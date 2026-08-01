@@ -34,7 +34,11 @@
       "minLength": 1
     },
     "status": {
-      "enum": ["pending-confirmation", "applied", "failed"]
+      "enum": [
+        "pending-confirmation",
+        "applied",
+        "failed"
+      ]
     },
     "startedAt": {
       "type": "string",
@@ -65,13 +69,1641 @@
     },
     "retryPolicy": {
       "$ref": "#/$defs/retryPolicy"
+    },
+    "storyAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "analysisRun",
+        "observations",
+        "factDeltas",
+        "records"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "1.1"
+        },
+        "analysisRun": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "analysisRunId",
+            "trigger",
+            "createdAt",
+            "startedAt",
+            "completedAt",
+            "chapter",
+            "contextSnapshot",
+            "recalledAssets",
+            "runtime",
+            "validation",
+            "usage",
+            "status",
+            "failure"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "1.1"
+            },
+            "analysisRunId": {
+              "type": "string",
+              "pattern": "^run_[a-f0-9]{32}$"
+            },
+            "trigger": {
+              "enum": [
+                "manual",
+                "chapter_completed"
+              ]
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "startedAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "completedAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "chapter": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chapterId",
+                "checksum"
+              ],
+              "properties": {
+                "chapterId": {
+                  "type": "string",
+                  "pattern": "^ch_[A-Za-z0-9_-]+$"
+                },
+                "checksum": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "contextSnapshot": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "contextSnapshotId",
+                "checksum"
+              ],
+              "properties": {
+                "contextSnapshotId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "checksum": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "recalledAssets": {
+              "type": "array",
+              "maxItems": 10000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "assetId",
+                  "revision",
+                  "checksum",
+                  "reason",
+                  "truncated"
+                ],
+                "properties": {
+                  "assetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "checksum": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "providerId",
+                "modelId",
+                "promptVersion",
+                "promptChecksum",
+                "extractorVersion"
+              ],
+              "properties": {
+                "providerId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "modelId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "promptVersion": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "promptChecksum": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "extractorVersion": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              }
+            },
+            "validation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observationCount",
+                "acceptedCount",
+                "rejectedCount",
+                "errors"
+              ],
+              "properties": {
+                "observationCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "acceptedCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "rejectedCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errors": {
+                  "type": "array",
+                  "maxItems": 1000,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "code",
+                      "message"
+                    ],
+                    "properties": {
+                      "code": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "message": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 10000
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "usage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "usageRecordId",
+                "inputTokens",
+                "outputTokens",
+                "estimatedCost"
+              ],
+              "properties": {
+                "usageRecordId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "outputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "estimatedCost": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            "status": {
+              "enum": [
+                "queued",
+                "running",
+                "completed",
+                "partial",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "retryable",
+                    "reason"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 10000
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "observations": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schemaVersion",
+              "observationId",
+              "analysisRunId",
+              "chapter",
+              "domain",
+              "subject",
+              "fact",
+              "evidence",
+              "epistemicStatus",
+              "confidence",
+              "reason"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "const": "1.1"
+              },
+              "observationId": {
+                "type": "string",
+                "pattern": "^obs_[a-f0-9]{32}$"
+              },
+              "analysisRunId": {
+                "type": "string",
+                "pattern": "^run_[a-f0-9]{32}$"
+              },
+              "chapter": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "chapterId",
+                  "checksum"
+                ],
+                "properties": {
+                  "chapterId": {
+                    "type": "string",
+                    "pattern": "^ch_[A-Za-z0-9_-]+$"
+                  },
+                  "checksum": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              },
+              "domain": {
+                "enum": [
+                  "character.behavior",
+                  "character.location",
+                  "character.resource",
+                  "character.relationship",
+                  "character.emotion",
+                  "character.information",
+                  "foreshadow",
+                  "timeline",
+                  "character.physical_state"
+                ]
+              },
+              "subject": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "mention",
+                  "expectedType",
+                  "candidateAssetIds",
+                  "resolvedAssetId"
+                ],
+                "properties": {
+                  "mention": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "expectedType": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "character",
+                          "world.location",
+                          "world.faction",
+                          "world.rule",
+                          "world.glossary",
+                          "world.item",
+                          "world.lore",
+                          "outline",
+                          "foreshadow",
+                          "timeline.events"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "candidateAssetIds": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9_-]+$"
+                    }
+                  },
+                  "resolvedAssetId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9_-]+$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              "fact": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "character_behavior",
+                      "character_location",
+                      "character_held_items",
+                      "character_relationship",
+                      "character_emotional",
+                      "character_knowledge",
+                      "character_physical",
+                      "world_item_holder",
+                      "world_item_location",
+                      "world_item_state",
+                      "world_detail",
+                      "outline_actual_outcome",
+                      "outline_deviation",
+                      "foreshadow_milestone",
+                      "timeline_event",
+                      "new_entity"
+                    ]
+                  },
+                  "value": {}
+                }
+              },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "start",
+                    "end",
+                    "excerptHash"
+                  ],
+                  "properties": {
+                    "start": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "end": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "excerptHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  }
+                }
+              },
+              "epistemicStatus": {
+                "enum": [
+                  "narrator_asserted",
+                  "dialogue_claim",
+                  "character_belief",
+                  "rumor",
+                  "model_inference",
+                  "uncertain"
+                ]
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 10000
+              }
+            }
+          }
+        },
+        "factDeltas": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schemaVersion",
+              "deltaId",
+              "analysisRunId",
+              "observationIds",
+              "chapter",
+              "domain",
+              "action",
+              "target",
+              "proposedAssetType",
+              "proposedAssetId",
+              "createValue",
+              "dependencies",
+              "consistencyGroupId",
+              "operations",
+              "evidence",
+              "epistemicStatus",
+              "confidence",
+              "reason",
+              "idempotencyKey"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "const": "1.1"
+              },
+              "deltaId": {
+                "type": "string",
+                "pattern": "^dlt_[a-f0-9]{32}$"
+              },
+              "analysisRunId": {
+                "type": "string",
+                "pattern": "^run_[a-f0-9]{32}$"
+              },
+              "observationIds": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^obs_[a-f0-9]{32}$"
+                }
+              },
+              "chapter": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "chapterId",
+                  "checksum"
+                ],
+                "properties": {
+                  "chapterId": {
+                    "type": "string",
+                    "pattern": "^ch_[A-Za-z0-9_-]+$"
+                  },
+                  "checksum": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              },
+              "domain": {
+                "enum": [
+                  "character.behavior",
+                  "character.location",
+                  "character.resource",
+                  "character.relationship",
+                  "character.emotion",
+                  "character.information",
+                  "foreshadow",
+                  "timeline",
+                  "character.physical_state"
+                ]
+              },
+              "action": {
+                "enum": [
+                  "create",
+                  "patch"
+                ]
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "assetId",
+                      "baseRevision",
+                      "entryRef"
+                    ],
+                    "properties": {
+                      "assetId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9_-]+$"
+                      },
+                      "baseRevision": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "entryRef": {
+                        "anyOf": [
+                          {
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "proposedAssetType": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "character",
+                      "world.location",
+                      "world.faction",
+                      "world.rule",
+                      "world.glossary",
+                      "world.item",
+                      "world.lore",
+                      "outline",
+                      "foreshadow",
+                      "timeline.events"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "proposedAssetId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createValue": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "dependencies": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "assetId",
+                        "baseRevision",
+                        "selectors",
+                        "valueChecksum"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "asset_fields"
+                        },
+                        "assetId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9_-]+$"
+                        },
+                        "baseRevision": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "selectors": {
+                          "type": "array",
+                          "maxItems": 100,
+                          "uniqueItems": true,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "valueChecksum": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "assetType",
+                        "querySignature",
+                        "indexRevision"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "type_index"
+                        },
+                        "assetType": {
+                          "enum": [
+                            "character",
+                            "world.location",
+                            "world.faction",
+                            "world.rule",
+                            "world.glossary",
+                            "world.item",
+                            "world.lore",
+                            "outline",
+                            "foreshadow",
+                            "timeline.events"
+                          ]
+                        },
+                        "querySignature": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "indexRevision": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "chapterId",
+                        "checksum"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "chapter"
+                        },
+                        "chapterId": {
+                          "type": "string",
+                          "pattern": "^ch_[A-Za-z0-9_-]+$"
+                        },
+                        "checksum": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "consistencyGroupId": {
+                "type": "string",
+                "pattern": "^cgrp_[a-f0-9]{32}$"
+              },
+              "operations": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "op",
+                    "path",
+                    "beforeValueChecksum"
+                  ],
+                  "properties": {
+                    "op": {
+                      "enum": [
+                        "add",
+                        "replace",
+                        "remove"
+                      ]
+                    },
+                    "path": {
+                      "type": "string",
+                      "pattern": "^/",
+                      "maxLength": 2048
+                    },
+                    "beforeValueChecksum": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "value": {}
+                  }
+                }
+              },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "start",
+                    "end",
+                    "excerptHash"
+                  ],
+                  "properties": {
+                    "start": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "end": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "excerptHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  }
+                }
+              },
+              "epistemicStatus": {
+                "enum": [
+                  "narrator_asserted",
+                  "dialogue_claim",
+                  "character_belief",
+                  "rumor",
+                  "model_inference",
+                  "uncertain"
+                ]
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 10000
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        },
+        "records": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "schemaVersion",
+                  "deltaId",
+                  "analysisRunId",
+                  "observationIds",
+                  "chapter",
+                  "domain",
+                  "action",
+                  "target",
+                  "proposedAssetType",
+                  "proposedAssetId",
+                  "createValue",
+                  "dependencies",
+                  "consistencyGroupId",
+                  "operations",
+                  "evidence",
+                  "epistemicStatus",
+                  "confidence",
+                  "reason",
+                  "idempotencyKey",
+                  "suggestionId",
+                  "recordType",
+                  "status",
+                  "revision",
+                  "createdAt",
+                  "updatedAt"
+                ],
+                "properties": {
+                  "schemaVersion": {
+                    "const": "1.1"
+                  },
+                  "deltaId": {
+                    "type": "string",
+                    "pattern": "^dlt_[a-f0-9]{32}$"
+                  },
+                  "analysisRunId": {
+                    "type": "string",
+                    "pattern": "^run_[a-f0-9]{32}$"
+                  },
+                  "observationIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^obs_[a-f0-9]{32}$"
+                    }
+                  },
+                  "chapter": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "chapterId",
+                      "checksum"
+                    ],
+                    "properties": {
+                      "chapterId": {
+                        "type": "string",
+                        "pattern": "^ch_[A-Za-z0-9_-]+$"
+                      },
+                      "checksum": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    }
+                  },
+                  "domain": {
+                    "enum": [
+                      "character.behavior",
+                      "character.location",
+                      "character.resource",
+                      "character.relationship",
+                      "character.emotion",
+                      "character.information",
+                      "foreshadow",
+                      "timeline",
+                      "character.physical_state"
+                    ]
+                  },
+                  "action": {
+                    "enum": [
+                      "create",
+                      "patch"
+                    ]
+                  },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "assetId",
+                          "baseRevision",
+                          "entryRef"
+                        ],
+                        "properties": {
+                          "assetId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9_-]+$"
+                          },
+                          "baseRevision": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "entryRef": {
+                            "anyOf": [
+                              {
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "proposedAssetType": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "character",
+                          "world.location",
+                          "world.faction",
+                          "world.rule",
+                          "world.glossary",
+                          "world.item",
+                          "world.lore",
+                          "outline",
+                          "foreshadow",
+                          "timeline.events"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "proposedAssetId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9_-]+$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "createValue": {
+                    "anyOf": [
+                      {
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "dependencies": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "kind",
+                            "assetId",
+                            "baseRevision",
+                            "selectors",
+                            "valueChecksum"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "const": "asset_fields"
+                            },
+                            "assetId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128,
+                              "pattern": "^[A-Za-z0-9_-]+$"
+                            },
+                            "baseRevision": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "selectors": {
+                              "type": "array",
+                              "maxItems": 100,
+                              "uniqueItems": true,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "valueChecksum": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "kind",
+                            "assetType",
+                            "querySignature",
+                            "indexRevision"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "const": "type_index"
+                            },
+                            "assetType": {
+                              "enum": [
+                                "character",
+                                "world.location",
+                                "world.faction",
+                                "world.rule",
+                                "world.glossary",
+                                "world.item",
+                                "world.lore",
+                                "outline",
+                                "foreshadow",
+                                "timeline.events"
+                              ]
+                            },
+                            "querySignature": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            },
+                            "indexRevision": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "kind",
+                            "chapterId",
+                            "checksum"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "const": "chapter"
+                            },
+                            "chapterId": {
+                              "type": "string",
+                              "pattern": "^ch_[A-Za-z0-9_-]+$"
+                            },
+                            "checksum": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "consistencyGroupId": {
+                    "type": "string",
+                    "pattern": "^cgrp_[a-f0-9]{32}$"
+                  },
+                  "operations": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "op",
+                        "path",
+                        "beforeValueChecksum"
+                      ],
+                      "properties": {
+                        "op": {
+                          "enum": [
+                            "add",
+                            "replace",
+                            "remove"
+                          ]
+                        },
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 2048
+                        },
+                        "beforeValueChecksum": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "value": {}
+                      }
+                    }
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "start",
+                        "end",
+                        "excerptHash"
+                      ],
+                      "properties": {
+                        "start": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "end": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "excerptHash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  },
+                  "epistemicStatus": {
+                    "enum": [
+                      "narrator_asserted",
+                      "dialogue_claim",
+                      "character_belief",
+                      "rumor",
+                      "model_inference",
+                      "uncertain"
+                    ]
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 10000
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "suggestionId": {
+                    "type": "string",
+                    "pattern": "^sug_[a-f0-9]{32}$"
+                  },
+                  "recordType": {
+                    "const": "change"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "accepted",
+                      "applied",
+                      "rejected",
+                      "stale",
+                      "failed"
+                    ]
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "schemaVersion",
+                  "issueId",
+                  "recordType",
+                  "revision",
+                  "createdAt",
+                  "updatedAt",
+                  "analysisRunId",
+                  "chapter",
+                  "issueType",
+                  "status",
+                  "claims",
+                  "affectedRefs",
+                  "dependencies",
+                  "idempotencyKey",
+                  "resolution",
+                  "dismissalReason",
+                  "supersededByIssueId"
+                ],
+                "properties": {
+                  "schemaVersion": {
+                    "const": "1.1"
+                  },
+                  "issueId": {
+                    "type": "string",
+                    "pattern": "^issue_[a-f0-9]{32}$"
+                  },
+                  "recordType": {
+                    "const": "review_issue"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "analysisRunId": {
+                    "type": "string",
+                    "pattern": "^run_[a-f0-9]{32}$"
+                  },
+                  "chapter": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "chapterId",
+                      "checksum"
+                    ],
+                    "properties": {
+                      "chapterId": {
+                        "type": "string",
+                        "pattern": "^ch_[A-Za-z0-9_-]+$"
+                      },
+                      "checksum": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    }
+                  },
+                  "issueType": {
+                    "enum": [
+                      "conflict",
+                      "ambiguity",
+                      "unresolved_entity",
+                      "overdue_foreshadow"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "open",
+                      "resolved",
+                      "dismissed",
+                      "stale"
+                    ]
+                  },
+                  "claims": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "value",
+                        "evidence"
+                      ],
+                      "properties": {
+                        "value": {},
+                        "evidence": {
+                          "type": "array",
+                          "minItems": 1,
+                          "maxItems": 100,
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "start",
+                              "end",
+                              "excerptHash"
+                            ],
+                            "properties": {
+                              "start": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "end": {
+                                "type": "integer",
+                                "minimum": 1
+                              },
+                              "excerptHash": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "affectedRefs": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "dependencies": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "kind",
+                            "assetId",
+                            "baseRevision",
+                            "selectors",
+                            "valueChecksum"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "const": "asset_fields"
+                            },
+                            "assetId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128,
+                              "pattern": "^[A-Za-z0-9_-]+$"
+                            },
+                            "baseRevision": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "selectors": {
+                              "type": "array",
+                              "maxItems": 100,
+                              "uniqueItems": true,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "valueChecksum": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "kind",
+                            "assetType",
+                            "querySignature",
+                            "indexRevision"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "const": "type_index"
+                            },
+                            "assetType": {
+                              "enum": [
+                                "character",
+                                "world.location",
+                                "world.faction",
+                                "world.rule",
+                                "world.glossary",
+                                "world.item",
+                                "world.lore",
+                                "outline",
+                                "foreshadow",
+                                "timeline.events"
+                              ]
+                            },
+                            "querySignature": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            },
+                            "indexRevision": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "kind",
+                            "chapterId",
+                            "checksum"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "const": "chapter"
+                            },
+                            "chapterId": {
+                              "type": "string",
+                              "pattern": "^ch_[A-Za-z0-9_-]+$"
+                            },
+                            "checksum": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "resolution": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "decision",
+                          "changeSetId",
+                          "actor",
+                          "resolvedAt"
+                        ],
+                        "properties": {
+                          "decision": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 10000
+                          },
+                          "changeSetId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "actor": {
+                            "enum": [
+                              "author",
+                              "system"
+                            ]
+                          },
+                          "resolvedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "dismissalReason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 10000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "supersededByIssueId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^issue_[a-f0-9]{32}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
     }
   },
   "$defs": {
     "contextSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sourceCount", "tokenEstimate", "selectionReason"],
+      "required": [
+        "sourceCount",
+        "tokenEstimate",
+        "selectionReason"
+      ],
       "properties": {
         "sourceCount": {
           "type": "integer",
@@ -89,7 +1721,12 @@
     "modelSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["profileId", "displayName", "provider", "modelName"],
+      "required": [
+        "profileId",
+        "displayName",
+        "provider",
+        "modelName"
+      ],
       "properties": {
         "profileId": {
           "type": "string",
@@ -112,7 +1749,13 @@
     "usageSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["inputTokens", "outputTokens", "totalTokens", "usageStatus", "cost"],
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "usageStatus",
+        "cost"
+      ],
       "properties": {
         "inputTokens": {
           "type": "integer",
@@ -127,12 +1770,20 @@
           "minimum": 0
         },
         "usageStatus": {
-          "enum": ["missing", "estimated", "actual"]
+          "enum": [
+            "missing",
+            "estimated",
+            "actual"
+          ]
         },
         "cost": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["amount", "currency", "status"],
+          "required": [
+            "amount",
+            "currency",
+            "status"
+          ],
           "properties": {
             "amount": {
               "type": "number",
@@ -143,7 +1794,11 @@
               "minLength": 1
             },
             "status": {
-              "enum": ["unknown", "estimated", "actual"]
+              "enum": [
+                "unknown",
+                "estimated",
+                "actual"
+              ]
             }
           }
         }
@@ -152,7 +1807,12 @@
     "step": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["stepId", "label", "kind", "status"],
+      "required": [
+        "stepId",
+        "label",
+        "kind",
+        "status"
+      ],
       "properties": {
         "stepId": {
           "type": "string",
@@ -163,17 +1823,30 @@
           "minLength": 1
         },
         "kind": {
-          "enum": ["context", "agent", "confirmation"]
+          "enum": [
+            "context",
+            "agent",
+            "confirmation"
+          ]
         },
         "status": {
-          "enum": ["pending", "running", "completed", "waiting-confirmation", "failed"]
+          "enum": [
+            "pending",
+            "running",
+            "completed",
+            "waiting-confirmation",
+            "failed"
+          ]
         }
       }
     },
     "errorSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "message"],
+      "required": [
+        "code",
+        "message"
+      ],
       "properties": {
         "code": {
           "type": "string",
@@ -184,7 +1857,12 @@
           "minLength": 1
         },
         "recoverability": {
-          "enum": ["retryable", "user-action", "fatal", "unknown"]
+          "enum": [
+            "retryable",
+            "user-action",
+            "fatal",
+            "unknown"
+          ]
         },
         "suggestedAction": {
           "type": "string",
@@ -198,10 +1876,17 @@
     "retryPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "maxAttempts", "backoffLabel", "retryableCodes"],
+      "required": [
+        "mode",
+        "maxAttempts",
+        "backoffLabel",
+        "retryableCodes"
+      ],
       "properties": {
         "mode": {
-          "enum": ["manual"]
+          "enum": [
+            "manual"
+          ]
         },
         "maxAttempts": {
           "type": "integer",

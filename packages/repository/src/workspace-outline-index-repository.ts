@@ -38,6 +38,7 @@ const DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
 const DEFAULT_WRITING_METADATA_MAX_ENTRIES = 1_000;
 const DEFAULT_WRITING_METADATA_HEADER_BYTES = 64 * 1_024;
 const DEFAULT_WRITING_METADATA_MAX_DURATION_MS = 200;
+const WRITING_METADATA_READ_CHUNK_BYTES = 256;
 const require = createRequire(import.meta.url);
 const { load: loadYaml } = require("js-yaml") as { load(input: string): unknown };
 
@@ -508,23 +509,32 @@ export class WorkspaceOutlineProjectMetadataRepository implements WorkspaceOutli
         return metadataError(this.traceId, "WORKSPACE_OUTLINE_METADATA_PATH_REJECTED");
       }
       await this.afterPathIdentityVerified(target.value);
-      const byte = Buffer.allocUnsafe(1);
+      const chunk = Buffer.allocUnsafe(
+        Math.min(WRITING_METADATA_READ_CHUNK_BYTES, this.maxHeaderBytes)
+      );
       const decoder = new TextDecoder("utf-8", { fatal: true });
       let text = "";
       let complete = false;
-      for (let position = 0; position < this.maxHeaderBytes; position += 1) {
+      for (let position = 0; position < this.maxHeaderBytes; ) {
         if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
-        const read = await handle.read(byte, 0, 1, position);
+        const read = await handle.read(
+          chunk,
+          0,
+          Math.min(chunk.byteLength, this.maxHeaderBytes - position),
+          position
+        );
         if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
         if (read.bytesRead === 0) break;
-        text += decoder.decode(byte.subarray(0, read.bytesRead), { stream: true });
-        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
-        const headerComplete = stopWhen(text);
-        if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
-        if (headerComplete) {
-          complete = true;
-          break;
+        for (let offset = 0; offset < read.bytesRead; offset += 1) {
+          text += decoder.decode(chunk.subarray(offset, offset + 1), { stream: true });
+          if (this.deadlineExceeded(deadline)) return metadataDurationExceeded(this.traceId);
+          if (stopWhen(text)) {
+            complete = true;
+            break;
+          }
         }
+        if (complete) break;
+        position += read.bytesRead;
       }
       if (!complete) {
         try {
@@ -680,6 +690,8 @@ export interface WorkspaceOutlineWritingIndex extends WorkspaceOutlineIndexBase 
   readonly storyBibleIndexRevision: string | null;
   readonly storyBibleIndexChecksum: string | null;
   readonly degradedDependencies: readonly ("chapters" | "story_bible")[];
+  /** Sources that were not authoritatively classified because their bounded metadata read timed out. */
+  readonly incompleteDependencies: readonly ("chapters" | "story_bible")[];
 }
 
 /**
@@ -812,6 +824,8 @@ export class WorkspaceOutlineIndexRepository {
 
     let chapters: WorkspaceOutlineChapterIndexSnapshot | undefined;
     let storyBible: WorkspaceOutlineStoryBibleIndexSnapshot | undefined;
+    let chapterReadCompleted = false;
+    let storyBibleReadCompleted = false;
     if (this.options.writingMetadata !== undefined && !durationExceeded(budget, this.now)) {
       const chapterResult = await this.options.writingMetadata.readChapterIndex({
         maxDurationMs: remainingDuration(budget, this.now)
@@ -825,6 +839,7 @@ export class WorkspaceOutlineIndexRepository {
         }
       } else {
         chapters = chapterResult.value;
+        chapterReadCompleted = true;
       }
 
       if (!budget.stopped && !durationExceeded(budget, this.now)) {
@@ -840,6 +855,7 @@ export class WorkspaceOutlineIndexRepository {
           }
         } else {
           storyBible = storyBibleResult.value;
+          storyBibleReadCompleted = true;
         }
       }
     }
@@ -871,6 +887,11 @@ export class WorkspaceOutlineIndexRepository {
     const degradedDependencies: ("chapters" | "story_bible")[] = [];
     if (normalizedChapters === undefined) degradedDependencies.push("chapters");
     if (normalizedStoryBible === undefined) degradedDependencies.push("story_bible");
+    const incompleteDependencies: ("chapters" | "story_bible")[] = [];
+    if (budget.reasons.has("max_duration")) {
+      if (!chapterReadCompleted) incompleteDependencies.push("chapters");
+      if (!storyBibleReadCompleted) incompleteDependencies.push("story_bible");
+    }
 
     const chapterIndexChecksum = checksum({
       kind: "chapters",
@@ -886,13 +907,15 @@ export class WorkspaceOutlineIndexRepository {
         kind: "chapter" as const,
         id: entry.id,
         label: entry.title,
+        ...(entry.relativePath === undefined ? {} : { relativePath: entry.relativePath }),
         ...(entry.wordCount === undefined ? {} : { wordCount: entry.wordCount })
       })) ?? []),
       ...(normalizedStoryBible?.entries.map((entry) => ({
         kind: "story_bible_asset" as const,
         id: entry.assetId,
         label: entry.title,
-        assetType: entry.assetType
+        assetType: entry.assetType,
+        ...(entry.relativePath === undefined ? {} : { relativePath: entry.relativePath })
       })) ?? [])
     ];
 
@@ -908,7 +931,8 @@ export class WorkspaceOutlineIndexRepository {
       chapterIndexChecksum,
       storyBibleIndexRevision: normalizedStoryBible?.revision ?? null,
       storyBibleIndexChecksum,
-      degradedDependencies: Object.freeze(degradedDependencies)
+      degradedDependencies: Object.freeze(degradedDependencies),
+      incompleteDependencies: Object.freeze(incompleteDependencies)
     });
   }
 }

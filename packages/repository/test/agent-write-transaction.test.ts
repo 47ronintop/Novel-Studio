@@ -16,11 +16,13 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { err, ok } from "@novel-studio/shared";
+import { deriveChangeSetGroupApprovalToken } from "@novel-studio/agent-engine";
 
 import {
   AgentWriteTransaction,
   type AgentWriteLifecycleMutation,
   type AgentWriteLifecycleOperationPort,
+  type AgentWriteTransactionOptions,
   type AgentWriteTrustedCreativeMutationPort
 } from "../src/agent-write-transaction.js";
 import { writeTextAtomically } from "../src/atomic-write.js";
@@ -66,6 +68,32 @@ describe("AgentWriteTransaction", () => {
       error: { code: "AGENT_WRITE_INPUT_INVALID" }
     });
     expect(operations).not.toContainEqual(expect.stringMatching(/^(snapshot|journal|replace):/));
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("before");
+  });
+
+  test("rejects a Story Bible status proof attached to a non-Story-Bible path", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    const operations: string[] = [];
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations),
+      recoveryRepository: recordingRecovery(operations)
+    });
+    const file = {
+      ...fileChange("notes/one.md", "before", "after", "text"),
+      storyBibleStatusProof: {
+        action: "delete" as const,
+        deletionImpactChecksum: "a".repeat(64)
+      }
+    };
+
+    const result = await transaction.apply(createInput([file]));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_INPUT_INVALID" }
+    });
+    expect(operations).toEqual([]);
     expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("before");
   });
 
@@ -328,6 +356,399 @@ describe("AgentWriteTransaction", () => {
       approvalSource: "human_confirmation",
       approvalToken: approvalToken("changes_01", 1, "c".repeat(64))
     });
+  });
+
+  test("returns apply validation errors before snapshots, journals, or mutations", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    const operations: string[] = [];
+    const backingRecovery = recordingRecovery(operations);
+    const recoveryRepository: AgentWriteRecoveryPort = {
+      writeAgentTransactionJournal: (journal) =>
+        backingRecovery.writeAgentTransactionJournal(journal),
+      readAgentTransactionJournal: (transactionId) =>
+        backingRecovery.readAgentTransactionJournal(transactionId),
+      async listAgentTransactionJournals() {
+        operations.push("list");
+        return backingRecovery.listAgentTransactionJournals();
+      }
+    };
+    const validateApply = vi.fn(async (input: AgentWriteTransactionInput) => {
+      operations.push("validate");
+      expect(input.consistencyGroupId).toBe("fact_validation_01");
+      return err(transactionTestError("STORY_BIBLE_GROUP_INVALID"));
+    });
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations),
+      recoveryRepository,
+      validateApply
+    });
+    const selectionChecksum = "e".repeat(64);
+    const input = createInput([fileChange("notes/one.md", "before", "after", "text")], {
+      applyBatchId: "apply_batch_validation_01",
+      consistencyGroupId: "fact_validation_01",
+      selectionChecksum,
+      approvalToken: deriveChangeSetGroupApprovalToken({
+        changeSetId: "changes_01",
+        revision: 1,
+        checksum: "c".repeat(64),
+        applyBatchId: "apply_batch_validation_01",
+        consistencyGroupId: "fact_validation_01",
+        selectionChecksum
+      })
+    });
+
+    const result = await transaction.apply(input);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_GROUP_INVALID" }
+    });
+    expect(operations).toEqual(["lock", "list", "validate"]);
+    expect(validateApply).toHaveBeenCalledOnce();
+    expect(await backingRecovery.listAgentTransactionJournals()).toEqual(ok([]));
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("before");
+  });
+
+  test("persists group metadata and returns the first result for an idempotent apply retry", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    const operations: string[] = [];
+    const recoveryRepository = recordingRecovery(operations);
+    const validateApply = vi.fn(async () => ok(undefined));
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations),
+      recoveryRepository,
+      validateApply
+    });
+    const selectionChecksum = "e".repeat(64);
+    const groupedInput = createInput([fileChange("notes/one.md", "before", "after", "text")], {
+      applyBatchId: "apply_batch_01",
+      consistencyGroupId: "fact_location_01",
+      selectionChecksum,
+      approvalToken: deriveChangeSetGroupApprovalToken({
+        changeSetId: "changes_01",
+        revision: 1,
+        checksum: "c".repeat(64),
+        applyBatchId: "apply_batch_01",
+        consistencyGroupId: "fact_location_01",
+        selectionChecksum
+      })
+    });
+
+    const first = await transaction.apply(groupedInput);
+    const repeated = await transaction.apply(groupedInput);
+
+    expect(first).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.1",
+        applyBatchId: "apply_batch_01",
+        consistencyGroupId: "fact_location_01",
+        selectionChecksum
+      }
+    });
+    expect(repeated).toEqual(first);
+    expect(validateApply).toHaveBeenCalledOnce();
+    expect(
+      operations.filter((operation) => operation === "replace:apply:notes/one.md")
+    ).toHaveLength(1);
+    await expect(recoveryRepository.listAgentTransactionJournals()).resolves.toMatchObject({
+      ok: true,
+      value: [
+        {
+          schemaVersion: "1.1",
+          applyBatchId: "apply_batch_01",
+          consistencyGroupId: "fact_location_01",
+          selectionChecksum
+        }
+      ]
+    });
+  });
+
+  test("round-trips a v1.1 grouped journal through the filesystem repository", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    const selectionChecksum = "e".repeat(64);
+    const groupedInput = createInput([fileChange("notes/one.md", "before", "after", "text")], {
+      applyBatchId: "apply_batch_round_trip",
+      consistencyGroupId: "fact_location_round_trip",
+      selectionChecksum,
+      approvalToken: deriveChangeSetGroupApprovalToken({
+        changeSetId: "changes_01",
+        revision: 1,
+        checksum: "c".repeat(64),
+        applyBatchId: "apply_batch_round_trip",
+        consistencyGroupId: "fact_location_round_trip",
+        selectionChecksum
+      })
+    });
+
+    const applied = await createTransaction(projectRoot).apply(groupedInput);
+    const listed = await new RecoveryRepository({
+      projectRoot
+    }).listAgentTransactionJournals();
+
+    expect(applied.ok).toBe(true);
+    expect(listed).toMatchObject({
+      ok: true,
+      value: [
+        {
+          schemaVersion: "1.1",
+          transactionStatus: "applied",
+          applyBatchId: "apply_batch_round_trip",
+          consistencyGroupId: "fact_location_round_trip",
+          selectionChecksum
+        }
+      ]
+    });
+  });
+
+  test("projects Story Bible revisions, History identity, suggestions, and inverse patch", async () => {
+    const before = JSON.stringify({
+      schemaVersion: "1.1",
+      id: "char_hero",
+      type: "character",
+      revision: 1,
+      title: "Hero"
+    });
+    const after = JSON.stringify({
+      schemaVersion: "1.1",
+      id: "char_hero",
+      type: "character",
+      revision: 2,
+      title: "Changed Hero"
+    });
+    const projectRoot = await createProject({ "characters/hero.json": before });
+    const selectionChecksum = "e".repeat(64);
+    const input = createInput([fileChange("characters/hero.json", before, after, "text")], {
+      applyBatchId: "apply_batch_receipt",
+      consistencyGroupId: "fact_character_receipt",
+      selectionChecksum,
+      storyBibleSuggestionIds: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      approvalToken: deriveChangeSetGroupApprovalToken({
+        changeSetId: "changes_01",
+        revision: 1,
+        checksum: "c".repeat(64),
+        applyBatchId: "apply_batch_receipt",
+        consistencyGroupId: "fact_character_receipt",
+        selectionChecksum
+      })
+    });
+
+    const applied = await createTransaction(projectRoot).apply(input);
+
+    expect(applied).toMatchObject({
+      ok: true,
+      value: {
+        storyBibleReceipt: {
+          schemaVersion: "1.0",
+          changeSetId: "changes_01",
+          consistencyGroupId: "fact_character_receipt",
+          suggestionIds: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+          assets: [
+            {
+              assetId: "char_hero",
+              relativePath: "characters/hero.json",
+              beforeRevision: 1,
+              afterRevision: 2,
+              beforeChecksum: expect.any(String),
+              afterChecksum: expect.any(String),
+              historyVersionId: expect.any(String),
+              inversePatch: expect.arrayContaining([
+                { op: "replace", path: "/revision", value: 1 },
+                { op: "replace", path: "/title", value: "Hero" }
+              ])
+            }
+          ]
+        }
+      }
+    });
+    expect(Object.isFrozen(applied.ok && applied.value.storyBibleReceipt)).toBe(true);
+  });
+
+  test("persists the History identity for a Story Bible create receipt", async () => {
+    const projectRoot = await createProject({});
+    await mkdir(join(projectRoot, "characters"));
+    const content = JSON.stringify({
+      schemaVersion: "1.1",
+      id: `chr_${"c".repeat(32)}`,
+      type: "character",
+      revision: 1,
+      title: "Created character"
+    });
+    const selectionChecksum = "e".repeat(64);
+    const input = createInput([], {
+      applyBatchId: "apply_batch_create_receipt",
+      consistencyGroupId: "fact_create_receipt",
+      selectionChecksum,
+      approvalToken: deriveChangeSetGroupApprovalToken({
+        changeSetId: "changes_01",
+        revision: 1,
+        checksum: "c".repeat(64),
+        applyBatchId: "apply_batch_create_receipt",
+        consistencyGroupId: "fact_create_receipt",
+        selectionChecksum
+      }),
+      operations: [
+        {
+          kind: "create_file",
+          operationId: "create_character",
+          toolCallIdempotencyKey: "tool_create_character",
+          relativePath: `characters/chr_${"c".repeat(32)}.json`,
+          content
+        }
+      ]
+    });
+
+    const applied = await createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot)
+    }).apply(input);
+
+    if (!applied.ok) throw new Error(JSON.stringify(applied.error));
+    expect(applied).toMatchObject({
+      ok: true,
+      value: {
+        storyBibleReceipt: {
+          assets: [
+            {
+              assetId: `chr_${"c".repeat(32)}`,
+              beforeRevision: null,
+              beforeChecksum: null,
+              afterRevision: 1,
+              historyVersionId: expect.any(String),
+              inversePatch: [{ op: "remove", path: "" }]
+            }
+          ]
+        }
+      }
+    });
+    const journals = await new RecoveryRepository({
+      projectRoot
+    }).listAgentTransactionJournals();
+    expect(journals.ok).toBe(true);
+    if (!journals.ok) throw new Error(journals.error.message);
+    expect(journals.value).toHaveLength(1);
+    expect(journals.value[0]?.storyBibleReceipt?.assets[0]?.historyVersionId).toEqual(
+      expect.any(String)
+    );
+  });
+
+  test("rejects different content that reuses a grouped apply idempotency key", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    const transaction = createTransaction(projectRoot);
+    const selectionChecksum = "e".repeat(64);
+    const groupBinding = {
+      applyBatchId: "apply_batch_conflict",
+      consistencyGroupId: "fact_location_conflict",
+      selectionChecksum,
+      approvalToken: deriveChangeSetGroupApprovalToken({
+        changeSetId: "changes_01",
+        revision: 1,
+        checksum: "c".repeat(64),
+        applyBatchId: "apply_batch_conflict",
+        consistencyGroupId: "fact_location_conflict",
+        selectionChecksum
+      })
+    } as const;
+
+    const first = await transaction.apply(
+      createInput([fileChange("notes/one.md", "before", "after", "text")], groupBinding)
+    );
+    const conflicting = await transaction.apply(
+      createInput([fileChange("notes/one.md", "before", "different", "text")], groupBinding)
+    );
+
+    expect(first.ok).toBe(true);
+    expect(conflicting).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_IDEMPOTENCY_CONFLICT" }
+    });
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("after");
+  });
+
+  test("recovers an incomplete grouped journal when the same apply is retried", async () => {
+    const projectRoot = await createProject({
+      "notes/one.md": "one before",
+      "notes/two.md": "two before"
+    });
+    const selectionChecksum = "e".repeat(64);
+    const groupedInput = createInput(
+      [
+        fileChange("notes/one.md", "one before", "one after", "text"),
+        fileChange("notes/two.md", "two before", "two after", "text")
+      ],
+      {
+        applyBatchId: "apply_batch_recovery",
+        consistencyGroupId: "fact_location_recovery",
+        selectionChecksum,
+        approvalToken: deriveChangeSetGroupApprovalToken({
+          changeSetId: "changes_01",
+          revision: 1,
+          checksum: "c".repeat(64),
+          applyBatchId: "apply_batch_recovery",
+          consistencyGroupId: "fact_location_recovery",
+          selectionChecksum
+        })
+      }
+    );
+    const failing = createTransaction(projectRoot, {
+      failReplace: ({ phase, relativePath }) =>
+        (phase === "apply" && relativePath === "notes/two.md") || phase === "compensate"
+    });
+
+    const validateApply = vi.fn(async () => err(transactionTestError("STORY_BIBLE_GROUP_INVALID")));
+    const first = await failing.apply(groupedInput);
+    const retried = await createTransaction(projectRoot, { validateApply }).apply(groupedInput);
+    const journals = await readJournals(projectRoot);
+
+    expect(first.ok && first.value.transactionStatus).toBe("partial_failure");
+    expect(retried).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.1",
+        transactionStatus: "rolled_back",
+        applyBatchId: "apply_batch_recovery",
+        consistencyGroupId: "fact_location_recovery"
+      }
+    });
+    expect(journals).toHaveLength(1);
+    expect(validateApply).not.toHaveBeenCalled();
+    expect(journals[0]?.transactionStatus).toBe("rolled_back");
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("one before");
+    expect(await readFile(join(projectRoot, "notes/two.md"), "utf8")).toBe("two before");
+  });
+
+  test("keeps apply validation inside the transaction exclusive section", async () => {
+    const projectRoot = await createProject({ "notes/one.md": "before" });
+    let releaseValidation: (() => void) | undefined;
+    let signalValidationStarted: (() => void) | undefined;
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    const validationStarted = new Promise<void>((resolve) => {
+      signalValidationStarted = resolve;
+    });
+    const validateApply = vi.fn(async () => {
+      signalValidationStarted?.();
+      await validationGate;
+      return ok(undefined);
+    });
+    const transaction = createTransaction(projectRoot, { validateApply });
+    const input = createInput([fileChange("notes/one.md", "before", "after", "text")]);
+
+    const firstApply = transaction.apply(input);
+    await validationStarted;
+    const overlappingApply = await transaction.apply(input);
+    releaseValidation?.();
+    const firstResult = await firstApply;
+
+    expect(overlappingApply).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_TRANSACTION_ACTIVE" }
+    });
+    expect(firstResult.ok).toBe(true);
+    expect(validateApply).toHaveBeenCalledOnce();
+    expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("after");
   });
 
   test("persists a preapproved-run binding before the first replacement", async () => {
@@ -2364,6 +2785,7 @@ interface TransactionTestOptions {
   readonly projectLock?: AgentWriteProjectLockPort;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
+  readonly validateApply?: AgentWriteTransactionOptions["validateApply"];
   readonly disableNativeFileMutations?: boolean;
 }
 
@@ -2406,6 +2828,7 @@ function createTransaction(
     ...(options.trustedCreativeMutations === undefined
       ? {}
       : { trustedCreativeMutations: options.trustedCreativeMutations }),
+    ...(options.validateApply === undefined ? {} : { validateApply: options.validateApply }),
     allowUnsafeReplaceFileForTesting: true,
     replaceFile: async (input) => {
       operations.push(`replace:${input.phase}:${input.relativePath}`);

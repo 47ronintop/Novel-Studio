@@ -245,7 +245,7 @@ describe("Stage 5 run/context contract normalization", () => {
       scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
       contextProfileId: "writing"
     });
-    expect(normalized.schemaVersion).toBe("1.3");
+    expect(normalized.schemaVersion).toBe("1.4");
     const source = normalized.sources[0];
     expect(source).toMatchObject({
       layer: "tool_result",
@@ -259,7 +259,7 @@ describe("Stage 5 run/context contract normalization", () => {
     expect(source?.checksum).toBe("a".repeat(64));
   });
 
-  test("createAgentContextSnapshot authors a v1.3 snapshot", () => {
+  test("createAgentContextSnapshot authors a v1.4 snapshot", () => {
     const snapshot = createAgentContextSnapshot({
       contextSnapshotId: "context_02",
       runId: "run_01",
@@ -283,7 +283,7 @@ describe("Stage 5 run/context contract normalization", () => {
         }
       ]
     });
-    expect(snapshot.schemaVersion).toBe("1.3");
+    expect(snapshot.schemaVersion).toBe("1.4");
     expect(snapshot.sources[0]?.layer).toBe("editor");
     expect(snapshot.sources[0]?.state).toBe("active");
   });

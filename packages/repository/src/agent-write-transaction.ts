@@ -2,9 +2,24 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { extname, isAbsolute, join, relative } from "node:path";
 
-import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
+import {
+  err,
+  ok,
+  type JsonObject,
+  type JsonValue,
+  type Result,
+  type UnifiedError
+} from "@novel-studio/shared";
+import {
+  deriveChangeSetGroupApprovalToken,
+  type StoryBibleApplyReceipt,
+  type StoryBibleApplyReceiptAsset,
+  type StoryBibleInversePatchOperation
+} from "@novel-studio/agent-engine";
+import { isStoryBibleV11AssetType } from "@novel-studio/schemas";
 
 import { storageError, validationError } from "./errors.js";
+import { withStoryBibleProjectWriteLock } from "./story-bible-write-coordinator.js";
 import type {
   AgentTransactionJournal,
   AgentTransactionJournalEntry,
@@ -119,6 +134,9 @@ export interface AgentWriteTransactionOptions {
   readonly projectLock: AgentWriteProjectLockPort;
   readonly historyRepository: AgentWriteHistoryPort;
   readonly recoveryRepository: AgentWriteRecoveryPort;
+  readonly validateApply?: (
+    input: AgentWriteTransactionInput
+  ) => Promise<Result<void, UnifiedError>>;
   readonly now?: () => string;
   readonly createTransactionId?: () => string;
   readonly createVersionGroupId?: () => string;
@@ -155,8 +173,19 @@ interface ExecuteTransactionOptions {
 
 type AgentUndoTransactionInput = Omit<
   AgentWriteTransactionInput,
-  "writePolicy" | "approvalSource" | "approvalToken"
->;
+  | "writePolicy"
+  | "approvalSource"
+  | "approvalToken"
+  | "applyBatchId"
+  | "consistencyGroupId"
+  | "selectionChecksum"
+  | "storyBibleSuggestionIds"
+> & {
+  readonly applyBatchId?: never;
+  readonly consistencyGroupId?: never;
+  readonly selectionChecksum?: never;
+  readonly storyBibleSuggestionIds?: never;
+};
 type TransactionExecutionInput = AgentWriteTransactionInput | AgentUndoTransactionInput;
 
 interface UndoSource {
@@ -225,8 +254,33 @@ export class AgentWriteTransaction {
     input: AgentWriteTransactionInput
   ): Promise<Result<VersionGroupRecord, UnifiedError>> {
     return this.exclusive(async () => {
+      const validation = validateTransactionInput(input, "apply");
+      if (!validation.ok) return validation;
       const lock = await this.options.projectLock.verifyProjectLockOwnership();
       if (!lock.ok) return lock;
+      if (input.applyBatchId !== undefined && input.consistencyGroupId !== undefined) {
+        const listed = await this.options.recoveryRepository.listAgentTransactionJournals();
+        if (!listed.ok) return listed;
+        const existing = listed.value.find(
+          (journal) =>
+            journal.kind === "apply" &&
+            journal.applyBatchId === input.applyBatchId &&
+            journal.consistencyGroupId === input.consistencyGroupId
+        );
+        if (existing !== undefined) {
+          if (!journalMatchesGroupedInput(existing, input)) {
+            return err(this.error("AGENT_WRITE_IDEMPOTENCY_CONFLICT", "validation"));
+          }
+          if (isIncompleteJournal(existing)) {
+            return this.resumeCompensation(existing);
+          }
+          return ok(groupFromCompletedJournal(existing));
+        }
+      }
+      if (this.options.validateApply !== undefined) {
+        const finalValidation = await this.options.validateApply(input);
+        if (!finalValidation.ok) return finalValidation;
+      }
       return this.executeTransaction(input, {
         kind: "apply",
         snapshotReason: "before-agent-write"
@@ -713,6 +767,7 @@ export class AgentWriteTransaction {
         }),
         reason: "before-agent-session-undo",
         content: file.reviewedCurrentHistoryContent ?? file.reviewedCurrentContent,
+        candidateContent: file.baselineHistoryContent ?? file.baselineContent,
         createdBy: "system",
         relativePath: file.relativePath,
         runId: review.runId,
@@ -908,6 +963,7 @@ export class AgentWriteTransaction {
         assetId: historyAssetId(file),
         reason: transactionOptions.snapshotReason,
         content: file.historyBaseContent ?? file.baseContent,
+        candidateContent: file.historyCandidateContent ?? file.candidateContent,
         createdBy: "system",
         relativePath: file.relativePath,
         runId: input.runId,
@@ -1379,6 +1435,7 @@ export class AgentWriteTransaction {
           assetId: historyAssetIdForJournalEntry(step.source),
           reason: "before-agent-session-undo",
           content: step.source.historyCandidateContent ?? before.content,
+          candidateContent: step.source.historyBaseContent ?? after.content,
           createdBy: "system",
           relativePath: step.source.relativePath,
           runId: firstJournal.runId,
@@ -2070,7 +2127,7 @@ export class AgentWriteTransaction {
     }
     this.transactionActive = true;
     try {
-      return await operation();
+      return await withStoryBibleProjectWriteLock(this.options.projectRoot, operation);
     } finally {
       this.transactionActive = false;
     }
@@ -2107,6 +2164,42 @@ function validateTransactionInput(
       operation.kind === "create_directory" ||
       operation.kind === "remove_directory"
   );
+  const hasAnyGroupBinding =
+    input.applyBatchId !== undefined ||
+    input.consistencyGroupId !== undefined ||
+    input.selectionChecksum !== undefined;
+  const hasCompleteGroupBinding =
+    input.applyBatchId !== undefined &&
+    input.consistencyGroupId !== undefined &&
+    input.selectionChecksum !== undefined;
+  const expectedApprovalToken = hasCompleteGroupBinding
+    ? deriveChangeSetGroupApprovalToken({
+        changeSetId: input.changeSetId,
+        revision: input.revision,
+        checksum: input.checksum,
+        applyBatchId: input.applyBatchId ?? "",
+        consistencyGroupId: input.consistencyGroupId ?? "",
+        selectionChecksum: input.selectionChecksum ?? ""
+      })
+    : approvalToken(input.changeSetId, input.revision, input.checksum);
+  const groupBindingInvalid =
+    kind === "apply"
+      ? hasAnyGroupBinding &&
+        (!hasCompleteGroupBinding ||
+          !isStableIdentifier(input.applyBatchId ?? "") ||
+          !isStableIdentifier(input.consistencyGroupId ?? "") ||
+          !sha256Pattern.test(input.selectionChecksum ?? "") ||
+          !("approvalSource" in input) ||
+          input.approvalSource !== "human_confirmation")
+      : hasAnyGroupBinding;
+  const storyBibleSuggestionBindingInvalid =
+    kind === "apply"
+      ? input.storyBibleSuggestionIds !== undefined &&
+        (!hasCompleteGroupBinding ||
+          input.storyBibleSuggestionIds.length > 1024 ||
+          new Set(input.storyBibleSuggestionIds).size !== input.storyBibleSuggestionIds.length ||
+          input.storyBibleSuggestionIds.some((id) => !/^sug_[A-Za-z0-9_-]{1,128}$/u.test(id)))
+      : input.storyBibleSuggestionIds !== undefined;
   const approvalBindingInvalid =
     kind === "apply"
       ? !("writePolicy" in input) ||
@@ -2118,7 +2211,7 @@ function validateTransactionInput(
         (input.approvalSource === "user_preapproved_run" &&
           input.writePolicy !== "user_preapproved_run") ||
         !("approvalToken" in input) ||
-        input.approvalToken !== approvalToken(input.changeSetId, input.revision, input.checksum) ||
+        input.approvalToken !== expectedApprovalToken ||
         (input.approvalSource === "user_preapproved_run" && destructiveOperation)
       : "writePolicy" in input || "approvalSource" in input || "approvalToken" in input;
   if (
@@ -2128,6 +2221,8 @@ function validateTransactionInput(
     !sha256Pattern.test(input.checksum) ||
     (input.files.length === 0 && operations.length === 0) ||
     approvalBindingInvalid ||
+    groupBindingInvalid ||
+    storyBibleSuggestionBindingInvalid ||
     new Set(paths).size !== paths.length ||
     paths.some((path) => operationPathSet.has(path)) ||
     new Set(operations.map((operation) => operation.operationId)).size !== operations.length ||
@@ -2136,7 +2231,11 @@ function validateTransactionInput(
     ) ||
     input.files.some(
       (file) =>
-        !sha256Pattern.test(file.baseChecksum) || !sha256Pattern.test(file.candidateChecksum)
+        !sha256Pattern.test(file.baseChecksum) ||
+        !sha256Pattern.test(file.candidateChecksum) ||
+        !isStoryBibleStatusProof(file.storyBibleStatusProof) ||
+        (file.storyBibleStatusProof !== undefined &&
+          !isStoryBibleTransactionRelativePath(file.relativePath))
     )
   ) {
     return err(
@@ -2149,6 +2248,36 @@ function validateTransactionInput(
     );
   }
   return ok(undefined);
+}
+
+function isStoryBibleTransactionRelativePath(relativePath: string): boolean {
+  return (
+    relativePath === "outline/outline.json" ||
+    relativePath === "timeline/events.json" ||
+    /^(?:characters|foreshadows|world)\/[A-Za-z0-9_-]+\.json$/u.test(relativePath)
+  );
+}
+
+function isStoryBibleStatusProof(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proof = value as Record<string, unknown>;
+  if (proof["action"] === "delete") {
+    return (
+      Object.keys(proof).length === 2 &&
+      typeof proof["deletionImpactChecksum"] === "string" &&
+      sha256Pattern.test(proof["deletionImpactChecksum"])
+    );
+  }
+  return (
+    proof["action"] === "restore" &&
+    Object.keys(proof).length === 3 &&
+    (proof["expectedStatus"] === "active" ||
+      proof["expectedStatus"] === "draft" ||
+      proof["expectedStatus"] === "archived") &&
+    typeof proof["historyAuthorizationChecksum"] === "string" &&
+    sha256Pattern.test(proof["historyAuthorizationChecksum"])
+  );
 }
 
 function validateRelativeTarget(relativePath: string): Result<void, never> {
@@ -2489,8 +2618,23 @@ function createJournal(input: {
   readonly createdAt: string;
   readonly undoOfVersionGroupIds?: readonly string[];
 }): AgentTransactionJournal {
+  const storyBibleReceipt = createStoryBibleApplyReceipt({
+    kind: input.kind,
+    changeSetId: input.input.changeSetId,
+    ...(input.input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.input.consistencyGroupId }),
+    ...(input.input.storyBibleSuggestionIds === undefined
+      ? {}
+      : { suggestionIds: input.input.storyBibleSuggestionIds }),
+    files: input.preparedFiles,
+    operations: input.preparedOperations
+  });
   return freezeJournal({
-    schemaVersion: "1.0",
+    schemaVersion:
+      input.input.applyBatchId === undefined || input.input.consistencyGroupId === undefined
+        ? "1.0"
+        : "1.1",
     transactionId: input.transactionId,
     versionGroupId: input.versionGroupId,
     kind: input.kind,
@@ -2500,6 +2644,13 @@ function createJournal(input: {
     changeSetId: input.input.changeSetId,
     changeSetRevision: input.input.revision,
     changeSetChecksum: input.input.checksum,
+    ...(input.input.applyBatchId === undefined ? {} : { applyBatchId: input.input.applyBatchId }),
+    ...(input.input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.input.consistencyGroupId }),
+    ...(input.input.selectionChecksum === undefined
+      ? {}
+      : { selectionChecksum: input.input.selectionChecksum }),
     ...(input.kind === "apply" &&
     "writePolicy" in input.input &&
     "approvalSource" in input.input &&
@@ -2552,9 +2703,195 @@ function createJournal(input: {
         id: prepared.operation.operationId
       }))
     ],
+    ...(storyBibleReceipt === undefined ? {} : { storyBibleReceipt }),
     ...(input.undoOfVersionGroupIds === undefined
       ? {}
       : { undoOfVersionGroupIds: input.undoOfVersionGroupIds })
+  });
+}
+
+function createStoryBibleApplyReceipt(input: {
+  readonly kind: AgentTransactionJournalKind;
+  readonly changeSetId: string;
+  readonly consistencyGroupId?: string;
+  readonly suggestionIds?: readonly string[];
+  readonly files: readonly PreparedFile[];
+  readonly operations: readonly PreparedOperation[];
+}): StoryBibleApplyReceipt | undefined {
+  if (input.kind !== "apply" || input.consistencyGroupId === undefined) return undefined;
+  const assets: StoryBibleApplyReceiptAsset[] = [];
+  for (const file of input.files) {
+    const after = parseStoryBibleAssetRecord(file.candidateContent);
+    if (after === undefined) continue;
+    const before = parseJsonValue(file.baseContent);
+    assets.push({
+      assetId: after.id,
+      relativePath: file.relativePath,
+      beforeRevision: parseRevision(before),
+      afterRevision: after.revision,
+      beforeChecksum: file.baseChecksum,
+      afterChecksum: file.candidateChecksum,
+      historyVersionId: file.beforeVersionId,
+      inversePatch: inverseStoryBiblePatch(before, after.value)
+    });
+  }
+  for (const prepared of input.operations) {
+    const operation = prepared.operation;
+    if (operation.kind !== "create_file") continue;
+    const after = parseStoryBibleAssetRecord(operation.content);
+    if (after === undefined) continue;
+    assets.push({
+      assetId: after.id,
+      relativePath: operation.relativePath,
+      beforeRevision: null,
+      afterRevision: after.revision,
+      beforeChecksum: null,
+      afterChecksum: checksum(operation.content),
+      historyVersionId: prepared.beforeVersionId ?? null,
+      inversePatch: [{ op: "remove", path: "" }]
+    });
+  }
+  if (assets.length === 0) return undefined;
+  const deduped = new Map<string, StoryBibleApplyReceiptAsset>();
+  for (const asset of assets) deduped.set(asset.relativePath, asset);
+  return freezeStoryBibleReceipt({
+    schemaVersion: "1.0",
+    changeSetId: input.changeSetId,
+    consistencyGroupId: input.consistencyGroupId,
+    suggestionIds: [...new Set(input.suggestionIds ?? [])].sort(),
+    assets: [...deduped.values()].sort((left, right) =>
+      left.relativePath.localeCompare(right.relativePath)
+    )
+  });
+}
+
+function parseStoryBibleAssetRecord(
+  content: string
+): { readonly id: string; readonly revision: number; readonly value: JsonObject } | undefined {
+  const parsed = parseJsonValue(content);
+  if (!isJsonObject(parsed)) return undefined;
+  const type = parsed["type"];
+  const id = parsed["id"];
+  const revision = parsed["revision"];
+  if (
+    parsed["schemaVersion"] !== "1.1" ||
+    !isStoryBibleV11AssetType(type) ||
+    typeof id !== "string" ||
+    !/^[A-Za-z0-9_-]{1,128}$/u.test(id) ||
+    !Number.isSafeInteger(revision) ||
+    Number(revision) < 1
+  ) {
+    return undefined;
+  }
+  return { id, revision: Number(revision), value: parsed };
+}
+
+function parseJsonValue(content: string): JsonValue | undefined {
+  try {
+    return JSON.parse(content) as JsonValue;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseRevision(value: JsonValue | undefined): number | null {
+  if (!isJsonObject(value)) return null;
+  const revision = value["revision"];
+  return Number.isSafeInteger(revision) && Number(revision) >= 0 ? Number(revision) : 0;
+}
+
+function inverseStoryBiblePatch(
+  before: JsonValue | undefined,
+  after: JsonValue
+): readonly StoryBibleInversePatchOperation[] {
+  if (before === undefined) return [{ op: "replace", path: "", value: "" }];
+  const operations: StoryBibleInversePatchOperation[] = [];
+  collectInversePatch(after, before, "", operations);
+  if (operations.length <= 512) return operations;
+  return [{ op: "replace", path: "", value: before }];
+}
+
+function collectInversePatch(
+  current: JsonValue,
+  target: JsonValue,
+  path: string,
+  operations: StoryBibleInversePatchOperation[]
+): void {
+  if (jsonValuesEqual(current, target)) return;
+  if (isJsonObject(current) && isJsonObject(target)) {
+    const keys = new Set([...Object.keys(current), ...Object.keys(target)]);
+    for (const key of [...keys].sort()) {
+      const childPath = `${path}/${escapeJsonPointer(key)}`;
+      const currentValue = current[key];
+      const targetValue = target[key];
+      if (currentValue === undefined) {
+        operations.push({ op: "add", path: childPath, value: targetValue as JsonValue });
+      } else if (targetValue === undefined) {
+        operations.push({ op: "remove", path: childPath });
+      } else {
+        collectInversePatch(currentValue, targetValue, childPath, operations);
+      }
+    }
+    return;
+  }
+  operations.push({ op: "replace", path, value: target });
+}
+
+function jsonValuesEqual(left: JsonValue, right: JsonValue): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return (
+      left.length === right.length &&
+      left.every((value, index) => {
+        const rightValue = right[index];
+        return rightValue !== undefined && jsonValuesEqual(value, rightValue);
+      })
+    );
+  }
+  if (isJsonObject(left) && isJsonObject(right)) {
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every((key, index) => {
+        const rightKey = rightKeys[index];
+        const leftValue = left[key];
+        const rightValue = right[key];
+        return (
+          rightKey !== undefined &&
+          key === rightKey &&
+          leftValue !== undefined &&
+          rightValue !== undefined &&
+          jsonValuesEqual(leftValue, rightValue)
+        );
+      })
+    );
+  }
+  return false;
+}
+
+function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function escapeJsonPointer(value: string): string {
+  return value.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+function freezeStoryBibleReceipt(receipt: StoryBibleApplyReceipt): StoryBibleApplyReceipt {
+  return Object.freeze({
+    ...receipt,
+    suggestionIds: Object.freeze([...receipt.suggestionIds]),
+    assets: Object.freeze(
+      receipt.assets.map((asset) =>
+        Object.freeze({
+          ...asset,
+          inversePatch: Object.freeze(
+            asset.inversePatch.map((operation) => Object.freeze({ ...operation }))
+          )
+        })
+      )
+    )
   });
 }
 
@@ -2668,7 +3005,10 @@ function freezeJournal(journal: AgentTransactionJournal): AgentTransactionJourna
         }),
     ...(journal.undoOfVersionGroupIds === undefined
       ? {}
-      : { undoOfVersionGroupIds: Object.freeze([...journal.undoOfVersionGroupIds]) })
+      : { undoOfVersionGroupIds: Object.freeze([...journal.undoOfVersionGroupIds]) }),
+    ...(journal.storyBibleReceipt === undefined
+      ? {}
+      : { storyBibleReceipt: freezeStoryBibleReceipt(journal.storyBibleReceipt) })
   });
 }
 
@@ -2979,7 +3319,7 @@ function groupFromJournal(
         ? "partial_failure"
         : "not_available";
   return freezeGroup({
-    schemaVersion: "1.0",
+    schemaVersion: journal.schemaVersion,
     versionGroupId: journal.versionGroupId,
     runId: journal.runId,
     checkpointId: journal.checkpointId,
@@ -2988,6 +3328,16 @@ function groupFromJournal(
     changeSetChecksum: journal.changeSetChecksum,
     ...(journal.writePolicy === undefined ? {} : { writePolicy: journal.writePolicy }),
     ...(journal.approvalSource === undefined ? {} : { approvalSource: journal.approvalSource }),
+    ...(journal.applyBatchId === undefined ? {} : { applyBatchId: journal.applyBatchId }),
+    ...(journal.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: journal.consistencyGroupId }),
+    ...(journal.selectionChecksum === undefined
+      ? {}
+      : { selectionChecksum: journal.selectionChecksum }),
+    ...(journal.storyBibleReceipt === undefined
+      ? {}
+      : { storyBibleReceipt: journal.storyBibleReceipt }),
     createdAt: journal.createdAt,
     writes,
     ...(operations.length === 0 ? {} : { operations }),
@@ -3003,6 +3353,58 @@ function groupFromJournal(
     ),
     ...(failureKind === undefined ? {} : { failureKind })
   });
+}
+
+function groupFromCompletedJournal(journal: AgentTransactionJournal): VersionGroupRecord {
+  switch (journal.transactionStatus) {
+    case "applied":
+      return groupFromJournal(journal, "applied", undefined);
+    case "rolled_back":
+      return groupFromJournal(journal, "rolled_back", "write_failure");
+    case "partial_failure":
+      return groupFromJournal(journal, "partial_failure", "partial_failure");
+    case "prepared":
+    case "applying":
+    case "compensating":
+      throw new Error("Incomplete transaction journals must be recovered before projection.");
+  }
+}
+
+function journalMatchesGroupedInput(
+  journal: AgentTransactionJournal,
+  input: AgentWriteTransactionInput
+): boolean {
+  return (
+    journal.runId === input.runId &&
+    journal.checkpointId === input.checkpointId &&
+    journal.changeSetId === input.changeSetId &&
+    journal.changeSetRevision === input.revision &&
+    journal.changeSetChecksum === input.checksum &&
+    journal.writePolicy === input.writePolicy &&
+    journal.approvalSource === input.approvalSource &&
+    journal.approvalToken === input.approvalToken &&
+    journal.applyBatchId === input.applyBatchId &&
+    journal.consistencyGroupId === input.consistencyGroupId &&
+    journal.selectionChecksum === input.selectionChecksum &&
+    JSON.stringify(journal.storyBibleReceipt?.suggestionIds ?? []) ===
+      JSON.stringify([...(input.storyBibleSuggestionIds ?? [])].sort()) &&
+    journal.entries.length === input.files.length &&
+    journal.entries.every((entry, index) => {
+      const file = input.files[index];
+      return (
+        file !== undefined &&
+        entry.relativePath === file.relativePath &&
+        entry.assetType === file.assetType &&
+        entry.assetId === file.assetId &&
+        entry.beforeChecksum === file.baseChecksum &&
+        entry.candidateChecksum === file.candidateChecksum &&
+        entry.beforeContent === file.baseContent &&
+        entry.candidateContent === file.candidateContent
+      );
+    }) &&
+    JSON.stringify((journal.operations ?? []).map((entry) => entry.operation)) ===
+      JSON.stringify(input.operations ?? [])
+  );
 }
 
 function undoMetadata(
@@ -3077,6 +3479,10 @@ function checksum(content: string): string {
 
 function approvalToken(changeSetId: string, revision: number, changeSetChecksum: string): string {
   return checksum(`${changeSetId}:${revision}:${changeSetChecksum}`);
+}
+
+function isStableIdentifier(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/u.test(value);
 }
 
 function checksumBytes(content: Uint8Array): string {

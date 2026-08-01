@@ -4,14 +4,20 @@ import { beforeEach, describe, expect, test } from "vitest";
 import {
   createAgentContextSession,
   type AgentContextBudgetInputs,
-  type AgentContextBudgetInputsPort
+  type AgentContextBudgetInputsPort,
+  type PackedAgentContextBinding
 } from "../src/agent-context-session.js";
+import { resolveAgentContextProfile } from "../src/agent-context-profile.js";
 import {
   createAgentRunDraftSession,
   type AgentRunDraftSession,
   type SyncStartDraftCommand
 } from "../src/agent-run-draft-session.js";
-import type { PreviewContextBudgetCommand } from "@novel-studio/agent-engine";
+import type {
+  AgentContextSourceInput,
+  AgentRunDraft,
+  PreviewContextBudgetCommand
+} from "@novel-studio/agent-engine";
 
 function createMemoryRepository() {
   const runDrafts = new Map<string, Map<number, JsonObject>>();
@@ -130,6 +136,24 @@ async function seedDraft(draftSession: AgentRunDraftSession) {
   const synced = await draftSession.syncStartDraft(syncCommand);
   if (!synced.ok) throw synced.error;
   return synced.value.runDraft;
+}
+
+function packingInputs(
+  draft: AgentRunDraft,
+  options: {
+    readonly activeSources?: readonly AgentContextSourceInput[];
+    readonly excludedSources?: readonly AgentContextSourceInput[];
+    readonly usedTokens?: number;
+  } = {}
+): AgentContextBudgetInputs {
+  return {
+    ...facts128k,
+    resolved: resolvedBudget(facts128k.model, options.usedTokens ?? facts128k.resolved.usedTokens),
+    profile: resolveAgentContextProfile(draft.scope, draft.operationMode, draft.contextMode),
+    modelProfileId: draft.modelProfileId,
+    activeSources: options.activeSources ?? [],
+    excludedSources: options.excludedSources ?? []
+  };
 }
 
 describe("Agent Context session — previewContextBudget", () => {
@@ -349,5 +373,226 @@ describe("Agent Context session — previewContextBudget", () => {
       ok: false,
       error: { code: "AGENT_CONTEXT_BUDGET_INPUTS_INVALID" }
     });
+  });
+});
+
+describe("Agent Context session — previewPackedContext", () => {
+  let draftSession: AgentRunDraftSession;
+
+  beforeEach(() => {
+    draftSession = createAgentRunDraftSession({
+      repository: createMemoryRepository(),
+      now: () => "2026-07-16T00:00:00.000Z",
+      createId: (() => {
+        let n = 0;
+        return () => `packed_id_${(n += 1)}`;
+      })()
+    });
+  });
+
+  function command(
+    draft: Pick<AgentRunDraft, "runDraftId" | "revision" | "checksum">,
+    commandId = "preview_packed_01"
+  ): PreviewContextBudgetCommand {
+    return {
+      projectId: "project_01",
+      conversationId: "conv_01",
+      commandId,
+      runDraftId: draft.runDraftId,
+      expectedDraftRevision: draft.revision,
+      runDraftChecksum: draft.checksum
+    };
+  }
+
+  test("returns raw author content while retaining the exact frozen provider payload", async () => {
+    const draft = await seedDraft(draftSession);
+    const activeSource: AgentContextSourceInput = {
+      refId: "story_bible:characters",
+      sourceKind: "story_bible_asset",
+      assetId: "characters",
+      content: "RAW_AUTHOR_STORY_BIBLE_CONTENT",
+      dirty: false,
+      selectionReason: "Pinned by the author",
+      selectionPolicy: "pinned",
+      preferenceScope: "run",
+      priority: 95
+    };
+    const excludedSource: AgentContextSourceInput = {
+      refId: "story_bible:world",
+      sourceKind: "story_bible_asset",
+      assetId: "world",
+      content: "EXCLUDED_AUTHOR_CONTENT",
+      dirty: false,
+      selectionReason: "Excluded for this run",
+      selectionPolicy: "explicit",
+      preferenceScope: "run",
+      priority: 40
+    };
+    let captured: PackedAgentContextBinding | undefined;
+    const session = createAgentContextSession({
+      draftSession,
+      budgetInputs: budgetInputsPort(
+        packingInputs(draft, {
+          activeSources: [activeSource],
+          excludedSources: [excludedSource]
+        })
+      ),
+      createBudgetSnapshotId: () => "budget_packed",
+      now: () => "2026-07-16T01:00:00.000Z",
+      onPackedContext(binding) {
+        captured = binding;
+      }
+    });
+
+    const result = await session.previewPackedContext(command(draft));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.budget.contextBudgetSnapshotId).toBe("budget_packed");
+    expect(result.value.blocks).toHaveLength(1);
+    expect(result.value.blocks[0]).toMatchObject({
+      refId: activeSource.refId,
+      sourceKind: activeSource.sourceKind,
+      order: 0,
+      content: activeSource.content
+    });
+    expect(Object.keys(result.value.blocks[0] ?? {})).not.toContain("role");
+    expect(Object.keys(result.value.blocks[0] ?? {})).not.toContain("materialization");
+    expect(JSON.stringify(result.value.blocks)).not.toContain("untrusted_project_data");
+    expect(result.value.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ refId: activeSource.refId, state: "active" }),
+        expect.objectContaining({ refId: excludedSource.refId, state: "excluded" })
+      ])
+    );
+    expect(result.value.blocks.some((block) => block.content === excludedSource.content)).toBe(
+      false
+    );
+
+    expect(captured).toBeDefined();
+    if (captured === undefined) return;
+    expect(captured.packedContext.packedContextId).toBe(result.value.packedContextId);
+    expect(captured.packedContext.payloadChecksum).toBe(result.value.payloadChecksum);
+    expect(captured.packedContext.blocks[0]?.checksum).toBe(result.value.blocks[0]?.checksum);
+    expect(captured.packedContext.blocks[0]?.content).toContain("untrusted_project_data");
+    expect(captured.runDraft).toEqual({
+      runDraftId: draft.runDraftId,
+      revision: draft.revision,
+      checksum: draft.checksum
+    });
+    expect(captured.contextDraft.contextDraftId).toBe(draft.contextDraftId);
+    expect(captured.activeSources[0]?.content).toBe(activeSource.content);
+    expect(captured.excludedSources[0]?.content).toBe(excludedSource.content);
+    expect(Object.isFrozen(captured)).toBe(true);
+    expect(Object.isFrozen(captured.packedContext)).toBe(true);
+    expect(Object.isFrozen(captured.activeSources)).toBe(true);
+  });
+
+  test("is concurrent-idempotent without resolving or publishing twice", async () => {
+    const draft = await seedDraft(draftSession);
+    let draftResolutions = 0;
+    let budgetResolutions = 0;
+    let publications = 0;
+    const resolvingDraftSession = {
+      resolveStartDraft(input: Parameters<AgentRunDraftSession["resolveStartDraft"]>[0]) {
+        draftResolutions += 1;
+        return draftSession.resolveStartDraft(input);
+      }
+    };
+    const session = createAgentContextSession({
+      draftSession: resolvingDraftSession,
+      budgetInputs: budgetInputsPort(packingInputs(draft), () => {
+        budgetResolutions += 1;
+      }),
+      onPackedContext() {
+        publications += 1;
+      }
+    });
+
+    const [first, second] = await Promise.all([
+      session.previewPackedContext(command(draft)),
+      session.previewPackedContext(command(draft))
+    ]);
+    const third = await session.previewPackedContext(command(draft));
+
+    expect(first).toEqual(second);
+    expect(second).toEqual(third);
+    expect(draftResolutions).toBe(1);
+    expect(budgetResolutions).toBe(1);
+    expect(publications).toBe(1);
+  });
+
+  test("fails closed without packing material while legacy budget preview remains compatible", async () => {
+    const draft = await seedDraft(draftSession);
+    const session = createAgentContextSession({
+      draftSession,
+      budgetInputs: budgetInputsPort(facts128k)
+    });
+
+    await expect(
+      session.previewContextBudget(command(draft, "legacy_budget"))
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      session.previewPackedContext(command(draft, "missing_packing"))
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PACKED_CONTEXT_INPUTS_INVALID" }
+    });
+  });
+
+  test("keeps aggregate pressure distinct from pinned-source overflow", async () => {
+    const draft = await seedDraft(draftSession);
+    const usedTokens = 120_000;
+    const session = createAgentContextSession({
+      draftSession,
+      budgetInputs: budgetInputsPort(packingInputs(draft, { usedTokens }))
+    });
+
+    const result = await session.previewPackedContext(command(draft, "fixed_overflow"));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tokenStats.usedTokens).toBe(usedTokens);
+    expect(result.value.tokenStats.usedTokens).toBeGreaterThan(
+      result.value.tokenStats.safeInputBudget
+    );
+    expect(result.value.fixedBudgetExceeded).toBe(false);
+  });
+
+  test("marks pinned sources as fixed overflow even when aggregate used tokens fit", async () => {
+    const draft = await seedDraft(draftSession);
+    const pinnedSource: AgentContextSourceInput = {
+      refId: "story_bible:timeline",
+      sourceKind: "story_bible_asset",
+      assetId: "timeline",
+      content: "PINNED_TIMELINE",
+      dirty: false,
+      selectionReason: "Pinned by the author",
+      selectionPolicy: "pinned",
+      preferenceScope: "run",
+      priority: 100
+    };
+    const session = createAgentContextSession({
+      draftSession,
+      budgetInputs: budgetInputsPort(
+        packingInputs(draft, {
+          activeSources: [pinnedSource]
+        })
+      ),
+      estimator: {
+        count() {
+          return { tokens: 120_000, precision: "reported" };
+        }
+      }
+    });
+
+    const result = await session.previewPackedContext(command(draft, "pinned_overflow"));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.tokenStats.usedTokens).toBeLessThan(
+      result.value.tokenStats.safeInputBudget
+    );
+    expect(result.value.tokenStats.pinnedTokens).toBeGreaterThan(
+      result.value.tokenStats.safeInputBudget
+    );
+    expect(result.value.fixedBudgetExceeded).toBe(true);
   });
 });

@@ -104,8 +104,14 @@ export type {
   ProjectSnapshot,
   ProjectStats,
   ProjectType,
+  StoryAnalysisCompletionMode,
+  StoryAnalysisSettings,
   SnapshotReason,
   SnapshotTextAssetInput,
+  StoryAnalysisHistoryRecord,
+  StoryAnalysisHistoryRepositoryPort,
+  StoryAnalysisHistorySummary,
+  StoryBibleStatusTransitionRecord,
   VersionRecord,
   VersionGroupBaselineRecord,
   VersionGroupFailureKind,
@@ -116,6 +122,7 @@ export type {
   VersionGroupUndoStatus,
   VersionGroupWriteRecord,
   VersionGroupWriteStatus,
+  StoryBibleApplyReceipt,
   WorkflowRunContextSummary,
   WorkflowRunCostSummary,
   WorkflowRunErrorSummary,
@@ -127,8 +134,10 @@ export type {
   WorkflowRunStepRecord,
   WorkflowRunStepStatus,
   WorkflowRunSummary,
-  WorkflowRunUsageSummary
+  WorkflowRunUsageSummary,
+  WriteStoryAnalysisHistoryInput
 } from "./ports.js";
+export type { StoryAnalysisBundle } from "@novel-studio/schemas";
 export type {
   DraftContentRef,
   RecoveryCursor,
@@ -166,13 +175,51 @@ export type {
   MemoryRecordType,
   StoryBibleAsset,
   StoryBibleAssetType,
+  StoryBibleAgentAsset,
+  StoryBibleAgentAssetRead,
   StoryBibleEntityStatus,
   StoryBibleFileRepositoryOptions,
+  StoryBibleListInput,
+  StoryBibleListItem,
+  StoryBibleListPage,
+  StoryBiblePassthroughSummary,
+  StoryBibleReference,
+  StoryBibleReferenceImpact,
+  StoryBibleReferenceTargetKind,
+  StoryBibleReferenceWarning,
   StoryBibleRegularAsset,
   StoryBibleRegularAssetType,
   StoryBibleRepositoryPort,
   StoryBibleSnapshot
 } from "./story-bible-repository.js";
+export {
+  STORY_BIBLE_CANDIDATE_ROOT_FIELDS,
+  adaptLegacyStoryBibleAsset,
+  canonicalStoryBibleJson,
+  checksumStoryBibleText,
+  compatibleV11StoryBibleAsset,
+  createStoryBibleAssetId,
+  deriveRelatedEntityIds,
+  isStoryBibleWriteCandidate
+} from "./story-bible-v1-1.js";
+export type {
+  CreateStoryBibleAssetInput,
+  PreparedStoryBibleCreate,
+  PreparedStoryBibleWrite,
+  SaveStoryBibleCandidateInput,
+  SaveStoryBibleStatusTransitionInput,
+  StoryBibleAdditionalReferenceTarget,
+  StoryBibleCandidateGroupEntry,
+  StoryBibleCompatibleAssetRead,
+  StoryBibleCreateValue,
+  StoryBiblePassthrough,
+  StoryBibleRelation,
+  StoryBibleSchemaVersion,
+  StoryBibleStatusTransitionAuthorization,
+  StoryBibleV11Asset,
+  StoryBibleWriteCandidate,
+  ValidateStoryBibleCandidateGroupInput
+} from "./story-bible-v1-1.js";
 export { WorkspaceStateFileRepository } from "./workspace-state-repository.js";
 export type { WorkspaceStateFileRepositoryOptions } from "./workspace-state-repository.js";
 export { SearchIndexFileRepository } from "./search-index-repository.js";

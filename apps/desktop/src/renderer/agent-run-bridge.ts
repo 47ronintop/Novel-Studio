@@ -13,6 +13,7 @@ import type {
   ChangeSetOperation,
   ContextBudgetSnapshot,
   ContextDraft,
+  ContextDraftMutation,
   ContextDraftActiveResourceRef,
   ContextDraftRef,
   PermissionSummary,
@@ -24,13 +25,15 @@ import { agentContextScopeKey, normalizeAgentContextScope } from "@novel-studio/
 import type {
   AgentContextMode,
   AgentOperationMode,
+  AgentRunPackedContextHistory,
   AgentRunDraftInitialization,
   AgentWritePolicy,
   ModelReasoningStrengthControl,
   ModelReasoningStrengthValue,
   NovelStudioApi,
   PlanArtifact,
-  ProjectConventionsCreateResult
+  ProjectConventionsCreateResult,
+  PackedAgentContextPreview
 } from "@novel-studio/application";
 import {
   findStoryBibleMentionSuggestions,
@@ -38,6 +41,7 @@ import {
 } from "@novel-studio/application";
 import type {
   AgentComposerContextStatusControl,
+  AgentComposerContextPreferenceScope,
   AgentComposerContextSourceRow,
   AgentComposerModelControl,
   AgentComposerPermissionControl,
@@ -127,7 +131,9 @@ export interface AgentRunBridge {
   decideToolApproval(decision: "approve" | "reject"): Promise<AgentRunPanelProps>;
   undoRun(): Promise<AgentRunPanelProps>;
   subscribe(listener: () => void): () => void;
-  subscribeProjectFilesChanged(listener: (event: AgentProjectFilesChangedEvent) => void): () => void;
+  subscribeProjectFilesChanged(
+    listener: (event: AgentProjectFilesChangedEvent) => void
+  ): () => void;
 }
 
 export interface AgentProjectFilesChangedEvent {
@@ -164,7 +170,13 @@ interface BridgeState {
   readonly contextDraft: ContextDraft | undefined;
   /** The latest server-resolved budget preview for the current draft revision (never renderer-authored). */
   readonly budgetPreview: ContextBudgetSnapshot | undefined;
+  /** The immutable packed preview used by the next start and rendered in the context inspector. */
+  readonly packedPreview: PackedAgentContextPreview | undefined;
+  /** Rebuilt from the persisted run manifest/artifact, never from the current workspace. */
+  readonly packedContextHistory: AgentRunPackedContextHistory | undefined;
+  readonly contextPreferenceScope: AgentComposerContextPreferenceScope;
   readonly draftPending: boolean;
+  readonly contextPreferencePending: boolean;
   readonly startPending: boolean;
   readonly permissionSummary: PermissionSummary | undefined;
   readonly permissionPending: boolean;
@@ -177,6 +189,12 @@ interface BridgeState {
   readonly conventionsPolicyError: string | undefined;
   readonly conventionsDisabled: boolean;
 }
+
+type PackedPreviewAttempt =
+  | { readonly kind: "unsupported" }
+  | { readonly kind: "stale" }
+  | { readonly kind: "failed"; readonly error: UnifiedError }
+  | { readonly kind: "ready"; readonly preview: PackedAgentContextPreview };
 
 export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   let context: ResolvedAgentRunBridgeContext | undefined;
@@ -203,7 +221,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     runDraft: undefined,
     contextDraft: undefined,
     budgetPreview: undefined,
+    packedPreview: undefined,
+    packedContextHistory: undefined,
+    contextPreferenceScope: "run",
     draftPending: false,
+    contextPreferencePending: false,
     startPending: false,
     permissionSummary: undefined,
     permissionPending: false,
@@ -217,9 +239,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     conventionsDisabled: false
   };
   const listeners = new Set<() => void>();
-  const projectFilesChangedListeners = new Set<
-    (event: AgentProjectFilesChangedEvent) => void
-  >();
+  const projectFilesChangedListeners = new Set<(event: AgentProjectFilesChangedEvent) => void>();
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
   let toolApprovalInFlight: Promise<AgentRunPanelProps> | undefined;
   let selectionInFlight: Promise<AgentRunPanelProps> | undefined;
@@ -417,6 +437,47 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         state = { ...state, errorMessage: formatAgentStartError(prepared.error) };
         return toProps();
       }
+      state = {
+        ...state,
+        runDraft: prepared.value.runDraft,
+        contextDraft: prepared.value.contextDraft,
+        packedPreview: undefined,
+        budgetPreview: undefined
+      };
+      const packedAttempt = await requestPackedPreview(draftToken, "preview-start");
+      if (packedAttempt.kind === "failed") {
+        state = { ...state, errorMessage: formatAgentStartError(packedAttempt.error) };
+        return toProps();
+      }
+      if (packedAttempt.kind === "stale") {
+        state = {
+          ...state,
+          errorMessage: "上下文预览已失效，请确认当前来源后重试。"
+        };
+        return toProps();
+      }
+      if (packedAttempt.kind === "unsupported") {
+        state = {
+          ...state,
+          errorMessage: "当前桌面端不支持实际发送预览，无法安全启动 Agent。请更新后重试。"
+        };
+        return toProps();
+      }
+      const packedPreview = packedAttempt.preview;
+      state = {
+        ...state,
+        packedPreview,
+        budgetPreview: packedPreview.budget,
+        errorMessage: undefined
+      };
+      notify();
+      if (packedPreview.fixedBudgetExceeded) {
+        state = {
+          ...state,
+          errorMessage: "固定项超过安全输入预算，发送已阻止。请取消固定或缩减来源。"
+        };
+        return toProps();
+      }
       const command: StartAgentRunCommand = {
         ...scopeIdentity(context.scope),
         conversationId: context.conversationId,
@@ -424,7 +485,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         expectedRunRevision: 0,
         runDraftId: prepared.value.runDraft.runDraftId,
         runDraftRevision: prepared.value.runDraft.revision,
-        runDraftChecksum: prepared.value.runDraft.checksum
+        runDraftChecksum: prepared.value.runDraft.checksum,
+        packedContextId: packedPreview.packedContextId,
+        packedContextPayloadChecksum: packedPreview.payloadChecksum
       };
       await applyCommandResult(await api.agentRuns.start(command));
       return toProps();
@@ -857,6 +920,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           ? "write_before_confirmation"
           : read.snapshot.writePolicy,
       events: [...read.events],
+      packedContextHistory: read.packedContextHistory,
       assistantText: assistantTextFromEvents(read.events),
       pendingUserInput: read.pendingUserInput,
       diagnostic: read.diagnostic,
@@ -1044,6 +1108,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       status: state.snapshot?.status ?? (state.startPending ? "created" : "idle"),
       assistantText: state.assistantText,
       events: state.events,
+      ...(state.packedContextHistory === undefined
+        ? {}
+        : { packedContextHistory: state.packedContextHistory }),
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
       ...(standalone || pendingToolApproval === undefined ? {} : { pendingToolApproval }),
       ...(state.diagnostic === undefined ? {} : { diagnostic: state.diagnostic }),
@@ -1229,6 +1296,28 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   /** Refresh the server-resolved budget preview for the current draft revision. */
   async function previewBudget(token: number): Promise<void> {
+    const packedAttempt = await requestPackedPreview(token, "preview-packed");
+    if (packedAttempt.kind === "stale") return;
+    if (packedAttempt.kind === "ready") {
+      state = {
+        ...state,
+        packedPreview: packedAttempt.preview,
+        budgetPreview: packedAttempt.preview.budget,
+        errorMessage: undefined
+      };
+      notify();
+      return;
+    }
+    if (packedAttempt.kind === "failed") {
+      state = {
+        ...state,
+        packedPreview: undefined,
+        budgetPreview: undefined,
+        errorMessage: formatAgentStartError(packedAttempt.error)
+      };
+      notify();
+      return;
+    }
     const previewContextBudget = draftApi.previewContextBudget;
     const ctx = context;
     const draft = state.runDraft;
@@ -1250,10 +1339,48 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (token !== draftToken) return;
     state = {
       ...state,
+      packedPreview: undefined,
       budgetPreview: result.ok ? result.value : undefined,
       ...(result.ok ? {} : { errorMessage: formatAgentStartError(result.error) })
     };
     notify();
+  }
+
+  async function requestPackedPreview(
+    token: number,
+    commandName: string
+  ): Promise<PackedPreviewAttempt> {
+    const previewPackedContext = draftApi.previewPackedContext;
+    const ctx = context;
+    const runDraft = state.runDraft;
+    const contextDraft = state.contextDraft;
+    if (previewPackedContext === undefined) return { kind: "unsupported" };
+    if (ctx?.conversationId === undefined || runDraft === undefined || contextDraft === undefined) {
+      return { kind: "stale" };
+    }
+    const result = await previewPackedContext({
+      ...scopeIdentity(ctx.scope),
+      conversationId: ctx.conversationId,
+      commandId: createCommandId(commandName),
+      runDraftId: runDraft.runDraftId,
+      expectedDraftRevision: runDraft.revision,
+      runDraftChecksum: runDraft.checksum
+    });
+    if (
+      token !== draftToken ||
+      context?.conversationId !== ctx.conversationId ||
+      state.runDraft?.runDraftId !== runDraft.runDraftId ||
+      state.runDraft.revision !== runDraft.revision ||
+      state.runDraft.checksum !== runDraft.checksum ||
+      state.contextDraft?.contextDraftId !== contextDraft.contextDraftId ||
+      state.contextDraft.revision !== contextDraft.revision ||
+      state.contextDraft.checksum !== contextDraft.checksum
+    ) {
+      return { kind: "stale" };
+    }
+    return result.ok
+      ? { kind: "ready", preview: result.value }
+      : { kind: "failed", error: result.error };
   }
 
   /**
@@ -1271,7 +1398,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       }
     });
     draftInFlight = next;
-    state = { ...state, draftPending: true };
+    state = { ...state, draftPending: true, packedPreview: undefined };
     notify();
     return next;
   }
@@ -1292,7 +1419,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         mutation
       });
       applyDraftResult(result, token);
-      if (refreshBudget) await previewBudget(token);
+      if (refreshBudget || draftApi.previewPackedContext !== undefined) await previewBudget(token);
     }).then(() => {
       if (permissionSummaryRequested) void loadPermissionSummary();
     });
@@ -1425,6 +1552,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         }
       });
       applyDraftResult(result, token);
+      if (draftApi.previewPackedContext !== undefined) await previewBudget(token);
     });
   }
 
@@ -1507,6 +1635,129 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       applyDraftResult(result, token);
       await previewBudget(token);
     });
+  }
+
+  function updateContextSourcePreference(
+    refId: string,
+    decision: "pinned" | "excluded" | null,
+    priority: number
+  ): void {
+    if (state.contextPreferenceScope === "project") {
+      updateProjectSourcePreference(refId, decision, priority);
+      return;
+    }
+    updateRunSourceOverride(refId, decision, priority);
+  }
+
+  function updateRunSourceOverride(
+    refId: string,
+    decision: "automatic" | "pinned" | "excluded" | null,
+    priority: number
+  ): void {
+    if (context !== undefined && isStandaloneScope(context.scope)) return;
+    const updateContextDraft = draftApi.updateContextDraft;
+    if (updateContextDraft === undefined) return;
+    void queueDraftMutation(async () => {
+      const ctx = context;
+      const draft = state.contextDraft;
+      const token = draftToken;
+      if (ctx?.conversationId === undefined || draft === undefined) return;
+      const result = await updateContextDraft({
+        ...scopeIdentity(ctx.scope),
+        conversationId: ctx.conversationId,
+        commandId: createCommandId("draft-source-override"),
+        contextDraftId: draft.contextDraftId,
+        expectedDraftRevision: draft.revision,
+        mutation: runSourceOverrideMutation(refId, decision, priority)
+      });
+      applyDraftResult(result, token);
+      await previewBudget(token);
+    });
+  }
+
+  function updateProjectSourcePreference(
+    refId: string,
+    decision: "pinned" | "excluded" | null,
+    priority: number
+  ): void {
+    const update = api.workspace?.updateContextPolicy;
+    const ctx = context;
+    if (
+      update === undefined ||
+      ctx === undefined ||
+      isStandaloneScope(ctx.scope) ||
+      state.contextPreferencePending
+    ) {
+      return;
+    }
+    const token = draftToken;
+    const sourceRef = contextSourceRef(state.contextDraft, refId);
+    state = {
+      ...state,
+      contextPreferencePending: true,
+      packedPreview: undefined,
+      errorMessage: undefined
+    };
+    notify();
+    void update({
+      action: "set_source_preference",
+      preference:
+        decision === null
+          ? { refId, decision: null }
+          : {
+              refId,
+              decision,
+              priority: normalizedContextPriority(priority),
+              ...(sourceRef === undefined ? {} : { ref: sourceRef })
+            }
+    })
+      .then(async (result) => {
+        if (
+          token !== draftToken ||
+          context === undefined ||
+          context.conversationId !== ctx.conversationId ||
+          !sameAgentScope(context.scope, ctx.scope)
+        ) {
+          return;
+        }
+        if (!result.ok) {
+          state = {
+            ...state,
+            contextPreferencePending: false,
+            errorMessage: result.error.message
+          };
+          notify();
+          return;
+        }
+        state = { ...state, errorMessage: undefined };
+        await previewBudget(token);
+        if (
+          token !== draftToken ||
+          context === undefined ||
+          context.conversationId !== ctx.conversationId ||
+          !sameAgentScope(context.scope, ctx.scope)
+        ) {
+          return;
+        }
+        state = { ...state, contextPreferencePending: false };
+        notify();
+      })
+      .catch((error: unknown) => {
+        if (
+          token !== draftToken ||
+          context === undefined ||
+          context.conversationId !== ctx.conversationId ||
+          !sameAgentScope(context.scope, ctx.scope)
+        ) {
+          return;
+        }
+        state = {
+          ...state,
+          contextPreferencePending: false,
+          errorMessage: thrownErrorMessage(error)
+        };
+        notify();
+      });
   }
 
   function refreshContextDraftSources(): void {
@@ -1742,11 +1993,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const references: AgentComposerReferenceControl = {
       chips: contextDraft.refs.map(refToChip),
       available: availableReferenceRefs(context, contextDraft).map(refToChip),
-      suggested: suggestedStoryBibleReferenceRefs(
-        context,
-        contextDraft,
-        state.userRequest
-      ).map(refToChip),
+      suggested: suggestedStoryBibleReferenceRefs(context, contextDraft, state.userRequest).map(
+        refToChip
+      ),
       onAdd: (refId) => addReferenceDraft(refId),
       onRemove: (refId) => removeReferenceDraft(refId),
       onPickFile: () => void pickProjectFile()
@@ -1783,6 +2032,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   function contextStatusControl(contextDraft: ContextDraft): AgentComposerContextStatusControl {
     const budget = state.budgetPreview;
+    const packedPreview = state.packedPreview;
     const snapshot = state.snapshot;
     const canCompact =
       draftApi.compactContext !== undefined &&
@@ -1790,9 +2040,71 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       snapshot.contextBudgetSnapshotId !== null;
     const automaticSources = automaticContextSourceRows(state.events);
     const automaticRefIds = new Set(automaticSources.map((source) => source.refId));
-    const conventionsSource = automaticSources.find(
-      (source) => source.sourceKind === "project_conventions"
-    );
+    const fallbackSources: AgentComposerContextSourceRow[] = [
+      ...automaticSources,
+      ...contextDraft.refs.map(refToSource).filter((source) => !automaticRefIds.has(source.refId))
+    ];
+    const fallbackByRef = new Map(fallbackSources.map((source) => [source.refId, source]));
+    const rawSources: AgentComposerContextSourceRow[] =
+      packedPreview === undefined
+        ? fallbackSources
+        : packedPreview.sources.map((source) => {
+            const fallback = fallbackByRef.get(source.refId);
+            const block = packedPreview.blocks.find(
+              (candidate) => candidate.refId === source.refId
+            );
+            return {
+              ...(fallback ?? {}),
+              refId: source.refId,
+              label: contextSourceLabel(contextDraft, source.refId, fallback?.label),
+              detail: fallback?.detail ?? contextSourceKindLabel(source.sourceKind),
+              sourceKind: source.sourceKind,
+              ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath }),
+              selectionReason: source.selectionReason,
+              selectionPolicy: source.selectionPolicy,
+              preferenceScope: source.preferenceScope,
+              priority: source.priority,
+              state: source.state,
+              tokenCount: source.tokenCount,
+              precision: source.precision,
+              sourceChecksum: source.sourceChecksum,
+              sourceRevision: source.sourceRevision,
+              truncationRange: source.truncationRange,
+              ...(block === undefined ? {} : { materializationOrder: block.order })
+            };
+          });
+    const canUpdateSources =
+      packedPreview !== undefined &&
+      (state.contextPreferenceScope === "run"
+        ? draftApi.updateContextDraft !== undefined
+        : api.workspace?.updateContextPolicy !== undefined);
+    const sources = rawSources.map((source): AgentComposerContextSourceRow => {
+      if (!canUpdateSources) return source;
+      const priority = source.priority ?? 50;
+      const priorityDecision = source.state === "excluded" ? "excluded" : "pinned";
+      const hasPreference = source.selectionPolicy === "pinned" || source.state === "excluded";
+      return {
+        ...source,
+        busy: state.draftPending || state.contextPreferencePending,
+        onPin: () => updateContextSourcePreference(source.refId, "pinned", priority),
+        onExclude: () => updateContextSourcePreference(source.refId, "excluded", priority),
+        onRestore: () => {
+          if (state.contextPreferenceScope === "run" && source.preferenceScope === "project") {
+            updateRunSourceOverride(source.refId, "automatic", priority);
+            return;
+          }
+          updateContextSourcePreference(source.refId, null, priority);
+        },
+        ...(hasPreference
+          ? {
+              onPriorityChange: (nextPriority: number) =>
+                updateContextSourcePreference(source.refId, priorityDecision, nextPriority)
+            }
+          : {})
+      };
+    });
+    const sourceLabels = new Map(sources.map((source) => [source.refId, source.label]));
+    const conventionsSource = sources.find((source) => source.sourceKind === "project_conventions");
     const conventionsPath =
       context?.workspaceKind === "engineeringWorkspace"
         ? ("AGENTS.md" as const)
@@ -1809,10 +2121,43 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       state: contextStatusState(),
       usageLabel: budgetUsageLabel(budget),
       precision: (budget?.precision ?? "unknown") as AgentContextPrecision,
-      sources: [
-        ...automaticSources,
-        ...contextDraft.refs.map(refToSource).filter((source) => !automaticRefIds.has(source.refId))
-      ],
+      sources,
+      preferenceScope: state.contextPreferenceScope,
+      onPreferenceScopeChange: (scope) => {
+        state = { ...state, contextPreferenceScope: scope };
+        notify();
+      },
+      ...(packedPreview === undefined
+        ? draftApi.previewPackedContext === undefined
+          ? {}
+          : {
+              previewUnavailableReason: state.draftPending
+                ? "正在重新打包作者项目上下文。"
+                : "实际发送预览尚未就绪。"
+            }
+        : {
+            previewBlocks: packedPreview.blocks.map((block) => ({
+              blockId: block.blockId,
+              refId: block.refId,
+              label:
+                sourceLabels.get(block.refId) ??
+                contextSourceLabel(contextDraft, block.refId, undefined),
+              content: block.content,
+              order: block.order,
+              tokenCount: block.tokenCount,
+              precision: block.precision,
+              checksum: block.checksum,
+              truncationRange: block.truncationRange
+            })),
+            previewPayloadChecksum: packedPreview.payloadChecksum,
+            tokenStats: packedPreview.tokenStats,
+            fixedBudgetExceeded: packedPreview.fixedBudgetExceeded,
+            ...(packedPreview.fixedBudgetExceeded
+              ? {
+                  fixedBudgetMessage: "固定项超过安全输入预算，发送已阻止。请取消固定或缩减来源。"
+                }
+              : {})
+          }),
       conventions: {
         relativePath:
           conventionsSource?.relativePath === "AGENTS.md" ||
@@ -1836,7 +2181,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...(draftApi.refreshContextDraft === undefined
         ? {}
         : { onRefresh: () => refreshContextDraftSources() }),
-      busy: state.draftPending
+      busy: state.draftPending || state.contextPreferencePending
     };
   }
 
@@ -2148,6 +2493,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           runDraft: state.runDraft,
           contextDraft: state.contextDraft,
           budgetPreview: state.budgetPreview,
+          packedPreview: state.packedPreview,
           draftPending: state.draftPending
         };
         state = resetRunState(state, context?.scope);
@@ -2160,6 +2506,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           ...(currentDraft.budgetPreview === undefined
             ? {}
             : { budgetPreview: currentDraft.budgetPreview }),
+          ...(currentDraft.packedPreview === undefined
+            ? {}
+            : { packedPreview: currentDraft.packedPreview }),
           draftPending: currentDraft.draftPending
         };
         if (state.runDraft === undefined && !state.draftPending) loadDraft();
@@ -2283,7 +2632,11 @@ function resetRunState(state: BridgeState, scope?: AgentContextScope): BridgeSta
     runDraft: undefined,
     contextDraft: undefined,
     budgetPreview: undefined,
+    packedPreview: undefined,
+    packedContextHistory: undefined,
+    contextPreferenceScope: "run",
     draftPending: false,
+    contextPreferencePending: false,
     startPending: false,
     permissionSummary: undefined,
     permissionPending: false,
@@ -2341,10 +2694,8 @@ function activeResourceForSurface(
   contextMode: Extract<AgentContextMode, "writing" | "general_file"> | undefined
 ): ContextDraftActiveResourceRef | null | undefined {
   if (ref === undefined || ref === null || contextMode === undefined) return ref;
-  return (
-    (contextMode === "writing" && ref.kind === "story_bible") ||
+  return (contextMode === "writing" && ref.kind === "story_bible") ||
     (contextMode === "general_file" && ref.kind === "project_file")
-  )
     ? ref
     : null;
 }
@@ -2823,6 +3174,7 @@ interface OptionalDraftApi {
   updateContextDraft?: NovelStudioApi["agentRuns"]["updateContextDraft"];
   refreshContextDraft?: NovelStudioApi["agentRuns"]["refreshContextDraft"];
   previewContextBudget?: NovelStudioApi["agentRuns"]["previewContextBudget"];
+  previewPackedContext?: NovelStudioApi["agentRuns"]["previewPackedContext"];
   compactContext?: NovelStudioApi["agentRuns"]["compactContext"];
 }
 
@@ -2842,8 +3194,67 @@ function refToChip(ref: ContextDraftRef): AgentComposerReferenceChip {
   return { refId: ref.refId, label: ref.label, kind: ref.kind };
 }
 
-function refToSource(ref: ContextDraftRef): { refId: string; label: string; detail: string } {
+function refToSource(ref: ContextDraftRef): AgentComposerContextSourceRow {
   return { refId: ref.refId, label: ref.label, detail: REFERENCE_KIND_LABEL[ref.kind] };
+}
+
+function contextSourceRef(
+  draft: ContextDraft | undefined,
+  refId: string
+): ContextDraftRef | undefined {
+  if (draft === undefined) return undefined;
+  return (
+    draft.refs.find((ref) => ref.refId === refId) ??
+    (draft.activeResourceRef?.refId === refId ? draft.activeResourceRef : undefined)
+  );
+}
+
+function contextSourceLabel(
+  draft: ContextDraft,
+  refId: string,
+  fallback: string | undefined
+): string {
+  return contextSourceRef(draft, refId)?.label ?? fallback ?? "上下文来源";
+}
+
+function contextSourceKindLabel(
+  sourceKind: NonNullable<AgentComposerContextSourceRow["sourceKind"]>
+): string {
+  switch (sourceKind) {
+    case "disk_file":
+      return "项目文件";
+    case "editor_buffer":
+      return "编辑器内容";
+    case "story_bible_asset":
+      return "故事资料";
+    case "project_conventions":
+      return "项目约定";
+    case "workspace_outline":
+      return "工作区大纲";
+    case "compaction_summary":
+      return "会话摘要";
+    case "system_guidance":
+      return "系统引导";
+  }
+}
+
+function normalizedContextPriority(priority: number): number {
+  return Math.min(100, Math.max(0, Math.round(priority)));
+}
+
+function runSourceOverrideMutation(
+  refId: string,
+  decision: "automatic" | "pinned" | "excluded" | null,
+  priority: number
+): ContextDraftMutation {
+  return decision === "pinned" || decision === "excluded"
+    ? {
+        kind: "set_source_override",
+        refId,
+        decision,
+        priority: normalizedContextPriority(priority)
+      }
+    : { kind: "set_source_override", refId, decision };
 }
 
 function automaticContextSourceRows(
@@ -2897,9 +3308,7 @@ function automaticContextSourceRows(
       detail: value["detail"],
       sourceKind,
       layerLabel: sourceKind === "project_conventions" ? "约定层" : "工作区定向块",
-      ...(typeof value["relativePath"] === "string"
-        ? { relativePath: value["relativePath"] }
-        : {}),
+      ...(typeof value["relativePath"] === "string" ? { relativePath: value["relativePath"] } : {}),
       ...(metadata.length === 0 ? {} : { metadata })
     });
   }

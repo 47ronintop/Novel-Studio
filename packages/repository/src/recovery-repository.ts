@@ -581,7 +581,7 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
   if (typeof value !== "object" || value === null) return false;
   const journal = value as Partial<AgentTransactionJournal>;
   if (
-    journal.schemaVersion !== "1.0" ||
+    (journal.schemaVersion !== "1.0" && journal.schemaVersion !== "1.1") ||
     typeof journal.transactionId !== "string" ||
     !isSafeTransactionId(journal.transactionId) ||
     typeof journal.versionGroupId !== "string" ||
@@ -607,6 +607,7 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
     return false;
   }
   if (!hasValidApprovalBinding(journal)) return false;
+  if (!isValidStoryBibleReceipt(journal)) return false;
   if (!journal.entries.every(isAgentTransactionJournalEntry)) return false;
   if (journal.operations !== undefined) {
     if (
@@ -627,6 +628,145 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
   if (!hasValidMutationOrder(journal)) return false;
   const writeIds = new Set(journal.entries.map((entry) => entry.writeId));
   return writeIds.size === journal.entries.length;
+}
+
+function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): boolean {
+  const receipt = journal.storyBibleReceipt;
+  if (receipt === undefined) return true;
+  if (
+    journal.kind !== "apply" ||
+    journal.schemaVersion !== "1.1" ||
+    typeof journal.changeSetId !== "string" ||
+    typeof journal.consistencyGroupId !== "string" ||
+    receipt.schemaVersion !== "1.0" ||
+    receipt.changeSetId !== journal.changeSetId ||
+    receipt.consistencyGroupId !== journal.consistencyGroupId ||
+    !Array.isArray(receipt.suggestionIds) ||
+    receipt.suggestionIds.length > 1024 ||
+    new Set(receipt.suggestionIds).size !== receipt.suggestionIds.length ||
+    receipt.suggestionIds.some(
+      (id) => typeof id !== "string" || !/^sug_[A-Za-z0-9_-]{1,128}$/u.test(id)
+    ) ||
+    !Array.isArray(receipt.assets) ||
+    receipt.assets.length === 0 ||
+    receipt.assets.length > 256
+  ) {
+    return false;
+  }
+  const paths = new Set<string>();
+  for (const asset of receipt.assets) {
+    const invalidAssetMetadata =
+      typeof asset !== "object" ||
+      asset === null ||
+      typeof asset.assetId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,128}$/u.test(asset.assetId) ||
+      typeof asset.relativePath !== "string" ||
+      !isSafeJournalPath(asset.relativePath) ||
+      paths.has(asset.relativePath) ||
+      (asset.beforeRevision !== null &&
+        (!Number.isSafeInteger(asset.beforeRevision) || asset.beforeRevision < 0)) ||
+      !Number.isSafeInteger(asset.afterRevision) ||
+      asset.afterRevision < 1 ||
+      (asset.beforeChecksum !== null && !/^[a-f0-9]{64}$/.test(asset.beforeChecksum)) ||
+      !/^[a-f0-9]{64}$/.test(asset.afterChecksum) ||
+      (asset.historyVersionId !== null &&
+        (typeof asset.historyVersionId !== "string" || asset.historyVersionId.length === 0)) ||
+      !Array.isArray(asset.inversePatch) ||
+      asset.inversePatch.length > 512 ||
+      !asset.inversePatch.every(isStoryBibleInversePatchOperation);
+    if (invalidAssetMetadata) {
+      return false;
+    }
+    paths.add(asset.relativePath);
+    const entry = (journal.entries ?? []).find(
+      (candidate) => candidate.relativePath === asset.relativePath
+    );
+    if (entry !== undefined) {
+      if (
+        asset.beforeChecksum !== entry.beforeChecksum ||
+        asset.afterChecksum !== entry.candidateChecksum ||
+        asset.historyVersionId !== entry.beforeVersionId ||
+        !matchesStoryBibleContent(entry.candidateContent, asset.assetId, asset.afterRevision) ||
+        !matchesStoryBibleBeforeRevision(entry.beforeContent, asset.beforeRevision)
+      ) {
+        return false;
+      }
+      continue;
+    }
+    const operation = (journal.operations ?? []).find(
+      (candidate) =>
+        candidate.operation.kind === "create_file" &&
+        candidate.operation.relativePath === asset.relativePath
+    );
+    const createOperation =
+      operation?.operation.kind === "create_file" ? operation.operation : undefined;
+    const invalidCreateReceipt =
+      operation === undefined ||
+      createOperation === undefined ||
+      asset.beforeChecksum !== null ||
+      asset.historyVersionId !== (operation.beforeVersionId ?? null) ||
+      asset.afterChecksum !== checksum(createOperation.content) ||
+      !matchesStoryBibleContent(createOperation.content, asset.assetId, asset.afterRevision);
+    if (invalidCreateReceipt) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isStoryBibleInversePatchOperation(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const operation = value as {
+    readonly op?: unknown;
+    readonly path?: unknown;
+    readonly value?: unknown;
+  };
+  if (
+    (operation.op !== "add" && operation.op !== "replace" && operation.op !== "remove") ||
+    typeof operation.path !== "string" ||
+    operation.path.length > 2048 ||
+    (operation.path.length > 0 && !operation.path.startsWith("/"))
+  ) {
+    return false;
+  }
+  return operation.op === "remove" || isJsonValue(operation.value);
+}
+
+function matchesStoryBibleContent(content: string, assetId: string, revision: number): boolean {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    return (
+      value["schemaVersion"] === "1.1" &&
+      value["id"] === assetId &&
+      Number.isSafeInteger(value["revision"]) &&
+      Number(value["revision"]) === revision
+    );
+  } catch {
+    return false;
+  }
+}
+
+function matchesStoryBibleBeforeRevision(content: string, revision: number | null): boolean {
+  if (revision === null) return false;
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    const current = value["revision"];
+    return current === undefined
+      ? revision === 0
+      : Number.isSafeInteger(current) && Number(current) === revision;
+  } catch {
+    return false;
+  }
+}
+
+function isJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (typeof value === "object") {
+    return value !== null && Object.values(value as Record<string, unknown>).every(isJsonValue);
+  }
+  return false;
 }
 
 function hasValidMutationOrder(journal: Partial<AgentTransactionJournal>): boolean {
@@ -660,12 +800,45 @@ function hasValidMutationOrder(journal: Partial<AgentTransactionJournal>): boole
 function hasValidApprovalBinding(journal: Partial<AgentTransactionJournal>): boolean {
   if (journal.kind !== "apply") {
     return (
+      journal.schemaVersion === "1.0" &&
       journal.writePolicy === undefined &&
       journal.approvalSource === undefined &&
-      journal.approvalToken === undefined
+      journal.approvalToken === undefined &&
+      journal.applyBatchId === undefined &&
+      journal.consistencyGroupId === undefined &&
+      journal.selectionChecksum === undefined
     );
   }
+  const hasAnyGroupBinding =
+    journal.applyBatchId !== undefined ||
+    journal.consistencyGroupId !== undefined ||
+    journal.selectionChecksum !== undefined;
+  const hasValidGroupBinding = hasAnyGroupBinding
+    ? journal.schemaVersion === "1.1" &&
+      journal.approvalSource === "human_confirmation" &&
+      typeof journal.applyBatchId === "string" &&
+      /^[A-Za-z0-9_-]{1,128}$/u.test(journal.applyBatchId) &&
+      typeof journal.consistencyGroupId === "string" &&
+      /^[A-Za-z0-9_-]{1,128}$/u.test(journal.consistencyGroupId) &&
+      typeof journal.selectionChecksum === "string" &&
+      /^[a-f0-9]{64}$/u.test(journal.selectionChecksum)
+    : journal.schemaVersion === "1.0";
+  const expectedBaseApprovalToken = checksum(
+    `${journal.changeSetId}:${journal.changeSetRevision}:${journal.changeSetChecksum}`
+  );
+  const expectedApprovalToken = hasAnyGroupBinding
+    ? checksum(
+        [
+          "change-set-group-approval-v1",
+          expectedBaseApprovalToken,
+          journal.applyBatchId,
+          journal.consistencyGroupId,
+          journal.selectionChecksum
+        ].join(":")
+      )
+    : expectedBaseApprovalToken;
   return (
+    hasValidGroupBinding &&
     (journal.writePolicy === "write_before_confirmation" ||
       journal.writePolicy === "user_preapproved_run") &&
     (journal.approvalSource === "human_confirmation" ||
@@ -675,8 +848,7 @@ function hasValidApprovalBinding(journal: Partial<AgentTransactionJournal>): boo
     typeof journal.changeSetRevision === "number" &&
     journal.changeSetRevision >= 1 &&
     typeof journal.approvalToken === "string" &&
-    journal.approvalToken ===
-      checksum(`${journal.changeSetId}:${journal.changeSetRevision}:${journal.changeSetChecksum}`)
+    journal.approvalToken === expectedApprovalToken
   );
 }
 

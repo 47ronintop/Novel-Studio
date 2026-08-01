@@ -1,6 +1,13 @@
 import { describe, expect, test, vi } from "vitest";
 
-import type { ChangeSet, ChangeSetApproval, VersionGroup } from "@novel-studio/agent-engine";
+import {
+  checksumChangeSetSelection,
+  checksumChangeSetText,
+  deriveChangeSetGroupApprovalToken,
+  type ChangeSet,
+  type ChangeSetApproval,
+  type VersionGroup
+} from "@novel-studio/agent-engine";
 import { err, ok } from "@novel-studio/shared";
 
 import {
@@ -84,6 +91,134 @@ describe("VersionGroupSession", () => {
     expect(appliedInput?.files).toEqual([]);
     expect(appliedInput?.operations).toEqual(operationChangeSet.operations);
     expect(operations).toEqual(["pause:drafts", "recovery-clean:drafts", "resume:drafts"]);
+  });
+
+  test("requires grouped application and forwards only one approved consistency group", async () => {
+    const operations: string[] = [];
+    let appliedInput: Parameters<VersionGroupSessionTransactionPort["apply"]>[0] | undefined;
+    const session = createSession(operations, {
+      async apply(input) {
+        appliedInput = input;
+        return ok(appliedGroup());
+      }
+    });
+    const grouped = groupedChangeSet();
+    const groupedApproval = approvalForGroupedChangeSet(grouped);
+
+    await expect(
+      session.applyApproved({ changeSet: grouped, approval: groupedApproval })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "VERSION_GROUP_GROUPED_APPLY_REQUIRED" }
+    });
+
+    const result = await session.applyApproved({
+      changeSet: grouped,
+      approval: groupedApproval,
+      group: {
+        applyBatchId: "apply_batch_01",
+        consistencyGroupId: "fact_location_01"
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(appliedInput).toMatchObject({
+      applyBatchId: "apply_batch_01",
+      consistencyGroupId: "fact_location_01",
+      selectionChecksum: groupedApproval.binding.selectionChecksum,
+      files: [{ relativePath: "characters/hero.json" }]
+    });
+    expect(appliedInput?.approvalToken).toBe(
+      deriveChangeSetGroupApprovalToken({
+        changeSetId: grouped.changeSetId,
+        revision: grouped.revision,
+        checksum: grouped.checksum,
+        applyBatchId: "apply_batch_01",
+        consistencyGroupId: "fact_location_01",
+        selectionChecksum: groupedApproval.binding.selectionChecksum ?? ""
+      })
+    );
+  });
+
+  test("applies approved consistency groups as one batch and reports partial success", async () => {
+    const operations: string[] = [];
+    const appliedInputs: Parameters<VersionGroupSessionTransactionPort["apply"]>[0][] = [];
+    const session = createSession(operations, {
+      async apply(input) {
+        appliedInputs.push(input);
+        if (input.consistencyGroupId === "fact_timeline_01") {
+          return err(testError("TIMELINE_GROUP_FAILED"));
+        }
+        const relativePath = input.files[0]?.relativePath ?? "characters/hero.json";
+        const base = appliedGroup();
+        const write = base.writes[0];
+        const baseline = base.baselineByPath["notes/one.md"];
+        if (
+          write === undefined ||
+          baseline === undefined ||
+          input.applyBatchId === undefined ||
+          input.consistencyGroupId === undefined ||
+          input.selectionChecksum === undefined
+        ) {
+          throw new Error("Expected a complete grouped apply binding.");
+        }
+        return ok({
+          ...base,
+          schemaVersion: "1.1" as const,
+          applyBatchId: input.applyBatchId,
+          consistencyGroupId: input.consistencyGroupId,
+          selectionChecksum: input.selectionChecksum,
+          writes: [{ ...write, relativePath }],
+          baselineByPath: {
+            [relativePath]: { ...baseline, relativePath }
+          }
+        });
+      }
+    });
+    const grouped = groupedChangeSet();
+    const groupedApproval = approvalForGroupedChangeSet(grouped);
+
+    const result = await session.applyApprovedBatch({
+      changeSet: grouped,
+      approval: groupedApproval,
+      applyBatchId: "apply_batch_01",
+      storyBibleSuggestionIdsByGroup: {
+        fact_location_01: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.0",
+        applyBatchId: "apply_batch_01",
+        changeSetId: grouped.changeSetId,
+        selectionChecksum: groupedApproval.binding.selectionChecksum,
+        groups: [
+          {
+            consistencyGroupId: "fact_location_01",
+            status: "applied",
+            versionGroup: { consistencyGroupId: "fact_location_01" }
+          },
+          {
+            consistencyGroupId: "fact_timeline_01",
+            status: "failed",
+            error: { code: "TIMELINE_GROUP_FAILED" }
+          }
+        ]
+      }
+    });
+    expect(appliedInputs).toHaveLength(2);
+    expect(appliedInputs[0]).toMatchObject({
+      consistencyGroupId: "fact_location_01",
+      storyBibleSuggestionIds: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      files: [{ relativePath: "characters/hero.json" }]
+    });
+    expect(appliedInputs[1]).toMatchObject({
+      consistencyGroupId: "fact_timeline_01",
+      files: [{ relativePath: "timeline/main.json" }]
+    });
+    expect(Object.isFrozen(result.ok && result.value.groups)).toBe(true);
   });
 
   test("rejects a publicly forged preapproved-run source before the transaction port", async () => {
@@ -798,6 +933,49 @@ function approval(): ChangeSetApproval {
       revision: 1,
       checksum: "c".repeat(64),
       approvalToken: "token_01"
+    }
+  };
+}
+
+function groupedChangeSet(): ChangeSet {
+  const checksum = "d".repeat(64);
+  const base = changeSet();
+  const firstFile = base.files[0];
+  if (firstFile === undefined) throw new Error("Expected the base change set to contain a file.");
+  return {
+    ...base,
+    schemaVersion: "1.1",
+    checksum,
+    approvalToken: checksumChangeSetText(`changes_01:1:${checksum}`),
+    files: [
+      {
+        ...firstFile,
+        relativePath: "characters/hero.json",
+        consistencyGroupId: "fact_location_01"
+      },
+      {
+        ...firstFile,
+        relativePath: "timeline/main.json",
+        consistencyGroupId: "fact_timeline_01"
+      }
+    ]
+  };
+}
+
+function approvalForGroupedChangeSet(changeSet: ChangeSet): ChangeSetApproval {
+  const selectedConsistencyGroupIds = ["fact_location_01", "fact_timeline_01"];
+  return {
+    schemaVersion: "1.1",
+    decision: "apply_selected",
+    approvalSource: "human_confirmation",
+    resolvedAt: "2026-07-13T01:01:00.000Z",
+    binding: {
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      approvalToken: changeSet.approvalToken,
+      selectedConsistencyGroupIds,
+      selectionChecksum: checksumChangeSetSelection(changeSet, selectedConsistencyGroupIds)
     }
   };
 }

@@ -11,6 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { StoryBibleFileRepository } from "@novel-studio/repository";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
@@ -306,6 +307,73 @@ test("rolls back the first replacement when the second file replacement fails", 
   }
 });
 
+test("right-side Agent reaches natural-language CRUD for all five Story Bible categories", async () => {
+  test.setTimeout(240_000);
+  const scenario = await launchStoryBibleCrudScenario();
+
+  try {
+    await startStoryBibleRequest(
+      scenario.page,
+      "按名称查询并读取人物林砚、世界观潮汐誓约、大纲主线大纲、伏笔暗门伏笔和时间线主时间线。"
+    );
+    await expect
+      .poll(
+        () => scenario.assets.every((asset) => scenario.toolPayload("read").includes(asset.id)),
+        { timeout: 30_000 }
+      )
+      .toBe(true);
+
+    await stageAndApplyStoryBibleRequest(
+      scenario.page,
+      "创建新人物顾舟、新世界观潮汐禁令、新伏笔铜钥匙，并尝试再次创建大纲和时间线。"
+    );
+    await expect
+      .poll(async () => (await listStoryBibleItems(scenario.repository)).length, {
+        timeout: 30_000
+      })
+      .toBe(8);
+    expect(await countSingletons(scenario.repository)).toEqual({ outline: 1, timeline: 1 });
+
+    await stageAndApplyStoryBibleRequest(
+      scenario.page,
+      "把刚才按名称找到的五类资料摘要都修改为已由右侧 Agent 更新。"
+    );
+    await expect
+      .poll(
+        async () =>
+          Promise.all(scenario.assets.map((asset) => readAssetSummary(scenario, asset.id))),
+        { timeout: 30_000 }
+      )
+      .toEqual(scenario.assets.map((asset) => `Agent 已更新：${asset.title}`));
+
+    await stageAndApplyStoryBibleRequest(
+      scenario.page,
+      "把人物、世界观和伏笔移入已删除，把大纲和时间线归档。"
+    );
+    await expect
+      .poll(
+        async () =>
+          Promise.all(scenario.assets.map((asset) => readAssetStatus(scenario, asset.id))),
+        { timeout: 30_000 }
+      )
+      .toEqual(["deleted", "deleted", "archived", "deleted", "archived"]);
+
+    await stageAndApplyStoryBibleRequest(
+      scenario.page,
+      "恢复已删除的人物、世界观和伏笔；大纲与时间线也调用恢复以确认单例保护。"
+    );
+    await expect
+      .poll(
+        async () =>
+          Promise.all(scenario.assets.map((asset) => readAssetStatus(scenario, asset.id))),
+        { timeout: 30_000 }
+      )
+      .toEqual(["active", "active", "archived", "active", "archived"]);
+  } finally {
+    await scenario.close();
+  }
+});
+
 interface Proposal {
   readonly id: string;
   readonly name: "edit_text";
@@ -316,6 +384,28 @@ interface Scenario {
   readonly page: Page;
   readonly projectRoot: string;
   close(): Promise<void>;
+}
+
+type StoryBibleCrudType = "character" | "world.lore" | "outline" | "foreshadow" | "timeline.events";
+
+type StoryBibleWorkflow = "read" | "create" | "patch" | "status" | "restore";
+
+interface StoryBibleSeededAsset {
+  readonly id: string;
+  readonly title: string;
+  readonly type: StoryBibleCrudType;
+}
+
+interface StoryBibleCrudScenario extends Scenario {
+  readonly assets: readonly StoryBibleSeededAsset[];
+  readonly repository: StoryBibleFileRepository;
+  toolPayload(workflow: StoryBibleWorkflow): string;
+}
+
+interface StoryBibleToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: Record<string, unknown>;
 }
 
 interface TransactionJournalEntry {
@@ -430,6 +520,246 @@ async function launchScenario(
   };
 }
 
+async function launchStoryBibleCrudScenario(): Promise<StoryBibleCrudScenario> {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-story-bible-crud-e2e-"));
+  const projectRoot = join(tempRoot, "Project");
+  await prepareProject(projectRoot);
+  const ids: Record<StoryBibleCrudType, string> = {
+    character: `chr_${"1".repeat(32)}`,
+    "world.lore": `lore_${"2".repeat(32)}`,
+    outline: "outline_main",
+    foreshadow: `fsh_${"3".repeat(32)}`,
+    "timeline.events": "timeline_main"
+  };
+  const repository = new StoryBibleFileRepository({
+    projectRoot,
+    now: () => "2026-08-01T00:00:00.000Z",
+    createAssetId: (type) => ids[type as StoryBibleCrudType]
+  });
+  const seeds: readonly { readonly title: string; readonly type: StoryBibleCrudType }[] = [
+    { type: "character", title: "林砚" },
+    { type: "world.lore", title: "潮汐誓约" },
+    { type: "outline", title: "主线大纲" },
+    { type: "foreshadow", title: "暗门伏笔" },
+    { type: "timeline.events", title: "主时间线" }
+  ];
+  const assets: StoryBibleSeededAsset[] = [];
+  for (const seed of seeds) {
+    const created = await repository.createStoryAsset({
+      type: seed.type,
+      value: storyBibleCreateValue(seed.type, seed.title, `用于 E2E 的${seed.title}`)
+    });
+    if (!created.ok) {
+      throw new Error(
+        `Story Bible ${seed.type} seed failed: ${created.error.message} ${JSON.stringify(created.error.details)}`
+      );
+    }
+    assets.push({ id: created.value.id, title: seed.title, type: seed.type });
+  }
+
+  const rounds = new Map<StoryBibleWorkflow, number>();
+  const toolPayloads = new Map<StoryBibleWorkflow, string>();
+  const server = createServer(async (request, response) => {
+    const body = await readJsonBody(request);
+    if (request.method === "GET" && request.url === "/v1/models") {
+      json(response, {
+        data: [
+          {
+            id: "local-agent",
+            context_window: 128000,
+            capabilities: { streaming: true, tool_calling: true, structured_arguments: true }
+          }
+        ]
+      });
+      return;
+    }
+    if (request.method !== "POST" || body["stream"] !== true) {
+      json(response, { choices: [{ message: { role: "assistant", content: "ok" } }] });
+      return;
+    }
+    const workflow = storyBibleWorkflowFromRequest(body);
+    if (workflow === undefined) {
+      sendToolCalls(
+        response,
+        [{ id: "finish-unknown", name: "finish", arguments: { summary: "Done." } }],
+        ""
+      );
+      return;
+    }
+    const round = (rounds.get(workflow) ?? 0) + 1;
+    rounds.set(workflow, round);
+    if (round > 1) toolPayloads.set(workflow, JSON.stringify(body));
+    sendToolCalls(
+      response,
+      await storyBibleWorkflowCalls(workflow, round, repository, assets),
+      round === 1 ? "正在按自然语言请求操作故事资料。" : ""
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("Expected server address");
+  const electronApp = await electron.launch({
+    args: [electronMain],
+    env: electronEnv({
+      NOVEL_STUDIO_PROJECT_ROOT: projectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
+    })
+  });
+  const page = await electronApp.firstWindow();
+  await queueDirectorySelection(electronApp, projectRoot);
+  await activateCreativeProject(page);
+  await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
+  return {
+    assets,
+    page,
+    projectRoot,
+    repository,
+    toolPayload: (workflow) => toolPayloads.get(workflow) ?? "",
+    async close() {
+      await electronApp.close();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error === undefined ? resolve() : reject(error)))
+      );
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  };
+}
+
+function storyBibleWorkflowFromRequest(
+  body: Record<string, unknown>
+): StoryBibleWorkflow | undefined {
+  const serialized = JSON.stringify(body);
+  if (serialized.includes("按名称查询并读取人物")) return "read";
+  if (serialized.includes("创建新人物顾舟")) return "create";
+  if (serialized.includes("五类资料摘要都修改")) return "patch";
+  if (serialized.includes("人物、世界观和伏笔移入已删除")) return "status";
+  if (serialized.includes("恢复已删除的人物")) return "restore";
+  return undefined;
+}
+
+async function storyBibleWorkflowCalls(
+  workflow: StoryBibleWorkflow,
+  round: number,
+  repository: StoryBibleFileRepository,
+  assets: readonly StoryBibleSeededAsset[]
+): Promise<readonly StoryBibleToolCall[]> {
+  if (workflow === "read" && round === 1) {
+    return assets.map((asset, index) => ({
+      id: `list-${index}`,
+      name: "list_story_bible",
+      arguments: { types: [asset.type], query: asset.title, limit: 10 }
+    }));
+  }
+  if (workflow === "read" && round === 2) {
+    return assets.map((asset, index) => ({
+      id: `read-${index}`,
+      name: "read_story_bible",
+      arguments: { assetId: asset.id }
+    }));
+  }
+  if (round > 1) {
+    return [
+      { id: `finish-${workflow}`, name: "finish", arguments: { summary: `${workflow} done` } }
+    ];
+  }
+  if (workflow === "create") {
+    return [
+      {
+        id: "create-character",
+        name: "create_story_bible",
+        arguments: {
+          type: "character",
+          value: storyBibleCreateValue("character", "顾舟", "新人物")
+        }
+      },
+      {
+        id: "create-world",
+        name: "create_story_bible",
+        arguments: {
+          type: "world.lore",
+          value: storyBibleCreateValue("world.lore", "潮汐禁令", "新世界观")
+        }
+      },
+      {
+        id: "create-foreshadow",
+        name: "create_story_bible",
+        arguments: {
+          type: "foreshadow",
+          value: storyBibleCreateValue("foreshadow", "铜钥匙", "新伏笔")
+        }
+      },
+      {
+        id: "create-outline-duplicate",
+        name: "create_story_bible",
+        arguments: { type: "outline", value: storyBibleCreateValue("outline", "重复大纲") }
+      },
+      {
+        id: "create-timeline-duplicate",
+        name: "create_story_bible",
+        arguments: {
+          type: "timeline.events",
+          value: storyBibleCreateValue("timeline.events", "重复时间线")
+        }
+      }
+    ];
+  }
+  const current = await Promise.all(
+    assets.map(async (asset) => {
+      const read = await repository.readCompatibleStoryAsset(asset.id);
+      if (!read.ok) throw new Error(`Story Bible read failed: ${read.error.message}`);
+      return { asset, read: read.value };
+    })
+  );
+  if (workflow === "patch") {
+    return current.map(({ asset, read }, index) => ({
+      id: `patch-${index}`,
+      name: "patch_story_bible",
+      arguments: {
+        assetId: asset.id,
+        baseRevision: read.revision,
+        baseChecksum: read.checksum,
+        operations: [{ op: "replace", path: "/summary", value: `Agent 已更新：${asset.title}` }]
+      }
+    }));
+  }
+  if (workflow === "status") {
+    return current.map(({ asset, read }, index) => ({
+      id: `status-${index}`,
+      name: "set_story_bible_status",
+      arguments: {
+        assetId: asset.id,
+        baseRevision: read.revision,
+        baseChecksum: read.checksum,
+        status:
+          asset.type === "outline" || asset.type === "timeline.events" ? "archived" : "deleted"
+      }
+    }));
+  }
+  return current.map(({ asset, read }, index) => ({
+    id: `restore-${index}`,
+    name: "restore_story_bible",
+    arguments: {
+      assetId: asset.id,
+      baseRevision: read.revision,
+      baseChecksum: read.checksum
+    }
+  }));
+}
+
+function storyBibleCreateValue(
+  type: StoryBibleCrudType,
+  title: string,
+  summary = ""
+): Record<string, unknown> {
+  const common = { title, summary };
+  if (type === "outline") return { ...common, details: { volumes: [], chapterOutlines: [] } };
+  if (type === "timeline.events") return { ...common, details: { events: [] } };
+  if (type === "foreshadow") {
+    return { ...common, details: { trackingStatus: "planned", milestones: [] } };
+  }
+  return common;
+}
+
 async function activateCreativeProject(page: Page): Promise<void> {
   const unbound = page.getByLabel("Agent 未绑定工作区");
   const view = page.getByLabel("Agent 会话主视图");
@@ -487,6 +817,30 @@ async function startExecution(page: Page): Promise<void> {
   await expect(page.getByLabel("变更集差异审阅")).toBeVisible();
 }
 
+async function startStoryBibleRequest(page: Page, request: string): Promise<void> {
+  const returnToConversation = page.getByRole("button", { name: "返回对话" });
+  if (await returnToConversation.isVisible()) await returnToConversation.click();
+  await expect(page.getByLabel("Agent 会话主视图")).toBeVisible();
+  const createConversation = page.getByRole("button", { name: "新建会话" }).first();
+  if (await createConversation.isVisible()) await createConversation.click();
+  const composer = page.getByLabel("会话输入区");
+  await composer.getByLabel("Agent 请求").fill(request);
+  await selectExecutionMode(page, composer);
+  await expect(composer.getByTitle("选择计划或执行模式")).toHaveAttribute("aria-label", "执行");
+  await composer.getByLabel("启动 Agent 运行").click();
+  await resolveContextRefreshIfVisible(page);
+}
+
+async function stageAndApplyStoryBibleRequest(page: Page, request: string): Promise<void> {
+  await startStoryBibleRequest(page, request);
+  await expect(page.getByLabel("变更集差异审阅")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "应用所选" }).click();
+  await resolveContextRefreshIfVisible(page);
+  await expect(page.getByLabel("会话输入区").getByLabel("Agent 请求")).toBeEnabled({
+    timeout: 30_000
+  });
+}
+
 async function selectExecutionMode(
   page: Page,
   composer: ReturnType<Page["getByLabel"]>
@@ -527,6 +881,32 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
       .filter({ hasText: "Connected to openai-compatible/local-agent" })
   ).toContainText("Connected to openai-compatible/local-agent");
   await page.getByRole("button", { name: "关闭设置" }).click();
+}
+
+async function listStoryBibleItems(repository: StoryBibleFileRepository) {
+  const listed = await repository.listStoryBible({ limit: 100 });
+  if (!listed.ok) throw new Error(`Story Bible list failed: ${listed.error.message}`);
+  return listed.value.items;
+}
+
+async function countSingletons(repository: StoryBibleFileRepository) {
+  const items = await listStoryBibleItems(repository);
+  return {
+    outline: items.filter((item) => item.type === "outline").length,
+    timeline: items.filter((item) => item.type === "timeline.events").length
+  };
+}
+
+async function readAssetSummary(scenario: StoryBibleCrudScenario, assetId: string) {
+  const read = await scenario.repository.readCompatibleStoryAsset(assetId);
+  if (!read.ok) throw new Error(`Story Bible read failed: ${read.error.message}`);
+  return read.value.asset.summary;
+}
+
+async function readAssetStatus(scenario: StoryBibleCrudScenario, assetId: string) {
+  const read = await scenario.repository.readCompatibleStoryAsset(assetId);
+  if (!read.ok) throw new Error(`Story Bible read failed: ${read.error.message}`);
+  return read.value.asset.status;
 }
 
 async function readTransactionJournals(projectRoot: string): Promise<TransactionJournal[]> {

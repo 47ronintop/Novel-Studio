@@ -19,6 +19,8 @@ import type {
   AiWritingSuggestionStreamPushEvent,
   AiWritingSuggestionStreamStartRequest,
   ChapterEditorSnapshot,
+  ChapterStatus,
+  ChapterStatusUpdateResult,
   ChapterSuggestionDiffPreview,
   ConfigAssetRestoreInput,
   ConfigAssetSaveInput,
@@ -38,6 +40,7 @@ import type {
   ModelSettingsSnapshot,
   NativeMenuCommandId,
   NovelStudioApi,
+  PackedAgentContextPreview,
   ReadAgentPermissionSummaryQuery,
   PluginSettingsSnapshot,
   ProjectChapterSelectionDto,
@@ -64,14 +67,31 @@ import type {
   SearchAgentConversationsQuery,
   ForeshadowAnalysisInput,
   ForeshadowAnalysisResultDto,
+  CreateStoryBibleAssetCommand,
   MemoryRecord,
+  SaveStoryBibleAssetCandidateCommand,
+  SaveStoryBibleStatusTransitionCommand,
   StoryBibleAsset,
   StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
+  StoryBibleEditableAsset,
+  StoryBibleReferenceImpact,
+  StoryBibleRestorableStatus,
   StoryBibleSnapshot,
+  StoryBibleExplicitInverseApplyResult,
+  StoryBibleExplicitInverseCancelResult,
+  StoryBibleExplicitInversePreview,
+  StoryBibleExplicitInverseSourceCommand,
+  StoryAnalysisHistorySummary,
+  StoryAnalysisApplicationPreviewDto,
+  StoryAnalysisApplicationResultDto,
+  StoryAnalysisRecordDto,
+  StoryAnalysisReviewCommand,
+  StoryAnalysisSettings,
   UserPreferencesSaveInput,
   UserPreferencesSnapshot,
+  WorkspaceContextPolicyUpdate,
   WorkflowRunRecord,
   WorkflowRunSummary
 } from "@novel-studio/application";
@@ -280,11 +300,11 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:workspace:create-project-conventions"
         ),
-      updateContextPolicy: (action: "disable_conventions" | "revoke_workspace_trust") =>
+      updateContextPolicy: (update: WorkspaceContextPolicyUpdate) =>
         invokeTyped<Result<void, UnifiedError>>(
           ipc,
           "application:workspace:update-context-policy",
-          { action }
+          typeof update === "string" ? { action: update } : update
         )
     },
     creativeProjectFiles: {
@@ -403,6 +423,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ContextBudgetSnapshot, UnifiedError>>(
           ipc,
           "application:agent-run:preview-context-budget",
+          command
+        ),
+      previewPackedContext: (command: PreviewContextBudgetCommand) =>
+        invokeTyped<Result<PackedAgentContextPreview, UnifiedError>>(
+          ipc,
+          "application:agent-run:preview-packed-context",
           command
         ),
       compactContext: (command: CompactContextCommand) =>
@@ -536,6 +562,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         ),
       save: () =>
         invokeTyped<Result<ChapterEditorSnapshot, UnifiedError>>(ipc, "application:chapter:save"),
+      saveWithStatus: (status: ChapterStatus) =>
+        invokeTyped<Result<ChapterStatusUpdateResult, UnifiedError>>(
+          ipc,
+          "application:chapter:set-status",
+          status
+        ),
       listVersions: () =>
         invokeTyped<Result<readonly ChapterVersionSummary[], UnifiedError>>(
           ipc,
@@ -592,6 +624,17 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           "application:settings:test-model-profile",
           profileId
         ),
+      readStoryAnalysisSettings: () =>
+        invokeTyped<Result<StoryAnalysisSettings, UnifiedError>>(
+          ipc,
+          "application:settings:read-story-analysis"
+        ),
+      saveStoryAnalysisSettings: (settings: StoryAnalysisSettings) =>
+        invokeTyped<Result<StoryAnalysisSettings, UnifiedError>>(
+          ipc,
+          "application:settings:save-story-analysis",
+          settings
+        ),
       listAgentUsage: (query: AgentUsageQuery) =>
         invokeTyped<Result<AgentUsageReport, UnifiedError>>(
           ipc,
@@ -622,6 +665,70 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
     storyBible: {
       load: () =>
         invokeTyped<Result<StoryBibleSnapshot, UnifiedError>>(ipc, "application:story-bible:load"),
+      readAsset: (assetId: string) =>
+        invokeTyped<Result<StoryBibleEditableAsset, UnifiedError>>(
+          ipc,
+          "application:story-bible:read-asset",
+          assetId
+        ),
+      createAsset: (input: CreateStoryBibleAssetCommand) =>
+        invokeTyped<Result<StoryBibleAsset, UnifiedError>>(
+          ipc,
+          "application:story-bible:create-asset",
+          input
+        ),
+      saveAssetCandidate: (input: SaveStoryBibleAssetCandidateCommand) =>
+        invokeTyped<Result<StoryBibleAsset, UnifiedError>>(
+          ipc,
+          "application:story-bible:save-asset-candidate",
+          input
+        ),
+      prepareExplicitInverseChange: (input: {
+        readonly source: StoryBibleExplicitInverseSourceCommand;
+      }) =>
+        invokeTyped<Result<StoryBibleExplicitInversePreview, UnifiedError>>(
+          ipc,
+          "application:story-bible:prepare-explicit-inverse-change",
+          input
+        ),
+      applyExplicitInverseChange: (input: {
+        readonly previewId: string;
+        readonly revision: number;
+        readonly checksum: string;
+      }) =>
+        invokeTyped<Result<StoryBibleExplicitInverseApplyResult, UnifiedError>>(
+          ipc,
+          "application:story-bible:apply-explicit-inverse-change",
+          input
+        ),
+      cancelExplicitInverseChange: (input: {
+        readonly previewId: string;
+        readonly revision: number;
+        readonly checksum: string;
+      }) =>
+        invokeTyped<Result<StoryBibleExplicitInverseCancelResult, UnifiedError>>(
+          ipc,
+          "application:story-bible:cancel-explicit-inverse-change",
+          input
+        ),
+      saveStatusTransition: (input: SaveStoryBibleStatusTransitionCommand) =>
+        invokeTyped<Result<StoryBibleAsset, UnifiedError>>(
+          ipc,
+          "application:story-bible:save-status-transition",
+          input
+        ),
+      getReferences: (assetId: string) =>
+        invokeTyped<Result<StoryBibleReferenceImpact, UnifiedError>>(
+          ipc,
+          "application:story-bible:get-references",
+          assetId
+        ),
+      resolveRestoreStatus: (assetId: string) =>
+        invokeTyped<Result<StoryBibleRestorableStatus, UnifiedError>>(
+          ipc,
+          "application:story-bible:resolve-restore-status",
+          assetId
+        ),
       saveAsset: (asset: StoryBibleAsset) =>
         invokeTyped<Result<StoryBibleAsset, UnifiedError>>(
           ipc,
@@ -649,6 +756,58 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ForeshadowAnalysisResultDto, UnifiedError>>(
           ipc,
           "application:story-bible:detect-foreshadows",
+          input
+        )
+    },
+    storyAnalysis: {
+      analyzeChapter: (input: { readonly chapterId: string }) =>
+        invokeTyped<Result<StoryAnalysisRecordDto, UnifiedError>>(
+          ipc,
+          "application:story-analysis:analyze",
+          input
+        ),
+      list: () =>
+        invokeTyped<Result<readonly StoryAnalysisHistorySummary[], UnifiedError>>(
+          ipc,
+          "application:story-analysis:list"
+        ),
+      read: (workflowRunId: string) =>
+        invokeTyped<Result<StoryAnalysisRecordDto, UnifiedError>>(
+          ipc,
+          "application:story-analysis:read",
+          workflowRunId
+        ),
+      transitionRecord: (command: StoryAnalysisReviewCommand) =>
+        invokeTyped<Result<StoryAnalysisRecordDto, UnifiedError>>(
+          ipc,
+          "application:story-analysis:transition",
+          command
+        ),
+      refreshStaleness: (workflowRunId: string) =>
+        invokeTyped<Result<StoryAnalysisRecordDto, UnifiedError>>(
+          ipc,
+          "application:story-analysis:refresh-staleness",
+          workflowRunId
+        ),
+      prepareApplication: (input: {
+        readonly workflowRunId: string;
+        readonly suggestionIds: readonly string[];
+      }) =>
+        invokeTyped<Result<StoryAnalysisApplicationPreviewDto, UnifiedError>>(
+          ipc,
+          "application:story-analysis:prepare-application",
+          input
+        ),
+      applyApplication: (input: {
+        readonly workflowRunId: string;
+        readonly suggestionIds: readonly string[];
+        readonly changeSetId: string;
+        readonly revision: number;
+        readonly checksum: string;
+      }) =>
+        invokeTyped<Result<StoryAnalysisApplicationResultDto, UnifiedError>>(
+          ipc,
+          "application:story-analysis:apply-application",
           input
         )
     },

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, test } from "vitest";
 
 import {
+  appendChangeSetProposal,
   createChangeSetRevision,
   decideChangeSetApproval,
   selectChangeSetRevision,
@@ -144,7 +145,95 @@ describe("Change Set approval gate", () => {
 
     expect(decide(operationOnly, "apply_selected")).toMatchObject({
       ok: true,
-      value: { decision: "apply_selected", approvalSource: "human_confirmation" }
+      value: {
+        schemaVersion: "1.1",
+        decision: "apply_selected",
+        approvalSource: "human_confirmation"
+      }
+    });
+  });
+
+  test("keeps a status-proof Change Set approval on protocol 1.1", async () => {
+    const baseContent = '{"status":"active"}';
+    const changeSet = await createChangeSetRevision({
+      changeSetId: "change-set-status-proof",
+      runId: "run-01",
+      projectId: "project-01",
+      checkpointId: "checkpoint-01",
+      contextSnapshotId: "context-01",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      proposal: {
+        relativePath: `characters/chr_${"a".repeat(32)}.json`,
+        assetType: "text",
+        assetId: `chr_${"a".repeat(32)}`,
+        baseContent,
+        baseChecksum: sha256(baseContent),
+        range: { unit: "character", start: 0, end: baseContent.length },
+        replacement: '{"status":"deleted"}',
+        storyBibleStatusProof: {
+          action: "delete",
+          deletionImpactChecksum: "b".repeat(64)
+        }
+      }
+    });
+
+    expect(changeSet.schemaVersion).toBe("1.1");
+    expect(decide(changeSet, "apply_selected")).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.1",
+        binding: {
+          checksum: changeSet.checksum,
+          approvalToken: changeSet.approvalToken
+        }
+      }
+    });
+  });
+
+  test("binds selected consistency groups and their checksum into approval", async () => {
+    const base = await createChangeSetRevision({
+      changeSetId: "change-set-grouped",
+      runId: "run-01",
+      projectId: "project-01",
+      checkpointId: "checkpoint-01",
+      contextSnapshotId: "context-01",
+      createdAt: "2026-07-13T01:00:00.000Z",
+      proposal: {
+        relativePath: "characters/hero.json",
+        assetType: "text",
+        assetId: "chr_hero",
+        baseContent: "{}",
+        baseChecksum: sha256("{}"),
+        range: { unit: "character", start: 0, end: 2 },
+        replacement: '{"location":"dock"}',
+        consistencyGroupId: "fact_location_01"
+      }
+    });
+    const grouped = await appendChangeSetProposal(base, {
+      createdAt: "2026-07-13T01:01:00.000Z",
+      proposal: {
+        relativePath: "timeline/main.json",
+        assetType: "text",
+        assetId: "timeline_main",
+        baseContent: "{}",
+        baseChecksum: sha256("{}"),
+        range: { unit: "character", start: 0, end: 2 },
+        replacement: '{"event":"arrival"}',
+        consistencyGroupId: "fact_location_01"
+      }
+    });
+
+    const result = decide(grouped, "apply_selected");
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.1",
+        binding: {
+          selectedConsistencyGroupIds: ["fact_location_01"],
+          selectionChecksum: expect.stringMatching(/^[a-f0-9]{64}$/)
+        }
+      }
     });
   });
 });

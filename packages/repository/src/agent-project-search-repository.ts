@@ -11,7 +11,10 @@ import {
   type CreativeProjectFilePolicy
 } from "./creative-project-file-repository.js";
 import { storageError, validationError } from "./errors.js";
-import { SearchIndexFileRepository } from "./search-index-repository.js";
+import {
+  SearchIndexFileRepository,
+  type SearchSourceRef
+} from "./search-index-repository.js";
 
 // Hard limits for search queries
 const MAX_QUERY_LENGTH = 1024;
@@ -188,6 +191,17 @@ function resultDigestFor(
   snippet: string
 ): string {
   return sha256(`${relativePath}:${rangeStart}:${rangeEnd}:${snippet}`);
+}
+
+function creativeSearchStableRef(source: SearchSourceRef): string {
+  switch (source.kind) {
+    case "chapter":
+      return `chapter:${source.id}`;
+    case "story-asset":
+      return `story_bible:${source.id}`;
+    case "memory":
+      return `memory:${source.id}`;
+  }
 }
 
 function truncateSnippet(text: string, maxBytes = MAX_SNIPPET_BYTES): string {
@@ -429,7 +443,7 @@ export class AgentProjectSearchRepository {
       const sourceChecksum = sha256(item.id);
       items.push({
         relativePath: rp,
-        stableRef: item.sourceRef.id,
+        stableRef: creativeSearchStableRef(item.sourceRef),
         range: { unit: "line_column", start: 1, end: 1 },
         snippet,
         sourceChecksum,

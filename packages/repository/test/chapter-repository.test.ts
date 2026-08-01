@@ -17,6 +17,14 @@ afterEach(async () => {
 });
 
 describe("ChapterFileRepository", () => {
+  test("treats a missing chapters directory as an authoritative empty catalog", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-chapter-empty-"));
+    tempRoots.push(projectRoot);
+    const repository = new ChapterFileRepository({ projectRoot, traceId: "trace_chapter_empty" });
+
+    expect(await repository.listChapters()).toEqual({ ok: true, value: [] });
+  });
+
   test("reads and writes a chapter fixture through the project folder", async () => {
     const projectRoot = await copyFixtureProject();
     const repository = new ChapterFileRepository({ projectRoot, traceId: "trace_chapter_repo" });

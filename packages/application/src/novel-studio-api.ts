@@ -6,11 +6,13 @@ import type {
   RenameChapterInput,
   ChapterVersionContent,
   ChapterVersionSummary,
+  ChapterStatus,
   Result,
   UnifiedError
 } from "@novel-studio/shared";
 import type {
   AgentContextScope,
+  ContextDraftRef,
   AgentRunCommandResult,
   AgentRunEvent,
   AgentRunSnapshot,
@@ -40,7 +42,7 @@ import type {
   UpdateAgentRunDraftCommand,
   UpdateContextDraftCommand
 } from "./agent-run-draft-session.js";
-import type { CompactContextResult } from "./agent-context-session.js";
+import type { CompactContextResult, PackedAgentContextPreview } from "./agent-context-session.js";
 import type {
   CreativeProjectFileDocument,
   CreativeProjectFileLifecycleCommand,
@@ -74,6 +76,7 @@ import type {
 } from "./config-studio-session.js";
 import type {
   DesktopShellState,
+  ChapterStatusUpdateResult,
   ProjectChapterSelectionDto,
   ProjectCreationPreviewDto,
   ProjectRecoveryApplyResultDto,
@@ -89,7 +92,8 @@ import type { ModelDiscoverySnapshot } from "./model-discovery-session.js";
 import type {
   ModelConnectionResult,
   ModelProfile,
-  ModelSettingsSnapshot
+  ModelSettingsSnapshot,
+  StoryAnalysisSettings
 } from "./model-settings-session.js";
 import type { PluginSettingsSnapshot } from "./plugin-settings-session.js";
 import type { ProjectRecoveryDraftPreview } from "./project-workspace-session.js";
@@ -99,14 +103,35 @@ import type {
   ProjectSearchResults
 } from "./project-search-session.js";
 import type {
+  CreateStoryBibleAssetCommand,
   MemoryRecord,
+  SaveStoryBibleAssetCandidateCommand,
+  SaveStoryBibleStatusTransitionCommand,
   StoryBibleAsset,
   StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
+  StoryBibleEditableAsset,
+  StoryBibleReferenceImpact,
+  StoryBibleRestorableStatus,
   StoryBibleSnapshot
 } from "./story-bible-session.js";
 import type { ForeshadowAnalysisInput } from "./foreshadow-analysis-session.js";
+import type {
+  StoryAnalysisHistorySummary,
+  StoryAnalysisRecordDto,
+  StoryAnalysisReviewCommand
+} from "./story-analysis-session.js";
+import type {
+  StoryAnalysisApplicationPreviewDto,
+  StoryAnalysisApplicationResultDto
+} from "./story-analysis-application-session.js";
+import type {
+  StoryBibleExplicitInverseApplyResult,
+  StoryBibleExplicitInverseCancelResult,
+  StoryBibleExplicitInversePreview,
+  StoryBibleExplicitInverseSourceCommand
+} from "./story-bible-explicit-inverse-session.js";
 import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot
@@ -167,6 +192,26 @@ export interface ForeshadowAnalysisUsageDto {
     readonly status: "unknown" | "estimated" | "actual";
   };
 }
+
+export type WorkspaceContextSourcePreferenceUpdate =
+  | {
+      readonly refId: string;
+      readonly decision: "pinned" | "excluded";
+      readonly priority: number;
+      readonly ref?: ContextDraftRef;
+    }
+  | {
+      readonly refId: string;
+      readonly decision: null;
+    };
+
+export type WorkspaceContextPolicyUpdate =
+  | "disable_conventions"
+  | "revoke_workspace_trust"
+  | {
+      readonly action: "set_source_preference";
+      readonly preference: WorkspaceContextSourcePreferenceUpdate;
+    };
 
 interface ForeshadowAnalysisCandidateDtoBase {
   readonly candidateId: string;
@@ -282,9 +327,7 @@ export interface NovelStudioApi {
       readonly expectedChecksum: string;
     }): Promise<Result<EngineeringTextFileSaveResult, UnifiedError>>;
     createProjectConventions(): Promise<Result<ProjectConventionsCreateResult, UnifiedError>>;
-    updateContextPolicy(
-      action: "disable_conventions" | "revoke_workspace_trust"
-    ): Promise<Result<void, UnifiedError>>;
+    updateContextPolicy(update: WorkspaceContextPolicyUpdate): Promise<Result<void, UnifiedError>>;
   };
   creativeProjectFiles: {
     refresh(
@@ -341,6 +384,9 @@ export interface NovelStudioApi {
     previewContextBudget(
       command: PreviewContextBudgetCommand
     ): Promise<Result<ContextBudgetSnapshot, UnifiedError>>;
+    previewPackedContext(
+      command: PreviewContextBudgetCommand
+    ): Promise<Result<PackedAgentContextPreview, UnifiedError>>;
     compactContext(
       command: CompactContextCommand
     ): Promise<Result<CompactContextResult, UnifiedError>>;
@@ -390,6 +436,7 @@ export interface NovelStudioApi {
     load(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
     edit(nextBody: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
     save(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+    saveWithStatus(status: ChapterStatus): Promise<Result<ChapterStatusUpdateResult, UnifiedError>>;
     listVersions(): Promise<Result<readonly ChapterVersionSummary[], UnifiedError>>;
     previewVersion(versionId: string): Promise<Result<ChapterVersionContent, UnifiedError>>;
     restoreVersion(versionId: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
@@ -408,6 +455,10 @@ export interface NovelStudioApi {
     testModelProfileConnection(
       profileId: string
     ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+    readStoryAnalysisSettings(): Promise<Result<StoryAnalysisSettings, UnifiedError>>;
+    saveStoryAnalysisSettings(
+      settings: StoryAnalysisSettings
+    ): Promise<Result<StoryAnalysisSettings, UnifiedError>>;
     listAgentUsage(query: AgentUsageQuery): Promise<Result<AgentUsageReport, UnifiedError>>;
     clearAgentUsage(
       command: ClearAgentUsageCommand
@@ -422,6 +473,33 @@ export interface NovelStudioApi {
   };
   storyBible: {
     load(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
+    readAsset(assetId: string): Promise<Result<StoryBibleEditableAsset, UnifiedError>>;
+    createAsset(
+      input: CreateStoryBibleAssetCommand
+    ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+    saveAssetCandidate(
+      input: SaveStoryBibleAssetCandidateCommand
+    ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+    prepareExplicitInverseChange?(input: {
+      readonly source: StoryBibleExplicitInverseSourceCommand;
+    }): Promise<Result<StoryBibleExplicitInversePreview, UnifiedError>>;
+    applyExplicitInverseChange?(input: {
+      readonly previewId: string;
+      readonly revision: number;
+      readonly checksum: string;
+    }): Promise<Result<StoryBibleExplicitInverseApplyResult, UnifiedError>>;
+    cancelExplicitInverseChange?(input: {
+      readonly previewId: string;
+      readonly revision: number;
+      readonly checksum: string;
+    }): Promise<Result<StoryBibleExplicitInverseCancelResult, UnifiedError>>;
+    saveStatusTransition?(
+      input: SaveStoryBibleStatusTransitionCommand
+    ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+    getReferences?(assetId: string): Promise<Result<StoryBibleReferenceImpact, UnifiedError>>;
+    resolveRestoreStatus?(
+      assetId: string
+    ): Promise<Result<StoryBibleRestorableStatus, UnifiedError>>;
     saveAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
     saveMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
     buildConsistencyReport(): Promise<Result<StoryBibleConsistencyReport, UnifiedError>>;
@@ -431,6 +509,28 @@ export interface NovelStudioApi {
     detectForeshadows(
       input: ForeshadowAnalysisInput
     ): Promise<Result<ForeshadowAnalysisResultDto, UnifiedError>>;
+  };
+  storyAnalysis: {
+    analyzeChapter(input: {
+      readonly chapterId: string;
+    }): Promise<Result<StoryAnalysisRecordDto, UnifiedError>>;
+    list(): Promise<Result<readonly StoryAnalysisHistorySummary[], UnifiedError>>;
+    read(workflowRunId: string): Promise<Result<StoryAnalysisRecordDto, UnifiedError>>;
+    transitionRecord(
+      command: StoryAnalysisReviewCommand
+    ): Promise<Result<StoryAnalysisRecordDto, UnifiedError>>;
+    refreshStaleness(workflowRunId: string): Promise<Result<StoryAnalysisRecordDto, UnifiedError>>;
+    prepareApplication(input: {
+      readonly workflowRunId: string;
+      readonly suggestionIds: readonly string[];
+    }): Promise<Result<StoryAnalysisApplicationPreviewDto, UnifiedError>>;
+    applyApplication(input: {
+      readonly workflowRunId: string;
+      readonly suggestionIds: readonly string[];
+      readonly changeSetId: string;
+      readonly revision: number;
+      readonly checksum: string;
+    }): Promise<Result<StoryAnalysisApplicationResultDto, UnifiedError>>;
   };
   studio: {
     loadConfigAsset(

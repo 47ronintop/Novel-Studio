@@ -57,6 +57,7 @@ import { useModelSettingsActions, useSettingsPanelActions } from "./settings-pan
 import { useShellPreferenceActions } from "./shell-preference-actions.js";
 import { createWorkspaceNavigation, type WorkspaceNavigation } from "./workspace-navigation.js";
 import { useStudioActions } from "./studio-actions.js";
+import { useStoryAnalysisWorkspace } from "./story-analysis-workspace.js";
 import {
   createCreativeProjectFileShellBindings,
   useWorkspaceFileEditorRuntime
@@ -393,6 +394,9 @@ export function App() {
     handleDiscardRecoveryDraft,
     handleStoryBibleDraftChange,
     handleStoryBibleFiltersChange,
+    handleStoryBibleStatusActionRequest,
+    handleStoryBibleStatusActionCancel,
+    handleStoryBibleStatusActionConfirm,
     handleSaveStoryBibleDraft,
     handleOpenForeshadowAnalysis,
     handleToggleForeshadowAnalysisChapter,
@@ -803,6 +807,21 @@ export function App() {
     handleStudioRestoreVersion
   } = useStudioActions(studioBridge, setStudio);
 
+  const storyAnalysisWorkspace = useStoryAnalysisWorkspace({
+    api,
+    activeCreativeProjectId,
+    activeCreativeWorkspaceId,
+    activeChapterId: projectWorkflow?.activeChapterId,
+    chapterBridge,
+    chapterEditor,
+    projectWorkflowBridge,
+    storyBibleBridge,
+    storyBibleEditor,
+    setChapterEditor,
+    setProjectWorkflow,
+    setStoryBible,
+    setStoryBibleEditor
+  });
   const interactiveChapterEditor =
     chapterEditor === undefined
       ? undefined
@@ -819,6 +838,7 @@ export function App() {
           onSelectionReviewUndo: handleUndoSelectionReview,
           onSelectionAiPreview: handleSelectionAiPreview,
           onSave: handleSave,
+          onStatusChange: storyAnalysisWorkspace.onChapterStatusChange,
           onVersionPreview: handleVersionPreview,
           onVersionRestore: handleVersionRestore
         };
@@ -891,7 +911,7 @@ export function App() {
         creativeProjectFiles={creativeProjectFileShell.navigator}
         onboarding={onboarding}
         storyBible={storyBible}
-        storyBibleEditor={storyBibleEditor}
+        storyBibleEditor={storyAnalysisWorkspace.storyBibleEditor}
         shellState={shellState}
         commands={commands}
         commandPaletteOpen={shortcutState.commandPaletteOpen}
@@ -942,6 +962,9 @@ export function App() {
         onStudioRestoreVersion={handleStudioRestoreVersion}
         onStoryBibleDraftChange={handleStoryBibleDraftChange}
         onStoryBibleFiltersChange={handleStoryBibleFiltersChange}
+        onStoryBibleStatusActionRequest={handleStoryBibleStatusActionRequest}
+        onStoryBibleStatusActionCancel={handleStoryBibleStatusActionCancel}
+        onStoryBibleStatusActionConfirm={handleStoryBibleStatusActionConfirm}
         onCreativeNavigatorModeSelect={creativeProjectFileShell.onNavigatorModeSelect}
         engineeringWorkspace={engineeringWorkspace}
         onEngineeringExpandedPathIdsChange={handleEngineeringExpandedPathIdsChange}

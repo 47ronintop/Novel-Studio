@@ -35,6 +35,7 @@ export interface WorkspaceNavigation {
   navigateToTimeline(): void;
   navigateToTimelineEntry(entryId: string): void;
   cancelStoryDraft(): void;
+  cancelStoryExplicitInversePreview(): Promise<void>;
   navigateToFile(path: string): Promise<void>;
   navigateToCreativeFile(path: string): Promise<void>;
   openMainReview(review: AgentConversationMainReview): void;
@@ -45,7 +46,13 @@ export interface WorkspaceNavigationDependencies {
   readonly projectWorkflowBridge?: Pick<ProjectWorkflowBridge, "selectChapterAndLoad"> | undefined;
   readonly chapterEditorBridge?: Pick<ChapterEditorBridge, "adopt"> | undefined;
   readonly storyBibleBridge?:
-    | Pick<StoryBibleBridge, "selectKind" | "selectEntry" | "beginCreate" | "cancelDraft">
+    | (Pick<StoryBibleBridge, "selectKind" | "selectEntry" | "beginCreate" | "cancelDraft"> &
+        Partial<
+          Pick<
+            StoryBibleBridge,
+            "selectEntryForEditing" | "getEditorProps" | "cancelExplicitInversePreview"
+          >
+        >)
     | undefined;
   readonly plainFileBridge?: Pick<PlainFileEditorBridge, "openFile"> | undefined;
   readonly creativePlainFileBridge?: Pick<PlainFileEditorBridge, "openFile" | "clear"> | undefined;
@@ -118,7 +125,7 @@ export function createWorkspaceNavigation(
       navigateToStory(() => {
         const bridge = dependencies.storyBibleBridge;
         if (bridge === undefined) return;
-        dependencies.setStoryBibleEditor(bridge.selectEntry(entryId));
+        openStoryBibleEntry(bridge, entryId);
       });
     },
     createStoryEntry(kind, assetType) {
@@ -139,7 +146,7 @@ export function createWorkspaceNavigation(
       navigateToStory(() => {
         const bridge = dependencies.storyBibleBridge;
         if (bridge === undefined) return;
-        dependencies.setStoryBibleEditor(bridge.selectEntry(entryId));
+        openStoryBibleEntry(bridge, entryId);
       }, "timeline");
     },
     cancelStoryDraft() {
@@ -147,6 +154,12 @@ export function createWorkspaceNavigation(
       const bridge = dependencies.storyBibleBridge;
       if (bridge === undefined) return;
       dependencies.setStoryBibleEditor(bridge.cancelDraft());
+    },
+    async cancelStoryExplicitInversePreview() {
+      if (!hasCreativeContext(dependencies.getWorkspaceContext())) return;
+      const bridge = dependencies.storyBibleBridge;
+      if (bridge?.cancelExplicitInversePreview === undefined) return;
+      dependencies.setStoryBibleEditor(await bridge.cancelExplicitInversePreview());
     },
     async navigateToFile(path) {
       if (!(await canLeaveCreativeFile())) return;
@@ -188,6 +201,21 @@ export function createWorkspaceNavigation(
       dependencies.setMainReview(review);
     }
   };
+
+  function openStoryBibleEntry(
+    bridge: NonNullable<WorkspaceNavigationDependencies["storyBibleBridge"]>,
+    entryId: string
+  ): void {
+    if (bridge.selectEntryForEditing === undefined || bridge.getEditorProps === undefined) {
+      dependencies.setStoryBibleEditor(bridge.selectEntry(entryId));
+      return;
+    }
+    const pending = bridge.selectEntryForEditing(entryId);
+    dependencies.setStoryBibleEditor(bridge.getEditorProps());
+    void pending.then(dependencies.setStoryBibleEditor, (error: unknown) => {
+      dependencies.onNavigationFeedback?.(toErrorMessage(error));
+    });
+  }
 
   function selectWorkbench(mode: WorkbenchMode): void {
     if (mode === "creative" && !hasCreativeContext(dependencies.getWorkspaceContext())) {

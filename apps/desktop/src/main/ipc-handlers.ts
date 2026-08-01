@@ -1,4 +1,8 @@
-import { createDesktopApplication, toProjectWorkspaceSnapshotDto } from "@novel-studio/application";
+import {
+  createDesktopApplication,
+  toProjectWorkspaceSnapshotDto,
+  validateStoryAnalysisBundle
+} from "@novel-studio/application";
 import { realpath, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, relative } from "node:path";
@@ -51,6 +55,7 @@ import type {
   ConfigAssetSaveInput,
   ConfigAssetType,
   ChangeAgentConversationStatusCommand,
+  CreateStoryBibleAssetCommand,
   CreateAgentConversationCommand,
   AiWritingSelectionPreviewRequest,
   AiWritingSuggestionRequest,
@@ -67,8 +72,19 @@ import type {
   SearchAgentConversationsQuery,
   ProjectSearchQuery,
   ProjectWorkspaceSnapshot,
+  SaveStoryBibleAssetCandidateCommand,
+  SaveStoryBibleStatusTransitionCommand,
   StoryBibleAsset,
+  StoryBibleCreateValue,
   StoryBibleContextCandidateOptions,
+  StoryBibleExplicitInverseSourceCommand,
+  StoryBibleWriteCandidate,
+  StoryAnalysisHistorySummary,
+  StoryAnalysisApplicationPreviewDto,
+  StoryAnalysisApplicationResultDto,
+  StoryAnalysisRecordDto,
+  StoryAnalysisReviewCommand,
+  StoryAnalysisSettings,
   UserPreferencesSaveInput
 } from "@novel-studio/application";
 import type {
@@ -81,6 +97,7 @@ import { DEFAULT_NETWORK_SETTINGS } from "@novel-studio/application";
 import { DEFAULT_MCP_SETTINGS } from "@novel-studio/application";
 import type {
   CreateChapterInput,
+  ChapterStatus,
   DeleteChapterInput,
   DuplicateChapterInput,
   RenameChapterInput,
@@ -91,9 +108,17 @@ import { createUnifiedError, err } from "@novel-studio/shared";
 import type { ModelSecretStore } from "./model-runtime.js";
 import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import type { WorkspaceActivationCoordinator } from "./workspace-activation.js";
-import type { WorkspaceContextPolicyStore } from "./workspace-context-policy-store.js";
+import {
+  parseWorkspaceContextSourcePreferenceMutation,
+  type WorkspaceContextPolicyStore,
+  type WorkspaceContextSourcePreferenceMutation
+} from "./workspace-context-policy-store.js";
 import type { CreativeGeneralActiveResourceProof } from "./creative-general-active-resource-proof.js";
 import { normalizeCreativeProjectFilePath } from "@novel-studio/repository";
+import {
+  validateStoryBibleCreateValue,
+  validateStoryBibleWriteCandidate
+} from "@novel-studio/schemas";
 import { createDesktopProjectConventionsFile } from "./project-conventions-file.js";
 
 export type ApplicationIpcHandlers = {
@@ -549,11 +574,11 @@ export function createApplicationIpcHandlers(
       return created;
     },
     "application:workspace:update-context-policy": async (input: unknown) => {
-      const action = toWorkspaceContextPolicyAction(input);
+      const update = toWorkspaceContextPolicyAction(input);
       const manager = options.agentRuntimeManager;
       const active = manager?.active();
       const store = options.workspaceContextPolicyStore;
-      if (action === undefined) return invalidWorkspaceRequest();
+      if (update === undefined) return invalidWorkspaceRequest();
       if (manager === undefined || store === undefined || active?.scope !== "workspace") {
         return err(workspaceContextPolicyUnavailable());
       }
@@ -563,9 +588,11 @@ export function createApplicationIpcHandlers(
         contentRoot: active.binding.contentRoot
       } as const;
       const changed =
-        action === "disable_conventions"
-          ? await store.disableConventions(binding)
-          : await store.revokeTrust(binding);
+        update.action === "set_source_preference"
+          ? await store.setSourcePreference(binding, update.preference)
+          : update.action === "disable_conventions"
+            ? await store.disableConventions(binding)
+            : await store.revokeTrust(binding);
       if (!changed.ok) return changed;
       const refreshed = await manager.refreshCurrentWorkspace();
       if (!refreshed.ok) {
@@ -834,9 +861,7 @@ export function createApplicationIpcHandlers(
       if (parsed.contextMode === "general_file") {
         const verified = await verifyCreativeGeneralProof(
           parsed,
-          parsed.activeResourceRef?.kind !== "project_file"
-            ? undefined
-            : parsed.activeResourceRef
+          parsed.activeResourceRef?.kind !== "project_file" ? undefined : parsed.activeResourceRef
         );
         if (verified !== undefined && !verified.ok) return verified;
       }
@@ -897,6 +922,13 @@ export function createApplicationIpcHandlers(
       return parsed === undefined || contextSession === undefined
         ? Promise.resolve(agentRunUnavailable())
         : contextSession.previewContextBudget(parsed);
+    },
+    "application:agent-run:preview-packed-context": (command: unknown) => {
+      const parsed = toPreviewContextBudgetCommand(command);
+      const contextSession = currentAgentContextSession();
+      return parsed === undefined || contextSession === undefined
+        ? Promise.resolve(agentRunUnavailable())
+        : contextSession.previewPackedContext(parsed);
     },
     "application:agent-run:compact-context": (command: unknown) => {
       const parsed = toCompactContextCommand(command);
@@ -1109,6 +1141,16 @@ export function createApplicationIpcHandlers(
     },
     "application:chapter:save": () =>
       saveActiveChapterWithCoordinator(application, options.agentWriteSaveCoordinator),
+    "application:chapter:set-status": (status: unknown) => {
+      const parsedStatus = toChapterStatusForIpc(status);
+      return parsedStatus === undefined
+        ? Promise.resolve(chapterStatusInputInvalid())
+        : saveActiveChapterStatusWithCoordinator(
+            application,
+            options.agentWriteSaveCoordinator,
+            parsedStatus
+          );
+    },
     "application:chapter:list-versions": () => application.listActiveChapterVersions(),
     "application:chapter:preview-version": (versionId: unknown) => {
       if (typeof versionId !== "string") {
@@ -1181,6 +1223,13 @@ export function createApplicationIpcHandlers(
 
       return application.testModelProfileConnection(profileId);
     },
+    "application:settings:read-story-analysis": () => application.readStoryAnalysisSettings(),
+    "application:settings:save-story-analysis": (value: unknown) => {
+      const settings = toStoryAnalysisSettingsForIpc(value);
+      return settings === undefined
+        ? Promise.resolve(storyAnalysisSettingsInputInvalid())
+        : application.saveStoryAnalysisSettings(settings);
+    },
     "application:settings:list-agent-usage": (query: unknown) =>
       application.listAgentUsage(query as AgentUsageQuery),
     "application:settings:clear-agent-usage": (command: unknown) =>
@@ -1194,6 +1243,54 @@ export function createApplicationIpcHandlers(
       return application.setPluginEnabled(pluginId, enabled);
     },
     "application:story-bible:load": () => application.loadStoryBible(),
+    "application:story-bible:read-asset": (assetId: unknown) =>
+      typeof assetId === "string" && assetId.length > 0 && assetId.trim() === assetId
+        ? application.readStoryBibleAssetForEditing(assetId)
+        : Promise.resolve(storyBibleIpcInputInvalid()),
+    "application:story-bible:create-asset": (input: unknown) => {
+      const command = toCreateStoryBibleAssetCommand(input);
+      return command === undefined
+        ? Promise.resolve(storyBibleIpcInputInvalid())
+        : application.createStoryBibleAsset(command);
+    },
+    "application:story-bible:save-asset-candidate": (input: unknown) => {
+      const command = toSaveStoryBibleAssetCandidateCommand(input);
+      return command === undefined
+        ? Promise.resolve(storyBibleIpcInputInvalid())
+        : application.saveStoryBibleAssetCandidate(command);
+    },
+    "application:story-bible:prepare-explicit-inverse-change": (input: unknown) => {
+      const command = toPrepareStoryBibleExplicitInverseCommand(input);
+      return command === undefined
+        ? Promise.resolve(storyBibleIpcInputInvalid())
+        : application.prepareStoryBibleExplicitInverseChange(command);
+    },
+    "application:story-bible:apply-explicit-inverse-change": (input: unknown) => {
+      const command = toApplyStoryBibleExplicitInverseCommand(input);
+      return command === undefined
+        ? Promise.resolve(storyBibleIpcInputInvalid())
+        : application.applyStoryBibleExplicitInverseChange(command);
+    },
+    "application:story-bible:cancel-explicit-inverse-change": (input: unknown) => {
+      const command = toExplicitInverseReceiptCommand(input);
+      return command === undefined
+        ? Promise.resolve(storyBibleIpcInputInvalid())
+        : application.cancelStoryBibleExplicitInverseChange(command);
+    },
+    "application:story-bible:save-status-transition": (input: unknown) => {
+      const command = toSaveStoryBibleStatusTransitionCommand(input);
+      return command === undefined
+        ? Promise.resolve(storyBibleIpcInputInvalid())
+        : application.saveStoryBibleStatusTransition(command);
+    },
+    "application:story-bible:get-references": (assetId: unknown) =>
+      typeof assetId === "string" && assetId.length > 0 && assetId.trim() === assetId
+        ? application.getStoryBibleReferences(assetId)
+        : Promise.resolve(storyBibleIpcInputInvalid()),
+    "application:story-bible:resolve-restore-status": (assetId: unknown) =>
+      typeof assetId === "string" && assetId.length > 0 && assetId.trim() === assetId
+        ? application.resolveStoryBibleRestoreStatus(assetId)
+        : Promise.resolve(storyBibleIpcInputInvalid()),
     "application:story-bible:save-asset": (asset: unknown) => {
       const storyBibleAsset = toStoryBibleAsset(asset);
       if (storyBibleAsset === undefined) {
@@ -1231,6 +1328,67 @@ export function createApplicationIpcHandlers(
       }
       const dto = toForeshadowAnalysisResultDto(result.value, analysisInput.chapterIds);
       return dto === undefined ? foreshadowScanIpcResultInvalid() : ok(dto);
+    },
+    "application:story-analysis:analyze": async (input: unknown) => {
+      const analysisInput = toStoryAnalysisAnalyzeInput(input);
+      if (analysisInput === undefined) return storyAnalysisInputInvalid();
+      return storyAnalysisRecordIpcResult(() =>
+        application.analyzeChapterStory({
+          chapterId: analysisInput.chapterId,
+          trigger: "manual"
+        })
+      );
+    },
+    "application:story-analysis:list": async (input: unknown = undefined) => {
+      if (input !== undefined) return storyAnalysisInputInvalid();
+      return storyAnalysisListIpcResult(() => application.listStoryAnalyses());
+    },
+    "application:story-analysis:read": async (workflowRunId: unknown) => {
+      const parsedWorkflowRunId = toStoryAnalysisWorkflowRunId(workflowRunId);
+      if (parsedWorkflowRunId === undefined) return storyAnalysisInputInvalid();
+      return storyAnalysisRecordIpcResult(() => application.readStoryAnalysis(parsedWorkflowRunId));
+    },
+    "application:story-analysis:transition": async (input: unknown) => {
+      const command = toStoryAnalysisReviewCommand(input);
+      if (command === undefined) return storyAnalysisInputInvalid();
+      const transition =
+        command.transition.status === "resolved"
+          ? {
+              status: "resolved" as const,
+              decision: command.transition.decision,
+              changeSetId: null,
+              actor: "author" as const
+            }
+          : command.transition;
+      return storyAnalysisRecordIpcResult(() =>
+        application.transitionStoryAnalysisRecord({
+          workflowRunId: command.workflowRunId,
+          recordId: command.recordId,
+          expectedRevision: command.expectedRevision,
+          transition
+        })
+      );
+    },
+    "application:story-analysis:refresh-staleness": async (workflowRunId: unknown) => {
+      const parsedWorkflowRunId = toStoryAnalysisWorkflowRunId(workflowRunId);
+      if (parsedWorkflowRunId === undefined) return storyAnalysisInputInvalid();
+      return storyAnalysisRecordIpcResult(() =>
+        application.refreshStoryAnalysisStaleness(parsedWorkflowRunId)
+      );
+    },
+    "application:story-analysis:prepare-application": async (input: unknown) => {
+      const command = toStoryAnalysisPrepareApplicationInput(input);
+      if (command === undefined) return storyAnalysisInputInvalid();
+      return storyAnalysisApplicationPreviewIpcResult(() =>
+        application.prepareStoryAnalysisApplication(command)
+      );
+    },
+    "application:story-analysis:apply-application": async (input: unknown) => {
+      const command = toStoryAnalysisApplyApplicationInput(input);
+      if (command === undefined) return storyAnalysisInputInvalid();
+      return storyAnalysisApplicationResultIpcResult(() =>
+        application.applyStoryAnalysisApplication(command)
+      );
     },
     "application:studio:load-config-asset": (assetType: unknown, assetId: unknown) => {
       if (!isConfigAssetType(assetType) || typeof assetId !== "string") {
@@ -1387,6 +1545,8 @@ function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefine
       "runDraftId",
       "runDraftRevision",
       "runDraftChecksum",
+      "packedContextId",
+      "packedContextPayloadChecksum",
       "limits",
       "sourcePlanId",
       "sourcePlanRevision"
@@ -1398,6 +1558,8 @@ function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefine
     !isSafeId(value["runDraftId"]) ||
     !isPositiveInteger(value["runDraftRevision"]) ||
     !isNonEmptyString(value["runDraftChecksum"]) ||
+    !isSafeId(value["packedContextId"]) ||
+    !isSha256Checksum(value["packedContextPayloadChecksum"]) ||
     (value["limits"] !== undefined && !isRecord(value["limits"])) ||
     (value["sourcePlanId"] !== undefined && !isSafeId(value["sourcePlanId"])) ||
     (value["sourcePlanRevision"] !== undefined && !isPositiveInteger(value["sourcePlanRevision"]))
@@ -1488,10 +1650,7 @@ function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | 
     (initialize["activeResourceRef"] !== undefined &&
       initialize["activeResourceRef"] !== null &&
       !isActiveResourceContextRef(initialize["activeResourceRef"])) ||
-    !activeResourceMatchesContextMode(
-      initialize["activeResourceRef"],
-      initialize["contextMode"]
-    )
+    !activeResourceMatchesContextMode(initialize["activeResourceRef"], initialize["contextMode"])
   ) {
     return undefined;
   }
@@ -1673,6 +1832,18 @@ function isContextDraftMutation(value: unknown): boolean {
         (value["ref"] === null || isActiveResourceContextRef(value["ref"])) &&
         hasOnlyKeys(value, ["kind", "ref"])
       );
+    case "set_source_override": {
+      if (!isNonEmptyString(value["refId"])) return false;
+      if (value["decision"] === null || value["decision"] === "automatic") {
+        return hasOnlyKeys(value, ["kind", "refId", "decision"]);
+      }
+      return (
+        (value["decision"] === "pinned" || value["decision"] === "excluded") &&
+        isNonNegativeInteger(value["priority"]) &&
+        value["priority"] <= 100 &&
+        hasOnlyKeys(value, ["kind", "refId", "decision", "priority"])
+      );
+    }
     default:
       return false;
   }
@@ -2278,6 +2449,10 @@ function isSafeId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(value);
 }
 
+function isSha256Checksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
 function isOpaqueRetryTargetId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= 512;
 }
@@ -2482,6 +2657,24 @@ async function saveActiveChapterWithCoordinator(
   }
 }
 
+async function saveActiveChapterStatusWithCoordinator(
+  application: DesktopApplication,
+  coordinator: AgentWriteSaveCoordinator | undefined,
+  status: Exclude<ChapterStatus, "deleted">
+): Promise<unknown> {
+  if (coordinator === undefined) return application.saveActiveChapterStatus(status);
+  const activeChapter = await application.readActiveChapterState();
+  if (!activeChapter.ok) return activeChapter;
+  const chapterId = activeChapter.value.state.chapter.frontmatter.id;
+  const permit = coordinator.beginSave(`chapters/${chapterId}.md`);
+  if (!permit.ok) return chapterSavePausedForAgentWrite();
+  try {
+    return await application.saveActiveChapterStatus(status);
+  } finally {
+    permit.release();
+  }
+}
+
 function chapterSavePausedForAgentWrite<T>(): Result<T, UnifiedError> {
   return err(
     createUnifiedError({
@@ -2537,6 +2730,513 @@ function readThrownStreamErrorDetail(error: unknown): JsonObject {
   }
 
   return detail;
+}
+
+const STORY_ANALYSIS_CHAPTER_ID_PATTERN = /^ch_[A-Za-z0-9_-]+$/u;
+const STORY_ANALYSIS_WORKFLOW_RUN_ID_PATTERN = /^wfrun_story_[a-f0-9]{32}$/u;
+const STORY_ANALYSIS_RECORD_ID_PATTERN = /^(?:sug|issue)_[a-f0-9]{32}$/u;
+const STORY_ANALYSIS_CHECKSUM_PATTERN = /^[a-f0-9]{64}$/u;
+const MAX_STORY_ANALYSIS_HISTORY_ITEMS = 10_000;
+const MAX_STORY_ANALYSIS_IPC_BYTES = 16 * 1024 * 1024;
+
+function toChapterStatusForIpc(value: unknown): Exclude<ChapterStatus, "deleted"> | undefined {
+  return value === "draft" ||
+    value === "revision" ||
+    value === "review" ||
+    value === "done" ||
+    value === "archived"
+    ? value
+    : undefined;
+}
+
+function toStoryAnalysisSettingsForIpc(value: unknown): StoryAnalysisSettings | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["completionMode"])) return undefined;
+  const completionMode = value["completionMode"];
+  return completionMode === "off" ||
+    completionMode === "prompt" ||
+    completionMode === "background-review"
+    ? { completionMode }
+    : undefined;
+}
+
+function chapterStatusInputInvalid<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "CHAPTER_STATUS_INPUT_INVALID",
+      category: "ValidationError",
+      message: "The chapter status is invalid.",
+      recoverability: "user-action",
+      suggestedAction: "Choose draft, revision, review, done, or archived.",
+      traceId: "desktop-chapter-ipc"
+    })
+  );
+}
+
+function storyAnalysisSettingsInputInvalid<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_ANALYSIS_SETTINGS_INPUT_INVALID",
+      category: "ValidationError",
+      message: "The Story Analysis settings are invalid.",
+      recoverability: "user-action",
+      suggestedAction: "Choose off, prompt, or background review.",
+      traceId: "desktop-story-analysis-settings-ipc"
+    })
+  );
+}
+
+function toStoryAnalysisAnalyzeInput(value: unknown): { readonly chapterId: string } | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["chapterId"])) return undefined;
+  const chapterId = value["chapterId"];
+  return typeof chapterId === "string" && STORY_ANALYSIS_CHAPTER_ID_PATTERN.test(chapterId)
+    ? { chapterId }
+    : undefined;
+}
+
+function toStoryAnalysisWorkflowRunId(value: unknown): string | undefined {
+  return typeof value === "string" && STORY_ANALYSIS_WORKFLOW_RUN_ID_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+function toStoryAnalysisReviewCommand(value: unknown): StoryAnalysisReviewCommand | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["workflowRunId", "recordId", "expectedRevision", "transition"])
+  ) {
+    return undefined;
+  }
+  const workflowRunId = toStoryAnalysisWorkflowRunId(value["workflowRunId"]);
+  const recordId = value["recordId"];
+  const expectedRevision = value["expectedRevision"];
+  const transition = toStoryAnalysisAuthorTransition(value["transition"]);
+  if (
+    workflowRunId === undefined ||
+    typeof recordId !== "string" ||
+    !STORY_ANALYSIS_RECORD_ID_PATTERN.test(recordId) ||
+    !Number.isSafeInteger(expectedRevision) ||
+    Number(expectedRevision) < 1 ||
+    transition === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    workflowRunId,
+    recordId,
+    expectedRevision: Number(expectedRevision),
+    transition
+  };
+}
+
+function toStoryAnalysisAuthorTransition(
+  value: unknown
+): StoryAnalysisReviewCommand["transition"] | undefined {
+  if (!isRecord(value) || typeof value["status"] !== "string") return undefined;
+  if (
+    (value["status"] === "accepted" || value["status"] === "rejected") &&
+    hasOnlyKeys(value, ["status"])
+  ) {
+    return { status: value["status"] };
+  }
+  if (value["status"] === "resolved" && hasOnlyKeys(value, ["status", "decision"])) {
+    const decision = boundedText(value["decision"], 1, 10_000);
+    return decision === undefined ? undefined : { status: "resolved", decision };
+  }
+  if (value["status"] === "dismissed" && hasOnlyKeys(value, ["status", "reason"])) {
+    const reason = boundedText(value["reason"], 1, 10_000);
+    return reason === undefined ? undefined : { status: "dismissed", reason };
+  }
+  return undefined;
+}
+
+function toStoryAnalysisPrepareApplicationInput(value: unknown):
+  | {
+      readonly workflowRunId: string;
+      readonly suggestionIds: readonly string[];
+    }
+  | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["workflowRunId", "suggestionIds"])) {
+    return undefined;
+  }
+  const workflowRunId = toStoryAnalysisWorkflowRunId(value["workflowRunId"]);
+  const suggestionIds = toStoryAnalysisSuggestionIds(value["suggestionIds"]);
+  return workflowRunId === undefined || suggestionIds === undefined
+    ? undefined
+    : { workflowRunId, suggestionIds };
+}
+
+function toStoryAnalysisApplyApplicationInput(value: unknown):
+  | {
+      readonly workflowRunId: string;
+      readonly suggestionIds: readonly string[];
+      readonly changeSetId: string;
+      readonly revision: number;
+      readonly checksum: string;
+    }
+  | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["workflowRunId", "suggestionIds", "changeSetId", "revision", "checksum"])
+  ) {
+    return undefined;
+  }
+  const prepared = toStoryAnalysisPrepareApplicationInput({
+    workflowRunId: value["workflowRunId"],
+    suggestionIds: value["suggestionIds"]
+  });
+  const changeSetId = value["changeSetId"];
+  const revision = value["revision"];
+  const checksum = value["checksum"];
+  if (
+    prepared === undefined ||
+    typeof changeSetId !== "string" ||
+    !/^change_set_[A-Za-z0-9_-]{1,128}$/u.test(changeSetId) ||
+    !Number.isSafeInteger(revision) ||
+    Number(revision) < 1 ||
+    typeof checksum !== "string" ||
+    !STORY_ANALYSIS_CHECKSUM_PATTERN.test(checksum)
+  ) {
+    return undefined;
+  }
+  return { ...prepared, changeSetId, revision: Number(revision), checksum };
+}
+
+function toStoryAnalysisSuggestionIds(value: unknown): readonly string[] | undefined {
+  if (
+    !Array.isArray(value) ||
+    !isDenseArray(value) ||
+    value.length === 0 ||
+    value.length > 1_000 ||
+    value.some((entry) => typeof entry !== "string" || !/^sug_[a-f0-9]{32}$/u.test(entry)) ||
+    new Set(value).size !== value.length
+  ) {
+    return undefined;
+  }
+  return value as string[];
+}
+
+async function storyAnalysisRecordIpcResult(
+  operation: () => ReturnType<DesktopApplication["readStoryAnalysis"]>
+): Promise<Result<StoryAnalysisRecordDto, UnifiedError>> {
+  try {
+    const result = await operation();
+    if (!result.ok) return storyAnalysisApplicationError(result.error);
+    const dto = toStoryAnalysisRecordDto(result.value);
+    return dto === undefined ? storyAnalysisIpcResultInvalid() : ok(dto);
+  } catch {
+    return storyAnalysisApplicationError(undefined);
+  }
+}
+
+async function storyAnalysisApplicationPreviewIpcResult(
+  operation: () => ReturnType<DesktopApplication["prepareStoryAnalysisApplication"]>
+): Promise<Result<StoryAnalysisApplicationPreviewDto, UnifiedError>> {
+  try {
+    const result = await operation();
+    if (!result.ok) return storyAnalysisApplicationError(result.error);
+    const analysis = toStoryAnalysisRecordDto(result.value.analysis);
+    const changeSet = toBoundedStoryAnalysisChangeSet(result.value.changeSet);
+    const suggestionIdsByGroup = toStoryAnalysisSuggestionIdsByGroup(
+      result.value.suggestionIdsByGroup
+    );
+    return analysis === undefined || changeSet === undefined || suggestionIdsByGroup === undefined
+      ? storyAnalysisIpcResultInvalid()
+      : ok({
+          schemaVersion: "1.0",
+          analysis,
+          changeSet,
+          suggestionIdsByGroup
+        });
+  } catch {
+    return storyAnalysisApplicationError(undefined);
+  }
+}
+
+async function storyAnalysisApplicationResultIpcResult(
+  operation: () => ReturnType<DesktopApplication["applyStoryAnalysisApplication"]>
+): Promise<Result<StoryAnalysisApplicationResultDto, UnifiedError>> {
+  try {
+    const result = await operation();
+    if (!result.ok) return storyAnalysisApplicationError(result.error);
+    const analysis = toStoryAnalysisRecordDto(result.value.analysis);
+    const batch = toBoundedStoryAnalysisApplyBatch(result.value.batch);
+    return analysis === undefined || batch === undefined
+      ? storyAnalysisIpcResultInvalid()
+      : ok({ schemaVersion: "1.0", analysis, batch });
+  } catch {
+    return storyAnalysisApplicationError(undefined);
+  }
+}
+
+function toBoundedStoryAnalysisChangeSet(
+  value: unknown
+): StoryAnalysisApplicationPreviewDto["changeSet"] | undefined {
+  if (
+    !isJsonObject(value) ||
+    !hasOnlyKeys(value, [
+      "schemaVersion",
+      "changeSetId",
+      "revision",
+      "runId",
+      "projectId",
+      "checkpointId",
+      "contextSnapshotId",
+      "writePolicy",
+      "status",
+      "checksum",
+      "approvalToken",
+      "files",
+      "operations",
+      "createdAt"
+    ]) ||
+    (value["schemaVersion"] !== "1.0" && value["schemaVersion"] !== "1.1") ||
+    typeof value["changeSetId"] !== "string" ||
+    !/^change_set_[A-Za-z0-9_-]{1,128}$/u.test(value["changeSetId"]) ||
+    !Number.isSafeInteger(value["revision"]) ||
+    !Array.isArray(value["files"]) ||
+    value["files"].length > 1_000 ||
+    (value["operations"] !== undefined &&
+      (!Array.isArray(value["operations"]) || value["operations"].length > 1_000)) ||
+    !isBoundedStoryAnalysisJson(value)
+  ) {
+    return undefined;
+  }
+  return value as unknown as StoryAnalysisApplicationPreviewDto["changeSet"];
+}
+
+function toStoryAnalysisSuggestionIdsByGroup(
+  value: unknown
+): Readonly<Record<string, readonly string[]>> | undefined {
+  if (!isJsonObject(value) || Object.keys(value).length > 1_000) return undefined;
+  const result: Record<string, readonly string[]> = {};
+  for (const [groupId, suggestionIds] of Object.entries(value)) {
+    const parsed = toStoryAnalysisSuggestionIds(suggestionIds);
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(groupId) || parsed === undefined) return undefined;
+    result[groupId] = parsed;
+  }
+  return result;
+}
+
+function toBoundedStoryAnalysisApplyBatch(
+  value: unknown
+): StoryAnalysisApplicationResultDto["batch"] | undefined {
+  if (
+    !isJsonObject(value) ||
+    !hasOnlyKeys(value, [
+      "schemaVersion",
+      "applyBatchId",
+      "changeSetId",
+      "selectionChecksum",
+      "groups"
+    ]) ||
+    value["schemaVersion"] !== "1.0" ||
+    typeof value["applyBatchId"] !== "string" ||
+    !/^apply_[A-Za-z0-9_-]{1,128}$/u.test(value["applyBatchId"]) ||
+    !Array.isArray(value["groups"]) ||
+    value["groups"].length === 0 ||
+    value["groups"].length > 1_000 ||
+    !isBoundedStoryAnalysisJson(value)
+  ) {
+    return undefined;
+  }
+  return value as unknown as StoryAnalysisApplicationResultDto["batch"];
+}
+
+function isBoundedStoryAnalysisJson(value: JsonValue): boolean {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8") <= MAX_STORY_ANALYSIS_IPC_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+async function storyAnalysisListIpcResult(
+  operation: () => ReturnType<DesktopApplication["listStoryAnalyses"]>
+): Promise<Result<readonly StoryAnalysisHistorySummary[], UnifiedError>> {
+  try {
+    const result = await operation();
+    if (!result.ok) return storyAnalysisApplicationError(result.error);
+    const dto = toStoryAnalysisHistorySummaries(result.value);
+    return dto === undefined ? storyAnalysisIpcResultInvalid() : ok(dto);
+  } catch {
+    return storyAnalysisApplicationError(undefined);
+  }
+}
+
+function toStoryAnalysisRecordDto(value: unknown): StoryAnalysisRecordDto | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["workflowRun", "storyAnalysis", "checksum"]) ||
+    !isRecord(value["workflowRun"])
+  ) {
+    return undefined;
+  }
+  const workflowRun = value["workflowRun"];
+  const workflowRunId = toStoryAnalysisWorkflowRunId(workflowRun["workflowRunId"]);
+  const workflowStatus = workflowRun["status"];
+  const updatedAt = workflowRun["updatedAt"];
+  const checksum = value["checksum"];
+  const storyAnalysis = toBoundedStoryAnalysisBundle(value["storyAnalysis"]);
+  if (
+    workflowRunId === undefined ||
+    (workflowStatus !== "pending-confirmation" &&
+      workflowStatus !== "applied" &&
+      workflowStatus !== "failed") ||
+    typeof updatedAt !== "string" ||
+    !isCanonicalIsoDateTime(updatedAt) ||
+    typeof checksum !== "string" ||
+    !STORY_ANALYSIS_CHECKSUM_PATTERN.test(checksum) ||
+    storyAnalysis === undefined
+  ) {
+    return undefined;
+  }
+  return { workflowRunId, workflowStatus, updatedAt, checksum, storyAnalysis };
+}
+
+function toStoryAnalysisHistorySummaries(
+  value: unknown
+): readonly StoryAnalysisHistorySummary[] | undefined {
+  if (
+    !Array.isArray(value) ||
+    !isDenseArray(value) ||
+    value.length > MAX_STORY_ANALYSIS_HISTORY_ITEMS
+  ) {
+    return undefined;
+  }
+  const summaries: StoryAnalysisHistorySummary[] = [];
+  for (const entry of value) {
+    const summary = toStoryAnalysisHistorySummary(entry);
+    if (summary === undefined) return undefined;
+    summaries.push(summary);
+  }
+  return summaries;
+}
+
+function toStoryAnalysisHistorySummary(value: unknown): StoryAnalysisHistorySummary | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "workflowRunId",
+      "analysisRunId",
+      "chapterId",
+      "status",
+      "updatedAt",
+      "pendingSuggestionCount",
+      "openIssueCount",
+      "checksum"
+    ])
+  ) {
+    return undefined;
+  }
+  const workflowRunId = toStoryAnalysisWorkflowRunId(value["workflowRunId"]);
+  const analysisRunId = value["analysisRunId"];
+  const chapterId = value["chapterId"];
+  const status = value["status"];
+  const updatedAt = value["updatedAt"];
+  const pendingSuggestionCount = value["pendingSuggestionCount"];
+  const openIssueCount = value["openIssueCount"];
+  const checksum = value["checksum"];
+  if (
+    workflowRunId === undefined ||
+    typeof analysisRunId !== "string" ||
+    !/^run_[a-f0-9]{32}$/u.test(analysisRunId) ||
+    typeof chapterId !== "string" ||
+    !STORY_ANALYSIS_CHAPTER_ID_PATTERN.test(chapterId) ||
+    !isStoryAnalysisRunStatus(status) ||
+    typeof updatedAt !== "string" ||
+    !isCanonicalIsoDateTime(updatedAt) ||
+    !isNonNegativeSafeInteger(pendingSuggestionCount) ||
+    !isNonNegativeSafeInteger(openIssueCount) ||
+    typeof checksum !== "string" ||
+    !STORY_ANALYSIS_CHECKSUM_PATTERN.test(checksum)
+  ) {
+    return undefined;
+  }
+  return {
+    workflowRunId,
+    analysisRunId,
+    chapterId,
+    status,
+    updatedAt,
+    pendingSuggestionCount,
+    openIssueCount,
+    checksum
+  };
+}
+
+function toBoundedStoryAnalysisBundle(
+  value: unknown
+): StoryAnalysisRecordDto["storyAnalysis"] | undefined {
+  try {
+    const serialized = JSON.stringify(value);
+    if (
+      serialized === undefined ||
+      Buffer.byteLength(serialized, "utf8") > MAX_STORY_ANALYSIS_IPC_BYTES
+    ) {
+      return undefined;
+    }
+    const parsed: unknown = JSON.parse(serialized);
+    const validation = validateStoryAnalysisBundle(parsed);
+    return validation.valid ? (parsed as StoryAnalysisRecordDto["storyAnalysis"]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isStoryAnalysisRunStatus(value: unknown): value is StoryAnalysisHistorySummary["status"] {
+  return (
+    value === "queued" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "partial" ||
+    value === "failed" ||
+    value === "cancelled"
+  );
+}
+
+function storyAnalysisInputInvalid<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_ANALYSIS_IPC_INPUT_INVALID",
+      category: "ValidationError",
+      message: "The Story Analysis request is invalid.",
+      recoverability: "user-action",
+      suggestedAction: "Reload the analysis view and retry the action.",
+      traceId: "desktop-story-analysis-ipc"
+    })
+  );
+}
+
+function storyAnalysisIpcResultInvalid<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_ANALYSIS_IPC_RESULT_INVALID",
+      category: "WorkflowError",
+      message: "The Story Analysis result could not be verified.",
+      recoverability: "retryable",
+      suggestedAction: "Retry the Story Analysis action.",
+      traceId: "desktop-story-analysis-ipc"
+    })
+  );
+}
+
+function storyAnalysisApplicationError<T>(value: unknown): Result<T, UnifiedError> {
+  const code =
+    isRecord(value) &&
+    typeof value["code"] === "string" &&
+    /^[A-Z][A-Z0-9_]{0,127}$/u.test(value["code"])
+      ? value["code"]
+      : "STORY_ANALYSIS_APPLICATION_FAILED";
+  return err(
+    createUnifiedError({
+      code,
+      category: code === "STORY_ANALYSIS_APPLICATION_FAILED" ? "WorkflowError" : "UserError",
+      message: "The Story Analysis action could not be completed.",
+      recoverability: code === "STORY_ANALYSIS_APPLICATION_FAILED" ? "retryable" : "user-action",
+      suggestedAction: "Reload the analysis view and retry the action.",
+      traceId: "desktop-story-analysis-ipc"
+    })
+  );
 }
 
 const FORESHADOW_CHAPTER_ID_PATTERN = /^ch_[A-Za-z0-9_-]+$/u;
@@ -3080,6 +3780,171 @@ function toStoryBibleAsset(value: unknown): StoryBibleAsset | undefined {
   };
 }
 
+function toCreateStoryBibleAssetCommand(value: unknown): CreateStoryBibleAssetCommand | undefined {
+  if (!isJsonObject(value) || !hasOnlyKeys(value, ["type", "value"])) return undefined;
+  if (!isStoryBibleAssetType(value["type"]) || !isJsonObject(value["value"])) return undefined;
+  const createValue = value["value"];
+  if (!validateStoryBibleCreateValue(value["type"], createValue).valid) return undefined;
+  return {
+    type: value["type"],
+    value: createValue as StoryBibleCreateValue
+  };
+}
+
+function toSaveStoryBibleAssetCandidateCommand(
+  value: unknown
+): SaveStoryBibleAssetCandidateCommand | undefined {
+  if (
+    !isJsonObject(value) ||
+    !hasOnlyKeys(value, ["candidate", "baseRevision", "baseChecksum"]) ||
+    !isJsonObject(value["candidate"]) ||
+    !Number.isInteger(value["baseRevision"]) ||
+    (value["baseRevision"] as number) < 0 ||
+    (value["baseChecksum"] !== undefined &&
+      (typeof value["baseChecksum"] !== "string" || !/^[a-f0-9]{64}$/u.test(value["baseChecksum"])))
+  ) {
+    return undefined;
+  }
+  const candidate = value["candidate"];
+  const type = candidate["type"];
+  const baseRevision = value["baseRevision"] as number;
+  if (
+    !isStoryBibleAssetType(type) ||
+    !validateStoryBibleWriteCandidate(candidate, {
+      assetType: type,
+      allowLegacyId: true
+    }).valid
+  ) {
+    return undefined;
+  }
+  return {
+    candidate: candidate as StoryBibleWriteCandidate,
+    baseRevision,
+    ...(value["baseChecksum"] === undefined
+      ? {}
+      : { baseChecksum: value["baseChecksum"] as string })
+  };
+}
+
+function toPrepareStoryBibleExplicitInverseCommand(
+  value: unknown
+): { readonly source: StoryBibleExplicitInverseSourceCommand } | undefined {
+  if (!isJsonObject(value) || !hasOnlyKeys(value, ["source"]) || !isJsonObject(value["source"])) {
+    return undefined;
+  }
+  const source = value["source"];
+  if (!hasOnlyKeys(source, ["candidate", "baseRevision", "baseChecksum"])) return undefined;
+  if (
+    typeof source["baseChecksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(source["baseChecksum"])
+  ) {
+    return undefined;
+  }
+  const direct = toSaveStoryBibleAssetCandidateCommand(source);
+  if (direct !== undefined && direct.baseChecksum !== undefined) {
+    return { source: { ...direct, baseChecksum: direct.baseChecksum } };
+  }
+  if (!isJsonObject(source["candidate"])) {
+    return undefined;
+  }
+  const candidate = source["candidate"];
+  const relations = candidate["relations"];
+  if (!Array.isArray(relations)) return undefined;
+  const normalizedRelations = relations.map((relation, index) =>
+    isJsonObject(relation) &&
+    relation["inversePolicy"] === "explicit" &&
+    relation["inverseRelationId"] === null
+      ? {
+          ...relation,
+          inverseRelationId: `rel_${(index + 1).toString(16).padStart(32, "f")}`
+        }
+      : relation
+  );
+  const normalized = toSaveStoryBibleAssetCandidateCommand({
+    ...source,
+    candidate: { ...candidate, relations: normalizedRelations }
+  });
+  return normalized === undefined || normalized.baseChecksum === undefined
+    ? undefined
+    : {
+        source: {
+          ...normalized,
+          baseChecksum: normalized.baseChecksum,
+          candidate: candidate as StoryBibleWriteCandidate
+        }
+      };
+}
+
+function toApplyStoryBibleExplicitInverseCommand(
+  value: unknown
+):
+  { readonly previewId: string; readonly revision: number; readonly checksum: string } | undefined {
+  return toExplicitInverseReceiptCommand(value);
+}
+
+function toExplicitInverseReceiptCommand(
+  value: unknown
+):
+  { readonly previewId: string; readonly revision: number; readonly checksum: string } | undefined {
+  if (
+    !isJsonObject(value) ||
+    !hasOnlyKeys(value, ["previewId", "revision", "checksum"]) ||
+    typeof value["previewId"] !== "string" ||
+    !/^preview_[A-Za-z0-9_-]{1,120}$/u.test(value["previewId"]) ||
+    !Number.isInteger(value["revision"]) ||
+    (value["revision"] as number) < 1 ||
+    typeof value["checksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value["checksum"])
+  ) {
+    return undefined;
+  }
+  return {
+    previewId: value["previewId"],
+    revision: value["revision"] as number,
+    checksum: value["checksum"]
+  };
+}
+
+function toSaveStoryBibleStatusTransitionCommand(
+  value: unknown
+): SaveStoryBibleStatusTransitionCommand | undefined {
+  if (!isJsonObject(value)) return undefined;
+  const action = value["action"];
+  const allowedKeys =
+    action === "move-to-deleted"
+      ? ["action", "candidate", "baseRevision", "baseChecksum", "expectedDeletionImpactChecksum"]
+      : action === "restore"
+        ? ["action", "candidate", "baseRevision", "baseChecksum"]
+        : [];
+  if (allowedKeys.length === 0 || !hasOnlyKeys(value, allowedKeys)) return undefined;
+  const base = toSaveStoryBibleAssetCandidateCommand({
+    candidate: value["candidate"],
+    baseRevision: value["baseRevision"],
+    ...(value["baseChecksum"] === undefined ? {} : { baseChecksum: value["baseChecksum"] })
+  });
+  if (base === undefined) return undefined;
+  if (action === "restore") return { ...base, action };
+  if (action !== "move-to-deleted") return undefined;
+  const expectedDeletionImpactChecksum = value["expectedDeletionImpactChecksum"];
+  return typeof expectedDeletionImpactChecksum === "string" &&
+    /^[a-f0-9]{64}$/u.test(expectedDeletionImpactChecksum)
+    ? { ...base, action, expectedDeletionImpactChecksum }
+    : undefined;
+}
+
+function storyBibleIpcInputInvalid<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_BIBLE_IPC_INPUT_INVALID",
+      category: "ValidationError",
+      message: "The Story Bible request is invalid.",
+      recoverability: "user-action",
+      suggestedAction: "Reload the Story Bible entry and retry.",
+      traceId: "desktop-story-bible-ipc"
+    })
+  );
+}
+
 function storyBibleAssetAdditionalFields(value: JsonObject): JsonObject {
   return Object.fromEntries(
     Object.entries(value).filter(([key]) => !STORY_BIBLE_ASSET_CANONICAL_FIELDS.has(key))
@@ -3481,13 +4346,25 @@ function creativeGeneralActiveResourceUnavailable(reason: string): UnifiedError 
   });
 }
 
-function toWorkspaceContextPolicyAction(
-  value: unknown
-): "disable_conventions" | "revoke_workspace_trust" | undefined {
+function toWorkspaceContextPolicyAction(value: unknown):
+  | { readonly action: "disable_conventions" | "revoke_workspace_trust" }
+  | {
+      readonly action: "set_source_preference";
+      readonly preference: WorkspaceContextSourcePreferenceMutation;
+    }
+  | undefined {
   if (!isRecord(value)) return undefined;
-  return value["action"] === "disable_conventions" || value["action"] === "revoke_workspace_trust"
-    ? value["action"]
-    : undefined;
+  if (value["action"] === "disable_conventions" || value["action"] === "revoke_workspace_trust") {
+    return { action: value["action"] };
+  }
+  if (
+    value["action"] !== "set_source_preference" ||
+    !hasOnlyKeys(value, ["action", "preference"])
+  ) {
+    return undefined;
+  }
+  const preference = parseWorkspaceContextSourcePreferenceMutation(value["preference"]);
+  return preference === undefined ? undefined : { action: "set_source_preference", preference };
 }
 
 function directorySelectionFailed(): UnifiedError {
@@ -3827,6 +4704,8 @@ function isStoryBibleAssetType(value: unknown): value is StoryBibleAsset["type"]
     value === "world.faction" ||
     value === "world.rule" ||
     value === "world.glossary" ||
+    value === "world.item" ||
+    value === "world.lore" ||
     value === "outline" ||
     value === "foreshadow" ||
     value === "timeline.events"

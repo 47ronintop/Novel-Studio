@@ -120,6 +120,33 @@ describe("AgentComposer", () => {
     );
   });
 
+  test("blocks button and Enter submission when fixed context exceeds the budget", () => {
+    const onSend = vi.fn();
+    const { host } = renderComposer({
+      onSend,
+      contextStatus: {
+        state: "heavy",
+        usageLabel: "140k / 128k",
+        precision: "reported",
+        sources: [],
+        fixedBudgetExceeded: true,
+        fixedBudgetMessage: "固定项超过安全输入预算"
+      }
+    });
+    const sendButton = host.querySelector<HTMLButtonElement>('[aria-label="启动 Agent 运行"]');
+    const input = host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]');
+
+    expect(sendButton?.disabled).toBe(true);
+    act(() => sendButton?.click());
+    act(() =>
+      input?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+      )
+    );
+
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   test("replaces send with one stop while active and keeps permission details readable", () => {
     const onStop = vi.fn();
     const { host } = renderComposer({ active: true, onStop });
@@ -538,9 +565,7 @@ describe("AgentComposer", () => {
     expect(sourceText).toContain("受信任工作区");
     expect(sourceText).toContain("内容仅作为数据");
     act(() =>
-      document
-        .querySelector<HTMLButtonElement>(".ns-agent-context-conventions > button")
-        ?.click()
+      document.querySelector<HTMLButtonElement>(".ns-agent-context-conventions > button")?.click()
     );
     expect(onCreateConventions).toHaveBeenCalledTimes(1);
     const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
@@ -548,7 +573,7 @@ describe("AgentComposer", () => {
       /\.ns-agent-composer-surface \.ns-agent-context-popover-root\s*\{[^}]*grid-column:\s*3/s
     );
     expect(css).toMatch(
-      /\.ns-agent-composer-surface \.ns-agent-context-popover\s*\{[^}]*width:\s*min\(272px,\s*calc\(100vw\s*-\s*16px\)\)/s
+      /\.ns-agent-composer-surface \.ns-agent-context-popover\s*\{[^}]*width:\s*min\(440px,\s*calc\(100vw\s*-\s*16px\)\)/s
     );
     expect(host.querySelector('[aria-label="Agent 快捷动作"]')).toBeNull();
   });

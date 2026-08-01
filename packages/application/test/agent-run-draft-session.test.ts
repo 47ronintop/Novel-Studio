@@ -123,7 +123,7 @@ describe("Agent Run Draft session", () => {
           contextMode: "standalone_chat"
         },
         contextDraft: {
-          schemaVersion: "1.1",
+          schemaVersion: "1.2",
           scope: { kind: "standalone", scopeId: "standalone" },
           refs: [],
           activeResourceRef: null

@@ -7,6 +7,7 @@ import {
   type StoryBibleOutlineModel,
   type StoryBibleOutlineVolume
 } from "./story-bible-outline.js";
+import { StoryBibleRelationsField } from "./story-bible-relations-field.js";
 import type { StoryBibleEditorProps } from "./workspace-shell-types.js";
 
 type OutlineSelection =
@@ -481,6 +482,7 @@ function OutlineInspector({
           <span>资料状态</span>
           <select
             aria-label="资料状态"
+            disabled={editor.draft.status === "deleted"}
             onChange={(event) =>
               onRootChange({ status: event.currentTarget.value as typeof editor.draft.status })
             }
@@ -489,7 +491,7 @@ function OutlineInspector({
             <option value="active">启用</option>
             <option value="draft">草稿</option>
             <option value="archived">归档</option>
-            <option value="deleted">已删除</option>
+            {editor.draft.status === "deleted" ? <option value="deleted">已删除</option> : null}
           </select>
         </label>
         <OutlineTextArea
@@ -506,13 +508,7 @@ function OutlineInspector({
           value={editor.draft.aliases.join("\n")}
           wide
         />
-        <OutlineTextArea
-          ariaLabel="关联资料 ID"
-          label="关联资料 ID"
-          onChange={(value) => onRootChange({ relatedEntityIds: splitLines(value) })}
-          value={editor.draft.relatedEntityIds.join("\n")}
-          wide
-        />
+        <StoryBibleRelationsField editor={editor} />
       </div>
     </div>
   );

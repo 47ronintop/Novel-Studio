@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -19,7 +19,8 @@ describe("workspace context policy store", () => {
 
     expect(await store.read(binding(contentRoot))).toMatchObject({
       workspaceTrust: "untrusted",
-      projectConventionsEnabled: false
+      projectConventionsEnabled: false,
+      sourcePreferences: []
     });
   });
 
@@ -130,6 +131,194 @@ describe("workspace context policy store", () => {
       await createDesktopWorkspaceContextPolicyStore({ userDataRoot }).read(binding(contentRoot))
     ).toMatchObject({ workspaceTrust: "untrusted", projectConventionsEnabled: false });
   });
+
+  test("reads schema 1.0 policies and upgrades them on the next idempotent write", async () => {
+    const userDataRoot = await createRoot("user-data");
+    const contentRoot = await createRoot("workspace");
+    const store = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
+    const enabled = await store.enableTrustedConventions(binding(contentRoot));
+    expect(enabled.ok).toBe(true);
+
+    const targetPath = policyPath(userDataRoot);
+    const legacy = await readStoredPolicyFile(targetPath);
+    legacy.schemaVersion = "1.0";
+    for (const entry of Object.values(legacy.policies)) delete entry.sourcePreferences;
+    await writeFile(targetPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+
+    const restored = await createDesktopWorkspaceContextPolicyStore({ userDataRoot }).read(
+      binding(contentRoot)
+    );
+    expect(restored).toMatchObject({
+      workspaceTrust: "trusted",
+      projectConventionsEnabled: true,
+      sourcePreferences: []
+    });
+
+    const upgraded = await createDesktopWorkspaceContextPolicyStore({
+      userDataRoot
+    }).enableTrustedConventions(binding(contentRoot));
+    expect(upgraded.ok).toBe(true);
+    if (!upgraded.ok) return;
+    expect(upgraded.value.policyRevision).toBe(restored.policyRevision);
+    expect(await readStoredPolicyFile(targetPath)).toMatchObject({
+      schemaVersion: "1.1",
+      policies: expect.objectContaining({
+        [Object.keys(legacy.policies)[0] as string]: expect.objectContaining({
+          sourcePreferences: []
+        })
+      })
+    });
+  });
+
+  test("persists, orders, deletes, and idempotently updates source preferences", async () => {
+    const userDataRoot = await createRoot("user-data");
+    const contentRoot = await createRoot("workspace");
+    const store = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
+    const excluded = {
+      refId: "story_bible:world_main",
+      decision: "excluded" as const,
+      priority: 20
+    };
+    const pinned = {
+      refId: "chapter:ch_01",
+      decision: "pinned" as const,
+      priority: 80,
+      ref: {
+        kind: "chapter" as const,
+        refId: "chapter:ch_01",
+        chapterId: "ch_01",
+        label: "第一章",
+        range: { start: 0, end: 120 }
+      }
+    };
+
+    await expect(store.setSourcePreference(binding(contentRoot), excluded)).resolves.toMatchObject({
+      ok: true
+    });
+    const saved = await store.setSourcePreference(binding(contentRoot), pinned);
+    expect(saved).toMatchObject({
+      ok: true,
+      value: { sourcePreferences: [pinned, excluded] }
+    });
+    if (!saved.ok) return;
+
+    const repeated = await store.setSourcePreference(binding(contentRoot), pinned);
+    expect(repeated).toMatchObject({ ok: true, value: { sourcePreferences: [pinned, excluded] } });
+    if (!repeated.ok) return;
+    expect(repeated.value.policyRevision).toBe(saved.value.policyRevision);
+    expect(
+      await createDesktopWorkspaceContextPolicyStore({ userDataRoot }).read(binding(contentRoot))
+    ).toEqual(repeated.value);
+
+    const removed = await store.setSourcePreference(binding(contentRoot), {
+      refId: pinned.refId,
+      decision: null
+    });
+    expect(removed).toMatchObject({ ok: true, value: { sourcePreferences: [excluded] } });
+    if (!removed.ok) return;
+    expect(removed.value.policyRevision).not.toBe(repeated.value.policyRevision);
+
+    const repeatedRemoval = await store.setSourcePreference(binding(contentRoot), {
+      refId: pinned.refId,
+      decision: null
+    });
+    expect(repeatedRemoval).toMatchObject({ ok: true, value: { sourcePreferences: [excluded] } });
+    if (!repeatedRemoval.ok) return;
+    expect(repeatedRemoval.value.policyRevision).toBe(removed.value.policyRevision);
+  });
+
+  test("rejects invalid source preferences before persistence", async () => {
+    const userDataRoot = await createRoot("user-data");
+    const contentRoot = await createRoot("workspace");
+    const store = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
+
+    await expect(
+      store.setSourcePreference(binding(contentRoot), {
+        refId: "chapter:ch_01",
+        decision: "pinned",
+        priority: 101
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_CONTEXT_POLICY_SOURCE_PREFERENCE_INVALID" }
+    });
+    await expect(
+      store.setSourcePreference(binding(contentRoot), {
+        refId: "file:notes",
+        decision: "pinned",
+        priority: 50,
+        ref: {
+          kind: "project_file",
+          refId: "file:notes",
+          relativePath: "../outside.md",
+          label: "越界路径"
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_CONTEXT_POLICY_SOURCE_PREFERENCE_INVALID" }
+    });
+    await expect(
+      store.setSourcePreference(binding(contentRoot), {
+        refId: "chapter:ch_01",
+        decision: "pinned",
+        priority: 50,
+        ref: {
+          kind: "chapter",
+          refId: "chapter:other",
+          chapterId: "ch_01",
+          label: "第一章"
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_CONTEXT_POLICY_SOURCE_PREFERENCE_INVALID" }
+    });
+    expect(await store.read(binding(contentRoot))).toMatchObject({ sourcePreferences: [] });
+  });
+
+  test("fails closed when a persisted source preference is malformed", async () => {
+    const userDataRoot = await createRoot("user-data");
+    const contentRoot = await createRoot("workspace");
+    const store = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
+    await store.enableTrustedConventions(binding(contentRoot));
+    await store.setSourcePreference(binding(contentRoot), {
+      refId: "story_bible:world_main",
+      decision: "pinned",
+      priority: 50
+    });
+    const targetPath = policyPath(userDataRoot);
+    const malformed = await readStoredPolicyFile(targetPath);
+    const entry = Object.values(malformed.policies)[0];
+    if (entry === undefined) throw new Error("expected a stored policy entry");
+    entry.sourcePreferences = [
+      { refId: "story_bible:world_main", decision: "pinned", priority: -1 }
+    ];
+    await writeFile(targetPath, `${JSON.stringify(malformed, null, 2)}\n`, "utf8");
+
+    expect(await store.read(binding(contentRoot))).toMatchObject({
+      workspaceTrust: "untrusted",
+      projectConventionsEnabled: false,
+      sourcePreferences: []
+    });
+  });
+
+  test("isolates source preferences by canonical workspace binding", async () => {
+    const userDataRoot = await createRoot("user-data");
+    const firstRoot = await createRoot("workspace-first");
+    const secondRoot = await createRoot("workspace-second");
+    const store = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
+    await store.setSourcePreference(binding(firstRoot), {
+      refId: "story_bible:world_main",
+      decision: "excluded",
+      priority: 30
+    });
+
+    expect(await store.read(binding(firstRoot))).toMatchObject({
+      sourcePreferences: [{ refId: "story_bible:world_main", decision: "excluded", priority: 30 }]
+    });
+    expect(await store.read(binding(secondRoot))).toMatchObject({ sourcePreferences: [] });
+  });
 });
 
 function binding(contentRoot: string) {
@@ -144,4 +333,22 @@ async function createRoot(label: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), `novel-studio-${label}-`));
   roots.push(root);
   return root;
+}
+
+function policyPath(userDataRoot: string): string {
+  return join(userDataRoot, "workspace-context-policy", "policies.json");
+}
+
+interface MutableStoredPolicyFile {
+  schemaVersion: string;
+  policies: Record<
+    string,
+    {
+      sourcePreferences?: Array<{ refId: string; decision: string; priority: number }>;
+    }
+  >;
+}
+
+async function readStoredPolicyFile(targetPath: string): Promise<MutableStoredPolicyFile> {
+  return JSON.parse(await readFile(targetPath, "utf8")) as MutableStoredPolicyFile;
 }

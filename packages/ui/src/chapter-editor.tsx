@@ -1,4 +1,4 @@
-import type { ChapterDocument } from "@novel-studio/shared";
+import type { ChapterDocument, ChapterStatus } from "@novel-studio/shared";
 import { ChevronRight, Eye, History, RotateCcw } from "lucide-react";
 import { useCallback, useMemo, useRef, type CSSProperties } from "react";
 import {
@@ -63,18 +63,30 @@ export interface ChapterEditorProps {
   readonly runtime?: ChapterEditorRuntimeProps;
   readonly editorPreferences?: EditorPreferences;
   readonly findMode?: EditorFindMode | undefined;
+  readonly statusBusy?: boolean;
+  readonly completionFeedback?: ChapterCompletionFeedbackProps;
   readonly onBodyChange?: (nextBody: string) => void;
   readonly onFindModeChange?: ((mode: EditorFindMode) => void) | undefined;
   readonly onSelectionChange?: (selection: ChapterEditorSelection) => void;
   readonly onEditorPreferencesChange?: (preferences: EditorPreferences) => void;
   readonly onFocusModeToggle?: () => void;
   readonly onSave?: () => void;
+  readonly onStatusChange?: (status: ChapterStatus) => void;
   readonly onSelectionReviewAccept?: () => void;
   readonly onSelectionReviewReject?: () => void;
   readonly onSelectionReviewUndo?: () => void;
   readonly onSelectionAiPreview?: (commandId: string) => void;
   readonly onVersionPreview?: (versionId: string) => void;
   readonly onVersionRestore?: (versionId: string) => void;
+}
+
+export interface ChapterCompletionFeedbackProps {
+  readonly kind: "info" | "error";
+  readonly message: string;
+  readonly action?: {
+    readonly label: string;
+    readonly onInvoke: () => void;
+  };
 }
 
 export interface ChapterEditorSelectionReview {

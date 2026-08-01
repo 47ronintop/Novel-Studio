@@ -47,6 +47,7 @@ interface ChangeSetOperationBase {
   readonly operationId: string;
   readonly dependsOn?: readonly string[];
   readonly toolCallIdempotencyKey: string;
+  readonly consistencyGroupId?: string;
 }
 
 export interface ChangeSetModifyOperation extends ChangeSetOperationBase {
@@ -197,6 +198,7 @@ export interface ProposeStoryBibleWriteInput {
   readonly assetType: string;
   readonly content: string;
   readonly dependsOn?: readonly string[];
+  readonly consistencyGroupId?: string;
 }
 
 export interface FileOperationProposal {
@@ -415,6 +417,9 @@ export function createAgentFileOperationSession(
         relativePath,
         content: input.content,
         toolCallIdempotencyKey: input.toolCallId,
+        ...(input.consistencyGroupId === undefined
+          ? {}
+          : { consistencyGroupId: input.consistencyGroupId }),
         ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
       };
       return ok(store(input.toolCallId, operation));
@@ -438,6 +443,8 @@ const STORY_BIBLE_ASSET_PATH_RESOLVERS = {
   "world.faction": (assetId: string) => `world/${assetId}.json`,
   "world.rule": (assetId: string) => `world/${assetId}.json`,
   "world.glossary": (assetId: string) => `world/${assetId}.json`,
+  "world.item": (assetId: string) => `world/${assetId}.json`,
+  "world.lore": (assetId: string) => `world/${assetId}.json`,
   outline: () => "outline/outline.json",
   "timeline.events": () => "timeline/events.json",
   foreshadow: (assetId: string) => `foreshadows/${assetId}.json`

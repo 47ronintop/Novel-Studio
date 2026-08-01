@@ -43,6 +43,12 @@ export interface HistorySettings extends JsonObject {
   readonly maxSnapshotsPerChapter?: number | null;
 }
 
+export type StoryAnalysisCompletionMode = "off" | "prompt" | "background-review";
+
+export interface StoryAnalysisSettings extends JsonObject {
+  completionMode: StoryAnalysisCompletionMode;
+}
+
 export interface ModelSettings extends JsonObject {
   readonly defaultProfileId: string;
   readonly profiles: ModelProfile[];
@@ -53,6 +59,20 @@ export interface ProjectSettings extends JsonObject {
   readonly autosave: AutosaveSettings;
   readonly history: HistorySettings;
   readonly models: ModelSettings;
+  readonly storyAnalysis?: StoryAnalysisSettings;
+}
+
+export const DEFAULT_STORY_ANALYSIS_SETTINGS: StoryAnalysisSettings = Object.freeze({
+  completionMode: "prompt"
+});
+
+export function resolveStoryAnalysisSettings(
+  settings: Pick<ProjectSettings, "storyAnalysis">
+): StoryAnalysisSettings {
+  const mode = settings.storyAnalysis?.completionMode;
+  return mode === "off" || mode === "background-review" || mode === "prompt"
+    ? { completionMode: mode }
+    : DEFAULT_STORY_ANALYSIS_SETTINGS;
 }
 
 export interface ProjectSettingsPort {
@@ -82,6 +102,10 @@ export interface ModelRuntimeProfile {
 }
 
 export interface ModelSettingsSession {
+  readStoryAnalysisSettings(): Promise<Result<StoryAnalysisSettings, UnifiedError>>;
+  saveStoryAnalysisSettings(
+    settings: StoryAnalysisSettings
+  ): Promise<Result<StoryAnalysisSettings, UnifiedError>>;
   listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
   saveModelProfile(
     profile: ModelProfile,
@@ -103,6 +127,33 @@ export function createModelSettingsSession(
   options: ModelSettingsSessionOptions
 ): ModelSettingsSession {
   return {
+    async readStoryAnalysisSettings() {
+      const settings = await options.settingsPort.readSettings();
+      return settings.ok ? ok(resolveStoryAnalysisSettings(settings.value)) : settings;
+    },
+
+    async saveStoryAnalysisSettings(storyAnalysis) {
+      if (!isStoryAnalysisSettings(storyAnalysis)) {
+        return err(
+          createUnifiedError({
+            code: "STORY_ANALYSIS_SETTINGS_INVALID",
+            category: "ValidationError",
+            message: "Story Analysis settings are invalid.",
+            recoverability: "user-action",
+            suggestedAction: "Choose off, prompt, or background review.",
+            traceId: "application-model-settings"
+          })
+        );
+      }
+      const current = await options.settingsPort.readSettings();
+      if (!current.ok) return current;
+      const saved = await options.settingsPort.writeSettings({
+        ...current.value,
+        storyAnalysis: { completionMode: storyAnalysis.completionMode }
+      });
+      return saved.ok ? ok(resolveStoryAnalysisSettings(saved.value)) : saved;
+    },
+
     async listModelProfiles() {
       const settings = await options.settingsPort.readSettings();
       if (!settings.ok) {
@@ -217,6 +268,17 @@ export function createModelSettingsSession(
       return ok(createModelDiscoveryFallback(profile, result.error.message));
     }
   };
+}
+
+function isStoryAnalysisSettings(value: unknown): value is StoryAnalysisSettings {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 1 &&
+    (record["completionMode"] === "off" ||
+      record["completionMode"] === "prompt" ||
+      record["completionMode"] === "background-review")
+  );
 }
 
 export function resolveDefaultModelRuntimeProfile(

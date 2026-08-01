@@ -194,6 +194,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         stateRoot: binding.stateRoot,
         workspaceTrust: workspaceContextPolicy.workspaceTrust,
         projectConventionsEnabled: workspaceContextPolicy.projectConventionsEnabled,
+        contextSourcePreferences: workspaceContextPolicy.sourcePreferences,
         ...(binding.activeChapterId === undefined
           ? {}
           : { activeChapterId: binding.activeChapterId }),

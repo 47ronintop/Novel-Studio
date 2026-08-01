@@ -4,13 +4,26 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  checksumChangeSetSelection,
+  checksumChangeSetText,
+  createChangeSetRevision,
+  decideChangeSetApproval,
+  type ChangeSet,
+  type ChangeSetApproval
+} from "@novel-studio/agent-engine";
+import {
+  AgentProjectReadRepository,
   AgentUsageFileRepository,
+  ChapterFileRepository,
+  HistoryRepository,
   ProjectLockFileRepository,
   RecoveryRepository,
   StoryBibleFileRepository,
+  createTrustedCreativeFileOperationsPort,
   type AgentTransactionJournal,
   type AgentOperationPathSnapshot,
-  type AgentWriteLifecycleOperationPort
+  type AgentWriteLifecycleOperationPort,
+  type StoryBibleV11Asset
 } from "@novel-studio/repository";
 import { err, ok, type UnifiedError } from "@novel-studio/shared";
 
@@ -384,6 +397,429 @@ describe("desktop Agent Run runtime", () => {
     ).toMatchObject({ ok: false });
   });
 
+  test("requires a Packed Context preview and reuses its exact blocks through Provider and persistence", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-packed-context-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "notes"), { recursive: true });
+    const sourceContent = "AUTHOR_VISIBLE_PACKED_CONTEXT_BODY\n";
+    await writeFile(join(projectRoot, "notes", "context.md"), sourceContent, "utf8");
+    let providerMessages: readonly { readonly role: string; readonly content: string }[] = [];
+    let modelRounds = 0;
+    const runId = "run-packed-context-binding";
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => runId,
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-packed-context",
+        provider: "demo",
+        modelName: "packed-context-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound(input) {
+          modelRounds += 1;
+          providerMessages = input.messages;
+          yield runtimeToolCall("finish-packed-context", "finish", { summary: "Finished." });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-packed-context-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-packed-context-run",
+      userRequest: "Use the selected project context.",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-packed-context",
+      contextRefs: [
+        {
+          kind: "project_file",
+          refId: "file:notes/context.md",
+          relativePath: "notes/context.md",
+          label: "Context"
+        }
+      ]
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+
+    expect(
+      await runtime.agentRunSession.startAgentRun(
+        draftOnlyStartCommand(
+          runtime.workspaceId,
+          prepared.value,
+          "start-packed-context-without-preview"
+        )
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_PREVIEW_REQUIRED" }
+    });
+    expect(modelRounds).toBe(0);
+
+    const previewed = await previewDraftStart(
+      runtime,
+      prepared.value,
+      "start-packed-context-with-preview"
+    );
+    expect(previewed.preview.blocks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: sourceContent })])
+    );
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: true
+    });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(modelRounds).toBe(1);
+
+    const contextSnapshotId = "context_" + runId + "_1";
+    const promptArtifact = JSON.parse(
+      await readFile(
+        join(
+          projectRoot,
+          "history",
+          "agent-runs",
+          runId,
+          "prompt-materializations",
+          "prompt_" + contextSnapshotId + ".json"
+        ),
+        "utf8"
+      )
+    ) as { readonly messages: readonly { readonly role: string; readonly content: string }[] };
+    const contextSnapshot = JSON.parse(
+      await readFile(
+        join(
+          projectRoot,
+          "history",
+          "agent-runs",
+          runId,
+          "context-snapshots",
+          contextSnapshotId + ".json"
+        ),
+        "utf8"
+      )
+    ) as Record<string, unknown>;
+    const previewChecksums = previewed.preview.blocks.map((block) => block.checksum);
+    const providerBlocks = messagesBoundToChecksums(providerMessages, previewChecksums);
+    const artifactBlocks = messagesBoundToChecksums(promptArtifact.messages, previewChecksums);
+    expect(providerBlocks.map((block) => block.checksum)).toEqual(previewChecksums);
+    expect(artifactBlocks).toEqual(providerBlocks);
+    expect(contextSnapshot["packedContextManifest"]).toMatchObject({
+      packedContextId: previewed.preview.packedContextId,
+      payloadChecksum: previewed.preview.payloadChecksum,
+      blocks: previewed.preview.blocks.map((block) => ({
+        blockId: block.blockId,
+        refId: block.refId,
+        sourceKind: block.sourceKind,
+        order: block.order,
+        checksum: block.checksum,
+        tokenCount: block.tokenCount,
+        precision: block.precision,
+        truncationRange: block.truncationRange
+      }))
+    });
+  });
+
+  test("rejects a Packed Context checksum mismatch and a draft changed after preview", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-packed-stale-"));
+    roots.push(projectRoot);
+    let modelRounds = 0;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-packed-context-stale",
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-packed-stale",
+        provider: "demo",
+        modelName: "packed-stale-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound() {
+          modelRounds += 1;
+          yield runtimeToolCall("finish-packed-stale", "finish", { summary: "Unexpected." });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-packed-stale-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-packed-stale-run",
+      userRequest: "Use the current context.",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-packed-stale",
+      contextRefs: []
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const previewed = await previewDraftStart(runtime, prepared.value, "unused-packed-stale-start");
+
+    expect(
+      await runtime.agentRunSession.startAgentRun({
+        ...draftOnlyStartCommand(
+          runtime.workspaceId,
+          prepared.value,
+          "start-packed-checksum-mismatch",
+          previewed.preview
+        ),
+        packedContextPayloadChecksum: "0".repeat(64)
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_PREVIEW_STALE" }
+    });
+
+    const changed = await runtime.agentRunDraftSession.updateAgentRunDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "change-draft-after-packed-preview",
+      expectedDraftRevision: prepared.value.runDraft.revision,
+      mutation: { kind: "set_request", request: "Use the changed request." }
+    });
+    expect(changed).toMatchObject({ ok: true });
+    if (!changed.ok) return;
+    expect(
+      await runtime.agentRunSession.startAgentRun(
+        draftOnlyStartCommand(
+          runtime.workspaceId,
+          changed.value,
+          "start-packed-draft-mismatch",
+          previewed.preview
+        )
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_PREVIEW_STALE" }
+    });
+    expect(modelRounds).toBe(0);
+  });
+
+  test("blocks a draft start when pinned context alone exceeds the fixed input budget", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-packed-overflow-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "notes"), { recursive: true });
+    await writeFile(join(projectRoot, "notes", "pinned.md"), "x".repeat(140_000), "utf8");
+    let modelRounds = 0;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => "run-packed-context-overflow",
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-packed-overflow",
+        provider: "demo",
+        modelName: "packed-overflow-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound() {
+          modelRounds += 1;
+          yield runtimeToolCall("finish-packed-overflow", "finish", { summary: "Unexpected." });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-packed-overflow-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-packed-overflow-run",
+      userRequest: "Use all pinned context.",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-packed-overflow",
+      contextRefs: [
+        {
+          kind: "project_file",
+          refId: "file:notes/pinned.md",
+          relativePath: "notes/pinned.md",
+          label: "Pinned"
+        }
+      ]
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const pinned = await runtime.agentRunDraftSession.updateContextDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "pin-packed-overflow-source",
+      contextDraftId: prepared.value.contextDraft.contextDraftId,
+      expectedDraftRevision: prepared.value.contextDraft.revision,
+      mutation: {
+        kind: "set_source_override",
+        refId: "file:notes/pinned.md",
+        decision: "pinned",
+        priority: 100
+      }
+    });
+    expect(pinned).toMatchObject({ ok: true });
+    if (!pinned.ok) return;
+    const previewed = await previewDraftStart(runtime, pinned.value, "start-packed-overflow");
+    expect(previewed.preview.tokenStats.pinnedTokens).toBeGreaterThan(
+      previewed.preview.tokenStats.safeInputBudget
+    );
+    expect(previewed.preview.fixedBudgetExceeded).toBe(true);
+
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_FIXED_BUDGET_EXCEEDED" }
+    });
+    expect(modelRounds).toBe(0);
+  });
+
+  test.each(["excluded", "pinned"] as const)(
+    "restores a project-%s source to base selection for this run only",
+    async (projectDecision) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-context-neutral-"));
+      roots.push(projectRoot);
+      await mkdir(join(projectRoot, "notes"), { recursive: true });
+      await writeFile(join(projectRoot, "notes", "neutral.md"), "Neutral context body.\n", "utf8");
+      const sourcePreference = {
+        refId: "file:notes/neutral.md",
+        decision: projectDecision,
+        priority: 99,
+        ref: {
+          kind: "project_file" as const,
+          refId: "file:notes/neutral.md",
+          relativePath: "notes/neutral.md",
+          label: "Neutral context"
+        }
+      };
+      const projectPreferences = [sourcePreference] as const;
+      const originalPreferences = structuredClone(projectPreferences);
+      const runtime = runtimeExports.createDesktopAgentRuntime({
+        workspaceKind: "creativeProject",
+        projectId: "project-context-neutral",
+        contentRoot: projectRoot,
+        stateRoot: projectRoot,
+        contextSourcePreferences: projectPreferences,
+        verifyCreativeGeneralActiveResource: async () => ok(undefined),
+        resolveModelStartFacts: async () => ({
+          profileId: "profile-context-neutral",
+          provider: "demo",
+          modelName: "context-neutral-model",
+          capabilities: {
+            streaming: true,
+            toolCalling: true,
+            structuredArguments: true,
+            contextWindow: 128000
+          },
+          requiredContextTokens: 8000,
+          reasoningStrength: { status: "hidden", reason: "test model" }
+        })
+      });
+      const conversation = await runtime.agentConversationSession.createConversation({
+        projectId: "project-context-neutral",
+        commandId: `create-context-neutral-${projectDecision}`
+      });
+      expect(conversation).toMatchObject({ ok: true });
+      if (!conversation.ok) return;
+      const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+        projectId: "project-context-neutral",
+        conversationId: conversation.value.conversationId,
+        commandId: `prepare-context-neutral-${projectDecision}`,
+        userRequest: "Use the neutral source.",
+        operationMode: "execution",
+        contextMode: "general_file",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        modelProfileId: "profile-context-neutral",
+        contextRefs: []
+      });
+      expect(prepared).toMatchObject({ ok: true });
+      if (!prepared.ok) return;
+      const restored = await runtime.agentRunDraftSession.updateContextDraft({
+        projectId: "project-context-neutral",
+        conversationId: conversation.value.conversationId,
+        commandId: `restore-context-neutral-${projectDecision}`,
+        contextDraftId: prepared.value.contextDraft.contextDraftId,
+        expectedDraftRevision: prepared.value.contextDraft.revision,
+        mutation: {
+          kind: "set_source_override",
+          refId: sourcePreference.refId,
+          decision: "automatic"
+        }
+      });
+      if (!restored.ok) throw new Error(JSON.stringify(restored.error));
+
+      const previewed = await previewDraftStart(
+        runtime,
+        restored.value,
+        `preview-context-neutral-${projectDecision}`
+      );
+      expect(
+        previewed.preview.sources.find((source) => source.refId === sourcePreference.refId)
+      ).toMatchObject({
+        state: "active",
+        selectionPolicy: "explicit",
+        preferenceScope: "run",
+        selectionReason: "Restored to automatic selection for this run",
+        priority: 70
+      });
+      expect(projectPreferences).toEqual(originalPreferences);
+    }
+  );
+
   test("treats a saved active editor as disk context during draft preflight", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-saved-editor-"));
     roots.push(projectRoot);
@@ -465,15 +901,8 @@ describe("desktop Agent Run runtime", () => {
     expect(prepared).toMatchObject({ ok: true });
     if (!prepared.ok) return;
 
-    const started = await runtime.agentRunSession.startAgentRun({
-      projectId: "project-01",
-      conversationId: conversation.value.conversationId,
-      commandId: "start-saved-editor-run",
-      expectedRunRevision: 0,
-      runDraftId: prepared.value.runDraft.runDraftId,
-      runDraftRevision: prepared.value.runDraft.revision,
-      runDraftChecksum: prepared.value.runDraft.checksum
-    });
+    const previewed = await previewDraftStart(runtime, prepared.value, "start-saved-editor-run");
+    const started = await runtime.agentRunSession.startAgentRun(previewed.command);
     expect(started).toMatchObject({ ok: true });
     await vi.waitFor(async () => {
       const read = await runtime.agentRunSession.readAgentRun("run-saved-editor-preflight");
@@ -582,17 +1011,14 @@ describe("desktop Agent Run runtime", () => {
     expect(withManualRef).toMatchObject({ ok: true });
     if (!withManualRef.ok) return;
 
-    expect(
-      await runtime.agentRunSession.startAgentRun({
-        projectId: "project-01",
-        conversationId: conversation.value.conversationId,
-        commandId: "start-active-file-suffix-run",
-        expectedRunRevision: 0,
-        runDraftId: withManualRef.value.runDraft.runDraftId,
-        runDraftRevision: withManualRef.value.runDraft.revision,
-        runDraftChecksum: withManualRef.value.runDraft.checksum
-      })
-    ).toMatchObject({ ok: true });
+    const previewed = await previewDraftStart(
+      runtime,
+      withManualRef.value,
+      "start-active-file-suffix-run"
+    );
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: true
+    });
     await vi.waitFor(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-active-file-suffix")).toMatchObject({
         ok: true,
@@ -688,17 +1114,10 @@ describe("desktop Agent Run runtime", () => {
     expect(prepared).toMatchObject({ ok: true });
     if (!prepared.ok) return;
 
-    expect(
-      await runtime.agentRunSession.startAgentRun({
-        projectId: "project-01",
-        conversationId: conversation.value.conversationId,
-        commandId: "start-active-story-run",
-        expectedRunRevision: 0,
-        runDraftId: prepared.value.runDraft.runDraftId,
-        runDraftRevision: prepared.value.runDraft.revision,
-        runDraftChecksum: prepared.value.runDraft.checksum
-      })
-    ).toMatchObject({ ok: true });
+    const previewed = await previewDraftStart(runtime, prepared.value, "start-active-story-run");
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: true
+    });
     await vi.waitFor(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-active-story-suffix")).toMatchObject({
         ok: true,
@@ -780,19 +1199,17 @@ describe("desktop Agent Run runtime", () => {
     });
     expect(prepared).toMatchObject({ ok: true });
     if (!prepared.ok) return;
+    const previewed = await previewDraftStart(
+      runtime,
+      prepared.value,
+      "start-active-file-stale-run"
+    );
     await writeFile(join(projectRoot, "notes", "current.md"), "Externally changed body.\n", "utf8");
 
-    await expect(
-      runtime.agentRunSession.startAgentRun({
-        projectId: "project-01",
-        conversationId: conversation.value.conversationId,
-        commandId: "start-active-file-stale-run",
-        expectedRunRevision: 0,
-        runDraftId: prepared.value.runDraft.runDraftId,
-        runDraftRevision: prepared.value.runDraft.revision,
-        runDraftChecksum: prepared.value.runDraft.checksum
-      })
-    ).resolves.toMatchObject({ ok: false, error: { code: "AGENT_CONTEXT_STALE" } });
+    await expect(runtime.agentRunSession.startAgentRun(previewed.command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_STALE" }
+    });
     expect(modelRounds).toBe(0);
   });
 
@@ -1106,6 +1523,1017 @@ describe("desktop Agent Run runtime", () => {
     await expect(
       readFile(join(projectRoot, "foreshadows", `${assetId}.json`), "utf8")
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("serves complete Agent-safe Story Bible discovery without exposing passthrough values", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-story-bible-read-"));
+    roots.push(projectRoot);
+    const repository = new StoryBibleFileRepository({ projectRoot });
+    const assetId = "chr_legacy_character_read";
+    expect(
+      await repository.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: assetId,
+        type: "character",
+        title: "林砚",
+        status: "active",
+        summary: "调查旧港失踪案",
+        details: { role: "记者", privateLegacyNote: "legacy-secret-value" },
+        createdAt: "2026-07-31T00:00:00.000Z",
+        updatedAt: "2026-07-31T00:00:00.000Z",
+        privateLegacyRoot: "legacy-secret-value"
+      })
+    ).toMatchObject({ ok: true });
+    let round = 0;
+    let toolPayload = "";
+    let visibleTools: string[] = [];
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-story-bible-read",
+      modelDriver: {
+        async *streamRound(input: {
+          tools: readonly { name: string }[];
+          messages: readonly { role: string; content: string }[];
+        }) {
+          round += 1;
+          visibleTools = input.tools.map((tool) => tool.name);
+          if (round === 1) {
+            yield runtimeToolCall("describe-character", "describe_story_bible_type", {
+              type: "character"
+            });
+            yield runtimeToolCall("list-story-bible", "list_story_bible", {
+              types: ["character"],
+              limit: 10
+            });
+          } else if (round === 2) {
+            yield runtimeToolCall("read-story-bible", "read_story_bible", { assetId });
+            yield runtimeToolCall("references-story-bible", "get_story_bible_references", {
+              assetId
+            });
+          } else {
+            toolPayload = input.messages
+              .filter((message) => message.role === "tool")
+              .map((message) => message.content)
+              .join("\n");
+            yield runtimeToolCall("finish-story-bible-read", "finish", { summary: "Read." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand("writing"));
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-story-bible-read")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(visibleTools).toEqual(
+      expect.arrayContaining([
+        "describe_story_bible_type",
+        "list_story_bible",
+        "read_story_bible",
+        "get_story_bible_references"
+      ])
+    );
+    expect(toolPayload).toContain("createValueSchema");
+    expect(toolPayload).toContain(assetId);
+    expect(toolPayload).toContain('"present":true');
+    expect(toolPayload).not.toContain("legacy-secret-value");
+  });
+
+  test("applies a structured Story Bible patch only after Change Set approval", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-story-bible-patch-"));
+    roots.push(projectRoot);
+    const repository = new StoryBibleFileRepository({
+      projectRoot,
+      now: () => "2026-07-31T00:00:00.000Z"
+    });
+    const created = await repository.createStoryAsset({
+      type: "character",
+      value: { title: "林砚", summary: "尚未进入旧港。" }
+    });
+    expect(created).toMatchObject({ ok: true });
+    if (!created.ok) throw new Error(created.error.message);
+    const assetId = created.value.id;
+    const relativePath = `characters/${assetId}.json`;
+    const assetPath = join(projectRoot, relativePath);
+    const beforeContent = await readFile(assetPath, "utf8");
+    const before = await repository.readCompatibleStoryAsset(assetId);
+    expect(before).toMatchObject({ ok: true });
+    if (!before.ok) throw new Error(before.error.message);
+    const lockOwnerId = "desktop-story-bible-patch-test";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      projectLockOwnerId: lockOwnerId,
+      lifecycleOperations: createTestingReplaceLifecyclePort(projectRoot),
+      createRunId: () => "run-desktop-story-bible-patch",
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("patch-character", "patch_story_bible", {
+              assetId,
+              baseRevision: before.value.revision,
+              baseChecksum: before.value.checksum,
+              operations: [{ op: "replace", path: "/summary", value: "已经进入旧港调查失踪案。" }]
+            });
+          } else {
+            yield runtimeToolCall("finish-story-bible-patch", "finish", { summary: "Patched." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    }) as unknown as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(executionCommand("writing"));
+    let awaitingRevision = 0;
+    let changeSet: Record<string, unknown> | undefined;
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun("run-desktop-story-bible-patch");
+      expect(read).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_write_approval" },
+          changeSet: {
+            files: [
+              expect.objectContaining({
+                relativePath,
+                candidateContent: expect.stringContaining("已经进入旧港调查失踪案。")
+              })
+            ]
+          }
+        }
+      });
+      const value = read as {
+        value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
+      };
+      awaitingRevision = value.value.snapshot.runRevision;
+      changeSet = value.value.changeSet;
+    });
+    expect(await readFile(assetPath, "utf8")).toBe(beforeContent);
+    if (changeSet === undefined) throw new Error("Expected a staged Story Bible Change Set.");
+
+    expect(
+      await session.decideChangeSet({
+        runId: "run-desktop-story-bible-patch",
+        projectId: "project-01",
+        commandId: "apply-story-bible-patch",
+        expectedRunRevision: awaitingRevision,
+        changeSetId: changeSet["changeSetId"],
+        revision: changeSet["revision"],
+        checksum: changeSet["checksum"],
+        decision: "apply_selected"
+      })
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-story-bible-patch")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(await repository.readCompatibleStoryAsset(assetId)).toMatchObject({
+      ok: true,
+      value: {
+        revision: 2,
+        asset: { summary: "已经进入旧港调查失踪案。", revision: 2 }
+      }
+    });
+  });
+
+  test.each([
+    ["null", null],
+    ["malformed", { afterStatus: "deleted" }]
+  ])("fails closed for a %s Story Bible deletion transition record", async (_label, malformed) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-restore-proof-malformed-"));
+    roots.push(projectRoot);
+    const assetId = `chr_${"1".repeat(32)}`;
+    const beforeContent = statusAssetContent(assetId, "active", 1);
+    const deletedContent = statusAssetContent(assetId, "deleted", 2);
+    const versionId = "ver_restore_malformed";
+    const history = new HistoryRepository({ projectRoot, createVersionId: () => versionId });
+    const snapshot = await history.snapshotTextAsset({
+      assetType: "text",
+      assetId,
+      reason: "before-agent-write",
+      content: beforeContent,
+      candidateContent: deletedContent
+    });
+    if (!snapshot.ok) throw new Error(snapshot.error.message);
+    const recordPath = join(
+      projectRoot,
+      "history",
+      "texts-records",
+      `asset_${sha256(assetId)}`,
+      `${versionId}.json`
+    );
+    const record = JSON.parse(await readFile(recordPath, "utf8")) as Record<string, unknown>;
+    record["storyBibleStatusTransition"] = malformed;
+    await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+
+    await expect(
+      runtimeExports.resolveStoryBibleRestoreAuthorization(
+        history,
+        assetId,
+        2,
+        sha256(deletedContent)
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_RESTORE_STATUS_UNAVAILABLE" }
+    });
+  });
+
+  test("binds restore authorization to the current deleted checksum", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-restore-proof-checksum-"));
+    roots.push(projectRoot);
+    const assetId = `chr_${"2".repeat(32)}`;
+    const beforeContent = statusAssetContent(assetId, "draft", 1);
+    const deletedContent = statusAssetContent(assetId, "deleted", 2);
+    const history = new HistoryRepository({ projectRoot });
+    const snapshot = await history.snapshotTextAsset({
+      assetType: "text",
+      assetId,
+      reason: "before-agent-write",
+      content: beforeContent,
+      candidateContent: deletedContent
+    });
+    if (!snapshot.ok) throw new Error(snapshot.error.message);
+
+    await expect(
+      runtimeExports.resolveStoryBibleRestoreAuthorization(
+        history,
+        assetId,
+        2,
+        sha256(`${deletedContent}changed`)
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_RESTORE_STATUS_UNAVAILABLE" }
+    });
+  });
+
+  test.each(["record", "snapshot"] as const)(
+    "rejects restore authorization when the History %s checksum is tampered",
+    async (tamperedPart) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-restore-proof-tamper-"));
+      roots.push(projectRoot);
+      const assetId = `chr_${"4".repeat(32)}`;
+      const beforeContent = statusAssetContent(assetId, "active", 1);
+      const deletedContent = statusAssetContent(assetId, "deleted", 2);
+      const versionId = "ver_restore_tamper";
+      const history = new HistoryRepository({ projectRoot, createVersionId: () => versionId });
+      const snapshot = await history.snapshotTextAsset({
+        assetType: "text",
+        assetId,
+        reason: "before-agent-write",
+        content: beforeContent,
+        candidateContent: deletedContent
+      });
+      if (!snapshot.ok) throw new Error(snapshot.error.message);
+      const assetHistoryKey = `asset_${sha256(assetId)}`;
+      if (tamperedPart === "record") {
+        const recordPath = join(
+          projectRoot,
+          "history",
+          "texts-records",
+          assetHistoryKey,
+          `${versionId}.json`
+        );
+        const record = JSON.parse(await readFile(recordPath, "utf8")) as Record<string, unknown>;
+        record["checksum"] = `sha256:${"f".repeat(64)}`;
+        await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+      } else {
+        await writeFile(
+          join(projectRoot, "history", "texts", assetHistoryKey, `${versionId}.txt`),
+          `${beforeContent}tampered`,
+          "utf8"
+        );
+      }
+
+      await expect(
+        runtimeExports.resolveStoryBibleRestoreAuthorization(
+          history,
+          assetId,
+          2,
+          sha256(deletedContent)
+        )
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_RESTORE_STATUS_UNAVAILABLE" }
+      });
+    }
+  );
+
+  test("rejects conflicting pre-delete statuses for the same deleted revision", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-restore-proof-conflict-"));
+    roots.push(projectRoot);
+    const assetId = `chr_${"3".repeat(32)}`;
+    const deletedContent = statusAssetContent(assetId, "deleted", 2);
+    const versionIds = ["ver_restore_active", "ver_restore_archived"];
+    let versionIndex = 0;
+    const history = new HistoryRepository({
+      projectRoot,
+      createVersionId: () => versionIds[versionIndex++] ?? `ver_restore_extra_${versionIndex}`
+    });
+    for (const status of ["active", "archived"] as const) {
+      const snapshot = await history.snapshotTextAsset({
+        assetType: "text",
+        assetId,
+        reason: "before-agent-write",
+        content: statusAssetContent(assetId, status, 1),
+        candidateContent: deletedContent
+      });
+      if (!snapshot.ok) throw new Error(snapshot.error.message);
+    }
+
+    await expect(
+      runtimeExports.resolveStoryBibleRestoreAuthorization(
+        history,
+        assetId,
+        2,
+        sha256(deletedContent)
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_RESTORE_STATUS_UNAVAILABLE" }
+    });
+  });
+
+  test("rejects a stale Story Bible deletion impact before snapshots or business writes", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-delete-proof-stale-"));
+    roots.push(projectRoot);
+    const targetId = `chr_${"5".repeat(32)}`;
+    const sourceId = `chr_${"6".repeat(32)}`;
+    const assetIds = [targetId, sourceId];
+    let assetIndex = 0;
+    const repository = new StoryBibleFileRepository({
+      projectRoot,
+      now: () => "2026-08-01T00:00:00.000Z",
+      createAssetId: () => assetIds[assetIndex++] ?? `chr_${"9".repeat(32)}`
+    });
+    const target = await repository.createStoryAsset({
+      type: "character",
+      value: { title: "待删除人物" }
+    });
+    const source = await repository.createStoryAsset({
+      type: "character",
+      value: { title: "引用人物" }
+    });
+    if (!target.ok || !source.ok) throw new Error("Failed to create Story Bible proof fixtures.");
+    const targetRead = await repository.readCompatibleStoryAsset(targetId);
+    if (!targetRead.ok) throw new Error(targetRead.error.message);
+    const initialImpact = await repository.getStoryBibleReferences(targetId);
+    if (!initialImpact.ok) throw new Error(initialImpact.error.message);
+    const preparedDelete = await repository.prepareStoryAssetCandidate({
+      candidate: storyBibleStatusCandidate(targetRead.value.asset, "deleted"),
+      baseRevision: targetRead.value.revision,
+      baseChecksum: targetRead.value.checksum
+    });
+    if (!preparedDelete.ok) throw new Error(preparedDelete.error.message);
+    const changeSet = await createChangeSetRevision({
+      changeSetId: "changes-delete-proof-stale",
+      runId: "run-delete-proof-stale",
+      projectId: "project-01",
+      checkpointId: "checkpoint-delete-proof-stale",
+      contextSnapshotId: "context-delete-proof-stale",
+      createdAt: "2026-08-01T00:01:00.000Z",
+      proposal: {
+        relativePath: preparedDelete.value.relativePath,
+        assetType: "text",
+        assetId: targetId,
+        baseContent: preparedDelete.value.baseContent,
+        baseChecksum: preparedDelete.value.baseChecksum,
+        range: { unit: "character", start: 0, end: preparedDelete.value.baseContent.length },
+        replacement: preparedDelete.value.content,
+        storyBibleStatusProof: {
+          action: "delete",
+          deletionImpactChecksum: initialImpact.value.deletionImpactChecksum
+        }
+      }
+    });
+    const approval = decideChangeSetApproval({
+      changeSet,
+      decision: "apply_selected",
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      resolvedAt: "2026-08-01T00:02:00.000Z"
+    });
+    if (!approval.ok) throw new Error(approval.error.message);
+
+    const sourceRead = await repository.readCompatibleStoryAsset(sourceId);
+    if (!sourceRead.ok) throw new Error(sourceRead.error.message);
+    const sourceCandidate = storyBibleStatusCandidate(
+      sourceRead.value.asset,
+      sourceRead.value.asset.status
+    );
+    sourceCandidate.relations = [
+      {
+        relationId: `rel_${"7".repeat(32)}`,
+        sourceId,
+        targetId,
+        relationType: "character.knows",
+        direction: "directed",
+        status: "active",
+        validFromChapterId: null,
+        validToChapterId: null,
+        inversePolicy: "none",
+        inverseRelationId: null,
+        evidence: [],
+        note: ""
+      }
+    ];
+    const savedSource = await repository.saveStoryAssetCandidate({
+      candidate: sourceCandidate,
+      baseRevision: sourceRead.value.revision,
+      baseChecksum: sourceRead.value.checksum
+    });
+    if (!savedSource.ok) throw new Error(savedSource.error.message);
+
+    const lockOwnerId = "desktop-delete-proof-stale";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const services = runtimeExports.createDesktopVersionGroupServices({
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      projectId: "project-01",
+      projectLockOwnerId: lockOwnerId,
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      }),
+      projectReads: new AgentProjectReadRepository({ projectRoot }),
+      storyBible: repository
+    });
+    const rejected = await services.versionGroupSession.applyApproved({
+      changeSet,
+      approval: approval.value
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_DELETION_IMPACT_CHANGED" }
+    });
+    expect(await repository.readCompatibleStoryAsset(targetId)).toMatchObject({
+      ok: true,
+      value: { asset: { status: "active" }, revision: 1 }
+    });
+    await expect(
+      new HistoryRepository({ projectRoot }).listTextAssetSnapshotRecords({
+        assetType: "text",
+        assetId: targetId
+      })
+    ).resolves.toEqual(ok([]));
+    await expect(
+      new RecoveryRepository({ projectRoot }).listAgentTransactionJournals()
+    ).resolves.toEqual(ok([]));
+  });
+
+  test("rejects a stale Story Bible restore authorization before snapshots or business writes", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-restore-proof-stale-"));
+    roots.push(projectRoot);
+    const assetId = `chr_${"8".repeat(32)}`;
+    const repository = new StoryBibleFileRepository({
+      projectRoot,
+      now: () => "2026-08-01T00:00:00.000Z",
+      createAssetId: () => assetId
+    });
+    const created = await repository.createStoryAsset({
+      type: "character",
+      value: { title: "待恢复人物", status: "draft" }
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    const activeRead = await repository.readCompatibleStoryAsset(assetId);
+    if (!activeRead.ok) throw new Error(activeRead.error.message);
+    const deletionImpact = await repository.getStoryBibleReferences(assetId);
+    if (!deletionImpact.ok) throw new Error(deletionImpact.error.message);
+    const preparedDelete = await repository.prepareStoryAssetCandidate({
+      candidate: storyBibleStatusCandidate(activeRead.value.asset, "deleted"),
+      baseRevision: activeRead.value.revision,
+      baseChecksum: activeRead.value.checksum
+    });
+    if (!preparedDelete.ok) throw new Error(preparedDelete.error.message);
+    const versionIds = ["ver_restore_initial", "ver_restore_late"];
+    let versionIndex = 0;
+    const history = new HistoryRepository({
+      projectRoot,
+      createVersionId: () => versionIds[versionIndex++] ?? `ver_restore_extra_${versionIndex}`
+    });
+    const initialSnapshot = await history.snapshotTextAsset({
+      assetType: "text",
+      assetId,
+      reason: "before-agent-write",
+      content: preparedDelete.value.baseContent,
+      candidateContent: preparedDelete.value.content
+    });
+    if (!initialSnapshot.ok) throw new Error(initialSnapshot.error.message);
+    const deleted = await repository.saveStoryAssetStatusTransition({
+      candidate: storyBibleStatusCandidate(activeRead.value.asset, "deleted"),
+      baseRevision: activeRead.value.revision,
+      baseChecksum: activeRead.value.checksum,
+      statusTransition: {
+        action: "move-to-deleted",
+        expectedDeletionImpactChecksum: deletionImpact.value.deletionImpactChecksum
+      }
+    });
+    if (!deleted.ok) throw new Error(deleted.error.message);
+    const deletedRead = await repository.readCompatibleStoryAsset(assetId);
+    if (!deletedRead.ok) throw new Error(deletedRead.error.message);
+    const authorization = await runtimeExports.resolveStoryBibleRestoreAuthorization(
+      history,
+      assetId,
+      deletedRead.value.revision,
+      deletedRead.value.checksum
+    );
+    if (!authorization.ok) throw new Error(authorization.error.message);
+    const preparedRestore = await repository.prepareStoryAssetCandidate({
+      candidate: storyBibleStatusCandidate(deletedRead.value.asset, authorization.value.status),
+      baseRevision: deletedRead.value.revision,
+      baseChecksum: deletedRead.value.checksum
+    });
+    if (!preparedRestore.ok) throw new Error(preparedRestore.error.message);
+    const changeSet = await createChangeSetRevision({
+      changeSetId: "changes-restore-proof-stale",
+      runId: "run-restore-proof-stale",
+      projectId: "project-01",
+      checkpointId: "checkpoint-restore-proof-stale",
+      contextSnapshotId: "context-restore-proof-stale",
+      createdAt: "2026-08-01T00:01:00.000Z",
+      proposal: {
+        relativePath: preparedRestore.value.relativePath,
+        assetType: "text",
+        assetId,
+        baseContent: preparedRestore.value.baseContent,
+        baseChecksum: preparedRestore.value.baseChecksum,
+        range: {
+          unit: "character",
+          start: 0,
+          end: preparedRestore.value.baseContent.length
+        },
+        replacement: preparedRestore.value.content,
+        storyBibleStatusProof: {
+          action: "restore",
+          expectedStatus: authorization.value.status,
+          historyAuthorizationChecksum: authorization.value.historyAuthorizationChecksum
+        }
+      }
+    });
+    const approval = decideChangeSetApproval({
+      changeSet,
+      decision: "apply_selected",
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      resolvedAt: "2026-08-01T00:02:00.000Z"
+    });
+    if (!approval.ok) throw new Error(approval.error.message);
+
+    const lateSnapshot = await history.snapshotTextAsset({
+      assetType: "text",
+      assetId,
+      reason: "before-agent-write",
+      content: preparedDelete.value.baseContent,
+      candidateContent: preparedDelete.value.content
+    });
+    if (!lateSnapshot.ok) throw new Error(lateSnapshot.error.message);
+    expect(
+      await runtimeExports.resolveStoryBibleRestoreAuthorization(
+        history,
+        assetId,
+        deletedRead.value.revision,
+        deletedRead.value.checksum
+      )
+    ).not.toEqual(authorization);
+
+    const lockOwnerId = "desktop-restore-proof-stale";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const services = runtimeExports.createDesktopVersionGroupServices({
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      projectId: "project-01",
+      projectLockOwnerId: lockOwnerId,
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      }),
+      projectReads: new AgentProjectReadRepository({ projectRoot }),
+      storyBible: repository
+    });
+    const rejected = await services.versionGroupSession.applyApproved({
+      changeSet,
+      approval: approval.value
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_RESTORE_AUTHORIZATION_CHANGED" }
+    });
+    expect(await repository.readCompatibleStoryAsset(assetId)).toMatchObject({
+      ok: true,
+      value: { asset: { status: "deleted" }, revision: deletedRead.value.revision }
+    });
+    await expect(
+      history.listTextAssetSnapshotRecords({ assetType: "text", assetId })
+    ).resolves.toMatchObject({ ok: true, value: [{}, {}] });
+    await expect(
+      new RecoveryRepository({ projectRoot }).listAgentTransactionJournals()
+    ).resolves.toEqual(ok([]));
+  });
+
+  test("validates the complete Story Bible file-and-create group before transaction writes", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-story-bible-group-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const firstId = `chr_${"a".repeat(32)}`;
+    const secondId = `chr_${"b".repeat(32)}`;
+    const firstRelationId = `rel_${"1".repeat(32)}`;
+    const secondRelationId = `rel_${"2".repeat(32)}`;
+    const repository = new StoryBibleFileRepository({
+      projectRoot,
+      now: () => "2026-07-31T00:00:00.000Z",
+      createAssetId: () => firstId
+    });
+    const created = await repository.createStoryAsset({
+      type: "character",
+      value: { title: "林砚" }
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    const firstRead = await repository.readCompatibleStoryAsset(firstId);
+    if (!firstRead.ok) throw new Error(firstRead.error.message);
+    const relation = (input: {
+      relationId: string;
+      sourceId: string;
+      targetId: string;
+      inverseRelationId: string;
+      status?: "active" | "ended";
+    }) => ({
+      relationId: input.relationId,
+      sourceId: input.sourceId,
+      targetId: input.targetId,
+      relationType: "character.trust",
+      direction: "directed" as const,
+      status: input.status ?? ("active" as const),
+      validFromChapterId: null,
+      validToChapterId: null,
+      inversePolicy: "explicit" as const,
+      inverseRelationId: input.inverseRelationId,
+      evidence: [],
+      note: ""
+    });
+    const firstCandidate = {
+      schemaVersion: "1.1" as const,
+      id: firstRead.value.asset.id,
+      type: firstRead.value.asset.type,
+      title: firstRead.value.asset.title,
+      status: firstRead.value.asset.status,
+      summary: firstRead.value.asset.summary,
+      aliases: [...firstRead.value.asset.aliases],
+      relations: [
+        relation({
+          relationId: firstRelationId,
+          sourceId: firstId,
+          targetId: secondId,
+          inverseRelationId: secondRelationId
+        })
+      ],
+      details: firstRead.value.asset.details,
+      extensions: firstRead.value.asset.extensions,
+      createdAt: firstRead.value.asset.createdAt
+    };
+    const preparedFirst = await repository.prepareStoryAssetCandidate({
+      candidate: firstCandidate,
+      baseRevision: firstRead.value.revision,
+      baseChecksum: firstRead.value.checksum,
+      additionalKnownAssetIds: [secondId],
+      deferProjectRelationPairValidation: true
+    });
+    if (!preparedFirst.ok) throw new Error(preparedFirst.error.message);
+    const preparedSecond = await repository.prepareCreateStoryAsset({
+      type: "character",
+      reservedAssetId: secondId,
+      value: {
+        title: "顾岚",
+        relations: [
+          relation({
+            relationId: secondRelationId,
+            sourceId: secondId,
+            targetId: firstId,
+            inverseRelationId: firstRelationId
+          })
+        ]
+      },
+      deferProjectRelationPairValidation: true
+    });
+    if (!preparedSecond.ok) throw new Error(preparedSecond.error.message);
+
+    const groupId = "fact_inverse_pair_01";
+    const buildChangeSet = (input: {
+      changeSetId: string;
+      preparedContent: string;
+      baseContent: string;
+      baseChecksum: string;
+      candidateChecksum: string;
+      operation?: {
+        readonly relativePath: string;
+        readonly content: string;
+      };
+    }): ChangeSet => {
+      const checksum = sha256(`${input.changeSetId}:${input.preparedContent}`);
+      return {
+        schemaVersion: "1.1",
+        changeSetId: input.changeSetId,
+        revision: 1,
+        runId: "run-story-bible-group",
+        projectId: "project-01",
+        checkpointId: "checkpoint-story-bible-group",
+        contextSnapshotId: "context-story-bible-group",
+        writePolicy: "write_before_confirmation",
+        status: "awaiting_approval",
+        checksum,
+        approvalToken: checksumChangeSetText(`${input.changeSetId}:1:${checksum}`),
+        createdAt: "2026-07-31T00:00:00.000Z",
+        files: [
+          {
+            relativePath: preparedFirst.value.relativePath,
+            assetType: "text",
+            assetId: firstId,
+            baseChecksum: input.baseChecksum,
+            candidateChecksum: input.candidateChecksum,
+            baseContent: input.baseContent,
+            candidateContent: input.preparedContent,
+            selected: true,
+            consistencyGroupId: groupId,
+            hunks: [],
+            validation: {
+              valid: true,
+              utf8: { status: "valid" },
+              syntax: { status: "valid" },
+              schema: { status: "valid" },
+              asset: { status: "valid" }
+            }
+          }
+        ],
+        operationsSchemaVersion: "1.1",
+        operations:
+          input.operation === undefined
+            ? []
+            : [
+                {
+                  kind: "create_file",
+                  operationId: "create-second-character",
+                  toolCallIdempotencyKey: "tool-create-second-character",
+                  relativePath: input.operation.relativePath,
+                  content: input.operation.content,
+                  selected: true,
+                  consistencyGroupId: groupId
+                }
+              ]
+      };
+    };
+    const approvalFor = (changeSet: ChangeSet): ChangeSetApproval => ({
+      schemaVersion: "1.1",
+      decision: "apply_selected",
+      approvalSource: "human_confirmation",
+      resolvedAt: "2026-07-31T00:01:00.000Z",
+      binding: {
+        changeSetId: changeSet.changeSetId,
+        revision: changeSet.revision,
+        checksum: changeSet.checksum,
+        approvalToken: changeSet.approvalToken,
+        selectedConsistencyGroupIds: [groupId],
+        selectionChecksum: checksumChangeSetSelection(changeSet, [groupId])
+      }
+    });
+
+    const lockOwnerId = "desktop-story-bible-group-test";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const services = runtimeExports.createDesktopVersionGroupServices({
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      projectId: "project-01",
+      projectLockOwnerId: lockOwnerId,
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      }),
+      projectReads: new AgentProjectReadRepository({ projectRoot }),
+      chapterRepository: new ChapterFileRepository({ projectRoot }),
+      storyBible: repository
+    });
+    const validChangeSet = buildChangeSet({
+      changeSetId: "changes-story-bible-group-valid",
+      preparedContent: preparedFirst.value.content,
+      baseContent: preparedFirst.value.baseContent,
+      baseChecksum: preparedFirst.value.baseChecksum,
+      candidateChecksum: sha256(preparedFirst.value.content),
+      operation: {
+        relativePath: preparedSecond.value.relativePath,
+        content: preparedSecond.value.content
+      }
+    });
+    const applied = await services.versionGroupSession.applyApproved({
+      changeSet: validChangeSet,
+      approval: approvalFor(validChangeSet),
+      group: { applyBatchId: "apply-story-bible-group-valid", consistencyGroupId: groupId }
+    });
+    if (!applied.ok) {
+      throw new Error(JSON.stringify(applied.error));
+    }
+    expect(applied).toMatchObject({
+      ok: true,
+      value: {
+        transactionStatus: "applied",
+        writes: [{ relativePath: preparedFirst.value.relativePath, status: "applied" }],
+        operations: [{ relativePaths: [preparedSecond.value.relativePath], status: "applied" }]
+      }
+    });
+    expect(await repository.readCompatibleStoryAsset(secondId)).toMatchObject({
+      ok: true,
+      value: { asset: { relations: [{ inverseRelationId: firstRelationId }] } }
+    });
+
+    const currentFirst = await repository.readCompatibleStoryAsset(firstId);
+    if (!currentFirst.ok) throw new Error(currentFirst.error.message);
+    const inconsistentCandidate = {
+      schemaVersion: "1.1" as const,
+      id: currentFirst.value.asset.id,
+      type: currentFirst.value.asset.type,
+      title: currentFirst.value.asset.title,
+      status: currentFirst.value.asset.status,
+      summary: currentFirst.value.asset.summary,
+      aliases: [...currentFirst.value.asset.aliases],
+      relations: currentFirst.value.asset.relations.map((entry) => ({
+        ...entry,
+        status: "ended" as const
+      })),
+      details: currentFirst.value.asset.details,
+      extensions: currentFirst.value.asset.extensions,
+      createdAt: currentFirst.value.asset.createdAt
+    };
+    const preparedInconsistent = await repository.prepareStoryAssetCandidate({
+      candidate: inconsistentCandidate,
+      baseRevision: currentFirst.value.revision,
+      baseChecksum: currentFirst.value.checksum,
+      deferProjectRelationPairValidation: true
+    });
+    if (!preparedInconsistent.ok) throw new Error(preparedInconsistent.error.message);
+    const invalidChangeSet = buildChangeSet({
+      changeSetId: "changes-story-bible-group-invalid",
+      preparedContent: preparedInconsistent.value.content,
+      baseContent: preparedInconsistent.value.baseContent,
+      baseChecksum: preparedInconsistent.value.baseChecksum,
+      candidateChecksum: sha256(preparedInconsistent.value.content)
+    });
+    const beforeRejectedApply = await readFile(
+      join(projectRoot, preparedInconsistent.value.relativePath),
+      "utf8"
+    );
+    const rejected = await services.versionGroupSession.applyApproved({
+      changeSet: invalidChangeSet,
+      approval: approvalFor(invalidChangeSet),
+      group: { applyBatchId: "apply-story-bible-group-invalid", consistencyGroupId: groupId }
+    });
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_CANDIDATE_INVALID" }
+    });
+    expect(await readFile(join(projectRoot, preparedInconsistent.value.relativePath), "utf8")).toBe(
+      beforeRejectedApply
+    );
+    await expect(
+      new RecoveryRepository({ projectRoot }).listAgentTransactionJournals()
+    ).resolves.toMatchObject({
+      ok: true,
+      value: [expect.objectContaining({ transactionStatus: "applied" })]
+    });
+  });
+
+  test("creates Story Bible assets with server-owned identity through approval", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-story-bible-create-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "world"), { recursive: true });
+    const lockOwnerId = "desktop-story-bible-create-test";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      projectLockOwnerId: lockOwnerId,
+      createRunId: () => "run-desktop-story-bible-create",
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("create-lore", "create_story_bible", {
+              type: "world.lore",
+              value: { title: "潮汐誓约", summary: "旧港守夜人遵循的誓约。" }
+            });
+          } else {
+            yield runtimeToolCall("finish-story-bible-create", "finish", { summary: "Created." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    }) as unknown as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      refreshContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(executionCommand("writing"));
+    let awaitingRevision = 0;
+    let changeSet: Record<string, unknown> | undefined;
+    let operation: Record<string, unknown> | undefined;
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun("run-desktop-story-bible-create");
+      expect(read).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_write_approval" },
+          changeSet: {
+            operations: [
+              expect.objectContaining({
+                kind: "create_file",
+                relativePath: expect.stringMatching(/^world\/lore_[a-f0-9]{32}\.json$/u)
+              })
+            ]
+          }
+        }
+      });
+      const value = read as {
+        value: {
+          snapshot: { runRevision: number };
+          changeSet: Record<string, unknown> & { operations: Record<string, unknown>[] };
+        };
+      };
+      awaitingRevision = value.value.snapshot.runRevision;
+      changeSet = value.value.changeSet;
+      operation = value.value.changeSet.operations[0];
+    });
+    if (changeSet === undefined || operation === undefined) {
+      throw new Error("Expected a staged Story Bible create operation.");
+    }
+    const relativePath = String(operation["relativePath"]);
+    const preparedAsset = JSON.parse(String(operation["content"])) as Record<string, unknown>;
+    expect(preparedAsset).toMatchObject({
+      schemaVersion: "1.1",
+      id: expect.stringMatching(/^lore_[a-f0-9]{32}$/u),
+      type: "world.lore",
+      title: "潮汐誓约",
+      revision: 1
+    });
+    expect(relativePath).toBe(`world/${String(preparedAsset["id"])}.json`);
+    await expect(readFile(join(projectRoot, relativePath), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+
+    const applied = await session.decideChangeSet({
+      runId: "run-desktop-story-bible-create",
+      projectId: "project-01",
+      commandId: "apply-story-bible-create",
+      expectedRunRevision: awaitingRevision,
+      changeSetId: changeSet["changeSetId"],
+      revision: changeSet["revision"],
+      checksum: changeSet["checksum"],
+      decision: "apply_selected"
+    });
+    expect(applied).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-story-bible-create")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(JSON.parse(await readFile(join(projectRoot, relativePath), "utf8"))).toMatchObject({
+      id: preparedAsset["id"],
+      type: "world.lore",
+      revision: 1
+    });
   });
 
   test("rejects memory IDs as Story Bible edit targets without touching the timeline", async () => {
@@ -2302,23 +3730,26 @@ describe("desktop Agent Run runtime", () => {
 
     await session.startAgentRun(executionCommand("writing"));
 
-    await vi.waitFor(async () => {
-      expect(await session.readAgentRun(runId)).toMatchObject({
-        ok: true,
-        value: {
-          snapshot: { status: "completed", contextMode: "writing" },
-          events: expect.arrayContaining([
-            expect.objectContaining({
-              type: "tool_failed",
-              detail: expect.objectContaining({
-                toolCallId: `managed-${input.label.replace(" ", "-")}`,
-                code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
+    await vi.waitFor(
+      async () => {
+        expect(await session.readAgentRun(runId)).toMatchObject({
+          ok: true,
+          value: {
+            snapshot: { status: "completed", contextMode: "writing" },
+            events: expect.arrayContaining([
+              expect.objectContaining({
+                type: "tool_failed",
+                detail: expect.objectContaining({
+                  toolCallId: `managed-${input.label.replace(" ", "-")}`,
+                  code: "CREATIVE_PROJECT_FILE_PATH_REJECTED"
+                })
               })
-            })
-          ])
-        }
-      });
-    });
+            ])
+          }
+        });
+      },
+      { timeout: 10_000 }
+    );
     const rejected = await session.readAgentRun(runId);
     expect(rejected).not.toMatchObject({ value: { changeSet: expect.anything() } });
     expect(await readFile(assetPath, "utf8")).toBe(content);
@@ -2508,6 +3939,70 @@ describe("desktop Agent Run runtime", () => {
     expect(observedToolPayload).not.toContain("settings.json");
   });
 
+  test("routes writing search through the complete creative index", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-writing-search-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const storyBible = new StoryBibleFileRepository({ projectRoot });
+    expect(
+      await storyBible.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: "chr_search",
+        type: "character",
+        title: "林砚",
+        status: "active",
+        summary: "writingsearchneedle 调查旧港失踪案",
+        details: { role: "记者" },
+        createdAt: "2026-07-31T00:00:00.000Z",
+        updatedAt: "2026-07-31T00:00:00.000Z"
+      })
+    ).toMatchObject({ ok: true });
+    let round = 0;
+    let observedToolPayload = "";
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-writing-search",
+      featureFlags: createAgentFeatureFlags({
+        phaseA_searchEnabled: true,
+        revision: "desktop-writing-search-test"
+      }),
+      modelDriver: {
+        async *streamRound(input) {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("search-writing-story", "search_project", {
+              mode: "text",
+              query: "writingsearchneedle",
+              maxResults: 10
+            });
+          } else {
+            observedToolPayload = input.messages
+              .filter((message) => message.role === "tool")
+              .map((message) => message.content)
+              .join("\n");
+            yield runtimeToolCall("finish-writing-search", "finish", { summary: "Found." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand("writing"));
+
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-writing-search")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed", contextMode: "writing" } }
+      });
+    });
+    expect(observedToolPayload).toContain("characters/chr_search.json");
+    expect(observedToolPayload).toContain("story_bible:chr_search");
+  });
+
   test("composes the repository-backed search executor into the production runtime", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-search-"));
     roots.push(projectRoot);
@@ -2662,6 +4157,59 @@ describe("desktop Agent Run runtime", () => {
   });
 });
 
+interface DraftStartView {
+  readonly runDraft: {
+    readonly runDraftId: string;
+    readonly revision: number;
+    readonly checksum: string;
+    readonly conversationId: string;
+  };
+}
+
+function draftOnlyStartCommand(
+  projectId: string,
+  view: DraftStartView,
+  commandId: string,
+  preview?: { readonly packedContextId: string; readonly payloadChecksum: string }
+) {
+  return {
+    projectId,
+    conversationId: view.runDraft.conversationId,
+    commandId,
+    expectedRunRevision: 0 as const,
+    runDraftId: view.runDraft.runDraftId,
+    runDraftRevision: view.runDraft.revision,
+    runDraftChecksum: view.runDraft.checksum,
+    ...(preview === undefined
+      ? {}
+      : {
+          packedContextId: preview.packedContextId,
+          packedContextPayloadChecksum: preview.payloadChecksum
+        })
+  };
+}
+
+async function previewDraftStart(
+  runtime: ReturnType<typeof runtimeExports.createDesktopAgentRuntime>,
+  view: DraftStartView,
+  commandId: string
+) {
+  const preview = await runtime.agentContextSession.previewPackedContext({
+    projectId: runtime.workspaceId,
+    conversationId: view.runDraft.conversationId,
+    commandId: `${commandId}-context-preview`,
+    runDraftId: view.runDraft.runDraftId,
+    expectedDraftRevision: view.runDraft.revision,
+    runDraftChecksum: view.runDraft.checksum
+  });
+  expect(preview).toMatchObject({ ok: true });
+  if (!preview.ok) throw preview.error;
+  return {
+    preview: preview.value,
+    command: draftOnlyStartCommand(runtime.workspaceId, view, commandId, preview.value)
+  };
+}
+
 function createDesktopRuntime(options: Record<string, unknown>) {
   return (
     runtimeExports.createDesktopAgentRunSession as (options: Record<string, unknown>) => {
@@ -2757,8 +4305,51 @@ function strictPlanningCommand(conversationId: string, commandId: string) {
   };
 }
 
+function messagesBoundToChecksums(
+  messages: readonly { readonly role: string; readonly content: string }[],
+  checksums: readonly string[]
+) {
+  const expected = new Set(checksums);
+  return messages
+    .map((message) => ({ ...message, checksum: sha256(message.content) }))
+    .filter((message) => expected.has(message.checksum));
+}
+
 function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function statusAssetContent(
+  assetId: string,
+  status: "active" | "draft" | "archived" | "deleted",
+  revision: number
+): string {
+  return `${JSON.stringify({
+    schemaVersion: "1.1",
+    id: assetId,
+    type: "character",
+    status,
+    revision
+  })}\n`;
+}
+
+function storyBibleStatusCandidate(
+  asset: StoryBibleV11Asset,
+  status: "active" | "draft" | "archived" | "deleted"
+) {
+  return {
+    schemaVersion: asset.schemaVersion,
+    id: asset.id,
+    type: asset.type,
+    title: asset.title,
+    status,
+    summary: asset.summary,
+    aliases: [...asset.aliases],
+    relations: [...asset.relations],
+    details: asset.details,
+    extensions: asset.extensions,
+    createdAt: asset.createdAt
+  };
 }
 
 function createTestingReplaceLifecyclePort(projectRoot: string): AgentWriteLifecycleOperationPort {

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import {
   createAgentBackedAiWritingWorkflowSession,
+  createAgentFileOperationSession,
   createAgentUsageSession,
   createChapterEditorSession,
   createConfigStudioSession,
@@ -13,11 +14,21 @@ import {
   createPluginSettingsSession,
   createProjectSearchSession,
   createProjectWorkspaceSession,
+  createStoryAnalysisSession,
+  createStoryAnalysisApplicationSession,
+  createStoryAnalysisChangeSetPreparationPort,
+  createStoryBibleExplicitInverseSession,
   createStoryBibleSession,
   createUserPreferencesSession,
   resolveDefaultForeshadowAnalysisRuntimeProfile,
-  resolveDefaultModelRuntimeProfile
+  resolveDefaultModelRuntimeProfile,
+  resolveDefaultStoryAnalysisRuntimeProfile
 } from "@novel-studio/application";
+import {
+  usageRecordIdempotencyKey,
+  validateAgentUsageRecord,
+  type AgentUsageRecord
+} from "@novel-studio/agent-engine";
 import type {
   ChapterEditorSession,
   DesktopApplication,
@@ -26,11 +37,19 @@ import type {
   ModelDiscoveryPort,
   ProjectWorkspaceSnapshot,
   ProjectSettings,
-  ProjectSettingsPort
+  ProjectSettingsPort,
+  StoryBibleAsset
 } from "@novel-studio/application";
-import { createLlmAdapter, type LlmProvider, type LlmRequest } from "@novel-studio/llm-adapter";
+import {
+  createLlmAdapter,
+  type LlmProvider,
+  type LlmRequest,
+  type LlmUsage
+} from "@novel-studio/llm-adapter";
 import {
   ChapterFileRepository,
+  AgentProjectReadRepository,
+  AgentRunFileRepository,
   AgentUsageFileRepository,
   ConfigAssetRepository,
   EngineeringWorkspaceFileRepository,
@@ -46,7 +65,14 @@ import {
   UserPreferencesFileRepository,
   WorkspaceStateFileRepository
 } from "@novel-studio/repository";
-import { err, ok } from "@novel-studio/shared";
+import { createTrustedCreativeFileOperationsPort } from "@novel-studio/repository";
+import { err, ok, type JsonObject } from "@novel-studio/shared";
+
+import {
+  createDesktopChangeSetSession,
+  createDesktopVersionGroupServices,
+  resolveStoryBibleRestoreStatus
+} from "./agent-run-runtime.js";
 
 export const DEFAULT_FIXTURE_CHAPTER_ID = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 const DEFAULT_PROJECT_TITLE = "未命名长篇项目";
@@ -218,6 +244,93 @@ export function createProjectDesktopApplication(
     writeSettings: (settings: ProjectSettings) => createSettingsRepository().writeSettings(settings)
   };
   const engineeringUserDataRoot = options.userDataRoot;
+  const createProjectStoryAnalysisSession = (projectRoot: string) => {
+    const snapshot = projectWorkspaceSession.getSnapshot();
+    if (snapshot === undefined || snapshot.projectRoot !== projectRoot) {
+      throw new Error("The active creative project changed before Story Analysis was created.");
+    }
+    const analysisChapterRepository = new ChapterFileRepository({
+      projectRoot,
+      traceId: "trace_desktop_story_analysis_chapter_repository",
+      ...(options.now === undefined ? {} : { now: options.now })
+    });
+    const analysisStoryBibleRepository = new StoryBibleFileRepository({
+      projectRoot,
+      traceId: "trace_desktop_story_analysis_story_bible_repository"
+    });
+    const analysisHistoryRepository = createActiveHistoryRepository(
+      projectRoot,
+      "trace_desktop_story_analysis_history_repository"
+    );
+    const analysisRunRepository = new AgentRunFileRepository({
+      projectRoot,
+      traceId: "trace_desktop_story_analysis_run_repository"
+    });
+    const analysisUsageRepository =
+      options.userDataRoot === undefined
+        ? undefined
+        : new AgentUsageFileRepository({
+            userDataRoot: options.userDataRoot,
+            traceId: "trace_desktop_story_analysis_usage_repository"
+          });
+    const activeChapterEditorSession =
+      projectWorkspaceSession.getActiveChapterEditorSession() ?? chapterEditorSession;
+    return createStoryAnalysisSession({
+      projectId: snapshot.project.projectId,
+      chapterRepository: {
+        readChapter: (chapterId) => analysisChapterRepository.readChapter(chapterId)
+      },
+      storyBibleRepository: {
+        listStoryBible: (input) => analysisStoryBibleRepository.listStoryBible(input),
+        readStoryAssetForAgent: (assetId) =>
+          analysisStoryBibleRepository.readStoryAssetForAgent(assetId)
+      },
+      contextSnapshotPort: {
+        writeContextSnapshot: (contextSnapshot) =>
+          analysisRunRepository.writeContextSnapshot(contextSnapshot)
+      },
+      history: {
+        coordinateStoryAnalysisChapter: (chapterId, operation) =>
+          analysisHistoryRepository.coordinateStoryAnalysisChapter(chapterId, operation),
+        writeStoryAnalysis: (input) => analysisHistoryRepository.writeStoryAnalysis(input),
+        listStoryAnalyses: () => analysisHistoryRepository.listStoryAnalyses(),
+        readStoryAnalysis: (workflowRunId) =>
+          analysisHistoryRepository.readStoryAnalysis(workflowRunId)
+      },
+      resolveModelRuntimeProfile: async () => {
+        const settings = await new ProjectSettingsRepository({
+          projectRoot: options.applicationSettingsRoot ?? projectRoot,
+          traceId: "trace_desktop_story_analysis_settings_repository"
+        }).readSettings();
+        return settings.ok ? resolveDefaultStoryAnalysisRuntimeProfile(settings.value) : settings;
+      },
+      llmAdapter: createLlmAdapter({
+        provider:
+          options.createAiProvider?.({ chapterEditorSession: activeChapterEditorSession }) ??
+          createDesktopMockAiProvider(activeChapterEditorSession),
+        clock: () => options.now?.() ?? new Date().toISOString()
+      }),
+      ...(analysisUsageRepository === undefined
+        ? {}
+        : {
+            usagePort: {
+              async recordUsage(input) {
+                const record = createStoryAnalysisUsageRecord({
+                  ...input,
+                  projectId: snapshot.project.projectId
+                });
+                const validated = validateAgentUsageRecord(record);
+                if (!validated.ok) return validated;
+                const written = await analysisUsageRepository.writeFinal(
+                  validated.value as unknown as JsonObject
+                );
+                return written.ok ? ok(validated.value.usageId) : written;
+              }
+            }
+          }),
+      ...(options.now === undefined ? {} : { now: options.now })
+    });
+  };
 
   return createDesktopApplication({
     chapterEditorSession,
@@ -286,11 +399,41 @@ export function createProjectDesktopApplication(
       repository: {
         readStoryBible: () => createStoryBibleRepository().readStoryBible(),
         saveStoryAsset: (asset) => createStoryBibleRepository().saveStoryAsset(asset),
+        readCompatibleStoryAsset: async (assetId) => {
+          const read = await createStoryBibleRepository().readCompatibleStoryAsset(assetId);
+          return read.ok
+            ? ok({ ...read.value, asset: read.value.asset as unknown as StoryBibleAsset })
+            : read;
+        },
+        createStoryAsset: async (input) => {
+          const created = await createStoryBibleRepository().createStoryAsset(input);
+          return created.ok ? ok(created.value as unknown as StoryBibleAsset) : created;
+        },
+        saveStoryAssetCandidate: async (input) => {
+          const saved = await createStoryBibleRepository().saveStoryAssetCandidate(input);
+          return saved.ok ? ok(saved.value as unknown as StoryBibleAsset) : saved;
+        },
+        saveStoryAssetStatusTransition: async (input) => {
+          const saved = await createStoryBibleRepository().saveStoryAssetStatusTransition(input);
+          return saved.ok ? ok(saved.value as unknown as StoryBibleAsset) : saved;
+        },
+        getStoryBibleReferences: (assetId, knownChapterIds) =>
+          createStoryBibleRepository().getStoryBibleReferences(assetId, knownChapterIds),
         saveMemory: (memory) => createStoryBibleRepository().saveMemory(memory)
       },
       chapterCatalog: {
         listChapters: () => createStoryBibleChapterCatalogRepository().listChapters()
-      }
+      },
+      resolveRestoreStatus: (assetId, currentRevision, currentChecksum) =>
+        resolveStoryBibleRestoreStatus(
+          createActiveHistoryRepository(
+            requireActiveProjectRoot(),
+            "trace_desktop_story_bible_restore_history_repository"
+          ),
+          assetId,
+          currentRevision,
+          currentChecksum
+        )
     }),
     createForeshadowAnalysisSession: (projectRoot) => {
       const analysisChapterRepository = new ChapterFileRepository({
@@ -325,6 +468,139 @@ export function createProjectDesktopApplication(
           clock: () => options.now?.() ?? new Date().toISOString()
         }),
         ...(options.now === undefined ? {} : { now: options.now })
+      });
+    },
+    createStoryAnalysisSession: createProjectStoryAnalysisSession,
+    createStoryBibleExplicitInverseSession: (projectRoot) => {
+      const snapshot = projectWorkspaceSession.getSnapshot();
+      if (snapshot === undefined || snapshot.projectRoot !== projectRoot) {
+        throw new Error(
+          "The active creative project changed before the explicit inverse editor was created."
+        );
+      }
+      const storyBible = new StoryBibleFileRepository({
+        projectRoot,
+        traceId: "trace_desktop_story_bible_explicit_inverse_repository",
+        ...(options.now === undefined ? {} : { now: options.now })
+      });
+      const chapter = new ChapterFileRepository({
+        projectRoot,
+        traceId: "trace_desktop_story_bible_explicit_inverse_chapter_repository",
+        ...(options.now === undefined ? {} : { now: options.now })
+      });
+      const runRepository = new AgentRunFileRepository({
+        projectRoot,
+        traceId: "trace_desktop_story_bible_explicit_inverse_run_repository"
+      });
+      const projectReads = new AgentProjectReadRepository({
+        projectRoot,
+        traceId: "trace_desktop_story_bible_explicit_inverse_project_reads"
+      });
+      const changeSets = createDesktopChangeSetSession({
+        projectId: snapshot.project.projectId,
+        projectReads,
+        chapterRepository: chapter,
+        storyBible,
+        repository: runRepository
+      });
+      const versionGroups = createDesktopVersionGroupServices({
+        contentRoot: projectRoot,
+        stateRoot: projectRoot,
+        projectId: snapshot.project.projectId,
+        projectLockOwnerId: lockOwnerId,
+        trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+          workspaceKind: "creativeProject",
+          projectRoot
+        }),
+        projectReads,
+        chapterRepository: chapter,
+        storyBible
+      }).versionGroupSession;
+      return createStoryBibleExplicitInverseSession({
+        projectId: snapshot.project.projectId,
+        repository: {
+          readCompatibleStoryAsset: (assetId) => storyBible.readCompatibleStoryAsset(assetId),
+          prepareStoryAssetCandidateReadOnly: (input) =>
+            storyBible.prepareStoryAssetCandidateReadOnly(
+              input as Parameters<StoryBibleFileRepository["prepareStoryAssetCandidateReadOnly"]>[0]
+            ),
+          validateStoryBibleCandidateGroup: (input) =>
+            storyBible.validateStoryBibleCandidateGroup(input)
+        },
+        chapterCatalog: { listChapters: () => chapter.listChapters() },
+        changeSets,
+        versionGroups,
+        ...(options.now === undefined ? {} : { now: options.now })
+      });
+    },
+    createStoryAnalysisApplicationSession: (projectRoot) => {
+      const snapshot = projectWorkspaceSession.getSnapshot();
+      if (snapshot === undefined || snapshot.projectRoot !== projectRoot) {
+        throw new Error("The active creative project changed before Story Analysis was created.");
+      }
+      const storyBible = new StoryBibleFileRepository({
+        projectRoot,
+        traceId: "trace_desktop_story_analysis_apply_story_bible_repository",
+        ...(options.now === undefined ? {} : { now: options.now })
+      });
+      const chapter = new ChapterFileRepository({
+        projectRoot,
+        traceId: "trace_desktop_story_analysis_apply_chapter_repository",
+        ...(options.now === undefined ? {} : { now: options.now })
+      });
+      const runRepository = new AgentRunFileRepository({
+        projectRoot,
+        traceId: "trace_desktop_story_analysis_apply_run_repository"
+      });
+      const projectReads = new AgentProjectReadRepository({
+        projectRoot,
+        traceId: "trace_desktop_story_analysis_apply_project_reads"
+      });
+      const changeSets = createDesktopChangeSetSession({
+        projectId: snapshot.project.projectId,
+        projectReads,
+        chapterRepository: chapter,
+        storyBible,
+        repository: runRepository
+      });
+      const fileOperations = createAgentFileOperationSession({
+        traceId: "trace_desktop_story_analysis_apply_file_operations"
+      });
+      const versionGroups = createDesktopVersionGroupServices({
+        contentRoot: projectRoot,
+        stateRoot: projectRoot,
+        projectId: snapshot.project.projectId,
+        projectLockOwnerId: lockOwnerId,
+        trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+          workspaceKind: "creativeProject",
+          projectRoot
+        }),
+        projectReads,
+        chapterRepository: chapter,
+        storyBible
+      }).versionGroupSession;
+      const preparation = createStoryAnalysisChangeSetPreparationPort({
+        projectId: snapshot.project.projectId,
+        chapterCatalog: { listChapters: () => chapter.listChapters() },
+        repository: {
+          readCompatibleStoryAsset: (assetId) => storyBible.readCompatibleStoryAsset(assetId),
+          prepareCreateStoryAsset: (input) =>
+            storyBible.prepareCreateStoryAsset(
+              input as Parameters<StoryBibleFileRepository["prepareCreateStoryAsset"]>[0]
+            ),
+          prepareStoryAssetCandidate: (input) =>
+            storyBible.prepareStoryAssetCandidate(
+              input as Parameters<StoryBibleFileRepository["prepareStoryAssetCandidate"]>[0]
+            )
+        },
+        changeSets,
+        fileOperations
+      });
+      return createStoryAnalysisApplicationSession({
+        analysis: createProjectStoryAnalysisSession(projectRoot),
+        preparation,
+        changeSets,
+        versionGroups
       });
     },
     createProjectSearchSession: (projectRoot) =>
@@ -394,9 +670,26 @@ export function createProjectDesktopApplication(
   }
 
   function createStoryBibleRepository(): StoryBibleFileRepository {
+    const projectRoot = requireActiveProjectRoot();
     return new StoryBibleFileRepository({
-      projectRoot: requireActiveProjectRoot(),
-      traceId: "trace_desktop_story_bible_repository"
+      projectRoot,
+      traceId: "trace_desktop_story_bible_repository",
+      ...(options.now === undefined ? {} : { now: options.now }),
+      beforeStoryAssetCandidateWrite: async (prepared) => {
+        const snapshot = await createActiveHistoryRepository(
+          projectRoot,
+          "trace_desktop_story_bible_history_repository"
+        ).snapshotTextAsset({
+          assetType: "text",
+          assetId: prepared.asset.id,
+          reason: "manual-save",
+          content: prepared.baseContent,
+          candidateContent: prepared.content,
+          createdBy: "user",
+          relativePath: prepared.relativePath
+        });
+        return snapshot.ok ? ok(undefined) : snapshot;
+      }
     });
   }
 
@@ -442,6 +735,104 @@ export function createProjectDesktopApplication(
     }
     return activeProjectRoot;
   }
+}
+
+function createStoryAnalysisUsageRecord(input: {
+  readonly projectId: string;
+  readonly analysisRunId: string;
+  readonly chapterId: string;
+  readonly usage: LlmUsage;
+  readonly provider: string;
+  readonly model: string;
+  readonly contextWindow: number;
+  readonly safeInputBudget: number;
+  readonly createdAt: string;
+}): AgentUsageRecord {
+  const roundId = "story_observer";
+  const finalSequence = 1;
+  const time = storyAnalysisUsageTime(input.createdAt);
+  const cacheOutcome = input.usage.cacheOutcome ?? "unknown";
+  const cost =
+    input.usage.cost.status === "actual"
+      ? input.usage.cost
+      : ({ amount: 0, currency: "", status: "unknown" } as const);
+  return {
+    schemaVersion: "1.2",
+    scope: {
+      kind: "workspace",
+      workspaceKind: "creativeProject",
+      workspaceId: input.projectId
+    },
+    usageId: usageRecordIdempotencyKey({
+      runId: input.analysisRunId,
+      roundId,
+      finalSequence
+    }),
+    runId: input.analysisRunId,
+    conversationId: input.chapterId,
+    roundId,
+    finalSequence,
+    provider: input.provider,
+    model: input.model,
+    inputTokens: input.usage.inputTokens,
+    outputTokens: input.usage.outputTokens,
+    ...(input.usage.cacheReadTokens === undefined
+      ? {}
+      : {
+          cachedTokens: input.usage.cacheReadTokens,
+          cacheReadTokens: input.usage.cacheReadTokens
+        }),
+    ...(input.usage.cacheWriteTokens === undefined
+      ? {}
+      : { cacheWriteTokens: input.usage.cacheWriteTokens }),
+    ...(input.usage.cacheEligibleInputTokens === undefined
+      ? {}
+      : { cacheEligibleInputTokens: input.usage.cacheEligibleInputTokens }),
+    cacheOutcome,
+    ...(cacheOutcome !== "bypass"
+      ? {}
+      : { cacheBypassReason: input.usage.cacheBypassReason ?? "usage_unavailable" }),
+    cacheUsageStatus: input.usage.cacheUsageStatus ?? "unavailable",
+    cacheInputTokenSemantics: input.usage.cacheInputTokenSemantics ?? "unavailable",
+    cacheMode: null,
+    cachePrefixChecksum: null,
+    ...(input.usage.reasoningTokens === undefined
+      ? {}
+      : { reasoningTokens: input.usage.reasoningTokens }),
+    totalTokens: input.usage.totalTokens,
+    usageStatus: input.usage.usageStatus,
+    precision:
+      input.usage.usageStatus === "actual"
+        ? "reported"
+        : input.usage.usageStatus === "estimated"
+          ? "estimated"
+          : "unknown",
+    pricingVersion: null,
+    unitPrices: null,
+    cost,
+    contextWindow: input.contextWindow,
+    safeInputBudget: input.safeInputBudget,
+    terminationReason: "stop",
+    ...time
+  };
+}
+
+function storyAnalysisUsageTime(timestamp: string): {
+  readonly timestamp: string;
+  readonly localDate: string;
+  readonly timezone: string;
+  readonly utcOffsetMinutes: number;
+} {
+  const current = new Date(timestamp);
+  const year = String(current.getFullYear()).padStart(4, "0");
+  const month = String(current.getMonth() + 1).padStart(2, "0");
+  const day = String(current.getDate()).padStart(2, "0");
+  return {
+    timestamp: current.toISOString(),
+    localDate: `${year}-${month}-${day}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    utcOffsetMinutes: -current.getTimezoneOffset()
+  };
 }
 
 export async function createUnboundDesktopApplication(

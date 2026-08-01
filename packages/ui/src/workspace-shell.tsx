@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import { editorFontFamilyValue } from "./editor-toolbar.js";
-import { FilePlus, PanelBottom } from "lucide-react";
+import { FilePlus, PanelBottom, Sparkles } from "lucide-react";
 
 import { ChapterEditor } from "./chapter-editor.js";
 import { AgentConversationView } from "./agent-conversation-view.js";
@@ -625,18 +625,47 @@ function WorkspaceEditorSurface({
   }, [activeChapterId, fileEditor?.path]);
 
   return (
-    <div className="ns-editor-workspace">
+    <div
+      className="ns-editor-workspace"
+      data-completion-feedback={
+        fileEditor === undefined && chapterEditor?.completionFeedback !== undefined
+      }
+    >
       <EditorDocumentBar
+        chapterStatus={fileEditor === undefined ? chapterEditor?.chapter.frontmatter.status : undefined}
+        chapterStatusBusy={chapterEditor?.statusBusy}
         dirty={activeDirty}
         saving={activeSaving}
         tabs={documentTabs}
         onFind={() => setFindMode("find")}
+        {...(fileEditor !== undefined || chapterEditor?.onStatusChange === undefined
+          ? {}
+          : { onChapterStatusChange: chapterEditor.onStatusChange })}
         {...(selectionAction === undefined ? {} : { selectionAction })}
         {...(activeSave === undefined ? {} : { onSave: activeSave })}
         {...(activeFocusModeToggle === undefined
           ? {}
           : { onFocusModeToggle: activeFocusModeToggle })}
       />
+      {fileEditor !== undefined || chapterEditor?.completionFeedback === undefined ? null : (
+        <div
+          className="ns-chapter-completion-feedback"
+          data-kind={chapterEditor.completionFeedback.kind}
+          role={chapterEditor.completionFeedback.kind === "error" ? "alert" : "status"}
+        >
+          <span>{chapterEditor.completionFeedback.message}</span>
+          {chapterEditor.completionFeedback.action === undefined ? null : (
+            <button
+              className="ns-icon-text-button"
+              onClick={chapterEditor.completionFeedback.action.onInvoke}
+              type="button"
+            >
+              <Sparkles aria-hidden="true" size={14} />
+              {chapterEditor.completionFeedback.action.label}
+            </button>
+          )}
+        </div>
+      )}
       <div className="ns-editor-panes" data-editor-layout="ide" data-split-view={splitView}>
         <section className="ns-editor-surface" aria-label="章节编辑器表面">
           <OnboardingQuickStart onboarding={onboarding} />

@@ -109,6 +109,15 @@ export interface RendererWorkspaceShellProps {
   readonly onStudioRestoreVersion: NonNullable<ConfigStudioPanelProps["onRestoreVersion"]>;
   readonly onStoryBibleDraftChange: StoryBibleEditorProps["onDraftChange"];
   readonly onStoryBibleFiltersChange: StoryBibleEditorProps["onFiltersChange"];
+  readonly onStoryBibleStatusActionRequest: NonNullable<
+    StoryBibleEditorProps["onStatusActionRequest"]
+  >;
+  readonly onStoryBibleStatusActionCancel: NonNullable<
+    StoryBibleEditorProps["onStatusActionCancel"]
+  >;
+  readonly onStoryBibleStatusActionConfirm: NonNullable<
+    StoryBibleEditorProps["onStatusActionConfirm"]
+  >;
   readonly onCreativeNavigatorModeSelect: (mode: CreativeNavigatorMode) => void;
   readonly onEngineeringExpandedPathIdsChange: (pathIds: readonly string[]) => void;
   readonly onRefreshEngineeringTree: () => void;
@@ -198,9 +207,13 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onEntrySelect: props.navigation.navigateToStoryEntry,
           onDraftChange: props.onStoryBibleDraftChange,
           onFiltersChange: props.onStoryBibleFiltersChange,
+          onStatusActionRequest: props.onStoryBibleStatusActionRequest,
+          onStatusActionCancel: props.onStoryBibleStatusActionCancel,
+          onStatusActionConfirm: props.onStoryBibleStatusActionConfirm,
           onNewDraft: (assetType) =>
             props.navigation.createStoryEntry(sourceStoryBibleEditor.activeKind, assetType),
           onCancelDraft: props.navigation.cancelStoryDraft,
+          onExplicitInversePreviewCancel: props.navigation.cancelStoryExplicitInversePreview,
           onForeshadowAnalysisOpen: props.onForeshadowAnalysisOpen,
           onForeshadowAnalysisChapterToggle: props.onForeshadowAnalysisChapterToggle,
           onForeshadowAnalysisStart: props.onForeshadowAnalysisStart,

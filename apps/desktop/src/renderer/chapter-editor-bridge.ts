@@ -1,5 +1,10 @@
-import type { ChapterEditorSnapshot, NovelStudioApi } from "@novel-studio/application";
 import type {
+  ChapterCompletionAnalysisDisposition,
+  ChapterEditorSnapshot,
+  NovelStudioApi
+} from "@novel-studio/application";
+import type {
+  ChapterStatus,
   ChapterVersionContent,
   ChapterVersionSummary,
   Result,
@@ -17,10 +22,16 @@ export interface ChapterEditorBridge {
   edit(nextBody: string): Promise<ChapterEditorProps>;
   beginSave(): ChapterEditorProps | undefined;
   save(): Promise<ChapterEditorProps>;
+  saveWithStatus(status: ChapterStatus): Promise<ChapterStatusBridgeResult>;
   listVersions(): Promise<readonly ChapterEditorVersionEntry[]>;
   previewVersion(versionId: string): Promise<ChapterVersionContent>;
   restoreVersion(versionId: string): Promise<ChapterEditorProps>;
   previewSuggestionDiff(nextBody: string): Promise<ChapterEditorDiffPreview>;
+}
+
+export interface ChapterStatusBridgeResult {
+  readonly editor: ChapterEditorProps;
+  readonly completionAnalysis: ChapterCompletionAnalysisDisposition;
 }
 
 export function createChapterEditorBridge(api: NovelStudioApi): ChapterEditorBridge {
@@ -52,6 +63,11 @@ export function createChapterEditorBridge(api: NovelStudioApi): ChapterEditorBri
     async save() {
       currentProps = toChapterEditorProps(await unwrap(api.chapter.save()));
       return currentProps;
+    },
+    async saveWithStatus(status) {
+      const result = await unwrap(api.chapter.saveWithStatus(status));
+      currentProps = toChapterEditorProps(result.chapter);
+      return { editor: currentProps, completionAnalysis: result.completionAnalysis };
     },
     async listVersions() {
       const versions = mapVersionSummaries(await unwrap(api.chapter.listVersions()));

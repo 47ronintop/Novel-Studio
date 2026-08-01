@@ -10,6 +10,7 @@
     { "path": "../agent-engine" },
     { "path": "../context-engine" },
     { "path": "../llm-adapter" },
+    { "path": "../schemas" },
     { "path": "../workflow-engine" }
   ]
 }

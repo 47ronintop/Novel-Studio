@@ -18,6 +18,8 @@ export interface AgentToolCapabilitySnapshot {
   readonly searchEnabled: boolean;
   /** Phase B: file create/move/delete/mkdir + Change Set v1.1 */
   readonly fileLifecycleEnabled: boolean;
+  /** Story Bible v1.1: schema discovery, stable listing, references, and structured CRUD. */
+  readonly storyBibleStructuredToolsEnabled?: boolean;
   /** Phase C: run_project_task — only when sandbox attestation is verified. */
   readonly controlledExecutionEnabled: boolean;
   /** Opaque attestation ID from Main's qualification store; absent when C is off. */
@@ -50,6 +52,8 @@ export function freezeAgentToolCapabilitySnapshot(
       snapshot.workspaceKind !== "engineeringWorkspace") ||
     typeof snapshot.searchEnabled !== "boolean" ||
     typeof snapshot.fileLifecycleEnabled !== "boolean" ||
+    (snapshot.storyBibleStructuredToolsEnabled !== undefined &&
+      typeof snapshot.storyBibleStructuredToolsEnabled !== "boolean") ||
     typeof snapshot.controlledExecutionEnabled !== "boolean" ||
     typeof snapshot.gitReadEnabled !== "boolean" ||
     typeof snapshot.networkReadEnabled !== "boolean" ||
@@ -69,6 +73,7 @@ export function freezeAgentToolCapabilitySnapshot(
     workspaceKind: snapshot.workspaceKind,
     searchEnabled: snapshot.searchEnabled,
     fileLifecycleEnabled: snapshot.fileLifecycleEnabled,
+    storyBibleStructuredToolsEnabled: snapshot.storyBibleStructuredToolsEnabled ?? false,
     controlledExecutionEnabled: snapshot.controlledExecutionEnabled,
     ...(snapshot.sandboxAttestationId === undefined
       ? {}
@@ -89,6 +94,7 @@ export function createDefaultCapabilitySnapshot(
     workspaceKind,
     searchEnabled: false,
     fileLifecycleEnabled: false,
+    storyBibleStructuredToolsEnabled: false,
     controlledExecutionEnabled: false,
     gitReadEnabled: false,
     networkReadEnabled: false,

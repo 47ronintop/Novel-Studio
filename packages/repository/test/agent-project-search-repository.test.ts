@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { AgentProjectSearchRepository } from "../src/agent-project-search-repository.js";
 import { DEFAULT_CREATIVE_PROJECT_FILE_POLICY } from "../src/creative-project-file-repository.js";
+import { StoryBibleFileRepository } from "../src/story-bible-repository.js";
 
 const roots: string[] = [];
 
@@ -348,6 +349,43 @@ describe("AgentProjectSearchRepository — engineering workspace", () => {
 });
 
 describe("AgentProjectSearchRepository — creative project files", () => {
+  test("uses the full writing index and returns stable Story Bible references", async () => {
+    const root = await makeProjectRoot();
+    await mkdir(join(root, "chapters"), { recursive: true });
+    const storyBible = new StoryBibleFileRepository({ projectRoot: root });
+    expect(
+      await storyBible.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: "chr_search",
+        type: "character",
+        title: "林砚",
+        status: "active",
+        summary: "writingsearchneedle 调查旧港失踪案",
+        details: { role: "记者" },
+        createdAt: "2026-07-31T00:00:00.000Z",
+        updatedAt: "2026-07-31T00:00:00.000Z"
+      })
+    ).toMatchObject({ ok: true });
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "creativeProject"
+    });
+
+    const result = await repo.searchText({ query: "writingsearchneedle" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        items: [
+          {
+            relativePath: "characters/chr_search.json",
+            stableRef: "story_bible:chr_search"
+          }
+        ]
+      }
+    });
+  });
+
   test("searches allowed project files without scanning managed or unsupported paths", async () => {
     const root = await makeProjectRoot();
     await mkdir(join(root, "notes"), { recursive: true });

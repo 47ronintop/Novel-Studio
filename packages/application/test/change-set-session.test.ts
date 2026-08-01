@@ -101,6 +101,7 @@ describe("Change Set application session", () => {
     const proposed = await session.proposeStoryBibleWrite({
       ...proposalBinding(),
       assetId: "hero",
+      consistencyGroupId: "fact_hero_summary",
       range: { unit: "character", start: content.indexOf("old"), end: content.indexOf("old") + 3 },
       baseHash: sha256(content),
       replacement: "new"
@@ -111,9 +112,77 @@ describe("Change Set application session", () => {
         {
           relativePath: "characters/hero.json",
           assetId: "hero",
+          consistencyGroupId: "fact_hero_summary",
           candidateContent: '{"id":"hero","type":"character","summary":"new"}\n'
         }
       ]
+    });
+  });
+
+  test("requires Repository preparation before staging a v1.1 Story Bible replacement", async () => {
+    const content = `${JSON.stringify({
+      schemaVersion: "1.1",
+      id: "chr_11111111111111111111111111111111",
+      type: "character",
+      status: "active",
+      summary: "old"
+    })}\n`;
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: {
+        ...targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+        async readStoryBibleTarget({ assetId }) {
+          return {
+            ok: true as const,
+            value: {
+              relativePath: `characters/${assetId}.json`,
+              assetType: "text" as const,
+              assetId,
+              content,
+              checksum: sha256(content),
+              dirty: false,
+              supported: true
+            }
+          };
+        }
+      },
+      createChangeSetId: () => "change-set-story-bible-v11",
+      createHunkId: () => "story-v11-hunk",
+      now: () => "2026-07-31T03:00:00.000Z"
+    });
+    const input = {
+      ...proposalBinding(),
+      assetId: "chr_11111111111111111111111111111111",
+      range: { unit: "character" as const, start: 0, end: content.length },
+      baseHash: sha256(content),
+      replacement: content.replace('"status":"active"', '"status":"deleted"')
+    };
+
+    expect(await session.proposeStoryBibleWrite(input)).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_STRUCTURED_TOOL_REQUIRED" }
+    });
+    expect(
+      await session.proposeStoryBibleWrite({
+        ...input,
+        repositoryPrepared: true,
+        storyBibleStatusProof: {
+          action: "delete",
+          deletionImpactChecksum: "d".repeat(64)
+        }
+      })
+    ).toMatchObject({
+      ok: true,
+      value: {
+        files: [
+          {
+            storyBibleStatusProof: {
+              action: "delete",
+              deletionImpactChecksum: "d".repeat(64)
+            }
+          }
+        ]
+      }
     });
   });
 

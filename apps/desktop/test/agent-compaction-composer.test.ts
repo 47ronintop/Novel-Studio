@@ -91,6 +91,18 @@ describe("desktop compaction composer", () => {
     expect(resultSnapshot.value["createdAt"]).toBe("2026-07-16T00:00:00.000Z");
     expect(sources.find((s) => s.refId === "chapter:ch-01")?.state).toBe("active");
     expect(sources.find((s) => s.refId === "file:draft-notes.md")?.state).toBe("excluded");
+    const packedManifest = resultSnapshot.value["packedContextManifest"] as JsonObject;
+    expect(packedManifest).toMatchObject({ schemaVersion: "1.2" });
+    expect(packedManifest["manifestChecksum"]).toMatch(/^[a-f0-9]{64}$/);
+    const compactedPrompt = await repository.readPromptMaterialization(
+      "run_01",
+      promptMaterializationArtifactId("context_run_01_c1")
+    );
+    expect(compactedPrompt).toMatchObject({ ok: true });
+    if (!compactedPrompt.ok || compactedPrompt.value === undefined) return;
+    expect(compactedPrompt.value["packedContextManifestChecksum"]).toBe(
+      packedManifest["manifestChecksum"]
+    );
 
     // A redacted usage record for the compaction round was written under the user-data root.
     const usage = await usageRepository.readById("run_01:compaction_01:7");

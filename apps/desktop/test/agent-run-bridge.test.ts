@@ -4,13 +4,15 @@ import type {
   AgentRunEvent,
   AgentRunSnapshot,
   ChangeSet,
-  ContextBudgetSnapshot
+  ContextBudgetSnapshot,
+  ContextDraftRef
 } from "@novel-studio/agent-engine";
 import { STANDALONE_AGENT_CONTEXT_SCOPE } from "@novel-studio/agent-engine";
 import {
   createAgentRunDraftSession,
   type AgentRunDraftSessionRepository,
   type NovelStudioApi,
+  type PackedAgentContextPreview,
   type StoryBibleSnapshot
 } from "@novel-studio/application";
 import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shared";
@@ -181,11 +183,15 @@ describe("Agent Run renderer bridge", () => {
         },
         prepareStart: async (command: Record<string, unknown>) => {
           prepared.push(structuredClone(command));
-          return ok({
-            runDraft: { runDraftId: "standalone-draft", revision: 1, checksum: "d".repeat(64) },
-            contextDraft: { contextDraftId: "standalone-context", revision: 1 }
-          });
+          return ok(
+            preparedDraftView(command, {
+              runDraftId: "standalone-draft",
+              contextDraftId: "standalone-context",
+              runDraftChecksum: "d".repeat(64)
+            })
+          );
         },
+        previewPackedContext: async () => ok(packedContextPreview({ refs: [] })),
         start: async (command: Record<string, unknown>) => {
           starts.push(structuredClone(command));
           return ok(standaloneSnapshot);
@@ -586,10 +592,7 @@ describe("Agent Run renderer bridge", () => {
     const api = createApi({
       prepareStart: async (command) => {
         preparedCommand = command as Record<string, unknown>;
-        return ok({
-          runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
-          contextDraft: { contextDraftId: "context-01", revision: 1 }
-        });
+        return ok(preparedDraftView(command));
       },
       start: async (command) => {
         startCommand = command as unknown as Record<string, unknown>;
@@ -635,10 +638,7 @@ describe("Agent Run renderer bridge", () => {
     const api = createApi({
       prepareStart: async (command) => {
         received = command as Record<string, unknown>;
-        return ok({
-          runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
-          contextDraft: { contextDraftId: "context-01", revision: 1 }
-        });
+        return ok(preparedDraftView(command));
       },
       start: async () => ok(executionSnapshot)
     });
@@ -703,11 +703,9 @@ describe("Agent Run renderer bridge", () => {
         prepareStart: async (command: Record<string, unknown>) => {
           // Intent (mode + write policy) now lives on the prepare command; record it for assertions.
           commands.push(structuredClone(command));
-          return ok({
-            runDraft: { runDraftId: `draft-0${commands.length}`, revision: 1, checksum: "cs" },
-            contextDraft: { contextDraftId: "context-01", revision: 1 }
-          });
+          return ok(preparedDraftView(command, { runDraftId: `draft-0${commands.length}` }));
         },
+        previewPackedContext: async () => ok(packedContextPreview({ refs: [] })),
         start: async () => {
           current = commands.length === 1 ? automaticCompleted : manualStarted;
           return ok(current);
@@ -762,11 +760,8 @@ describe("Agent Run renderer bridge", () => {
           listener = nextListener;
           return () => undefined;
         },
-        prepareStart: async () =>
-          ok({
-            runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
-            contextDraft: { contextDraftId: "context-01", revision: 1 }
-          }),
+        prepareStart: async (command: unknown) => ok(preparedDraftView(command)),
+        previewPackedContext: async () => ok(packedContextPreview({ refs: [] })),
         start: async () => ok(activeAutomatic),
         read: async () => ok({ snapshot: activeAutomatic, events: [] })
       }
@@ -815,6 +810,51 @@ describe("Agent Run renderer bridge", () => {
     expect(bridge.getComposerProps()?.writePolicy).toBe("user_preapproved_run");
     expect(bridge.getComposerProps()?.writePolicyAcknowledged).toBe(true);
   });
+
+  test.each([
+    {
+      history: {
+        status: "available" as const,
+        packedContext: {
+          packedContextId: "packed_context_available",
+          payloadChecksum: "a".repeat(64)
+        }
+      },
+      expected: {
+        status: "available",
+        packedContext: { packedContextId: "packed_context_available" }
+      }
+    },
+    {
+      history: { status: "stale" as const, reason: "block_content_mismatch" as const },
+      expected: { status: "stale", reason: "block_content_mismatch" }
+    },
+    {
+      history: { status: "unavailable" as const, reason: "legacy_manifest" as const },
+      expected: { status: "unavailable", reason: "legacy_manifest" }
+    },
+    {
+      history: { status: "unavailable" as const, reason: "prompt_artifact_missing" as const },
+      expected: { status: "unavailable", reason: "prompt_artifact_missing" }
+    }
+  ])(
+    "preserves historical Packed Context $history.status state during hydrate",
+    async ({ history, expected }) => {
+      const api = {
+        agentRuns: {
+          onEvent: () => () => undefined,
+          list: async () => ok([snapshot]),
+          read: async () => ok({ snapshot, events: [], packedContextHistory: history })
+        }
+      } as unknown as NovelStudioApi;
+      const bridge = createAgentRunBridge(api);
+      bridge.syncContext({ projectId: "project-01", settings });
+
+      await bridge.load("project-01");
+
+      expect(bridge.getProps()?.packedContextHistory).toMatchObject(expected);
+    }
+  );
 
   test("only passes execution policy for an acknowledged automatic plan approval", async () => {
     const commands: Record<string, unknown>[] = [];
@@ -3048,7 +3088,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
 
   test("accepts only server-described automatic project context sources", async () => {
     const activeRun = { ...snapshot, status: "planning_model" as const };
-    const { api, emitEvent } = createDraftApi({ activeRun });
+    const { api, emitEvent } = createDraftApi({ activeRun, packedPreview: false });
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({
       projectId: "project-01",
@@ -3206,6 +3246,251 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     expect(updateContextPolicy).toHaveBeenCalledWith("revoke_workspace_trust");
   });
 
+  test("renders the packed author preview and binds the post-prepare preview to start", async () => {
+    const preview = packedContextPreview({
+      selectionPolicy: "automatic",
+      preferenceScope: "automatic"
+    });
+    const { api, packedCalls, startCalls } = createDraftApi({ packedPreview: preview });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus).toMatchObject({
+        previewPayloadChecksum: preview.payloadChecksum,
+        fixedBudgetExceeded: false,
+        previewBlocks: [
+          {
+            refId: "chapter:chapter-01",
+            label: "第一章",
+            content: "作者可见的第一章上下文。",
+            checksum: "b".repeat(64)
+          }
+        ],
+        sources: [
+          {
+            refId: "chapter:chapter-01",
+            selectionReason: "当前章节",
+            selectionPolicy: "automatic",
+            preferenceScope: "automatic",
+            priority: 60,
+            sourceChecksum: "a".repeat(64),
+            sourceRevision: 1
+          }
+        ]
+      })
+    );
+
+    await bridge.send("检查当前章节");
+
+    expect(packedCalls.length).toBeGreaterThanOrEqual(2);
+    const startPreviewCall = packedCalls.at(-1);
+    const startCall = startCalls.at(-1);
+    expect(startPreviewCall).toMatchObject({
+      runDraftId: startCall?.["runDraftId"],
+      expectedDraftRevision: startCall?.["runDraftRevision"],
+      runDraftChecksum: startCall?.["runDraftChecksum"]
+    });
+    expect(startCall).toMatchObject({
+      packedContextId: preview.packedContextId,
+      packedContextPayloadChecksum: preview.payloadChecksum
+    });
+  });
+
+  test("routes run-only source actions through set_source_override", async () => {
+    const { api, contextDraftCalls } = createDraftApi({
+      packedPreview: packedContextPreview({ selectionPolicy: "pinned" })
+    });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.sources[0]?.onPriorityChange).toEqual(
+        expect.any(Function)
+      )
+    );
+
+    const source = bridge.getComposerProps()?.contextStatus?.sources[0];
+    source?.onPin?.();
+    source?.onExclude?.();
+    source?.onRestore?.();
+    source?.onPriorityChange?.(82);
+
+    await vi.waitFor(() =>
+      expect(
+        contextDraftCalls.filter(
+          (call) =>
+            (call["mutation"] as Record<string, unknown> | undefined)?.["kind"] ===
+            "set_source_override"
+        )
+      ).toHaveLength(4)
+    );
+    expect(contextDraftCalls.slice(-4).map((call) => call["mutation"])).toEqual([
+      {
+        kind: "set_source_override",
+        refId: "chapter:chapter-01",
+        decision: "pinned",
+        priority: 60
+      },
+      {
+        kind: "set_source_override",
+        refId: "chapter:chapter-01",
+        decision: "excluded",
+        priority: 60
+      },
+      {
+        kind: "set_source_override",
+        refId: "chapter:chapter-01",
+        decision: null
+      },
+      {
+        kind: "set_source_override",
+        refId: "chapter:chapter-01",
+        decision: "pinned",
+        priority: 82
+      }
+    ]);
+  });
+
+  test.each(["excluded", "pinned"] as const)(
+    "restores a project-%s preference with a run-only automatic override",
+    async (projectDecision) => {
+      const { api, contextDraftCalls } = createDraftApi({
+        packedPreview: packedContextPreview({
+          selectionPolicy: projectDecision === "pinned" ? "pinned" : "explicit",
+          preferenceScope: "project",
+          sourceState: projectDecision === "excluded" ? "excluded" : "active"
+        })
+      });
+      const updateContextPolicy = vi.fn(async () => ok(undefined));
+      api.workspace = { updateContextPolicy } as never;
+      const bridge = createAgentRunBridge(api);
+      bridge.syncContext({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        activeChapterId: "chapter-01",
+        chapterEditor: editor,
+        settings: draftSettings
+      });
+      await vi.waitFor(() =>
+        expect(bridge.getComposerProps()?.contextStatus?.sources[0]?.onRestore).toEqual(
+          expect.any(Function)
+        )
+      );
+
+      bridge.getComposerProps()?.contextStatus?.sources[0]?.onRestore?.();
+
+      await vi.waitFor(() =>
+        expect(contextDraftCalls.at(-1)?.["mutation"]).toEqual({
+          kind: "set_source_override",
+          refId: "chapter:chapter-01",
+          decision: "automatic"
+        })
+      );
+      expect(updateContextPolicy).not.toHaveBeenCalled();
+    }
+  );
+
+  test("routes project-default source actions through set_source_preference", async () => {
+    const { api } = createDraftApi({
+      packedPreview: packedContextPreview({ selectionPolicy: "pinned" })
+    });
+    const updateContextPolicy = vi.fn(async () => ok(undefined));
+    api.workspace = { updateContextPolicy } as never;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.sources[0]?.onExclude).toEqual(
+        expect.any(Function)
+      )
+    );
+
+    bridge.getComposerProps()?.contextStatus?.onPreferenceScopeChange?.("project");
+    bridge.getComposerProps()?.contextStatus?.sources[0]?.onExclude?.();
+    await vi.waitFor(() => expect(updateContextPolicy).toHaveBeenCalledTimes(1));
+    expect(updateContextPolicy).toHaveBeenLastCalledWith({
+      action: "set_source_preference",
+      preference: {
+        refId: "chapter:chapter-01",
+        decision: "excluded",
+        priority: 60,
+        ref: {
+          kind: "chapter",
+          refId: "chapter:chapter-01",
+          chapterId: "chapter-01",
+          label: "第一章"
+        }
+      }
+    });
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
+    const restoredStatus = bridge.getComposerProps()?.contextStatus;
+    expect(restoredStatus?.preferenceScope).toBe("project");
+    expect(restoredStatus?.sources[0]?.onRestore).toEqual(expect.any(Function));
+    restoredStatus?.sources[0]?.onRestore?.();
+    await vi.waitFor(() => expect(updateContextPolicy).toHaveBeenCalledTimes(2));
+    expect(updateContextPolicy).toHaveBeenLastCalledWith({
+      action: "set_source_preference",
+      preference: { refId: "chapter:chapter-01", decision: null }
+    });
+  });
+
+  test("blocks start when the packed preview reports fixed-budget overflow", async () => {
+    const preview = packedContextPreview({ fixedBudgetExceeded: true });
+    const { api, startCalls } = createDraftApi({ packedPreview: preview });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() =>
+      expect(bridge.getComposerProps()?.contextStatus?.fixedBudgetExceeded).toBe(true)
+    );
+
+    await bridge.send("检查当前章节");
+
+    expect(startCalls).toHaveLength(0);
+    expect(bridge.getProps()?.errorMessage).toContain("固定项超过安全输入预算");
+  });
+
+  test("blocks start when the host cannot create a packed preview", async () => {
+    const { api, startCalls } = createDraftApi({ packedPreview: false });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+
+    await bridge.send("检查当前章节");
+
+    expect(startCalls).toHaveLength(0);
+    expect(bridge.getProps()?.errorMessage).toContain("不支持实际发送预览");
+  });
+
   test("surfaces a heavy context and compacts the live run", async () => {
     const activeRun: AgentRunSnapshot = {
       ...snapshot,
@@ -3248,10 +3533,17 @@ function createDraftApi(
     readonly activeRun?: AgentRunSnapshot;
     readonly heavyRefThreshold?: number;
     readonly firstPermissionRead?: Promise<void>;
+    readonly packedPreview?:
+      | false
+      | PackedAgentContextPreview
+      | ((call: number, command: Record<string, unknown>) => PackedAgentContextPreview);
   } = {}
 ): {
   api: NovelStudioApi;
   budgetCalls: unknown[];
+  packedCalls: Record<string, unknown>[];
+  startCalls: Record<string, unknown>[];
+  contextDraftCalls: Record<string, unknown>[];
   compactCalls: Record<string, unknown>[];
   permissionCalls: Record<string, unknown>[];
   emitEvent: (event: AgentRunEvent) => void;
@@ -3281,6 +3573,9 @@ function createDraftApi(
     createId: () => `draft_${(idSequence += 1)}`
   });
   const budgetCalls: unknown[] = [];
+  const packedCalls: Record<string, unknown>[] = [];
+  const startCalls: Record<string, unknown>[] = [];
+  const contextDraftCalls: Record<string, unknown>[] = [];
   const compactCalls: Record<string, unknown>[] = [];
   const permissionCalls: Record<string, unknown>[] = [];
   const heavyRefThreshold = options.heavyRefThreshold ?? 2;
@@ -3288,6 +3583,9 @@ function createDraftApi(
   const activeRun = options.activeRun;
   return {
     budgetCalls,
+    packedCalls,
+    startCalls,
+    contextDraftCalls,
     compactCalls,
     permissionCalls,
     emitEvent: (event) => {
@@ -3301,7 +3599,10 @@ function createDraftApi(
         },
         readRunDraft: (command: unknown) => session.readAgentRunDraft(command as never),
         updateRunDraft: (command: unknown) => session.updateAgentRunDraft(command as never),
-        updateContextDraft: (command: unknown) => session.updateContextDraft(command as never),
+        updateContextDraft: (command: unknown) => {
+          contextDraftCalls.push(structuredClone(command as Record<string, unknown>));
+          return session.updateContextDraft(command as never);
+        },
         refreshContextDraft: (command: unknown) => session.refreshContextDraft(command as never),
         previewContextBudget: async (command: unknown) => {
           budgetCalls.push(command);
@@ -3314,6 +3615,31 @@ function createDraftApi(
           const usedTokens = refCount >= heavyRefThreshold ? 90000 : 20000;
           return ok(budgetSnapshot(safeInputBudget, usedTokens));
         },
+        ...(options.packedPreview === false
+          ? {}
+          : {
+              previewPackedContext: async (command: Record<string, unknown>) => {
+                budgetCalls.push(structuredClone(command));
+                packedCalls.push(structuredClone(command));
+                return ok(
+                  typeof options.packedPreview === "function"
+                    ? options.packedPreview(packedCalls.length, command)
+                    : (options.packedPreview ??
+                        packedContextPreview({
+                          refs: contextDraftRefsForPreview(
+                            contextDrafts.get(String(command["conversationId"]))
+                          ),
+                          safeInputBudget: 100000,
+                          usedTokens:
+                            contextDraftRefsForPreview(
+                              contextDrafts.get(String(command["conversationId"]))
+                            ).length >= heavyRefThreshold
+                              ? 90000
+                              : 20000
+                        }))
+                );
+              }
+            }),
         readPermissionSummary: async (command: Record<string, unknown>) => {
           permissionCalls.push(structuredClone(command));
           if (permissionCalls.length === 1 && options.firstPermissionRead !== undefined) {
@@ -3350,12 +3676,11 @@ function createDraftApi(
             runSnapshot: { ...(activeRun ?? snapshot) } as unknown as JsonObject
           });
         },
-        prepareStart: async () =>
-          ok({
-            runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
-            contextDraft: { contextDraftId: "context-01", revision: 1 }
-          }),
-        start: async () => ok(activeRun ?? snapshot),
+        prepareStart: (command: unknown) => session.syncStartDraft(command as never),
+        start: async (command: Record<string, unknown>) => {
+          startCalls.push(structuredClone(command));
+          return ok(activeRun ?? snapshot);
+        },
         read: async () => ok({ snapshot: activeRun ?? snapshot, events: [] }),
         list: async () => ok(activeRun === undefined ? [] : [activeRun])
       }
@@ -3382,6 +3707,97 @@ function budgetSnapshot(safeInputBudget: number, usedTokens: number): ContextBud
     model: "local-model",
     calculatedAt: "2026-07-16T00:00:00.000Z"
   };
+}
+
+function contextDraftRefsForPreview(draft: JsonObject | undefined): readonly ContextDraftRef[] {
+  return Array.isArray(draft?.["refs"])
+    ? (draft["refs"] as unknown as readonly ContextDraftRef[])
+    : [];
+}
+
+function packedContextPreview(
+  options: {
+    readonly refs?: readonly ContextDraftRef[];
+    readonly safeInputBudget?: number;
+    readonly usedTokens?: number;
+    readonly selectionPolicy?: "automatic" | "explicit" | "pinned";
+    readonly preferenceScope?: "automatic" | "run" | "project";
+    readonly sourceState?: "active" | "excluded";
+    readonly fixedBudgetExceeded?: boolean;
+  } = {}
+): PackedAgentContextPreview {
+  const refs =
+    options.refs ??
+    ([
+      {
+        kind: "chapter",
+        refId: "chapter:chapter-01",
+        chapterId: "chapter-01",
+        label: "第一章"
+      }
+    ] satisfies readonly ContextDraftRef[]);
+  const safeInputBudget = options.safeInputBudget ?? 100000;
+  const usedTokens = options.usedTokens ?? 20000;
+  const selectionPolicy = options.selectionPolicy ?? "explicit";
+  const tokenCount = refs.length === 0 ? 0 : Math.max(1, Math.floor(usedTokens / refs.length));
+  const sources = refs.map((ref, index) => {
+    const sourceKind =
+      ref.kind === "story_bible"
+        ? ("story_bible_asset" as const)
+        : ref.kind === "project_file"
+          ? ("disk_file" as const)
+          : ("editor_buffer" as const);
+    return {
+      refId: ref.refId,
+      sourceKind,
+      ...(ref.kind === "project_file" ? { relativePath: ref.relativePath } : {}),
+      ...(ref.kind === "story_bible" ? { assetId: ref.assetId } : {}),
+      sourceRevision: index + 1,
+      sourceChecksum: previewChecksum(index + 10),
+      tokenCount,
+      precision: "estimated" as const,
+      state: options.sourceState ?? ("active" as const),
+      selectionReason: ref.kind === "chapter" ? "当前章节" : "用户选择",
+      selectionPolicy,
+      preferenceScope: options.preferenceScope ?? ("run" as const),
+      priority: 60,
+      truncationRange: null
+    };
+  });
+  return {
+    budget: budgetSnapshot(safeInputBudget, usedTokens),
+    packedContextId: `packed_context_${"c".repeat(32)}`,
+    payloadChecksum: "d".repeat(64),
+    tokenStats: {
+      contextTokens: usedTokens,
+      pinnedTokens: selectionPolicy === "pinned" ? usedTokens : 0,
+      usedTokens,
+      safeInputBudget,
+      remainingTokens: Math.max(0, safeInputBudget - usedTokens),
+      precision: "estimated"
+    },
+    sources,
+    blocks: refs.map((ref, index) => ({
+      blockId: `context-block-${String(index + 1)}`,
+      refId: ref.refId,
+      sourceKind: sources[index]?.sourceKind ?? "editor_buffer",
+      order: index,
+      content:
+        ref.kind === "chapter" && ref.refId === "chapter:chapter-01"
+          ? "作者可见的第一章上下文。"
+          : `${ref.label} 的作者可见上下文。`,
+      checksum: previewChecksum(index + 11),
+      sourceChecksum: sources[index]?.sourceChecksum ?? previewChecksum(index + 10),
+      tokenCount,
+      precision: "estimated",
+      truncationRange: null
+    })),
+    fixedBudgetExceeded: options.fixedBudgetExceeded ?? false
+  };
+}
+
+function previewChecksum(seed: number): string {
+  return seed.toString(16).repeat(64).slice(0, 64);
 }
 
 function rollbackReview(reviewedCurrentContent: string, updatedAt: string) {
@@ -3521,26 +3937,23 @@ function changeSet(revision: number, checksum: string, selected: boolean): Chang
   };
 }
 
-function createApi(overrides: {
-  start?: (command: unknown) => Promise<ReturnType<typeof ok<AgentRunSnapshot>>>;
-  prepareStart?: (command: unknown) => Promise<unknown>;
-  refreshContext?: (command: {
-    readonly decision: "refresh" | "exclude" | "cancel";
-    readonly sourceRefs?: readonly string[];
-    readonly currentSources?: readonly { readonly content: string }[];
-  }) => Promise<ReturnType<typeof ok<AgentRunSnapshot>>>;
-}): NovelStudioApi {
+function createApi(
+  overrides: {
+    start?: (command: unknown) => Promise<ReturnType<typeof ok<AgentRunSnapshot>>>;
+    prepareStart?: (command: unknown) => Promise<unknown>;
+    refreshContext?: (command: {
+      readonly decision: "refresh" | "exclude" | "cancel";
+      readonly sourceRefs?: readonly string[];
+      readonly currentSources?: readonly { readonly content: string }[];
+    }) => Promise<ReturnType<typeof ok<AgentRunSnapshot>>>;
+  } = {}
+): NovelStudioApi {
   const eventListeners = new Set<(event: AgentRunEvent) => void>();
   return {
     agentRuns: {
       prepareStart: (command) =>
-        overrides.prepareStart?.(command) ??
-        Promise.resolve(
-          ok({
-            runDraft: { runDraftId: "draft-01", revision: 1, checksum: "checksum-01" },
-            contextDraft: { contextDraftId: "context-01", revision: 1 }
-          })
-        ),
+        overrides.prepareStart?.(command) ?? Promise.resolve(ok(preparedDraftView(command))),
+      previewPackedContext: async () => ok(packedContextPreview()),
       start: (command) => overrides.start?.(command) ?? Promise.resolve(ok(snapshot)),
       stop: async () => ok(snapshot),
       answerUserInput: async () => ok(snapshot),
@@ -3557,4 +3970,60 @@ function createApi(overrides: {
       }
     }
   } as unknown as NovelStudioApi;
+}
+
+function preparedDraftView(
+  command: unknown,
+  options: {
+    readonly runDraftId?: string;
+    readonly contextDraftId?: string;
+    readonly runDraftChecksum?: string;
+  } = {}
+) {
+  const input = command as Record<string, unknown>;
+  const conversationId = String(input["conversationId"] ?? "conversation-01");
+  const scope = input["scope"] ?? workspaceScope(String(input["projectId"] ?? "project-01"));
+  const contextDraftId = options.contextDraftId ?? "context-01";
+  const contextDraftChecksum = "e".repeat(64);
+  const contextMode = (input["contextMode"] ?? "writing") as "writing";
+  return {
+    runDraft: {
+      schemaVersion: "1.1" as const,
+      runDraftId: options.runDraftId ?? "draft-01",
+      scope,
+      conversationId,
+      revision: 1,
+      checksum: options.runDraftChecksum ?? "checksum-01",
+      userRequest: String(input["userRequest"] ?? ""),
+      operationMode: input["operationMode"] ?? "planning",
+      contextMode,
+      writePolicy: input["writePolicy"] ?? "write_before_confirmation",
+      writePolicyAcknowledged: input["writePolicyAcknowledged"] === true,
+      modelProfileId: String(input["modelProfileId"] ?? "profile-01"),
+      ...(typeof input["modelName"] === "string" ? { modelName: input["modelName"] } : {}),
+      ...(typeof input["reasoningEffort"] === "string"
+        ? { reasoningEffort: input["reasoningEffort"] }
+        : {}),
+      contextDraftId,
+      contextDraftRevision: 1,
+      contextDraftChecksum,
+      contextBudgetSnapshotId: null,
+      updatedAt: "2026-07-16T00:00:00.000Z"
+    },
+    contextDraft: {
+      schemaVersion: "1.2" as const,
+      contextDraftId,
+      conversationId,
+      scope,
+      contextMode,
+      revision: 1,
+      refs: Array.isArray(input["contextRefs"])
+        ? (input["contextRefs"] as readonly ContextDraftRef[])
+        : [],
+      activeResourceRef: input["activeResourceRef"] ?? null,
+      sourceOverrides: [],
+      checksum: contextDraftChecksum,
+      updatedAt: "2026-07-16T00:00:00.000Z"
+    }
+  };
 }

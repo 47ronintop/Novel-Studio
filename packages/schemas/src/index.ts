@@ -1,9 +1,60 @@
-import { createRequire } from "node:module";
 import { Ajv, type AnySchema, type ErrorObject, type ValidateFunction } from "ajv/dist/ajv.js";
-import type { FormatsPlugin } from "ajv-formats";
+import addFormatsImport, { type FormatsPlugin } from "ajv-formats";
 
-const require = createRequire(import.meta.url);
-const addFormats = require("ajv-formats") as FormatsPlugin;
+export {
+  STORY_BIBLE_V11_ASSET_TYPES,
+  collectStoryBibleDeclaredChapterReferences,
+  collectStoryBibleDeclaredReferences,
+  createStoryBibleCreateValueSchema,
+  createStoryBibleDefaultDetails,
+  createStoryBibleWriteCandidateSchema,
+  createStoryBibleV11Schema,
+  describeStoryBibleType,
+  getStoryBibleKnownDetailKeys,
+  isStoryBibleV11AssetType,
+  inspectStoryBibleChapterReferences,
+  inspectStoryBibleReferences,
+  storyBibleChapterReferenceFingerprint,
+  storyBibleReferenceFingerprint,
+  storyBibleSchemaFileName,
+  validateStoryBibleCreateValue,
+  validateStoryBibleV11Asset,
+  validateStoryBibleWriteCandidate
+} from "./story-bible.js";
+export type {
+  StoryBibleDeclaredChapterReference,
+  StoryBibleDeclaredReference,
+  StoryBibleInspectedChapterReference,
+  StoryBibleInspectedReference,
+  StoryBibleReferenceTargetType,
+  StoryBibleSchemaMode,
+  StoryBibleSemanticValidationOptions,
+  StoryBibleV11AssetType
+} from "./story-bible.js";
+export {
+  STORY_EPISTEMIC_STATUSES,
+  STORY_FACT_KINDS,
+  STORY_OBSERVATION_DOMAINS,
+  createStoryAnalysisBundleSchema,
+  validateStoryAnalysisBundle
+} from "./story-analysis.js";
+export type {
+  StoryAnalysisBundle,
+  StoryAnalysisChapterBinding,
+  StoryAnalysisDependency,
+  StoryAnalysisPatchOperation,
+  StoryAnalysisRun,
+  StoryChangeSuggestion,
+  StoryEpistemicStatus,
+  StoryEvidenceRange,
+  StoryFactDelta,
+  StoryFactKind,
+  StoryObservation,
+  StoryObservationDomain,
+  StoryReviewIssue
+} from "./story-analysis.js";
+
+const addFormats = addFormatsImport as unknown as FormatsPlugin;
 
 export interface ValidationIssue {
   instancePath: string;

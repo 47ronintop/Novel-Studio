@@ -1,0 +1,424 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.story-timeline.v1.1.writeStrict",
+  "title": "timeline.events Story Bible asset (writeStrict)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "type",
+    "title",
+    "status",
+    "summary",
+    "aliases",
+    "relations",
+    "details",
+    "extensions",
+    "createdAt",
+    "updatedAt",
+    "revision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^timeline_main$"
+    },
+    "type": {
+      "const": "timeline.events"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "draft",
+        "archived",
+        "deleted"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 100000
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 256,
+      "uniqueItems": true
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relationId",
+          "sourceId",
+          "targetId",
+          "relationType",
+          "direction",
+          "status",
+          "validFromChapterId",
+          "validToChapterId",
+          "inversePolicy",
+          "inverseRelationId",
+          "evidence",
+          "note"
+        ],
+        "properties": {
+          "relationId": {
+            "type": "string",
+            "pattern": "^rel_[a-f0-9]{32}$"
+          },
+          "sourceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "targetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "relationType": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "directed",
+              "symmetric"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "ended",
+              "uncertain"
+            ]
+          },
+          "validFromChapterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validToChapterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inversePolicy": {
+            "type": "string",
+            "enum": [
+              "derived",
+              "explicit",
+              "none"
+            ]
+          },
+          "inverseRelationId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^rel_[a-f0-9]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chapterId",
+                "start",
+                "end",
+                "excerptHash"
+              ],
+              "properties": {
+                "chapterId": {
+                  "type": "string",
+                  "pattern": "^ch_[A-Za-z0-9_-]+$"
+                },
+                "start": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "excerptHash": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "maxItems": 10000
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "events"
+      ],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "eventId",
+              "entryRevision",
+              "title",
+              "sequence",
+              "time",
+              "summary",
+              "chapterIds",
+              "characterIds",
+              "locationIds",
+              "parallelEventIds",
+              "causes",
+              "effects",
+              "stateChanges"
+            ],
+            "properties": {
+              "eventId": {
+                "type": "string",
+                "pattern": "^evt_[a-f0-9]{32}$"
+              },
+              "entryRevision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "time": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "mode",
+                  "label",
+                  "uncertain"
+                ],
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "absolute",
+                      "relative",
+                      "sequence-only",
+                      "unknown"
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "absolute": {
+                    "type": "string"
+                  },
+                  "anchorEventId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^evt_[a-f0-9]{32}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "offset": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "value",
+                          "unit"
+                        ],
+                        "properties": {
+                          "value": {
+                            "type": "number"
+                          },
+                          "unit": {
+                            "type": "string",
+                            "enum": [
+                              "minute",
+                              "hour",
+                              "day",
+                              "week",
+                              "month",
+                              "year",
+                              "custom"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "uncertain": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "duration": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "summary": {
+                "type": "string"
+              },
+              "chapterIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "characterIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "locationIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "parallelEventIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "causes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "effects": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "stateChanges": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "subjectId",
+                    "path",
+                    "before",
+                    "after",
+                    "note"
+                  ],
+                  "properties": {
+                    "subjectId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "before": {},
+                    "after": {},
+                    "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(?:[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+|[a-z][a-z0-9-]*/[a-z][a-z0-9-]*)$"
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

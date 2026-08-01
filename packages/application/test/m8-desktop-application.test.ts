@@ -13,6 +13,12 @@ import {
 describe("desktop application M8 boundary", () => {
   test("exposes injected model settings and config studio sessions", async () => {
     const modelSettingsSession: ModelSettingsSession = {
+      async readStoryAnalysisSettings() {
+        return ok({ completionMode: "prompt" });
+      },
+      async saveStoryAnalysisSettings(storyAnalysis) {
+        return ok(storyAnalysis);
+      },
       async listModelProfiles() {
         return ok({
           defaultProfileId: "model_default",
@@ -115,6 +121,12 @@ describe("desktop application M8 boundary", () => {
       timeoutMs: 30_000
     };
     const modelSettingsSession: ModelSettingsSession = {
+      async readStoryAnalysisSettings() {
+        return ok({ completionMode: "prompt" });
+      },
+      async saveStoryAnalysisSettings(storyAnalysis) {
+        return ok(storyAnalysis);
+      },
       async listModelProfiles() {
         calls.push("list");
         return ok({ defaultProfileId: profile.id, profiles: [profile] });

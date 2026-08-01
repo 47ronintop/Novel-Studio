@@ -270,7 +270,8 @@ export function AgentComposer(props: AgentComposerProps) {
   const planningOptionRef = useRef<HTMLButtonElement>(null);
   const executionOptionRef = useRef<HTMLButtonElement>(null);
   const draftDisabled = props.disabled === true || props.active;
-  const canSend = !draftDisabled && props.request.trim().length > 0;
+  const fixedBudgetExceeded = props.contextStatus?.fixedBudgetExceeded === true;
+  const canSend = !draftDisabled && !fixedBudgetExceeded && props.request.trim().length > 0;
 
   function sendRequest(): void {
     if (!canSend) return;
@@ -330,7 +331,9 @@ export function AgentComposer(props: AgentComposerProps) {
             ))}
           </ul>
         ) : null}
-        {!isStandaloneConversation && references !== undefined && references.suggested.length > 0 ? (
+        {!isStandaloneConversation &&
+        references !== undefined &&
+        references.suggested.length > 0 ? (
           <div aria-label="建议引用" className="ns-agent-composer-suggested-references">
             <span>建议引用</span>
             <ul>
@@ -534,7 +537,11 @@ export function AgentComposer(props: AgentComposerProps) {
                   className="ns-ai-send-button"
                   disabled={!canSend}
                   onClick={sendRequest}
-                  title="发送"
+                  title={
+                    fixedBudgetExceeded
+                      ? (props.contextStatus?.fixedBudgetMessage ?? "固定项超过安全输入预算")
+                      : "发送"
+                  }
                   type="button"
                 >
                   <Send aria-hidden="true" size={14} />

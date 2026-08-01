@@ -1,11 +1,12 @@
-import { ok } from "@novel-studio/shared";
+import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { describe, expect, test, vi } from "vitest";
 
 import {
   DEFAULT_CREATIVE_PROJECT_FILE_POLICY,
   WorkspaceOutlineIndexRepository,
   type CreativeProjectFileTreeSnapshot,
-  type WorkspaceOutlineGuardedEntryReader
+  type WorkspaceOutlineGuardedEntryReader,
+  type WorkspaceOutlineWritingIndex
 } from "../../../packages/repository/src/index.js";
 import {
   createDesktopWorkspaceOutlineReader,
@@ -192,6 +193,64 @@ describe("DesktopWorkspaceOutlineReader", () => {
     expect(result.value.text).not.toContain("This body is not an outline field");
   });
 
+  test("retries a transient writing dependency timeout instead of publishing a false revision", async () => {
+    const readWritingIndexes = vi
+      .fn<() => Promise<Result<WorkspaceOutlineWritingIndex, UnifiedError>>>()
+      .mockResolvedValueOnce(ok(timedOutWritingIndex()))
+      .mockResolvedValueOnce(ok(availableWritingIndex("Opening")));
+    const reader = createDesktopWorkspaceOutlineReader({
+      writingIndex: { readWritingIndexes }
+    });
+
+    const result = await reader.readDependencyManifest(readDependencyInput("writing"));
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        dependency: {
+          kind: "writing_indexes",
+          chapterIndexRevision: "chapters:r1",
+          storyBibleIndexRevision: "story_bible:r1",
+          degradedDependencies: []
+        }
+      }
+    });
+    expect(readWritingIndexes).toHaveBeenCalledTimes(2);
+  });
+
+  test("fails closed when a bounded writing dependency scan stays incomplete", async () => {
+    const readWritingIndexes = vi.fn(async () => ok(timedOutWritingIndex()));
+    const reader = createDesktopWorkspaceOutlineReader({
+      writingIndex: { readWritingIndexes }
+    });
+
+    const result = await reader.readDependencyManifest(readDependencyInput("writing"));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_OUTLINE_DEPENDENCY_SCAN_INCOMPLETE" }
+    });
+    expect(readWritingIndexes).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps staleness bound to source revisions when only the rendered outline changes", async () => {
+    const readWritingIndexes = vi
+      .fn<() => Promise<Result<WorkspaceOutlineWritingIndex, UnifiedError>>>()
+      .mockResolvedValueOnce(ok(availableWritingIndex("First rendering")))
+      .mockResolvedValueOnce(ok(availableWritingIndex("Second rendering")));
+    const reader = createDesktopWorkspaceOutlineReader({ writingIndex: { readWritingIndexes } });
+    const input = readInput("writing");
+
+    const materialized = await reader.read(input);
+    const current = await reader.readDependencyManifest(readDependencyInput("writing"));
+
+    if (!materialized.ok || !current.ok) throw new Error("Expected stable writing indexes");
+    expect(materialized.value.text).not.toBe("Second rendering");
+    expect(
+      sameWorkspaceOutlineDependencyManifest(materialized.value.dependencyManifest, current.value)
+    ).toBe(true);
+  });
+
   test("uses normalized writing source paths in the dependency manifest without rendering them", async () => {
     let chapterPath = "chapters/chapter-01.md";
     let storyBiblePath = "characters/alex.json";
@@ -312,6 +371,66 @@ function readInput(profileId: "engineering" | "creative_general" | "writing") {
     },
     modelProfileId: "test-model"
   } as const;
+}
+
+function readDependencyInput(profileId: "engineering" | "creative_general" | "writing") {
+  const input = readInput(profileId);
+  return {
+    workspace: input.workspace,
+    profileId: input.profileId,
+    limits: input.limits
+  };
+}
+
+function timedOutWritingIndex(): WorkspaceOutlineWritingIndex {
+  return {
+    entries: [],
+    limits: {
+      maxDepth: 2,
+      maxEntries: 200,
+      maxScannedEntries: 1_000,
+      maxBytes: 64 * 1_024,
+      maxDurationMs: 1_000
+    },
+    truncated: true,
+    truncationReasons: ["max_duration"],
+    omittedEntryCount: 0,
+    chapterIndexRevision: "chapters:missing",
+    chapterIndexChecksum: "chapter-timeout",
+    storyBibleIndexRevision: null,
+    storyBibleIndexChecksum: null,
+    degradedDependencies: ["chapters", "story_bible"],
+    incompleteDependencies: ["chapters", "story_bible"]
+  };
+}
+
+function availableWritingIndex(renderedTitle: string): WorkspaceOutlineWritingIndex {
+  return {
+    entries: [
+      {
+        kind: "chapter",
+        id: "chapter-01",
+        label: renderedTitle,
+        wordCount: 100
+      }
+    ],
+    limits: {
+      maxDepth: 2,
+      maxEntries: 200,
+      maxScannedEntries: 1_000,
+      maxBytes: 64 * 1_024,
+      maxDurationMs: 1_000
+    },
+    truncated: false,
+    truncationReasons: [],
+    omittedEntryCount: 0,
+    chapterIndexRevision: "chapters:r1",
+    chapterIndexChecksum: "chapter-source-checksum",
+    storyBibleIndexRevision: "story_bible:r1",
+    storyBibleIndexChecksum: "story-bible-source-checksum",
+    degradedDependencies: [],
+    incompleteDependencies: []
+  };
 }
 
 function guardedEntries(

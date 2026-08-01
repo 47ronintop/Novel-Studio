@@ -1888,8 +1888,8 @@ describe("AgentRunSession", () => {
             expect.objectContaining({ type: "assistant_text_completed" }),
             expect.objectContaining({ type: "tool_started" }),
             expect.objectContaining({ type: "tool_completed" }),
-            expect.objectContaining({ type: "context_stale" }),
-            expect.objectContaining({ type: "error_recorded" })
+            expect.objectContaining({ type: "error_recorded" }),
+            expect.objectContaining({ type: "context_stale" })
           ],
           diagnostic: expect.objectContaining({
             code: "AGENT_CONTEXT_STALE",
@@ -4668,9 +4668,10 @@ describe("AgentRunSession", () => {
     if (typeof createSession !== "function") return;
 
     const sourceContent = "before";
+    const repository = durableMemoryRepository();
     const session = (createSession as (options: Record<string, unknown>) => unknown)({
       coordinatorOptions: { createRunId: () => "run_context_command" },
-      repository: durableMemoryRepository(),
+      repository,
       contextSourceReader: {
         async readCurrentSources() {
           return { ok: true, value: [{ refId: "file:notes.txt", content: "after" }] };
@@ -4735,7 +4736,33 @@ describe("AgentRunSession", () => {
     });
     expect(await session.readAgentRun(runId)).toMatchObject({
       ok: true,
-      value: { snapshot: { activeErrorId: null, recoveryState: "none" } }
+      value: {
+        snapshot: { activeErrorId: null, recoveryState: "none" },
+        packedContextHistory: { status: "available" }
+      }
+    });
+    const reloaded = (createSession as (options: Record<string, unknown>) => unknown)({
+      repository,
+      contextSourceReader: {
+        async readCurrentSources() {
+          throw new Error("reload must use the frozen prompt artifact, not current files");
+        }
+      },
+      modelDriver: {
+        async *streamRound() {
+          yield { type: "round_completed" as const, finishReason: "stop" as const };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          throw new Error("unused while reading historical context");
+        }
+      }
+    }) as { readAgentRun(runId: string): Promise<Record<string, unknown>> };
+    expect(await reloaded.readAgentRun(runId)).toMatchObject({
+      ok: true,
+      value: { packedContextHistory: { status: "available" } }
     });
   });
 
@@ -5292,7 +5319,8 @@ describe("AgentRunSession server-authoritative start", () => {
   function createStartSession(
     startPreflight: unknown,
     createRunId = "run_authority",
-    repository = durableMemoryRepository()
+    repository = durableMemoryRepository(),
+    diagnostics?: Record<string, unknown>
   ): {
     startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     readAgentRun(runId: string): Promise<Record<string, unknown>>;
@@ -5304,6 +5332,7 @@ describe("AgentRunSession server-authoritative start", () => {
       coordinatorOptions: { createRunId: () => createRunId },
       repository,
       startPreflight,
+      ...(diagnostics === undefined ? {} : { diagnostics }),
       modelDriver: {
         async *streamRound() {
           yield { type: "assistant_text_delta", delta: "ok" };
@@ -5423,6 +5452,42 @@ describe("AgentRunSession server-authoritative start", () => {
       }
     });
     expect(JSON.stringify(persisted)).not.toContain("must not persist");
+  });
+
+  test("preserves an unowned preflight error without recording a diagnostic", async () => {
+    const recordPreflightError = vi.fn(async () => ({
+      ok: false,
+      error: {
+        code: "AGENT_DIAGNOSTIC_OWNER_REQUIRED",
+        message: "A diagnostic must be bound to a run draft."
+      }
+    }));
+    const session = createStartSession(
+      {
+        async resolveStart() {
+          return {
+            ok: false,
+            error: {
+              code: "AGENT_PREFLIGHT_TEST_FAILURE",
+              message: "The internal preflight failed."
+            }
+          };
+        }
+      },
+      "run_unowned_preflight",
+      durableMemoryRepository(),
+      { recordPreflightError }
+    );
+
+    expect(
+      await session.startAgentRun({
+        projectId: "project-01",
+        conversationId: "conv-unowned-preflight",
+        commandId: "start-unowned-preflight",
+        expectedRunRevision: 0
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_PREFLIGHT_TEST_FAILURE" } });
+    expect(recordPreflightError).not.toHaveBeenCalled();
   });
 
   test("rejects an unknown profile whose capabilities cannot support a run", async () => {

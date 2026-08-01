@@ -18,7 +18,8 @@ import {
   type StoryBibleAsset,
   type StoryBibleRegularAsset,
   type StoryBibleRepositoryPort,
-  type StoryBibleSnapshot
+  type StoryBibleSnapshot,
+  type StoryBibleWriteCandidate
 } from "../src/index.js";
 
 const now = "2026-07-05T00:00:00.000Z";
@@ -62,6 +63,344 @@ describe("StoryBibleSession", () => {
       priority: 400,
       memoryConfidence: "ai-unconfirmed",
       sourceRefs: [{ entityType: "memory", entityId: "mem_possible_betrayal" }]
+    });
+  });
+
+  test("passes authoritative chapter IDs to manual create and candidate save", async () => {
+    const calls: { create?: unknown; save?: unknown } = {};
+    const candidate = editableCharacterCandidate();
+    const repository: StoryBibleRepositoryPort = {
+      async readStoryBible() {
+        return ok({ characters: [], worldAssets: [], foreshadows: [], memories: [] });
+      },
+      async saveStoryAsset() {
+        return err(unexpectedWrite());
+      },
+      async createStoryAsset(input) {
+        calls.create = input;
+        return ok(persistedEditableCharacter(1));
+      },
+      async saveStoryAssetCandidate(input) {
+        calls.save = input;
+        return ok(persistedEditableCharacter(2));
+      },
+      async saveMemory() {
+        return err(unexpectedWrite());
+      }
+    };
+    const session = createStoryBibleSession({
+      repository,
+      chapterCatalog: createChapterCatalog([chapterSummary("ch_02"), chapterSummary("ch_01")])
+    });
+    if (session.createStoryAsset === undefined || session.saveStoryAssetCandidate === undefined) {
+      throw new Error("manual Story Bible write methods are unavailable");
+    }
+
+    const created = await session.createStoryAsset({
+      type: "character",
+      value: { title: "Mira" }
+    });
+    const saved = await session.saveStoryAssetCandidate({
+      candidate,
+      baseRevision: 1,
+      baseChecksum: "a".repeat(64)
+    });
+
+    expect(created.ok).toBe(true);
+    expect(saved.ok).toBe(true);
+    expect(calls.create).toMatchObject({ knownChapterIds: ["ch_02", "ch_01"] });
+    expect(calls.save).toMatchObject({ knownChapterIds: ["ch_02", "ch_01"] });
+  });
+
+  test("passes chapter catalog errors through manual create and candidate save unchanged", async () => {
+    const catalogError = createUnifiedError({
+      code: "CHAPTER_CATALOG_READ_FAILED",
+      category: "StorageError",
+      message: "Could not read chapter catalog.",
+      recoverability: "retryable",
+      suggestedAction: "Retry.",
+      traceId: "story-bible-session-manual-write-test"
+    });
+    let repositoryWriteCount = 0;
+    const candidate = editableCharacterCandidate();
+    const repository: StoryBibleRepositoryPort = {
+      async readStoryBible() {
+        return ok({ characters: [], worldAssets: [], foreshadows: [], memories: [] });
+      },
+      async saveStoryAsset() {
+        return err(unexpectedWrite());
+      },
+      async createStoryAsset() {
+        repositoryWriteCount += 1;
+        return ok(persistedEditableCharacter(1));
+      },
+      async saveStoryAssetCandidate() {
+        repositoryWriteCount += 1;
+        return ok(persistedEditableCharacter(2));
+      },
+      async saveMemory() {
+        return err(unexpectedWrite());
+      }
+    };
+    const session = createStoryBibleSession({
+      repository,
+      chapterCatalog: {
+        async listChapters() {
+          return err(catalogError);
+        }
+      }
+    });
+    if (session.createStoryAsset === undefined || session.saveStoryAssetCandidate === undefined) {
+      throw new Error("manual Story Bible write methods are unavailable");
+    }
+
+    const created = await session.createStoryAsset({
+      type: "character",
+      value: { title: "Mira" }
+    });
+    const saved = await session.saveStoryAssetCandidate({
+      candidate,
+      baseRevision: 1,
+      baseChecksum: "a".repeat(64)
+    });
+
+    expect(created).toEqual(err(catalogError));
+    expect(saved).toEqual(err(catalogError));
+    expect(repositoryWriteCount).toBe(0);
+  });
+
+  test("rejects deleted-boundary changes through generic strict and legacy saves", async () => {
+    let strictWriteCount = 0;
+    let legacyWriteCount = 0;
+    let current = persistedEditableCharacter(3);
+    const repository: StoryBibleRepositoryPort = {
+      async readStoryBible() {
+        return ok({ characters: [current], worldAssets: [], foreshadows: [], memories: [] });
+      },
+      async readCompatibleStoryAsset() {
+        return ok({
+          asset: current,
+          persistedSchemaVersion: "1.1" as const,
+          checksum: "a".repeat(64),
+          revision: 3,
+          passthroughPresent: false,
+          passthroughFieldCount: 0
+        });
+      },
+      async saveStoryAsset(asset) {
+        legacyWriteCount += 1;
+        return ok(asset);
+      },
+      async saveStoryAssetCandidate(input) {
+        strictWriteCount += 1;
+        return ok({
+          ...current,
+          ...input.candidate,
+          type: "character" as const,
+          updatedAt: now,
+          revision: 4
+        });
+      },
+      async saveMemory() {
+        return err(unexpectedWrite());
+      }
+    };
+    const session = createStoryBibleSession({ repository });
+    if (session.saveStoryAssetCandidate === undefined) throw new Error("strict save unavailable");
+
+    const deleted = await session.saveStoryAssetCandidate({
+      candidate: { ...editableCharacterCandidate(), status: "deleted" },
+      baseRevision: 3,
+      baseChecksum: "a".repeat(64)
+    });
+    const archived = await session.saveStoryAssetCandidate({
+      candidate: { ...editableCharacterCandidate(), status: "archived" },
+      baseRevision: 3,
+      baseChecksum: "a".repeat(64)
+    });
+    current = { ...current, id: "chr_hero", status: "active" };
+    const legacyDeleted = await session.saveStoryAsset({ ...characterAsset(), status: "deleted" });
+
+    expect(deleted).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_STATUS_TRANSITION_COMMAND_REQUIRED" }
+    });
+    expect(archived.ok).toBe(true);
+    expect(legacyDeleted).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_STATUS_TRANSITION_COMMAND_REQUIRED" }
+    });
+    expect(strictWriteCount).toBe(1);
+    expect(legacyWriteCount).toBe(0);
+  });
+
+  test("authorizes only dedicated delete and server-resolved restore transitions", async () => {
+    let current = persistedEditableCharacter(2);
+    const transitionInputs: unknown[] = [];
+    const repository: StoryBibleRepositoryPort = {
+      async readStoryBible() {
+        return ok({ characters: [current], worldAssets: [], foreshadows: [], memories: [] });
+      },
+      async readCompatibleStoryAsset() {
+        return ok({
+          asset: current,
+          persistedSchemaVersion: "1.1" as const,
+          checksum: "b".repeat(64),
+          revision: 2,
+          passthroughPresent: false,
+          passthroughFieldCount: 0
+        });
+      },
+      async saveStoryAsset() {
+        return err(unexpectedWrite());
+      },
+      async saveStoryAssetStatusTransition(input) {
+        transitionInputs.push(input);
+        return ok({
+          ...current,
+          ...input.candidate,
+          type: "character" as const,
+          updatedAt: now,
+          revision: 3
+        });
+      },
+      async saveMemory() {
+        return err(unexpectedWrite());
+      }
+    };
+    const session = createStoryBibleSession({
+      repository,
+      resolveRestoreStatus: async (_assetId, revision) => {
+        expect(revision).toBe(2);
+        return ok("draft");
+      }
+    });
+    if (session.saveStoryAssetStatusTransition === undefined) {
+      throw new Error("status transition save unavailable");
+    }
+
+    const deleted = await session.saveStoryAssetStatusTransition({
+      action: "move-to-deleted",
+      candidate: { ...editableCharacterCandidate(), status: "deleted" },
+      baseRevision: 2,
+      baseChecksum: "b".repeat(64),
+      expectedDeletionImpactChecksum: "c".repeat(64)
+    });
+    current = { ...current, status: "deleted" };
+    const wrongRestore = await session.saveStoryAssetStatusTransition({
+      action: "restore",
+      candidate: { ...editableCharacterCandidate(), status: "active" },
+      baseRevision: 2,
+      baseChecksum: "b".repeat(64)
+    });
+    const restored = await session.saveStoryAssetStatusTransition({
+      action: "restore",
+      candidate: { ...editableCharacterCandidate(), status: "draft" },
+      baseRevision: 2,
+      baseChecksum: "b".repeat(64)
+    });
+
+    expect(deleted.ok).toBe(true);
+    expect(wrongRestore).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_STATUS_TRANSITION_INVALID" }
+    });
+    expect(restored.ok).toBe(true);
+    expect(transitionInputs).toEqual([
+      expect.objectContaining({
+        statusTransition: {
+          action: "move-to-deleted",
+          expectedDeletionImpactChecksum: "c".repeat(64)
+        }
+      }),
+      expect.objectContaining({
+        statusTransition: { action: "restore", restoreStatus: "draft" }
+      })
+    ]);
+  });
+
+  test("uses the authoritative chapter catalog for reference-impact queries", async () => {
+    let receivedChapterIds: readonly string[] | undefined;
+    const repository: StoryBibleRepositoryPort = {
+      ...createStaticStoryBibleRepository({
+        characters: [characterAsset()],
+        worldAssets: [],
+        foreshadows: [],
+        memories: []
+      }),
+      async getStoryBibleReferences(assetId, knownChapterIds) {
+        receivedChapterIds = knownChapterIds;
+        return ok({
+          assetId,
+          deletionImpactChecksum: "d".repeat(64),
+          incoming: [],
+          outgoing: [],
+          canSetDeleted: true,
+          deletionImpact: { affectedReferenceCount: 0, affectedAssetIds: [], cascades: false }
+        });
+      }
+    };
+    const session = createStoryBibleSession({
+      repository,
+      chapterCatalog: createChapterCatalog([chapterSummary("ch_02"), chapterSummary("ch_01")])
+    });
+    if (session.getStoryAssetReferences === undefined) {
+      throw new Error("reference-impact query is unavailable");
+    }
+
+    const impact = await session.getStoryAssetReferences("chr_hero");
+
+    expect(impact).toMatchObject({ ok: true, value: { assetId: "chr_hero" } });
+    expect(receivedChapterIds).toEqual(["ch_02", "ch_01"]);
+  });
+
+  test("restores only deleted assets to the status resolved from History", async () => {
+    const readCompatibleStoryAsset = async (status: "active" | "deleted") =>
+      ok({
+        asset: { ...characterAsset(), status },
+        persistedSchemaVersion: "1.1" as const,
+        checksum: "a".repeat(64),
+        revision: 2,
+        passthroughPresent: false,
+        passthroughFieldCount: 0
+      });
+    const deletedSession = createStoryBibleSession({
+      repository: {
+        ...createStaticStoryBibleRepository({
+          characters: [{ ...characterAsset(), status: "deleted" }],
+          worldAssets: [],
+          foreshadows: [],
+          memories: []
+        }),
+        readCompatibleStoryAsset: () => readCompatibleStoryAsset("deleted")
+      },
+      resolveRestoreStatus: async () => ok("draft")
+    });
+    const activeSession = createStoryBibleSession({
+      repository: {
+        ...createStaticStoryBibleRepository({
+          characters: [characterAsset()],
+          worldAssets: [],
+          foreshadows: [],
+          memories: []
+        }),
+        readCompatibleStoryAsset: () => readCompatibleStoryAsset("active")
+      },
+      resolveRestoreStatus: async () => ok("draft")
+    });
+    if (
+      deletedSession.resolveStoryAssetRestoreStatus === undefined ||
+      activeSession.resolveStoryAssetRestoreStatus === undefined
+    ) {
+      throw new Error("restore status resolution is unavailable");
+    }
+
+    await expect(deletedSession.resolveStoryAssetRestoreStatus("chr_hero")).resolves.toEqual(
+      ok("draft")
+    );
+    await expect(activeSession.resolveStoryAssetRestoreStatus("chr_hero")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_RESTORE_NOT_DELETED" }
     });
   });
 
@@ -320,6 +659,52 @@ describe("StoryBibleSession", () => {
     expect(report.value.issues.every((issue) => issue.targetRef.kind === "chapter")).toBe(true);
   });
 
+  test("reports missing chapter references from non-foreshadow Story Bible entries", async () => {
+    const session = createStoryBibleSession({
+      repository: createStaticStoryBibleRepository({
+        characters: [
+          {
+            ...characterAsset(),
+            schemaVersion: "1.1",
+            id: "chr_11111111111111111111111111111111",
+            title: "Mira",
+            details: {
+              currentState: {
+                locationId: null,
+                physical: "",
+                emotional: "",
+                heldItemIds: [],
+                asOfChapterId: "ch_missing_state",
+                asOfEventId: null
+              },
+              knowledgeStates: [],
+              stateHistory: []
+            }
+          }
+        ],
+        worldAssets: [],
+        foreshadows: [],
+        memories: []
+      }),
+      chapterCatalog: createChapterCatalog([chapterSummary("ch_existing")])
+    });
+
+    const report = await session.buildConsistencyReport();
+
+    expect(report).toMatchObject({
+      ok: true,
+      value: {
+        issues: [
+          {
+            id: "story-consistency.character.chr_11111111111111111111111111111111.missing-chapter.ch_missing_state",
+            title: "Story Bible entry references a missing chapter",
+            targetRef: { kind: "chapter", id: "ch_missing_state" }
+          }
+        ]
+      }
+    });
+  });
+
   test("reports duplicate non-deleted foreshadow evidence once with a stable issue id", async () => {
     const duplicateHash = "b".repeat(64);
     const duplicateSource = {
@@ -571,6 +956,31 @@ function timelineAsset(): StoryBibleRegularAsset {
     summary: "Arrival happens before the council summons.",
     createdAt: now,
     updatedAt: now
+  };
+}
+
+function editableCharacterCandidate(): StoryBibleWriteCandidate {
+  return {
+    schemaVersion: "1.1",
+    id: "chr_11111111111111111111111111111111",
+    type: "character",
+    title: "Mira",
+    status: "active",
+    summary: "An archivist.",
+    aliases: [],
+    relations: [],
+    details: { knowledgeStates: [], stateHistory: [] },
+    extensions: {},
+    createdAt: now
+  };
+}
+
+function persistedEditableCharacter(revision: number): StoryBibleRegularAsset {
+  return {
+    ...editableCharacterCandidate(),
+    type: "character",
+    updatedAt: now,
+    revision
   };
 }
 

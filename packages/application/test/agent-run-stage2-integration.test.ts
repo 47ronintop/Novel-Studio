@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, test, vi } from "vitest";
 
 import * as applicationExports from "../src/index.js";
+import { packAgentContext } from "../src/agent-prompt-materializer.js";
 
 describe("AgentRunSession Stage 2 integration", () => {
   test("stages a proposal without writing and pauses on the persisted Change Set", async () => {
@@ -481,6 +484,23 @@ describe("AgentRunSession Stage 2 integration", () => {
     const createSession = requireCreateSession();
     let applyCount = 0;
     let round = 0;
+    let currentContext = "before\n";
+    const beforeOutline = workspaceOutlineSource("chapters:r1", "story:r1", [
+      {
+        kind: "file",
+        id: "notes/outline.md",
+        label: "before",
+        relativePath: "notes/outline.md"
+      }
+    ]);
+    const afterOutline = workspaceOutlineSource("chapters:r1", "story:r1", [
+      {
+        kind: "file",
+        id: "notes/outline.md",
+        label: "before",
+        relativePath: "notes/outline.md"
+      }
+    ]);
     let releaseApply!: () => void;
     const applyGate = new Promise<void>((resolve) => {
       releaseApply = resolve;
@@ -512,6 +532,31 @@ describe("AgentRunSession Stage 2 integration", () => {
       },
       startPreflight: echoStartPreflight(),
       readToolExecutor: unusedReadExecutor(),
+      contextSourceReader: {
+        async readCurrentSources(input: {
+          readonly purpose: "staleness" | "refresh";
+          readonly sources: readonly { readonly refId: string; readonly sourceKind: string }[];
+        }) {
+          return {
+            ok: true,
+            value: input.sources.map((source) => {
+              if (source.sourceKind !== "workspace_outline") {
+                return { refId: source.refId, content: currentContext };
+              }
+              const outline = currentContext === "before\n" ? beforeOutline : afterOutline;
+              const materialization = outline.materialization;
+              return {
+                refId: source.refId,
+                comparisonChecksum:
+                  materialization?.kind === "workspace_outline"
+                    ? materialization.dependencyRevisionChecksum
+                    : undefined,
+                ...(input.purpose === "refresh" ? { source: outline } : {})
+              };
+            })
+          };
+        }
+      },
       changeSetSession: {
         async proposeFileWrite() {
           return { ok: true, value: pendingChangeSet("run_stage2_apply") };
@@ -537,6 +582,7 @@ describe("AgentRunSession Stage 2 integration", () => {
             }
           });
           await applyGate;
+          currentContext = "after\n";
           return {
             ok: true,
             value: {
@@ -550,7 +596,13 @@ describe("AgentRunSession Stage 2 integration", () => {
                 status: "recovery_required",
                 failedHooks: ["markRecoveryClean"]
               },
-              writes: [{ relativePath: "notes/outline.md" }]
+              writes: [
+                {
+                  relativePath: "notes/outline.md",
+                  afterChecksum: sha256("after\n"),
+                  status: "applied"
+                }
+              ]
             }
           };
         },
@@ -560,7 +612,18 @@ describe("AgentRunSession Stage 2 integration", () => {
       }
     });
 
-    await session.startAgentRun(startCommand());
+    await session.startAgentRun({
+      ...startCommand(),
+      initialContextSources: [
+        {
+          refId: "file:notes/outline.md",
+          sourceKind: "disk_file",
+          relativePath: "notes/outline.md",
+          content: currentContext,
+          dirty: false
+        }
+      ]
+    });
     const awaiting = await waitForStatus(session, "run_stage2_apply", "awaiting_write_approval");
     const command = {
       projectId: "project-01",
@@ -606,9 +669,293 @@ describe("AgentRunSession Stage 2 integration", () => {
     await waitForStatus(session, "run_stage2_apply", "completed");
     expect(await session.readAgentRun("run_stage2_apply")).toMatchObject({
       ok: true,
-      value: { changeSet: { changeSetId: "changes_stage2", status: "applied" } }
+      value: {
+        changeSet: { changeSetId: "changes_stage2", status: "applied" },
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            type: "write_applied",
+            detail: expect.objectContaining({
+              refreshedContextSourceRefs: ["file:notes/outline.md"]
+            })
+          })
+        ])
+      }
     });
   });
+
+  test.each([
+    {
+      label: "the touched path was externally overwritten",
+      entries: [
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_one",
+          label: "角色一（外部覆盖）",
+          relativePath: "characters/chr_one.json"
+        },
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_two",
+          label: "角色二",
+          relativePath: "characters/chr_two.json"
+        }
+      ],
+      expectedStatus: "awaiting_context_refresh" as const
+    },
+    {
+      label: "another asset in the same bucket changed",
+      entries: [
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_one",
+          label: "角色一（本次写入）",
+          relativePath: "characters/chr_one.json"
+        },
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_two",
+          label: "角色二（外部修改）",
+          relativePath: "characters/chr_two.json"
+        }
+      ],
+      expectedStatus: "awaiting_context_refresh" as const
+    },
+    {
+      label: "an untouched chapter bucket changed",
+      afterChapterRevision: "chapters:external",
+      entries: [
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_one",
+          label: "角色一（本次写入）",
+          relativePath: "characters/chr_one.json"
+        },
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_two",
+          label: "角色二",
+          relativePath: "characters/chr_two.json"
+        }
+      ],
+      expectedStatus: "awaiting_context_refresh" as const
+    },
+    {
+      label: "an untouched chapter degradation changed",
+      afterChapterRevision: "chapters:missing",
+      afterDegradedDependencies: ["chapters"] as const,
+      entries: [
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_one",
+          label: "角色一（本次写入）",
+          relativePath: "characters/chr_one.json"
+        },
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_two",
+          label: "角色二",
+          relativePath: "characters/chr_two.json"
+        }
+      ],
+      expectedStatus: "awaiting_context_refresh" as const
+    },
+    {
+      label: "only max_tokens truncated the materialized text",
+      truncationReasons: ["max_tokens"] as const,
+      entries: [
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_one",
+          label: "角色一（本次写入）",
+          relativePath: "characters/chr_one.json"
+        },
+        {
+          kind: "story_bible_asset" as const,
+          id: "chr_two",
+          label: "角色二",
+          relativePath: "characters/chr_two.json"
+        }
+      ],
+      expectedStatus: "completed" as const
+    }
+  ])(
+    "handles an own-write outline safely when $label",
+    async ({
+      entries,
+      expectedStatus,
+      afterChapterRevision,
+      afterDegradedDependencies,
+      truncationReasons
+    }) => {
+      const createSession = requireCreateSession();
+      const runId = "run_stage2_own_write_outline_external";
+      const beforeOutline = workspaceOutlineSource(
+        "chapters:r1",
+        "story:r1",
+        [
+          {
+            kind: "story_bible_asset",
+            id: "chr_one",
+            label: "角色一",
+            relativePath: "characters/chr_one.json"
+          },
+          {
+            kind: "story_bible_asset",
+            id: "chr_two",
+            label: "角色二",
+            relativePath: "characters/chr_two.json"
+          }
+        ],
+        { ...(truncationReasons === undefined ? {} : { truncationReasons }) }
+      );
+      const afterOutline = workspaceOutlineSource(
+        afterChapterRevision ?? "chapters:r1",
+        "story:own-plus-external",
+        entries,
+        {
+          ...(truncationReasons === undefined ? {} : { truncationReasons }),
+          ...(afterDegradedDependencies === undefined
+            ? {}
+            : { degradedDependencies: afterDegradedDependencies })
+        }
+      );
+      const candidateContent = JSON.stringify({
+        id: "chr_one",
+        title: "角色一（本次写入）",
+        type: "character"
+      });
+      let applied = false;
+      let rounds = 0;
+      const baseChangeSet = pendingChangeSet(runId) as unknown as {
+        readonly files: readonly Record<string, unknown>[];
+      } & Record<string, unknown>;
+      const changeSet = {
+        ...baseChangeSet,
+        files: [
+          {
+            ...baseChangeSet.files[0],
+            relativePath: "characters/chr_one.json",
+            candidateContent,
+            candidateChecksum: sha256(candidateContent)
+          }
+        ]
+      };
+      const session = createSession({
+        newRunToolFacadeVersion: "v2",
+        coordinatorOptions: { createRunId: () => runId },
+        repository: memoryRepository(),
+        modelDriver: {
+          async *streamRound() {
+            rounds += 1;
+            if (rounds === 1) {
+              yield toolCall("propose_outline_refresh", "edit_text", {
+                ref: "story_bible:chr_one",
+                baseHash: sha256("before\n"),
+                range: { unit: "character", start: 0, end: 7 },
+                replacement: candidateContent
+              });
+              yield { type: "round_completed", finishReason: "tool_calls" };
+            } else {
+              yield toolCall("finish_outline_refresh", "finish", { summary: "done" });
+              yield { type: "round_completed", finishReason: "tool_calls" };
+            }
+          }
+        },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: unusedReadExecutor(),
+        contextSourceReader: {
+          async readCurrentSources(input: {
+            readonly purpose: "staleness" | "refresh";
+            readonly sources: readonly {
+              readonly refId: string;
+              readonly sourceKind: string;
+            }[];
+          }) {
+            return {
+              ok: true,
+              value: input.sources.map((source) => {
+                if (source.sourceKind !== "workspace_outline") {
+                  return { refId: source.refId, content: applied ? candidateContent : "before\n" };
+                }
+                const outline = applied ? afterOutline : beforeOutline;
+                const materialization = outline.materialization as unknown as Record<
+                  string,
+                  unknown
+                >;
+                return {
+                  refId: source.refId,
+                  comparisonChecksum: materialization["dependencyRevisionChecksum"],
+                  ...(input.purpose === "refresh" ? { source: outline } : {})
+                };
+              })
+            };
+          }
+        },
+        changeSetSession: {
+          async proposeStoryBibleWrite() {
+            return { ok: true, value: changeSet };
+          },
+          async proposeFileWrite() {
+            throw new Error("unused");
+          },
+          ...unusedChangeSetMethods()
+        },
+        versionGroupExecutor: {
+          async apply() {
+            applied = true;
+            return {
+              ok: true,
+              value: {
+                versionGroupId: "versions_outline_external",
+                transactionStatus: "applied",
+                writes: [
+                  {
+                    relativePath: "characters/chr_one.json",
+                    afterChecksum: sha256(candidateContent),
+                    status: "applied"
+                  }
+                ]
+              }
+            };
+          },
+          async undoRun() {
+            throw new Error("unused");
+          }
+        }
+      });
+
+      const started = await session.startAgentRun({
+        ...startCommand(),
+        contextMode: "writing",
+        initialContextSources: [
+          beforeOutline,
+          {
+            refId: "story_bible:chr_one",
+            sourceKind: "story_bible_asset",
+            relativePath: "characters/chr_one.json",
+            assetId: "chr_one",
+            content: "before\n",
+            dirty: false
+          }
+        ]
+      });
+      if (!started.ok) throw new Error(JSON.stringify(started.error));
+      const awaiting = await waitForStatus(session, runId, "awaiting_write_approval");
+      await session.decideChangeSet({
+        projectId: "project-01",
+        runId,
+        commandId: "apply-outline-external",
+        expectedRunRevision: awaiting.runRevision,
+        changeSetId: "changes_stage2",
+        revision: 1,
+        checksum: "checksum_revision_1",
+        decision: "apply_selected"
+      });
+
+      await waitForStatus(session, runId, expectedStatus);
+      expect(rounds).toBe(expectedStatus === "completed" ? 2 : 1);
+    }
+  );
 
   test("does not cache a successful apply when its command receipt cannot be persisted", async () => {
     const createSession = requireCreateSession();
@@ -1439,6 +1786,160 @@ describe("AgentRunSession Stage 2 integration", () => {
     });
   });
 
+  test("rebuilds historical Packed Context after reload and reports stale or legacy history", async () => {
+    const createSession = requireCreateSession();
+    const repository = memoryRepository();
+    const source = {
+      refId: "file:notes/supporting.md",
+      sourceKind: "disk_file" as const,
+      relativePath: "notes/supporting.md",
+      content: "frozen supporting context",
+      dirty: false,
+      sourceRevision: 4,
+      selectionReason: "Explicit context reference",
+      selectionPolicy: "pinned" as const,
+      preferenceScope: "run" as const,
+      priority: 70
+    };
+    const profile = applicationExports.resolveAgentContextProfile(
+      {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project-01"
+      },
+      "execution",
+      "general_file"
+    );
+    const packedContext = packAgentContext({
+      profile,
+      contextSources: [source],
+      modelProfileId: "profile-stage2",
+      usedTokens: 20,
+      safeInputBudget: 10_000,
+      remainingTokens: 9_980,
+      precision: "estimated",
+      createdAt: "2026-07-31T00:00:00.000Z"
+    });
+    const basePreflight = echoStartPreflight();
+    const sharedOptions = {
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("finish-packed-history", "finish", { summary: "done" });
+          yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+        }
+      },
+      startPreflight: {
+        async resolveStart(command: Record<string, unknown>) {
+          const resolved = await basePreflight.resolveStart(command);
+          return {
+            ...resolved,
+            value: { ...resolved.value, packedContext }
+          };
+        }
+      },
+      readToolExecutor: unusedReadExecutor(),
+      changeSetSession: { ...unusedChangeSetMethods() },
+      versionGroupExecutor: unusedVersionGroupExecutor()
+    };
+    const firstSession = createSession({
+      ...sharedOptions,
+      coordinatorOptions: { createRunId: () => "run_packed_history" }
+    });
+
+    await firstSession.startAgentRun({ ...startCommand(), initialContextSources: [source] });
+    await waitForStatus(firstSession, "run_packed_history", "completed");
+
+    const reloaded = createSession({
+      ...sharedOptions,
+      contextSourceReader: {
+        async readCurrentSources() {
+          throw new Error("Historical Packed Context must not read current project files");
+        }
+      }
+    });
+    const historical = await reloaded.readAgentRun("run_packed_history");
+    expect(historical).toMatchObject({
+      ok: true,
+      value: {
+        packedContextHistory: {
+          status: "available",
+          packedContext: {
+            packedContextId: packedContext.packedContextId,
+            payloadChecksum: packedContext.payloadChecksum
+          }
+        }
+      }
+    });
+    const packedHistory = (
+      historical as {
+        readonly ok: boolean;
+        readonly value?: {
+          readonly packedContextHistory?: {
+            readonly status: string;
+            readonly packedContext?: {
+              readonly blocks: readonly { readonly sourceKind: string }[];
+            };
+          };
+        };
+      }
+    ).value?.packedContextHistory;
+    if (packedHistory?.status !== "available" || packedHistory.packedContext === undefined) {
+      throw new Error("Expected historical Packed Context to be available.");
+    }
+    expect(
+      packedHistory.packedContext.blocks.every((block) => block.sourceKind !== "system_guidance")
+    ).toBe(true);
+
+    const staleRepository = {
+      ...repository,
+      async readContextSnapshot(runId: string, contextSnapshotId: string) {
+        const read = await repository.readContextSnapshot(runId, contextSnapshotId);
+        const value = structuredClone(read.value) as Record<string, unknown>;
+        const manifest = value["packedContextManifest"] as Record<string, unknown>;
+        const blocks = structuredClone(manifest["blocks"]) as Record<string, unknown>[];
+        blocks[0] = {
+          ...blocks[0],
+          checksum: "f".repeat(64),
+          blockId: `context_block_${"f".repeat(24)}_0`
+        };
+        manifest["blocks"] = blocks;
+        return { ok: true as const, value };
+      }
+    };
+    const staleSession = createSession({ ...sharedOptions, repository: staleRepository });
+    expect(await staleSession.readAgentRun("run_packed_history")).toMatchObject({
+      ok: true,
+      value: {
+        packedContextHistory: { status: "stale", reason: "manifest_invalid" }
+      }
+    });
+
+    const legacyRepository = {
+      ...repository,
+      async readContextSnapshot(runId: string, contextSnapshotId: string) {
+        const read = await repository.readContextSnapshot(runId, contextSnapshotId);
+        const value = structuredClone(read.value) as Record<string, unknown>;
+        const current = value["packedContextManifest"] as Record<string, unknown>;
+        value["packedContextManifest"] = {
+          schemaVersion: "1.0",
+          packedContextId: current["packedContextId"],
+          payloadChecksum: current["payloadChecksum"],
+          blocks: current["blocks"],
+          tokenStats: current["tokenStats"]
+        };
+        return { ok: true as const, value };
+      }
+    };
+    const legacySession = createSession({ ...sharedOptions, repository: legacyRepository });
+    expect(await legacySession.readAgentRun("run_packed_history")).toMatchObject({
+      ok: true,
+      value: {
+        packedContextHistory: { status: "unavailable", reason: "legacy_manifest" }
+      }
+    });
+  });
+
   test("restores the bound context snapshot before approving a reloaded Change Set", async () => {
     const createSession = requireCreateSession();
     const repository = memoryRepository();
@@ -2049,14 +2550,84 @@ function proposalOnlyDriver() {
   };
 }
 
+function workspaceOutlineSource(
+  chapterRevision: string,
+  storyRevision: string,
+  entries: readonly {
+    readonly kind: "directory" | "file" | "chapter" | "story_bible_asset";
+    readonly id: string;
+    readonly label: string;
+    readonly relativePath?: string;
+  }[] = [],
+  options: {
+    readonly truncationReasons?: readonly "max_tokens"[];
+    readonly degradedDependencies?: readonly ("chapters" | "story_bible")[];
+  } = {}
+) {
+  const truncationReasons = options.truncationReasons ?? [];
+  const dependencyEntries = entries.map((entry) =>
+    entry.kind === "story_bible_asset" ? { ...entry, assetType: "character" } : entry
+  );
+  const manifest = {
+    schemaVersion: "1.0" as const,
+    readerVersion: "1.0" as const,
+    profileId: "writing" as const,
+    workspace: {
+      workspaceId: "project-01",
+      workspaceKind: "creativeProject" as const,
+      canonicalRootIdentity: sha256("root:project-01")
+    },
+    limits: {
+      maxDepth: 8,
+      maxEntries: 200,
+      maxScannedEntries: 2_000,
+      maxBytes: 128_000,
+      maxDurationMs: 1_000,
+      maxTokens: 8_000
+    },
+    truncated: truncationReasons.length > 0,
+    truncationReasons,
+    dependency: {
+      kind: "writing_indexes" as const,
+      chapterIndexRevision: chapterRevision,
+      chapterIndexChecksum: sha256(chapterRevision),
+      storyBibleIndexRevision: storyRevision,
+      storyBibleIndexChecksum: sha256(storyRevision),
+      degradedDependencies: options.degradedDependencies ?? []
+    }
+  };
+  const create = applicationExports.createWorkspaceOutlineSource;
+  return create({
+    workspaceTrust: "trusted",
+    result: {
+      entries: dependencyEntries,
+      text: `${chapterRevision}:${storyRevision}`,
+      dependencyManifest: manifest,
+      dependencyManifestChecksum: applicationExports.checksumProjectContext(manifest),
+      materializedChecksum: sha256(`${chapterRevision}:${storyRevision}`),
+      tokenCount: 1,
+      truncationRange: null
+    }
+  }).source;
+}
+
 function memoryRepository() {
   const snapshots = new Map<string, Record<string, unknown>>();
   const events = new Map<string, Record<string, unknown>[]>();
   const receipts = new Map<string, Record<string, unknown>>();
   const contextSnapshots = new Map<string, Record<string, unknown>>();
   const promptMaterializations = new Map<string, Record<string, unknown>>();
+  const contextSourceMaterializations = new Map<string, Record<string, unknown>>();
+  const toolCatalogs = new Map<string, Record<string, unknown>>();
   const budgetSnapshots = new Map<string, Record<string, unknown>>();
   return {
+    async writeToolCatalog(runId: string, catalog: Record<string, unknown>) {
+      toolCatalogs.set(runId, structuredClone(catalog));
+      return { ok: true, value: catalog };
+    },
+    async readToolCatalog(runId: string) {
+      return { ok: true, value: toolCatalogs.get(runId) };
+    },
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), snapshot);
       return { ok: true, value: snapshot };
@@ -2096,6 +2667,19 @@ function memoryRepository() {
     },
     async readPromptMaterialization(runId: string, artifactId: string) {
       return { ok: true, value: promptMaterializations.get(`${runId}:${artifactId}`) };
+    },
+    async writeContextSourceMaterialization(runId: string, artifact: Record<string, unknown>) {
+      contextSourceMaterializations.set(
+        `${runId}:${String(artifact["artifactId"])}`,
+        structuredClone(artifact)
+      );
+      return { ok: true, value: artifact };
+    },
+    async readContextSourceMaterialization(runId: string, artifactId: string) {
+      return {
+        ok: true,
+        value: contextSourceMaterializations.get(`${runId}:${artifactId}`)
+      };
     },
     async writeBudgetSnapshot(runId: string, snapshot: Record<string, unknown>) {
       budgetSnapshots.set(
@@ -2177,10 +2761,7 @@ async function waitForStatus(
 }
 
 function sha256(value: string): string {
-  // Fixed fixtures keep this renderer-neutral integration test free of Node crypto imports.
-  if (value === "before\n")
-    return "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb";
-  return "7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919";
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function storageError(code: string): Record<string, unknown> {

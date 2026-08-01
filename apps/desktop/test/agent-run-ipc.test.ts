@@ -23,6 +23,16 @@ describe("Agent Run IPC", () => {
         policyRevision: "policy-03"
       })
     );
+    const setSourcePreference = vi.fn(async () =>
+      ok({
+        workspaceTrust: "untrusted" as const,
+        projectConventionsEnabled: false,
+        sourcePreferences: [
+          { refId: "story_bible:chr_hero", decision: "pinned" as const, priority: 80 }
+        ],
+        policyRevision: "policy-04"
+      })
+    );
     const refreshCurrentWorkspace = vi.fn(async () => ok(undefined));
     const revokeCurrentSettingsCapabilities = vi.fn();
     const manager = {
@@ -46,7 +56,11 @@ describe("Agent Run IPC", () => {
       {} as DesktopApplication,
       {
         agentRuntimeManager: manager,
-        workspaceContextPolicyStore: { disableConventions, revokeTrust }
+        workspaceContextPolicyStore: {
+          disableConventions,
+          revokeTrust,
+          setSourcePreference
+        }
       } as never
     ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
     const update = handlers["application:workspace:update-context-policy"];
@@ -72,6 +86,49 @@ describe("Agent Run IPC", () => {
       workspaceId: "workspace-active",
       contentRoot: "C:/workspace-active"
     });
+
+    await expect(
+      update({
+        action: "set_source_preference",
+        preference: {
+          refId: "story_bible:chr_hero",
+          decision: "pinned",
+          priority: 80
+        }
+      })
+    ).resolves.toEqual({ ok: true, value: undefined });
+    expect(setSourcePreference).toHaveBeenCalledWith(
+      {
+        workspaceKind: "engineeringWorkspace",
+        workspaceId: "workspace-active",
+        contentRoot: "C:/workspace-active"
+      },
+      {
+        refId: "story_bible:chr_hero",
+        decision: "pinned",
+        priority: 80
+      }
+    );
+    expect(refreshCurrentWorkspace).toHaveBeenCalledTimes(3);
+
+    await expect(
+      update({
+        action: "set_source_preference",
+        preference: {
+          refId: "file:escape",
+          decision: "pinned",
+          priority: 50,
+          ref: {
+            kind: "project_file",
+            refId: "file:escape",
+            relativePath: "../outside.md",
+            label: "Outside"
+          }
+        }
+      })
+    ).resolves.toMatchObject({ ok: false });
+    expect(setSourcePreference).toHaveBeenCalledOnce();
+    expect(refreshCurrentWorkspace).toHaveBeenCalledTimes(3);
   });
 
   test("requires a Main-attested Files surface and exact active resource for creative general drafts", async () => {
@@ -465,7 +522,9 @@ describe("Agent Run IPC", () => {
       expectedRunRevision: 0,
       runDraftId: "draft-01",
       runDraftRevision: 1,
-      runDraftChecksum: "checksum-01"
+      runDraftChecksum: "checksum-01",
+      packedContextId: "packed_context_0123456789abcdef0123456789abcdef",
+      packedContextPayloadChecksum: "a".repeat(64)
     };
     expect(typeof handlers["application:agent-run:start"]).toBe("function");
     expect(typeof handlers["application:agent-run:stop"]).toBe("function");
@@ -496,6 +555,22 @@ describe("Agent Run IPC", () => {
       return;
 
     expect(await handlers["application:agent-run:start"](startCommand)).toMatchObject({ ok: true });
+    const callsAfterStart = calls.length;
+    expect(
+      await handlers["application:agent-run:start"]({
+        ...startCommand,
+        commandId: "start-missing-packed-checksum",
+        packedContextPayloadChecksum: undefined
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_IPC_UNAVAILABLE" } });
+    expect(
+      await handlers["application:agent-run:start"]({
+        ...startCommand,
+        commandId: "start-invalid-packed-checksum",
+        packedContextPayloadChecksum: "not-a-checksum"
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_RUN_IPC_UNAVAILABLE" } });
+    expect(calls).toHaveLength(callsAfterStart);
     await handlers["application:agent-run:answer-user-input"]({
       projectId: "project-01",
       runId: "run-ipc",
@@ -702,7 +777,9 @@ describe("Agent Run IPC", () => {
       expectedRunRevision: 0,
       runDraftId: "draft-01",
       runDraftRevision: 1,
-      runDraftChecksum: "checksum-01"
+      runDraftChecksum: "checksum-01",
+      packedContextId: "packed_context_0123456789abcdef0123456789abcdef",
+      packedContextPayloadChecksum: "a".repeat(64)
     });
     await startStarted;
     expect(leaseCount).toBe(1);
@@ -1295,6 +1372,17 @@ describe("Agent Run IPC", () => {
         async previewContextBudget(command: Record<string, unknown>) {
           calls.push(`preview-budget:${String(command["commandId"])}`);
           return { ok: true, value: { contextBudgetSnapshotId: "budget-01" } };
+        },
+        async previewPackedContext(command: Record<string, unknown>) {
+          calls.push(`preview-packed:${String(command["commandId"])}`);
+          return {
+            ok: true,
+            value: {
+              packedContextId: "packed-01",
+              payloadChecksum: "a".repeat(64),
+              blocks: []
+            }
+          };
         }
       }
     };
@@ -1345,6 +1433,18 @@ describe("Agent Run IPC", () => {
     await handlers["application:agent-run:update-context-draft"]?.({
       projectId: "project-01",
       conversationId: "conversation-01",
+      commandId: "cmd-02-neutral",
+      contextDraftId: "context-01",
+      expectedDraftRevision: 2,
+      mutation: {
+        kind: "set_source_override",
+        refId: "chapter:ch-01",
+        decision: "automatic"
+      }
+    });
+    await handlers["application:agent-run:update-context-draft"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
       commandId: "cmd-02-story",
       contextDraftId: "context-01",
       expectedDraftRevision: 2,
@@ -1369,6 +1469,14 @@ describe("Agent Run IPC", () => {
       projectId: "project-01",
       conversationId: "conversation-01",
       commandId: "cmd-04",
+      runDraftId: "draft-01",
+      expectedDraftRevision: 3,
+      runDraftChecksum: "checksum-01"
+    });
+    await handlers["application:agent-run:preview-packed-context"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "cmd-packed-04",
       runDraftId: "draft-01",
       expectedDraftRevision: 3,
       runDraftChecksum: "checksum-01"
@@ -1415,6 +1523,28 @@ describe("Agent Run IPC", () => {
         expectedDraftRevision: 1,
         mutation: { kind: "unknown_mutation" }
       }),
+      handlers["application:agent-run:update-context-draft"]?.({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        commandId: "cmd-bad-neutral",
+        contextDraftId: "context-01",
+        expectedDraftRevision: 1,
+        mutation: {
+          kind: "set_source_override",
+          refId: "chapter:ch-01",
+          decision: "automatic",
+          priority: 50
+        }
+      }),
+      handlers["application:agent-run:preview-packed-context"]?.({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        commandId: "cmd-bad-packed",
+        runDraftId: "draft-01",
+        expectedDraftRevision: 3,
+        runDraftChecksum: "checksum-01",
+        exposeSystemGuidance: true
+      }),
       handlers["application:agent-run:compact-context"]?.({
         projectId: "project-01",
         runId: "run-01",
@@ -1439,9 +1569,11 @@ describe("Agent Run IPC", () => {
       "read-run-draft:conversation-01",
       "update-run-draft:set_model",
       "update-context-draft:remove_ref",
+      "update-context-draft:set_source_override",
       "update-context-draft:set_active_resource",
       "refresh-context-draft:context-01",
       "preview-budget:cmd-04",
+      "preview-packed:cmd-packed-04",
       "compact:manual",
       "preview-budget:cmd-standalone-preview",
       "compact:recovery"
@@ -1467,6 +1599,7 @@ describe("Agent Run IPC", () => {
     await agentRuns["updateContextDraft"]?.({});
     await agentRuns["refreshContextDraft"]?.({});
     await agentRuns["previewContextBudget"]?.({});
+    await agentRuns["previewPackedContext"]?.({});
     await agentRuns["compactContext"]?.({});
 
     expect(invoked).toEqual([
@@ -1475,6 +1608,7 @@ describe("Agent Run IPC", () => {
       "application:agent-run:update-context-draft",
       "application:agent-run:refresh-context-draft",
       "application:agent-run:preview-context-budget",
+      "application:agent-run:preview-packed-context",
       "application:agent-run:compact-context"
     ]);
   });

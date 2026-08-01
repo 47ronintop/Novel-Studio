@@ -11,6 +11,8 @@ import type {
   StoryBibleAsset,
   StoryBibleConsistencyReport,
   StoryBibleContextCandidate,
+  StoryBibleEditableAsset,
+  StoryBibleReferenceImpact,
   StoryBibleSnapshot
 } from "@novel-studio/application";
 
@@ -59,11 +61,39 @@ describe("M16 Story Bible IPC", () => {
         if (channel === "application:story-bible:save-memory") {
           return ok(memoryRecord());
         }
+        if (channel === "application:story-bible:get-references") {
+          return ok(referenceImpact());
+        }
+        if (channel === "application:story-bible:resolve-restore-status") {
+          return ok("draft");
+        }
         return ok(snapshot);
       }
     });
 
     await api.storyBible.load();
+    await api.storyBible.readAsset("chr_hero");
+    await api.storyBible.createAsset({ type: "character", value: { title: "New hero" } });
+    await api.storyBible.saveAssetCandidate(strictSaveCommand());
+    await api.storyBible.prepareExplicitInverseChange?.({ source: strictSaveCommand() });
+    await api.storyBible.applyExplicitInverseChange?.({
+      previewId: "preview_1",
+      revision: 1,
+      checksum: "b".repeat(64)
+    });
+    await api.storyBible.cancelExplicitInverseChange?.({
+      previewId: "preview_1",
+      revision: 1,
+      checksum: "b".repeat(64)
+    });
+    await api.storyBible.saveStatusTransition?.({
+      ...strictSaveCommand(),
+      action: "move-to-deleted",
+      candidate: { ...strictSaveCommand().candidate, status: "deleted" },
+      expectedDeletionImpactChecksum: "d".repeat(64)
+    });
+    await api.storyBible.getReferences?.("chr_hero");
+    await api.storyBible.resolveRestoreStatus?.("chr_hero");
     await api.storyBible.saveAsset(characterAsset());
     await api.storyBible.saveMemory(memoryRecord());
     await api.storyBible.buildConsistencyReport();
@@ -72,6 +102,15 @@ describe("M16 Story Bible IPC", () => {
 
     expect(calls).toEqual([
       "application:story-bible:load:0",
+      "application:story-bible:read-asset:1",
+      "application:story-bible:create-asset:1",
+      "application:story-bible:save-asset-candidate:1",
+      "application:story-bible:prepare-explicit-inverse-change:1",
+      "application:story-bible:apply-explicit-inverse-change:1",
+      "application:story-bible:cancel-explicit-inverse-change:1",
+      "application:story-bible:save-status-transition:1",
+      "application:story-bible:get-references:1",
+      "application:story-bible:resolve-restore-status:1",
       "application:story-bible:save-asset:1",
       "application:story-bible:save-memory:1",
       "application:story-bible:build-consistency-report:0",
@@ -84,6 +123,30 @@ describe("M16 Story Bible IPC", () => {
     const handlers = createApplicationIpcHandlers(createFakeApplication());
 
     await expect(handlers["application:story-bible:load"]()).resolves.toEqual(ok(snapshot));
+    await expect(handlers["application:story-bible:read-asset"]("chr_hero")).resolves.toEqual(
+      ok(editableAsset())
+    );
+    await expect(
+      handlers["application:story-bible:create-asset"]({
+        type: "character",
+        value: { title: "New hero" }
+      })
+    ).resolves.toEqual(ok(characterAsset()));
+    await expect(
+      handlers["application:story-bible:save-asset-candidate"](strictSaveCommand())
+    ).resolves.toEqual(ok(characterAsset()));
+    await expect(
+      handlers["application:story-bible:save-status-transition"]({
+        ...strictSaveCommand(),
+        action: "restore"
+      })
+    ).resolves.toEqual(ok(characterAsset()));
+    await expect(handlers["application:story-bible:get-references"]("chr_hero")).resolves.toEqual(
+      ok(referenceImpact())
+    );
+    await expect(
+      handlers["application:story-bible:resolve-restore-status"]("chr_hero")
+    ).resolves.toEqual(ok("draft"));
     await expect(handlers["application:story-bible:save-asset"](characterAsset())).resolves.toEqual(
       ok(characterAsset())
     );
@@ -99,6 +162,209 @@ describe("M16 Story Bible IPC", () => {
     await expect(
       handlers["application:story-bible:detect-foreshadows"]({ chapterIds: ["ch_opening"] })
     ).resolves.toEqual(ok(analysisResult()));
+  });
+
+  test("rejects malformed strict Story Bible IPC inputs before calling Application", async () => {
+    const readStoryBibleAssetForEditing = vi.fn<
+      DesktopApplication["readStoryBibleAssetForEditing"]
+    >(async () => ok(editableAsset()));
+    const createStoryBibleAsset = vi.fn<DesktopApplication["createStoryBibleAsset"]>(async () =>
+      ok(characterAsset())
+    );
+    const saveStoryBibleAssetCandidate = vi.fn<DesktopApplication["saveStoryBibleAssetCandidate"]>(
+      async () => ok(characterAsset())
+    );
+    const saveStoryBibleStatusTransition = vi.fn<
+      DesktopApplication["saveStoryBibleStatusTransition"]
+    >(async () => ok(characterAsset()));
+    const getStoryBibleReferences = vi.fn<DesktopApplication["getStoryBibleReferences"]>(async () =>
+      ok(referenceImpact())
+    );
+    const resolveStoryBibleRestoreStatus = vi.fn<
+      DesktopApplication["resolveStoryBibleRestoreStatus"]
+    >(async () => ok("draft"));
+    const handlers = createApplicationIpcHandlers({
+      ...createFakeApplication(),
+      readStoryBibleAssetForEditing,
+      createStoryBibleAsset,
+      saveStoryBibleAssetCandidate,
+      saveStoryBibleStatusTransition,
+      getStoryBibleReferences,
+      resolveStoryBibleRestoreStatus
+    });
+
+    for (const input of [undefined, null, "", " chr_hero", 7]) {
+      await expect(handlers["application:story-bible:read-asset"](input)).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+      await expect(
+        handlers["application:story-bible:get-references"](input)
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+      await expect(
+        handlers["application:story-bible:resolve-restore-status"](input)
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+    }
+    const validSave = strictSaveCommand();
+    for (const input of [
+      undefined,
+      { type: "character", value: {} },
+      { type: "unsupported", value: { title: "Invalid" } },
+      { type: "character", value: { title: "Invalid", revision: 1 } },
+      { type: "character", value: { title: "Invalid" }, unexpected: true }
+    ]) {
+      await expect(handlers["application:story-bible:create-asset"](input)).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+    }
+    for (const input of [
+      undefined,
+      { ...validSave, action: "move-to-deleted" },
+      { ...validSave, action: "restore", expectedDeletionImpactChecksum: "d".repeat(64) },
+      {
+        ...validSave,
+        action: "move-to-deleted",
+        expectedDeletionImpactChecksum: "D".repeat(64)
+      }
+    ]) {
+      await expect(
+        handlers["application:story-bible:save-status-transition"](input)
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+    }
+    await expect(
+      handlers["application:story-bible:save-asset-candidate"]({
+        ...validSave,
+        action: "move-to-deleted",
+        expectedDeletionImpactChecksum: "d".repeat(64)
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+    });
+    for (const input of [
+      undefined,
+      { ...validSave, baseRevision: -1 },
+      { ...validSave, baseChecksum: "A".repeat(64) },
+      { ...validSave, candidate: { ...validSave.candidate, schemaVersion: "1.0" } },
+      { ...validSave, candidate: { ...validSave.candidate, revision: 1 } }
+    ]) {
+      await expect(
+        handlers["application:story-bible:save-asset-candidate"](input)
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+    }
+
+    expect(readStoryBibleAssetForEditing).not.toHaveBeenCalled();
+    expect(createStoryBibleAsset).not.toHaveBeenCalled();
+    expect(saveStoryBibleAssetCandidate).not.toHaveBeenCalled();
+    expect(saveStoryBibleStatusTransition).not.toHaveBeenCalled();
+    expect(getStoryBibleReferences).not.toHaveBeenCalled();
+    expect(resolveStoryBibleRestoreStatus).not.toHaveBeenCalled();
+  });
+
+  test("allows only source baseline fields for explicit inverse preview and only receipt bindings for apply", async () => {
+    const prepareStoryBibleExplicitInverseChange =
+      vi.fn<DesktopApplication["prepareStoryBibleExplicitInverseChange"]>(rejected);
+    const applyStoryBibleExplicitInverseChange =
+      vi.fn<DesktopApplication["applyStoryBibleExplicitInverseChange"]>(rejected);
+    const cancelStoryBibleExplicitInverseChange =
+      vi.fn<DesktopApplication["cancelStoryBibleExplicitInverseChange"]>(rejected);
+    const handlers = createApplicationIpcHandlers({
+      ...createFakeApplication(),
+      prepareStoryBibleExplicitInverseChange,
+      applyStoryBibleExplicitInverseChange,
+      cancelStoryBibleExplicitInverseChange
+    });
+    const source = {
+      ...strictSaveCommand(),
+      candidate: {
+        ...strictSaveCommand().candidate,
+        relations: [
+          {
+            relationId: "rel_11111111111111111111111111111111",
+            sourceId: "chr_hero",
+            targetId: "chr_target",
+            relationType: "character.ally",
+            direction: "directed",
+            status: "active",
+            validFromChapterId: null,
+            validToChapterId: null,
+            inversePolicy: "explicit",
+            inverseRelationId: null,
+            evidence: [],
+            note: ""
+          }
+        ]
+      }
+    } as const;
+
+    await handlers["application:story-bible:prepare-explicit-inverse-change"]({ source });
+    expect(prepareStoryBibleExplicitInverseChange).toHaveBeenCalledWith({ source });
+
+    for (const input of [
+      { source, targetCandidate: source.candidate },
+      { source, consistencyGroupId: "group_attacker" },
+      { source: { ...source, repositoryPrepared: true } },
+      { source: { ...source, approvalToken: "attacker" } },
+      { source, selection: [] },
+      { source: { candidate: source.candidate, baseRevision: source.baseRevision } }
+    ]) {
+      await expect(
+        handlers["application:story-bible:prepare-explicit-inverse-change"](input)
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+    }
+    expect(prepareStoryBibleExplicitInverseChange).toHaveBeenCalledTimes(1);
+
+    const apply = { previewId: "preview_1", revision: 1, checksum: "b".repeat(64) };
+    await handlers["application:story-bible:apply-explicit-inverse-change"](apply);
+    expect(applyStoryBibleExplicitInverseChange).toHaveBeenCalledWith(apply);
+    for (const input of [
+      { ...apply, approvalToken: "attacker" },
+      { ...apply, consistencyGroupId: "group_attacker" },
+      { ...apply, selection: [] },
+      { ...apply, checksum: "B".repeat(64) },
+      { ...apply, revision: 0 }
+    ]) {
+      await expect(
+        handlers["application:story-bible:apply-explicit-inverse-change"](input)
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+    }
+    expect(applyStoryBibleExplicitInverseChange).toHaveBeenCalledTimes(1);
+
+    await handlers["application:story-bible:cancel-explicit-inverse-change"](apply);
+    expect(cancelStoryBibleExplicitInverseChange).toHaveBeenCalledWith(apply);
+    for (const input of [
+      { ...apply, targetCandidate: source.candidate },
+      { ...apply, approvalToken: "attacker" },
+      { ...apply, consistencyGroupId: "group_attacker" },
+      { ...apply, selection: [] }
+    ]) {
+      await expect(
+        handlers["application:story-bible:cancel-explicit-inverse-change"](input)
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "STORY_BIBLE_IPC_INPUT_INVALID" }
+      });
+    }
+    expect(cancelStoryBibleExplicitInverseChange).toHaveBeenCalledTimes(1);
   });
 
   test("validates foreshadow scan input before routing to the Application layer", async () => {
@@ -376,6 +642,15 @@ function createFakeApplication(): DesktopApplication {
     createProjectChapter: unsupported,
     selectProjectChapter: unsupported,
     loadStoryBible: async () => ok(snapshot),
+    readStoryBibleAssetForEditing: async () => ok(editableAsset()),
+    createStoryBibleAsset: async () => ok(characterAsset()),
+    saveStoryBibleAssetCandidate: async () => ok(characterAsset()),
+    prepareStoryBibleExplicitInverseChange: unsupported,
+    applyStoryBibleExplicitInverseChange: unsupported,
+    cancelStoryBibleExplicitInverseChange: unsupported,
+    saveStoryBibleStatusTransition: async () => ok(characterAsset()),
+    getStoryBibleReferences: async () => ok(referenceImpact()),
+    resolveStoryBibleRestoreStatus: async () => ok("draft"),
     saveStoryBibleAsset: async () => ok(characterAsset()),
     saveStoryBibleMemory: async () => ok(memoryRecord()),
     buildStoryBibleConsistencyReport: async () => ok(consistencyReport()),
@@ -399,11 +674,64 @@ function createFakeApplication(): DesktopApplication {
   };
 }
 
+function editableAsset(): StoryBibleEditableAsset {
+  return {
+    asset: {
+      ...characterAsset(),
+      schemaVersion: "1.1",
+      relations: [],
+      details: {},
+      extensions: {},
+      revision: 0
+    },
+    persistedSchemaVersion: "1.0",
+    checksum: "a".repeat(64),
+    revision: 0,
+    passthroughPresent: false,
+    passthroughFieldCount: 0
+  };
+}
+
+function strictSaveCommand() {
+  return {
+    candidate: {
+      schemaVersion: "1.1" as const,
+      id: "chr_hero",
+      type: "character" as const,
+      title: "Hero updated",
+      status: "active" as const,
+      summary: "Updated summary.",
+      aliases: [],
+      relations: [],
+      details: {},
+      extensions: {},
+      createdAt: now
+    },
+    baseRevision: 0,
+    baseChecksum: "a".repeat(64)
+  };
+}
+
 function consistencyReport(): StoryBibleConsistencyReport {
   return {
     status: "healthy",
     checkedAt: now,
     issues: []
+  };
+}
+
+function referenceImpact(): StoryBibleReferenceImpact {
+  return {
+    assetId: "chr_hero",
+    deletionImpactChecksum: "d".repeat(64),
+    incoming: [],
+    outgoing: [],
+    canSetDeleted: true,
+    deletionImpact: {
+      affectedReferenceCount: 0,
+      affectedAssetIds: [],
+      cascades: false
+    }
   };
 }
 
@@ -554,4 +882,17 @@ function memoryRecord(): MemoryRecord {
 
 async function unsupported<T>(): Promise<Result<T, UnifiedError>> {
   throw new Error("Not used by this test.");
+}
+
+async function rejected<T>(): Promise<Result<T, UnifiedError>> {
+  return err(
+    createUnifiedError({
+      code: "TEST_REJECTED",
+      category: "ValidationError",
+      message: "Rejected by the test double.",
+      recoverability: "user-action",
+      suggestedAction: "Inspect the routed arguments.",
+      traceId: "story-bible-ipc-test"
+    })
+  );
 }

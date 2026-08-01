@@ -1,0 +1,588 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.story-character.v1.1.writeStrict",
+  "title": "character Story Bible asset (writeStrict)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "type",
+    "title",
+    "status",
+    "summary",
+    "aliases",
+    "relations",
+    "details",
+    "extensions",
+    "createdAt",
+    "updatedAt",
+    "revision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^chr_[a-f0-9]{32}$"
+    },
+    "type": {
+      "const": "character"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "draft",
+        "archived",
+        "deleted"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 100000
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 256,
+      "uniqueItems": true
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relationId",
+          "sourceId",
+          "targetId",
+          "relationType",
+          "direction",
+          "status",
+          "validFromChapterId",
+          "validToChapterId",
+          "inversePolicy",
+          "inverseRelationId",
+          "evidence",
+          "note"
+        ],
+        "properties": {
+          "relationId": {
+            "type": "string",
+            "pattern": "^rel_[a-f0-9]{32}$"
+          },
+          "sourceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "targetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "relationType": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "directed",
+              "symmetric"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "ended",
+              "uncertain"
+            ]
+          },
+          "validFromChapterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validToChapterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inversePolicy": {
+            "type": "string",
+            "enum": [
+              "derived",
+              "explicit",
+              "none"
+            ]
+          },
+          "inverseRelationId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^rel_[a-f0-9]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chapterId",
+                "start",
+                "end",
+                "excerptHash"
+              ],
+              "properties": {
+                "chapterId": {
+                  "type": "string",
+                  "pattern": "^ch_[A-Za-z0-9_-]+$"
+                },
+                "start": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "excerptHash": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "maxItems": 10000
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "personality": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10000,
+              "uniqueItems": true
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "traits": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "uniqueItems": true
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "uniqueItems": true
+                },
+                "fears": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "uniqueItems": true
+                },
+                "desires": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "uniqueItems": true
+                }
+              }
+            }
+          ]
+        },
+        "voice": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "tone": {
+                  "type": "string"
+                },
+                "vocabulary": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "uniqueItems": true
+                },
+                "catchphrases": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "uniqueItems": true
+                },
+                "forbiddenExpressions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "uniqueItems": true
+                }
+              }
+            }
+          ]
+        },
+        "goals": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10000,
+              "uniqueItems": true
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "external": {
+                  "type": "string"
+                },
+                "internal": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "arc": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "start": {
+              "type": "string"
+            },
+            "turningPoints": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10000,
+              "uniqueItems": true
+            },
+            "targetState": {
+              "type": "string"
+            }
+          }
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "content",
+              "knownByIds",
+              "revealStatus"
+            ],
+            "properties": {
+              "secretId": {
+                "type": "string",
+                "pattern": "^sec_[a-f0-9]{32}$"
+              },
+              "content": {
+                "type": "string",
+                "minLength": 1
+              },
+              "knownByIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "revealStatus": {
+                "type": "string",
+                "enum": [
+                  "hidden",
+                  "partial",
+                  "revealed"
+                ]
+              }
+            }
+          }
+        },
+        "abilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "currentState": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "locationId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "physical": {
+              "type": "string"
+            },
+            "emotional": {
+              "type": "string"
+            },
+            "heldItemIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10000,
+              "uniqueItems": true
+            },
+            "asOfChapterId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^ch_[A-Za-z0-9_-]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "asOfEventId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^evt_[a-f0-9]{32}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "knowledgeStates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "knowledgeStateId",
+              "entryRevision",
+              "subject",
+              "state"
+            ],
+            "properties": {
+              "knowledgeStateId": {
+                "type": "string",
+                "pattern": "^knw_[a-f0-9]{32}$"
+              },
+              "entryRevision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "known",
+                  "believed",
+                  "suspected",
+                  "misunderstood",
+                  "forgotten"
+                ]
+              },
+              "sourceChapterId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^ch_[A-Za-z0-9_-]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "validFromChapterId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^ch_[A-Za-z0-9_-]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "validToChapterId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^ch_[A-Za-z0-9_-]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "stateHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "stateHistoryId",
+              "entryRevision",
+              "timelineEventId",
+              "note"
+            ],
+            "properties": {
+              "stateHistoryId": {
+                "type": "string",
+                "pattern": "^sth_[a-f0-9]{32}$"
+              },
+              "entryRevision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "timelineEventId": {
+                "type": "string",
+                "pattern": "^evt_[a-f0-9]{32}$"
+              },
+              "chapterId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^ch_[A-Za-z0-9_-]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(?:[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+|[a-z][a-z0-9-]*/[a-z][a-z0-9-]*)$"
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

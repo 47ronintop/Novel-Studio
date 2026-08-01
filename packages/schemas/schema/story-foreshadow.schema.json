@@ -1,0 +1,357 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.story-foreshadow.v1.1.writeStrict",
+  "title": "foreshadow Story Bible asset (writeStrict)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "type",
+    "title",
+    "status",
+    "summary",
+    "aliases",
+    "relations",
+    "details",
+    "extensions",
+    "createdAt",
+    "updatedAt",
+    "revision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^fsh_[a-f0-9]{32}$"
+    },
+    "type": {
+      "const": "foreshadow"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "draft",
+        "archived",
+        "deleted"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 100000
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 256,
+      "uniqueItems": true
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relationId",
+          "sourceId",
+          "targetId",
+          "relationType",
+          "direction",
+          "status",
+          "validFromChapterId",
+          "validToChapterId",
+          "inversePolicy",
+          "inverseRelationId",
+          "evidence",
+          "note"
+        ],
+        "properties": {
+          "relationId": {
+            "type": "string",
+            "pattern": "^rel_[a-f0-9]{32}$"
+          },
+          "sourceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "targetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "relationType": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "directed",
+              "symmetric"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "ended",
+              "uncertain"
+            ]
+          },
+          "validFromChapterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validToChapterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inversePolicy": {
+            "type": "string",
+            "enum": [
+              "derived",
+              "explicit",
+              "none"
+            ]
+          },
+          "inverseRelationId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^rel_[a-f0-9]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chapterId",
+                "start",
+                "end",
+                "excerptHash"
+              ],
+              "properties": {
+                "chapterId": {
+                  "type": "string",
+                  "pattern": "^ch_[A-Za-z0-9_-]+$"
+                },
+                "start": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "excerptHash": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "maxItems": 10000
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackingStatus",
+        "milestones"
+      ],
+      "properties": {
+        "trackingStatus": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "planted",
+            "progressing",
+            "ready-to-payoff",
+            "paid-off",
+            "abandoned"
+          ]
+        },
+        "plantedChapterId": {
+          "type": "string",
+          "pattern": "^ch_[A-Za-z0-9_-]+$"
+        },
+        "plannedPayoffChapterId": {
+          "type": "string",
+          "pattern": "^ch_[A-Za-z0-9_-]+$"
+        },
+        "actualPayoffChapterId": {
+          "type": "string",
+          "pattern": "^ch_[A-Za-z0-9_-]+$"
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "ai-confirmed"
+          ]
+        },
+        "notes": {
+          "type": "string"
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "chapterId",
+              "excerpt",
+              "excerptHash"
+            ],
+            "properties": {
+              "chapterId": {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              "excerpt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "excerptHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        },
+        "milestones": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "milestoneId",
+              "entryRevision",
+              "kind",
+              "chapterId",
+              "evidence",
+              "note"
+            ],
+            "properties": {
+              "milestoneId": {
+                "type": "string",
+                "pattern": "^fsm_[a-f0-9]{32}$"
+              },
+              "entryRevision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "plan",
+                  "plant",
+                  "progress",
+                  "payoff",
+                  "abandon"
+                ]
+              },
+              "chapterId": {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              "timelineEventId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^evt_[a-f0-9]{32}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "evidence": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "start",
+                  "end",
+                  "excerptHash"
+                ],
+                "properties": {
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "excerptHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(?:[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+|[a-z][a-z0-9-]*/[a-z][a-z0-9-]*)$"
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

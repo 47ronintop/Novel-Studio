@@ -3,10 +3,20 @@ import { describe, expect, test, vi } from "vitest";
 import type {
   ForeshadowAnalysisResultDto,
   NovelStudioApi,
+  StoryBibleAsset,
   StoryBibleConsistencyReport,
+  StoryBibleEditableAsset,
+  StoryBibleExplicitInversePreview,
+  StoryBibleReferenceImpact,
   StoryBibleSnapshot
 } from "@novel-studio/application";
-import { createUnifiedError, err, hashForeshadowEvidence, ok } from "@novel-studio/shared";
+import {
+  createUnifiedError,
+  err,
+  hashForeshadowEvidence,
+  ok,
+  type JsonObject
+} from "@novel-studio/shared";
 
 import {
   createStoryBibleBridge,
@@ -140,6 +150,7 @@ describe("Story Bible bridge", () => {
       })
     );
     expect(bridge.getEditorProps().entries.some((entry) => entry.id === "mem_oath")).toBe(false);
+    expect(bridge.getEditorProps().filters.status).toBe("available");
     expect(props.assets[2]).toMatchObject({
       id: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       type: "foreshadow",
@@ -287,6 +298,289 @@ describe("Story Bible bridge", () => {
     expect(editor).toMatchObject({ viewMode: "detail", dirty: false });
   });
 
+  test("loads a compatible editing baseline and submits only a strict v1.1 candidate", async () => {
+    const baseApi = createApi([]);
+    const relation = {
+      relationId: `rel_${"1".repeat(32)}`,
+      sourceId: "chr_hero",
+      targetId: "loc_capital",
+      relationType: "legacy.related",
+      direction: "directed" as const,
+      status: "uncertain" as const,
+      validFromChapterId: null,
+      validToChapterId: null,
+      inversePolicy: "none" as const,
+      inverseRelationId: null,
+      evidence: [],
+      note: "Migrated relation"
+    };
+    const knowledgeStateId = `knw_${"4".repeat(32)}`;
+    const stateHistoryId = `sth_${"5".repeat(32)}`;
+    let editable: StoryBibleEditableAsset = {
+      asset: {
+        schemaVersion: "1.1",
+        id: "chr_hero",
+        type: "character",
+        title: "Hero",
+        status: "active",
+        summary: "A procedural protagonist with a hidden oath.",
+        aliases: ["Oath bearer"],
+        relations: [relation],
+        relatedEntityIds: ["loc_capital"],
+        details: {
+          role: "lead",
+          appearanceChapterIds: ["ch_01"],
+          knowledgeStates: [
+            {
+              knowledgeStateId,
+              entryRevision: 2,
+              subject: "The oath",
+              state: "known",
+              sourceChapterId: "ch_01",
+              validFromChapterId: "ch_01",
+              validToChapterId: null,
+              note: "Learned in the archive"
+            }
+          ],
+          stateHistory: [
+            {
+              stateHistoryId,
+              entryRevision: 3,
+              timelineEventId: `evt_${"6".repeat(32)}`,
+              chapterId: "ch_01",
+              note: "Accepted the oath"
+            }
+          ]
+        },
+        extensions: {},
+        passthrough: {
+          sourceSchemaVersion: "1.0",
+          rootFields: { futureRootField: { enabled: true } },
+          detailFieldsByPointer: { "/futureDetailField": { value: ["kept"] } }
+        },
+        revision: 0,
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z"
+      },
+      persistedSchemaVersion: "1.0",
+      checksum: "a".repeat(64),
+      revision: 0,
+      passthroughPresent: true,
+      passthroughFieldCount: 2
+    };
+    let currentSnapshot = snapshot;
+    const readAsset = vi.fn<NovelStudioApi["storyBible"]["readAsset"]>(async () => ok(editable));
+    const saveAssetCandidate = vi.fn<NovelStudioApi["storyBible"]["saveAssetCandidate"]>(
+      async (input) => {
+        const saved: StoryBibleAsset = {
+          ...input.candidate,
+          type: "character",
+          details: input.candidate.details,
+          relatedEntityIds: input.candidate.relations.map((item) => item.targetId),
+          passthrough: editable.asset.passthrough,
+          revision: 1,
+          updatedAt: "2026-07-31T01:00:00.000Z"
+        };
+        editable = {
+          ...editable,
+          asset: saved,
+          persistedSchemaVersion: "1.1",
+          checksum: "b".repeat(64),
+          revision: 1
+        };
+        currentSnapshot = { ...currentSnapshot, characters: [saved] };
+        return ok(saved);
+      }
+    );
+    const entryIdentities = ["9".repeat(32), "a".repeat(32)];
+    const bridge = createStoryBibleBridge(
+      {
+        ...baseApi,
+        storyBible: {
+          ...baseApi.storyBible,
+          load: async () => ok(currentSnapshot),
+          readAsset,
+          createAsset: async () => {
+            throw new Error("not used");
+          },
+          saveAssetCandidate
+        }
+      },
+      {
+        createEntryIdentity: () => {
+          const identity = entryIdentities.shift();
+          if (identity === undefined) throw new Error("unexpected entry identity request");
+          return identity;
+        }
+      }
+    );
+
+    await bridge.load("workspace-01");
+    await bridge.selectEntryForEditing("chr_hero");
+    bridge.updateDraft("character", {
+      title: "Hero Strict",
+      details: {
+        knowledgeStates: [
+          ...((bridge.getEditorProps().draft.details["knowledgeStates"] as JsonObject[]) ?? []),
+          {
+            entryRevision: 1,
+            subject: "The hidden door",
+            state: "suspected",
+            sourceChapterId: null,
+            validFromChapterId: null,
+            validToChapterId: null,
+            note: ""
+          }
+        ],
+        stateHistory: [
+          ...((bridge.getEditorProps().draft.details["stateHistory"] as JsonObject[]) ?? []),
+          {
+            entryRevision: 1,
+            timelineEventId: `evt_${"7".repeat(32)}`,
+            chapterId: null,
+            note: "Investigates the door"
+          }
+        ]
+      }
+    });
+    const editor = await bridge.saveDraft();
+
+    expect(readAsset).toHaveBeenCalledWith("chr_hero");
+    expect(saveAssetCandidate).toHaveBeenCalledTimes(1);
+    const command = saveAssetCandidate.mock.calls[0]?.[0];
+    expect(command).toMatchObject({
+      baseRevision: 0,
+      baseChecksum: "a".repeat(64),
+      candidate: {
+        schemaVersion: "1.1",
+        id: "chr_hero",
+        type: "character",
+        title: "Hero Strict",
+        relations: [relation],
+        createdAt: "2026-07-05T00:00:00.000Z"
+      }
+    });
+    expect(command?.candidate).not.toHaveProperty("passthrough");
+    expect(command?.candidate).not.toHaveProperty("revision");
+    expect(command?.candidate).not.toHaveProperty("updatedAt");
+    expect(command?.candidate).not.toHaveProperty("relatedEntityIds");
+    expect(command?.candidate.details).not.toHaveProperty("appearanceChapterIds");
+    expect(command?.candidate.details["knowledgeStates"]).toMatchObject([
+      { knowledgeStateId, entryRevision: 2 },
+      { entryRevision: 1 }
+    ]);
+    expect(command?.candidate.details["knowledgeStates"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ knowledgeStateId: expect.stringMatching(/^knw_[a-f0-9]{32}$/u) })
+      ])
+    );
+    const savedKnowledgeStates = command?.candidate.details["knowledgeStates"] as
+      JsonObject[] | undefined;
+    expect(savedKnowledgeStates?.[1]?.["knowledgeStateId"]).toBe(`knw_${"9".repeat(32)}`);
+    expect(command?.candidate.details["stateHistory"]).toMatchObject([
+      { stateHistoryId, entryRevision: 3 },
+      { entryRevision: 1 }
+    ]);
+    expect(command?.candidate.details["stateHistory"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stateHistoryId: expect.stringMatching(/^sth_[a-f0-9]{32}$/u) })
+      ])
+    );
+    const savedStateHistory = command?.candidate.details["stateHistory"] as
+      JsonObject[] | undefined;
+    expect(savedStateHistory?.[1]?.["stateHistoryId"]).toBe(`sth_${"a".repeat(32)}`);
+    expect(editor).toMatchObject({
+      dirty: false,
+      draft: { id: "chr_hero", title: "Hero Strict" }
+    });
+  });
+
+  test("uses the server-returned ID when a strict asset is created", async () => {
+    const baseApi = createApi([]);
+    const serverId = `chr_${"2".repeat(32)}`;
+    let currentSnapshot: StoryBibleSnapshot = { ...snapshot, characters: [] };
+    let createdEditable: StoryBibleEditableAsset | undefined;
+    const createAsset = vi.fn<NovelStudioApi["storyBible"]["createAsset"]>(async (input) => {
+      const created: StoryBibleAsset = {
+        schemaVersion: "1.1",
+        id: serverId,
+        type: "character",
+        title: input.value.title,
+        status: input.value.status ?? "active",
+        summary: input.value.summary ?? "",
+        aliases: [...(input.value.aliases ?? [])],
+        relations: [],
+        details: {
+          currentState: {
+            locationId: null,
+            physical: "",
+            emotional: "",
+            heldItemIds: [],
+            asOfChapterId: null,
+            asOfEventId: null
+          },
+          knowledgeStates: [],
+          stateHistory: []
+        },
+        extensions: {},
+        createdAt: "2026-07-31T01:00:00.000Z",
+        updatedAt: "2026-07-31T01:00:00.000Z",
+        revision: 1
+      };
+      currentSnapshot = { ...currentSnapshot, characters: [created] };
+      createdEditable = {
+        asset: created,
+        persistedSchemaVersion: "1.1",
+        checksum: "c".repeat(64),
+        revision: 1,
+        passthroughPresent: false,
+        passthroughFieldCount: 0
+      };
+      return ok(created);
+    });
+    const bridge = createStoryBibleBridge(
+      {
+        ...baseApi,
+        storyBible: {
+          ...baseApi.storyBible,
+          load: async () => ok(currentSnapshot),
+          readAsset: async () =>
+            createdEditable === undefined
+              ? err(createUnifiedError({ code: "NOT_CREATED", message: "not created" }))
+              : ok(createdEditable),
+          createAsset,
+          saveAssetCandidate: async () => {
+            throw new Error("not used");
+          }
+        }
+      },
+      {
+        createAssetIdentity: () => {
+          throw new Error("strict creation must not generate an asset ID in the renderer");
+        }
+      }
+    );
+
+    await bridge.load("workspace-01");
+    bridge.beginCreate("character");
+    bridge.updateDraft("character", { title: "Server-created hero" });
+    const editor = await bridge.saveDraft();
+
+    expect(createAsset).toHaveBeenCalledWith({
+      type: "character",
+      value: {
+        title: "Server-created hero",
+        status: "active",
+        summary: "",
+        aliases: [],
+        relations: [],
+        details: {},
+        extensions: {}
+      }
+    });
+    expect(editor).toMatchObject({ dirty: false, draft: { id: serverId } });
+  });
+
   test("deep-merges edited character details without dropping unknown nested fields", async () => {
     const bridge = createStoryBibleBridge(createApi([]));
     await bridge.load("workspace-01");
@@ -294,6 +588,7 @@ describe("Story Bible bridge", () => {
     bridge.selectEntry("chr_hero");
     bridge.updateDraft("character", {
       details: {
+        appearanceChapterIds: ["ch_01"],
         arc: {
           start: "Accepts the investigation"
         }
@@ -309,6 +604,7 @@ describe("Story Bible bridge", () => {
         futureArcField: "kept"
       }
     });
+    expect(bridge.getSnapshot().characters[0]?.details).not.toHaveProperty("appearanceChapterIds");
   });
 
   test("retains the dirty detail draft when Story Bible saving fails", async () => {
@@ -1348,6 +1644,152 @@ describe("Story Bible bridge", () => {
     expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
   });
 
+  test("applies foreshadow confirmations through strict create and revisioned update APIs", async () => {
+    const baseApi = createApi([]);
+    const target = snapshot.foreshadows[0];
+    if (target === undefined) throw new Error("Expected a foreshadow fixture.");
+    const serverCreatedId = `fsh_${"e".repeat(32)}`;
+    let currentSnapshot = snapshot;
+    const editableTarget: StoryBibleEditableAsset = {
+      asset: {
+        ...target,
+        schemaVersion: "1.1",
+        aliases: [],
+        relations: [],
+        details: { ...target.details, milestones: [] },
+        extensions: {},
+        passthrough: {
+          sourceSchemaVersion: "1.0",
+          rootFields: {},
+          detailFieldsByPointer: {}
+        },
+        revision: 0
+      },
+      persistedSchemaVersion: "1.0",
+      checksum: "7".repeat(64),
+      revision: 0,
+      passthroughPresent: true,
+      passthroughFieldCount: 0
+    };
+    const createAsset = vi.fn<NovelStudioApi["storyBible"]["createAsset"]>(async (input) => {
+      const created = {
+        schemaVersion: "1.1" as const,
+        id: serverCreatedId,
+        type: "foreshadow" as const,
+        title: input.value.title,
+        status: input.value.status ?? "active",
+        summary: input.value.summary ?? "",
+        aliases: [...(input.value.aliases ?? [])],
+        relations: [...(input.value.relations ?? [])].map((relation) => ({
+          ...relation,
+          sourceId: serverCreatedId
+        })),
+        details: input.value.details ?? { trackingStatus: "planned", milestones: [] },
+        extensions: input.value.extensions ?? {},
+        createdAt: "2026-07-30T12:00:00.000Z",
+        updatedAt: "2026-07-30T12:00:00.000Z",
+        revision: 1
+      } as StoryBibleAsset;
+      currentSnapshot = {
+        ...currentSnapshot,
+        foreshadows: [...currentSnapshot.foreshadows, created as never]
+      };
+      return ok(created);
+    });
+    const saveAssetCandidate = vi.fn<NovelStudioApi["storyBible"]["saveAssetCandidate"]>(
+      async (input) => {
+        const saved = {
+          ...input.candidate,
+          type: "foreshadow" as const,
+          updatedAt: "2026-07-30T12:00:00.000Z",
+          revision: 1
+        } as StoryBibleAsset;
+        currentSnapshot = {
+          ...currentSnapshot,
+          foreshadows: currentSnapshot.foreshadows.map((asset) =>
+            asset.id === saved.id ? (saved as never) : asset
+          )
+        };
+        return ok(saved);
+      }
+    );
+    const saveAsset = vi.fn(baseApi.storyBible.saveAsset);
+    const bridge = createStoryBibleBridge(
+      {
+        ...baseApi,
+        storyBible: {
+          ...baseApi.storyBible,
+          load: async () => ok(currentSnapshot),
+          readAsset: async () => ok(editableTarget),
+          createAsset,
+          saveAssetCandidate,
+          saveAsset,
+          detectForeshadows: async () => ok(analysisWithUpdateCandidate())
+        }
+      },
+      {
+        createAssetIdentity: () => "d".repeat(32),
+        now: () => "2026-07-30T12:00:00.000Z"
+      }
+    );
+    await enterForeshadowReview(bridge);
+    bridge.toggleForeshadowAnalysisCandidate("candidate-new");
+    bridge.toggleForeshadowAnalysisCandidate("candidate-progress");
+    const previewStart = bridge.beginForeshadowAnalysisPreview();
+    if (previewStart.token === undefined) throw new Error("Expected a preview token.");
+    await bridge.prepareForeshadowAnalysisPreview(previewStart.token, ["ch_01", "ch_02"]);
+    const saveStart = bridge.beginForeshadowAnalysisSave(false);
+    if (saveStart.token === undefined) throw new Error("Expected a save token.");
+
+    const result = await bridge.saveForeshadowAnalysisChanges(saveStart.token);
+
+    expect(result.editor.foreshadowAnalysis).toMatchObject({
+      status: "review",
+      review: {
+        outcome: "completed",
+        changes: [
+          { changeId: "new:candidate-new", assetId: serverCreatedId, status: "succeeded" },
+          {
+            changeId: "update:fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            status: "succeeded"
+          }
+        ]
+      }
+    });
+    expect(saveAsset).not.toHaveBeenCalled();
+    expect(createAsset).toHaveBeenCalledTimes(1);
+    const createCommand = createAsset.mock.calls[0]?.[0];
+    expect(createCommand).toMatchObject({
+      type: "foreshadow",
+      value: {
+        title: "Old key",
+        details: {
+          trackingStatus: "planted",
+          milestones: [{ entryRevision: 1, kind: "plant", chapterId: "ch_01" }]
+        }
+      }
+    });
+    expect(createCommand?.value).not.toHaveProperty("id");
+    expect(createCommand?.value).not.toHaveProperty("revision");
+    expect(saveAssetCandidate).toHaveBeenCalledTimes(1);
+    const updateCommand = saveAssetCandidate.mock.calls[0]?.[0];
+    expect(updateCommand).toMatchObject({
+      baseRevision: 0,
+      baseChecksum: "7".repeat(64),
+      candidate: {
+        schemaVersion: "1.1",
+        id: target.id,
+        details: {
+          trackingStatus: "ready-to-payoff",
+          milestones: [{ entryRevision: 1, kind: "progress", chapterId: "ch_02" }]
+        }
+      }
+    });
+    expect(updateCommand?.candidate).not.toHaveProperty("passthrough");
+    expect(updateCommand?.candidate).not.toHaveProperty("revision");
+    expect(updateCommand?.candidate).not.toHaveProperty("updatedAt");
+  });
+
   test("keeps successful confirmation changes out of failed-only retry", async () => {
     const calls: string[] = [];
     const baseApi = createApi(calls);
@@ -1653,7 +2095,545 @@ describe("Story Bible bridge", () => {
       });
     }
   });
+
+  test("rechecks incoming references before preparing a soft-delete save", async () => {
+    const calls: string[] = [];
+    const statusApi = createStatusTransitionApi(createApi(calls), snapshot);
+    const impact = referenceImpact();
+    const getReferences = vi.fn(async () => ok(impact));
+    const bridge = createStoryBibleBridge({
+      ...statusApi.api,
+      storyBible: { ...statusApi.api.storyBible, getReferences }
+    });
+    await bridge.load("workspace-01");
+    await bridge.selectEntryForEditing("chr_hero");
+
+    const pending = bridge.requestStatusAction("move-to-deleted");
+    expect(bridge.getEditorProps().statusAction).toMatchObject({
+      status: "loading",
+      action: "move-to-deleted",
+      assetId: "chr_hero"
+    });
+    const preview = await pending;
+    expect(preview.statusAction).toMatchObject({
+      status: "confirmation",
+      affectedReferenceCount: 1,
+      affectedAssetIds: ["fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    });
+
+    const prepared = await bridge.confirmStatusAction();
+
+    expect(getReferences).toHaveBeenCalledTimes(2);
+    expect(prepared).toMatchObject({
+      readyToSave: true,
+      editor: { dirty: true, draft: { id: "chr_hero", status: "deleted" } }
+    });
+    bridge.beginSave();
+    const saved = await bridge.saveDraft({ chapterIds: ["ch_01", "ch_05"] });
+    expect(saved).toMatchObject({
+      status: "saved",
+      dirty: false,
+      draft: { id: "chr_hero", status: "deleted" },
+      statusAction: { status: "idle" }
+    });
+    expect(statusApi.saveStatusTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "move-to-deleted",
+        expectedDeletionImpactChecksum: impact.deletionImpactChecksum,
+        candidate: expect.objectContaining({ id: "chr_hero", status: "deleted" })
+      })
+    );
+  });
+
+  test("fails closed when soft-delete reference impact changes after preview", async () => {
+    const baseApi = createApi([]);
+    const getReferences = vi
+      .fn<NonNullable<NovelStudioApi["storyBible"]["getReferences"]>>()
+      .mockResolvedValueOnce(ok(referenceImpact()))
+      .mockResolvedValueOnce(
+        ok({
+          ...referenceImpact(),
+          deletionImpactChecksum: "e".repeat(64),
+          deletionImpact: {
+            affectedReferenceCount: 0,
+            affectedAssetIds: [],
+            cascades: false
+          },
+          incoming: []
+        })
+      );
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: { ...baseApi.storyBible, getReferences }
+    });
+    await bridge.load("workspace-01");
+    bridge.selectEntry("chr_hero");
+    await bridge.requestStatusAction("move-to-deleted");
+
+    const prepared = await bridge.confirmStatusAction();
+
+    expect(prepared.readyToSave).toBe(false);
+    expect(prepared.editor).toMatchObject({
+      dirty: false,
+      draft: { status: "active" },
+      statusAction: {
+        status: "error",
+        message: "入向引用影响已变化，请重新检查后再确认。"
+      }
+    });
+  });
+
+  test("clears stale status proof and restores the baseline after a transition save fails", async () => {
+    const statusApi = createStatusTransitionApi(createApi([]), snapshot);
+    const saveStatusTransition = vi.fn<
+      NonNullable<NovelStudioApi["storyBible"]["saveStatusTransition"]>
+    >(async () =>
+      err(
+        createUnifiedError({
+          code: "STORY_BIBLE_DELETION_IMPACT_CHANGED",
+          category: "ValidationError",
+          message: "References changed.",
+          recoverability: "user-action",
+          suggestedAction: "Review references again.",
+          traceId: "story-bible-bridge-status-test"
+        })
+      )
+    );
+    const bridge = createStoryBibleBridge({
+      ...statusApi.api,
+      storyBible: {
+        ...statusApi.api.storyBible,
+        getReferences: async () => ok(referenceImpact()),
+        saveStatusTransition
+      }
+    });
+    await bridge.load("workspace-01");
+    await bridge.selectEntryForEditing("chr_hero");
+    await bridge.requestStatusAction("move-to-deleted");
+    await bridge.confirmStatusAction();
+    bridge.beginSave();
+
+    const failed = await bridge.saveDraft();
+
+    expect(failed).toMatchObject({
+      status: "error",
+      dirty: false,
+      draft: { id: "chr_hero", status: "active" },
+      feedback: { kind: "error", message: "References changed." }
+    });
+    expect(saveStatusTransition).toHaveBeenCalledTimes(1);
+  });
+
+  test("restores the status recorded before deletion instead of assuming active", async () => {
+    const hero = snapshot.characters[0];
+    if (hero === undefined) throw new Error("Expected a character fixture.");
+    const deletedSnapshot: StoryBibleSnapshot = {
+      ...snapshot,
+      characters: [{ ...hero, status: "deleted" }]
+    };
+    const baseApi = createApi([], deletedSnapshot);
+    const resolveRestoreStatus = vi.fn(async () => ok("draft" as const));
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: { ...baseApi.storyBible, resolveRestoreStatus }
+    });
+    await bridge.load("workspace-01");
+    bridge.selectEntry("chr_hero");
+
+    const preview = await bridge.requestStatusAction("restore");
+    expect(preview.statusAction).toMatchObject({ status: "confirmation", action: "restore" });
+    const prepared = await bridge.confirmStatusAction();
+
+    expect(resolveRestoreStatus).toHaveBeenCalledWith("chr_hero");
+    expect(prepared).toMatchObject({
+      readyToSave: true,
+      editor: { dirty: true, draft: { status: "draft" }, statusAction: { status: "idle" } }
+    });
+  });
+
+  test("previews explicit inverse endpoints, cancels with zero writes, then applies atomically", async () => {
+    const relationId = `rel_${"1".repeat(32)}`;
+    const inverseRelationId = `rel_${"2".repeat(32)}`;
+    const source = strictCharacterAsset("chr_source", "Source", []);
+    const target = strictCharacterAsset("chr_target", "Target", []);
+    let currentSnapshot: StoryBibleSnapshot = {
+      characters: [source, target],
+      worldAssets: [],
+      foreshadows: [],
+      memories: []
+    };
+    let sourceEditable = strictEditable(source, "a".repeat(64), 1);
+    const targetEditable = strictEditable(target, "b".repeat(64), 1);
+    const baseApi = createApi([], currentSnapshot);
+    const saveAssetCandidate = vi.fn<NovelStudioApi["storyBible"]["saveAssetCandidate"]>(async () =>
+      ok(source)
+    );
+    const prepareExplicitInverseChange = vi.fn<
+      NonNullable<NovelStudioApi["storyBible"]["prepareExplicitInverseChange"]>
+    >(async () => {
+      const prepared = explicitInversePreview("chr_source", "chr_target");
+      return ok({
+        ...prepared,
+        changeSet: {
+          ...prepared.changeSet,
+          files: prepared.changeSet.files.filter((file) => file.assetId === "chr_target")
+        }
+      });
+    });
+    const applyExplicitInverseChange = vi.fn<
+      NonNullable<NovelStudioApi["storyBible"]["applyExplicitInverseChange"]>
+    >(async (input) => {
+      const sourceRelation = {
+        relationId,
+        sourceId: "chr_source",
+        targetId: "chr_target",
+        relationType: "character.relationship",
+        direction: "directed" as const,
+        status: "active" as const,
+        validFromChapterId: null,
+        validToChapterId: null,
+        inversePolicy: "explicit" as const,
+        inverseRelationId,
+        evidence: [],
+        note: ""
+      };
+      const savedSource = { ...source, relations: [sourceRelation], revision: 2 };
+      const savedTarget = {
+        ...target,
+        relations: [
+          {
+            ...sourceRelation,
+            relationId: inverseRelationId,
+            sourceId: "chr_target",
+            targetId: "chr_source",
+            inverseRelationId: relationId
+          }
+        ],
+        revision: 2
+      };
+      currentSnapshot = { ...currentSnapshot, characters: [savedSource, savedTarget] };
+      sourceEditable = strictEditable(savedSource, "c".repeat(64), 2);
+      return ok({
+        schemaVersion: "1.0",
+        previewId: input.previewId,
+        applied: true,
+        batch: {
+          schemaVersion: "1.0",
+          applyBatchId: "apply_1",
+          changeSetId: "change_set_1",
+          selectionChecksum: "d".repeat(64),
+          groups: [{ consistencyGroupId: "group_1", status: "applied" }]
+        }
+      });
+    });
+    const cancelExplicitInverseChange = vi
+      .fn<NonNullable<NovelStudioApi["storyBible"]["cancelExplicitInverseChange"]>>()
+      .mockResolvedValueOnce(
+        err(
+          createUnifiedError({
+            code: "STORY_BIBLE_EXPLICIT_INVERSE_CANCEL_FAILED",
+            category: "ValidationError",
+            message: "Cancel failed.",
+            recoverability: "user-action",
+            suggestedAction: "Retry cancellation.",
+            traceId: "story-bible-bridge-explicit-inverse-test"
+          })
+        )
+      )
+      .mockImplementation(async (input) =>
+        ok({
+          schemaVersion: "1.0",
+          previewId: input.previewId,
+          canceled: true
+        })
+      );
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: {
+        ...baseApi.storyBible,
+        load: async () => ok(currentSnapshot),
+        readAsset: async (assetId) =>
+          ok(assetId === "chr_source" ? sourceEditable : targetEditable),
+        createAsset: async () => {
+          throw new Error("not used");
+        },
+        saveAssetCandidate,
+        prepareExplicitInverseChange,
+        applyExplicitInverseChange,
+        cancelExplicitInverseChange
+      }
+    });
+    await bridge.load("workspace-01");
+    await bridge.selectEntryForEditing("chr_source");
+    bridge.updateDraft("character", {
+      relations: [
+        {
+          relationId,
+          sourceId: "chr_source",
+          targetId: "chr_target",
+          relationType: "character.relationship",
+          direction: "directed",
+          status: "active",
+          validFromChapterId: null,
+          validToChapterId: null,
+          inversePolicy: "explicit",
+          inverseRelationId: null,
+          evidence: [],
+          note: ""
+        }
+      ]
+    });
+
+    const preview = await bridge.saveDraft();
+    expect(preview.explicitInversePreview).toMatchObject({
+      status: "confirmation",
+      files: [
+        { assetId: "chr_source", side: "source" },
+        { assetId: "chr_target", side: "inverse" }
+      ]
+    });
+    expect(saveAssetCandidate).not.toHaveBeenCalled();
+    expect(applyExplicitInverseChange).not.toHaveBeenCalled();
+
+    const failedCancellation = await bridge.cancelExplicitInversePreview();
+    expect(failedCancellation).toMatchObject({
+      dirty: true,
+      explicitInversePreview: { status: "confirmation", previewId: "preview_explicit_1" },
+      feedback: { kind: "error", message: "Cancel failed." }
+    });
+
+    const cancelled = await bridge.cancelExplicitInversePreview();
+    expect(cancelled.dirty).toBe(true);
+    expect(cancelled.explicitInversePreview).toBeUndefined();
+    expect(cancelExplicitInverseChange).toHaveBeenCalledTimes(2);
+    expect(cancelExplicitInverseChange).toHaveBeenLastCalledWith({
+      previewId: "preview_explicit_1",
+      revision: 2,
+      checksum: "e".repeat(64)
+    });
+    expect(applyExplicitInverseChange).not.toHaveBeenCalled();
+    await bridge.saveDraft();
+    const saved = await bridge.saveDraft();
+
+    expect(prepareExplicitInverseChange).toHaveBeenCalledTimes(2);
+    expect(applyExplicitInverseChange).toHaveBeenCalledWith({
+      previewId: "preview_explicit_1",
+      revision: 2,
+      checksum: "e".repeat(64)
+    });
+    expect(saveAssetCandidate).not.toHaveBeenCalled();
+    expect(saved).toMatchObject({
+      status: "saved",
+      dirty: false,
+      draft: { id: "chr_source" }
+    });
+    expect(saved.explicitInversePreview).toBeUndefined();
+    expect(bridge.getSnapshot().characters).toHaveLength(2);
+  });
+
+  test("blocks opening a relation target while the current draft is dirty", async () => {
+    const source = strictCharacterAsset("chr_source", "Source", []);
+    const target = strictCharacterAsset("chr_target", "Target", []);
+    const currentSnapshot: StoryBibleSnapshot = {
+      characters: [source, target],
+      worldAssets: [],
+      foreshadows: [],
+      memories: []
+    };
+    const baseApi = createApi([], currentSnapshot);
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: {
+        ...baseApi.storyBible,
+        load: async () => ok(currentSnapshot),
+        readAsset: async (assetId) =>
+          ok(strictEditable(assetId === "chr_source" ? source : target, "a".repeat(64), 1))
+      }
+    });
+    await bridge.load("workspace-01");
+    await bridge.selectEntryForEditing("chr_source");
+    bridge.updateDraft("character", { title: "Unsaved source" });
+
+    const blocked = bridge.selectEntry("chr_target");
+    expect(blocked).toMatchObject({
+      dirty: true,
+      draft: { id: "chr_source", title: "Unsaved source" },
+      feedback: { kind: "error" }
+    });
+
+    bridge.cancelDraft();
+    const opened = bridge.selectEntry("chr_target");
+    expect(opened).toMatchObject({ dirty: false, draft: { id: "chr_target", title: "Target" } });
+  });
 });
+
+function strictCharacterAsset(id: string, title: string, relations: JsonObject[]): StoryBibleAsset {
+  return {
+    schemaVersion: "1.1",
+    id,
+    type: "character",
+    title,
+    status: "active",
+    summary: `${title} summary`,
+    aliases: [],
+    relations,
+    details: {},
+    extensions: {},
+    revision: 1,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-31T00:00:00.000Z"
+  };
+}
+
+function strictEditable(
+  asset: StoryBibleAsset,
+  checksum: string,
+  revision: number
+): StoryBibleEditableAsset {
+  return {
+    asset,
+    persistedSchemaVersion: "1.1",
+    checksum,
+    revision,
+    passthroughPresent: false,
+    passthroughFieldCount: 0
+  };
+}
+
+function explicitInversePreview(
+  sourceAssetId: string,
+  targetAssetId: string
+): StoryBibleExplicitInversePreview {
+  return {
+    schemaVersion: "1.0",
+    previewId: "preview_explicit_1",
+    expiresAt: "2026-08-01T00:10:00.000Z",
+    sourceAssetId,
+    affectedAssetIds: [sourceAssetId, targetAssetId],
+    changeSet: {
+      schemaVersion: "1.1",
+      changeSetId: "change_set_1",
+      revision: 2,
+      runId: "run_1",
+      projectId: "project_1",
+      checkpointId: "checkpoint_1",
+      contextSnapshotId: "context_1",
+      status: "awaiting_approval",
+      checksum: "e".repeat(64),
+      approvalToken: "",
+      files: [sourceAssetId, targetAssetId].map((assetId) => ({
+        relativePath: `story/characters/${assetId}.json`,
+        assetType: "text" as const,
+        assetId,
+        baseChecksum: "a".repeat(64),
+        candidateChecksum: "b".repeat(64),
+        baseContent: "{}\n",
+        candidateContent: "{}\n",
+        hunks: [],
+        validation: { status: "valid" as const, checks: [] },
+        selected: true,
+        consistencyGroupId: "group_1"
+      })),
+      createdAt: "2026-08-01T00:00:00.000Z"
+    }
+  };
+}
+
+function referenceImpact(): StoryBibleReferenceImpact {
+  return {
+    assetId: "chr_hero",
+    deletionImpactChecksum: "d".repeat(64),
+    incoming: [
+      {
+        sourceAssetId: "fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        sourceType: "foreshadow",
+        sourceTitle: "Old key",
+        sourceStatus: "active",
+        sourceRevision: 2,
+        targetAssetId: "chr_hero",
+        targetType: "character",
+        targetTitle: "Hero",
+        targetStatus: "active",
+        targetReferenceType: "character",
+        expectedTargetTypes: ["character"],
+        integrity: "valid",
+        warnings: [],
+        kind: "detail",
+        path: "/details/relatedCharacterIds/0"
+      }
+    ],
+    outgoing: [],
+    canSetDeleted: true,
+    deletionImpact: {
+      affectedReferenceCount: 1,
+      affectedAssetIds: ["fsh_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      cascades: false
+    }
+  };
+}
+
+function createStatusTransitionApi(baseApi: NovelStudioApi, initialSnapshot: StoryBibleSnapshot) {
+  const source = initialSnapshot.characters[0];
+  if (source === undefined) throw new Error("Expected a character fixture.");
+  let currentSnapshot = initialSnapshot;
+  let editable: StoryBibleEditableAsset = {
+    asset: {
+      ...source,
+      schemaVersion: "1.1",
+      aliases: [...(source.aliases ?? [])],
+      relations: [],
+      extensions: {},
+      revision: 0,
+      passthrough: {
+        sourceSchemaVersion: "1.0",
+        rootFields: {},
+        detailFieldsByPointer: {}
+      }
+    },
+    persistedSchemaVersion: "1.0",
+    checksum: "a".repeat(64),
+    revision: 0,
+    passthroughPresent: true,
+    passthroughFieldCount: 0
+  };
+  const saveStatusTransition = vi.fn<
+    NonNullable<NovelStudioApi["storyBible"]["saveStatusTransition"]>
+  >(async (input) => {
+    const saved: StoryBibleAsset = {
+      ...input.candidate,
+      type: "character",
+      updatedAt: "2026-07-31T02:00:00.000Z",
+      revision: editable.revision + 1
+    };
+    editable = {
+      ...editable,
+      asset: saved,
+      persistedSchemaVersion: "1.1",
+      checksum: "b".repeat(64),
+      revision: editable.revision + 1
+    };
+    currentSnapshot = { ...currentSnapshot, characters: [saved] };
+    return ok(saved);
+  });
+  return {
+    saveStatusTransition,
+    api: {
+      ...baseApi,
+      storyBible: {
+        ...baseApi.storyBible,
+        load: async () => ok(currentSnapshot),
+        readAsset: async () => ok(editable),
+        createAsset: async () => {
+          throw new Error("not used");
+        },
+        saveAssetCandidate: async () => {
+          throw new Error("generic candidate save must not handle deleted transitions");
+        },
+        saveStatusTransition
+      }
+    }
+  } satisfies { readonly api: NovelStudioApi; readonly saveStatusTransition: unknown };
+}
 
 async function enterForeshadowReview(bridge: StoryBibleBridge): Promise<void> {
   await bridge.load("workspace-01");

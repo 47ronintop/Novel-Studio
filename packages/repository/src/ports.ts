@@ -5,7 +5,13 @@ import type {
   Result,
   UnifiedError
 } from "@novel-studio/shared";
-import type { ChangeSetOperation } from "@novel-studio/agent-engine";
+import type {
+  ChangeSetOperation,
+  StoryBibleApplyReceipt,
+  StoryBibleStatusTransitionProof
+} from "@novel-studio/agent-engine";
+export type { StoryBibleApplyReceipt } from "@novel-studio/agent-engine";
+import type { StoryAnalysisBundle } from "@novel-studio/schemas";
 
 export type {
   DraftContentRef,
@@ -62,6 +68,12 @@ export interface HistorySettings extends JsonObject {
   maxSnapshotsPerChapter?: number | null;
 }
 
+export type StoryAnalysisCompletionMode = "off" | "prompt" | "background-review";
+
+export interface StoryAnalysisSettings extends JsonObject {
+  completionMode: StoryAnalysisCompletionMode;
+}
+
 export interface ModelProfile extends JsonObject {
   id: string;
   provider: string;
@@ -87,6 +99,7 @@ export interface ProjectSettings extends JsonObject {
   autosave: AutosaveSettings;
   history: HistorySettings;
   models: ModelSettings;
+  storyAnalysis?: StoryAnalysisSettings;
 }
 
 export interface ProjectSnapshot {
@@ -109,6 +122,16 @@ export interface VersionRecord extends JsonObject {
   checkpointId?: string;
   writeId?: string;
   targetRelativePath?: string;
+  storyBibleStatusTransition?: StoryBibleStatusTransitionRecord;
+}
+
+export interface StoryBibleStatusTransitionRecord extends JsonObject {
+  assetId: string;
+  beforeStatus: "active" | "draft" | "archived" | "deleted";
+  afterStatus: "active" | "draft" | "archived" | "deleted";
+  beforeRevision: number;
+  afterRevision: number;
+  afterChecksum: string;
 }
 
 export interface WorkflowRunContextSummary extends JsonObject {
@@ -174,6 +197,7 @@ export interface WorkflowRunRecord extends JsonObject {
   steps: WorkflowRunStepRecord[];
   error?: WorkflowRunErrorSummary;
   retryPolicy?: WorkflowRunRetryPolicySummary;
+  storyAnalysis?: JsonObject;
 }
 
 export interface WorkflowRunSummary extends JsonObject {
@@ -196,6 +220,42 @@ export interface HistoryRepositoryPort {
   recordWorkflowRun(record: WorkflowRunRecord): Promise<Result<WorkflowRunRecord, UnifiedError>>;
   listWorkflowRuns(): Promise<Result<WorkflowRunSummary[], UnifiedError>>;
   readWorkflowRun(workflowRunId: string): Promise<Result<WorkflowRunRecord, UnifiedError>>;
+}
+
+export interface WriteStoryAnalysisHistoryInput {
+  readonly workflowRun: WorkflowRunRecord;
+  readonly expectedChecksum: string | null;
+}
+
+export interface StoryAnalysisHistoryRecord {
+  readonly workflowRun: WorkflowRunRecord;
+  readonly storyAnalysis: StoryAnalysisBundle;
+  readonly checksum: string;
+}
+
+export interface StoryAnalysisHistorySummary {
+  readonly workflowRunId: string;
+  readonly analysisRunId: string;
+  readonly chapterId: string;
+  readonly status: StoryAnalysisBundle["analysisRun"]["status"];
+  readonly updatedAt: string;
+  readonly pendingSuggestionCount: number;
+  readonly openIssueCount: number;
+  readonly checksum: string;
+}
+
+export interface StoryAnalysisHistoryRepositoryPort {
+  coordinateStoryAnalysisChapter<T>(
+    chapterId: string,
+    operation: () => Promise<Result<T, UnifiedError>>
+  ): Promise<Result<T, UnifiedError>>;
+  writeStoryAnalysis(
+    input: WriteStoryAnalysisHistoryInput
+  ): Promise<Result<StoryAnalysisHistoryRecord, UnifiedError>>;
+  listStoryAnalyses(): Promise<Result<StoryAnalysisHistorySummary[], UnifiedError>>;
+  readStoryAnalysis(
+    workflowRunId: string
+  ): Promise<Result<StoryAnalysisHistoryRecord, UnifiedError>>;
 }
 
 export type AgentWriteAssetType = "chapter" | "text";
@@ -270,6 +330,7 @@ export interface AgentWriteTransactionFile {
   readonly assetId?: string;
   readonly historyBaseContent?: string;
   readonly historyCandidateContent?: string;
+  readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
 }
 
 export interface AgentWriteTransactionInput {
@@ -281,6 +342,11 @@ export interface AgentWriteTransactionInput {
   readonly writePolicy: "write_before_confirmation" | "user_preapproved_run";
   readonly approvalSource: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken: string;
+  readonly applyBatchId?: string;
+  readonly consistencyGroupId?: string;
+  readonly selectionChecksum?: string;
+  /** Story Analysis suggestions represented by this grouped write. */
+  readonly storyBibleSuggestionIds?: readonly string[];
   readonly files: readonly AgentWriteTransactionFile[];
   /**
    * Selected lifecycle operations from a v1.1 Change Set. They are journaled
@@ -351,7 +417,7 @@ export interface VersionGroupUndoMetadataRecord {
 }
 
 export interface VersionGroupRecord {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
   readonly versionGroupId: string;
   readonly runId: string;
   readonly checkpointId: string;
@@ -360,6 +426,10 @@ export interface VersionGroupRecord {
   readonly changeSetChecksum: string;
   readonly writePolicy?: "write_before_confirmation" | "user_preapproved_run";
   readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
+  readonly applyBatchId?: string;
+  readonly consistencyGroupId?: string;
+  readonly selectionChecksum?: string;
+  readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWriteRecord[];
   /** v1.1 filesystem lifecycle outcomes, independent of text writes. */
@@ -418,7 +488,7 @@ export interface AgentTransactionJournalMutationRecord {
 }
 
 export interface AgentTransactionJournal {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
   readonly transactionId: string;
   readonly versionGroupId: string;
   readonly kind: AgentTransactionJournalKind;
@@ -431,6 +501,10 @@ export interface AgentTransactionJournal {
   readonly writePolicy?: "write_before_confirmation" | "user_preapproved_run";
   readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken?: string;
+  readonly applyBatchId?: string;
+  readonly consistencyGroupId?: string;
+  readonly selectionChecksum?: string;
+  readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly transactionStatus: AgentTransactionJournalStatus;
@@ -475,6 +549,8 @@ export interface SnapshotTextAssetInput {
   assetId: string;
   reason: SnapshotReason;
   content: string;
+  /** Optional post-write content used only to bind status-transition metadata to this snapshot. */
+  candidateContent?: string;
   createdBy?: CreatedBy;
   parentVersionId?: string | null;
   relativePath?: string;

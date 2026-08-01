@@ -35,7 +35,10 @@ export interface ChapterFileRepositoryOptions {
 }
 
 export class ChapterFileRepository
-  implements ChapterDraftRepositoryPort, ChapterCatalogRepositoryPort, ChapterMaintenanceRepositoryPort
+  implements
+    ChapterDraftRepositoryPort,
+    ChapterCatalogRepositoryPort,
+    ChapterMaintenanceRepositoryPort
 {
   private readonly traceId: string;
 
@@ -116,6 +119,7 @@ export class ChapterFileRepository
     try {
       entries = await readdir(chaptersDirectory);
     } catch (error) {
+      if (isMissingPathError(error)) return ok([]);
       return err(
         storageError({
           code: "CHAPTER_DIRECTORY_MISSING",
@@ -308,6 +312,15 @@ export class ChapterFileRepository
 
     return ok(chapter);
   }
+}
+
+function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

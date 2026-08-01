@@ -8,6 +8,7 @@ import type {
 } from "@novel-studio/llm-adapter";
 import type { ChangeSetFileSelection, ChangeSetOperationSelection } from "./change-set.js";
 import type { AgentContextSourceInput } from "./context-snapshot.js";
+import type { PackedAgentContext } from "./packed-agent-context.js";
 import type { AgentToolFacadeVersion } from "./tool-registry.js";
 import type { AgentWorkspaceKind } from "./agent-tool-capabilities.js";
 import {
@@ -452,6 +453,8 @@ export interface StartAgentRunCommand {
   readonly runDraftId: string;
   readonly runDraftRevision: number;
   readonly runDraftChecksum: string;
+  readonly packedContextId?: string;
+  readonly packedContextPayloadChecksum?: string;
   readonly limits?: Partial<AgentRunLimits>;
   readonly sourcePlanId?: string;
   readonly sourcePlanRevision?: number;
@@ -480,6 +483,8 @@ export interface ResolvedAgentRunStartInput {
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly limits?: Partial<AgentRunLimits>;
   readonly initialContextSources?: readonly AgentContextSourceInput[];
+  readonly excludedContextSourceIds?: readonly string[];
+  readonly packedContext?: PackedAgentContext;
   readonly contextBudgetSnapshotId?: string;
   readonly permissionSummaryId?: string;
   readonly permissionSummaryChecksum?: string;

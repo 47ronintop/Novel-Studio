@@ -144,7 +144,7 @@ describe("desktop workspace project context runtime", () => {
     });
     if (!prepared.ok) throw prepared.error;
 
-    const budget = await runtime.agentContextSession.previewContextBudget({
+    const preview = await runtime.agentContextSession.previewPackedContext({
       projectId: "workspace-preview",
       conversationId: conversation.value.conversationId,
       commandId: "preview-context",
@@ -153,8 +153,12 @@ describe("desktop workspace project context runtime", () => {
       runDraftChecksum: prepared.value.runDraft.checksum
     });
 
-    expect(budget).toMatchObject({ ok: true, value: { systemReserve: expect.any(Number) } });
-    if (!budget.ok) throw budget.error;
+    expect(preview).toMatchObject({
+      ok: true,
+      value: { budget: { systemReserve: expect.any(Number) } }
+    });
+    if (!preview.ok) throw preview.error;
+    const budget = preview.value.budget;
     expect(getTree).toHaveBeenCalledTimes(1);
 
     const started = await runtime.agentRunSession.startAgentRun({
@@ -164,7 +168,9 @@ describe("desktop workspace project context runtime", () => {
       expectedRunRevision: 0,
       runDraftId: prepared.value.runDraft.runDraftId,
       runDraftRevision: prepared.value.runDraft.revision,
-      runDraftChecksum: prepared.value.runDraft.checksum
+      runDraftChecksum: prepared.value.runDraft.checksum,
+      packedContextId: preview.value.packedContextId,
+      packedContextPayloadChecksum: preview.value.payloadChecksum
     });
     if (!started.ok) throw started.error;
     await roundStarted;
@@ -189,7 +195,7 @@ describe("desktop workspace project context runtime", () => {
       audit: value["audit"]
     });
     expect(comparable(startBudget.value)).toEqual(
-      comparable(budget.value as unknown as Record<string, unknown>)
+      comparable(budget as unknown as Record<string, unknown>)
     );
     expect(comparable(roundBudget as unknown as Record<string, unknown>)).toEqual(
       comparable(startBudget.value)
@@ -503,6 +509,34 @@ describe("desktop workspace project context runtime", () => {
       }
     });
 
+    let exclusionTriggered = false;
+    const immediateExclusion = new Promise<void>((resolve, reject) => {
+      const unsubscribe = session.subscribe((event) => {
+        if (
+          exclusionTriggered ||
+          event.runId !== "run-story-bible-missing" ||
+          event.type !== "context_stale"
+        ) {
+          return;
+        }
+        exclusionTriggered = true;
+        unsubscribe();
+        void session
+          .refreshContext({
+            projectId: "workspace-story-bible-missing",
+            runId: "run-story-bible-missing",
+            commandId: "exclude-missing-story-bible",
+            expectedRunRevision: event.runRevision,
+            decision: "exclude"
+          })
+          .then((result) => {
+            if (!result.ok) throw result.error;
+            resolve();
+          })
+          .catch(reject);
+      });
+    });
+
     const started = await session.startAgentRun({
       ...startCommand("workspace-story-bible-missing", "writing"),
       initialContextSources: [
@@ -516,7 +550,7 @@ describe("desktop workspace project context runtime", () => {
       ]
     });
     if (!started.ok) throw started.error;
-    await waitForStatus(session, "run-story-bible-missing", "awaiting_context_refresh");
+    await immediateExclusion;
 
     const stale = await session.readAgentRun("run-story-bible-missing");
     if (!stale.ok) throw stale.error;
@@ -530,15 +564,42 @@ describe("desktop workspace project context runtime", () => {
         })
       ])
     );
-
-    const excluded = await session.refreshContext({
-      projectId: "workspace-story-bible-missing",
-      runId: "run-story-bible-missing",
-      commandId: "exclude-missing-story-bible",
-      expectedRunRevision: stale.value.snapshot.runRevision,
-      decision: "exclude"
+    const errorRecordedIndex = stale.value.events.findIndex(
+      (event) => event.type === "error_recorded" && event.detail?.["code"] === "AGENT_CONTEXT_STALE"
+    );
+    const contextStaleIndex = stale.value.events.findIndex(
+      (event) => event.type === "context_stale"
+    );
+    expect(errorRecordedIndex).toBeGreaterThanOrEqual(0);
+    expect(contextStaleIndex).toBeGreaterThan(errorRecordedIndex);
+    await vi.waitFor(async () => {
+      const current = await session.readAgentRun("run-story-bible-missing");
+      expect(["completed", "awaiting_context_refresh"]).toContain(
+        current.ok ? current.value.snapshot.status : undefined
+      );
     });
-    if (!excluded.ok) throw excluded.error;
+    const afterAssetExclusion = await session.readAgentRun("run-story-bible-missing");
+    if (!afterAssetExclusion.ok) throw afterAssetExclusion.error;
+    if (afterAssetExclusion.value.snapshot.status === "awaiting_context_refresh") {
+      expect(afterAssetExclusion.value.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "context_stale",
+            detail: expect.objectContaining({
+              staleRefs: expect.arrayContaining([expect.stringContaining("workspace_outline_")])
+            })
+          })
+        ])
+      );
+      const outlineExcluded = await session.refreshContext({
+        projectId: "workspace-story-bible-missing",
+        runId: "run-story-bible-missing",
+        commandId: "exclude-stale-outline-after-story-bible",
+        expectedRunRevision: afterAssetExclusion.value.snapshot.runRevision,
+        decision: "exclude"
+      });
+      if (!outlineExcluded.ok) throw outlineExcluded.error;
+    }
     await waitForStatus(session, "run-story-bible-missing", "completed");
 
     const completed = await session.readAgentRun("run-story-bible-missing");

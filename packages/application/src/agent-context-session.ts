@@ -10,6 +10,9 @@ import {
   type AgentContextPrecision,
   type AgentContextProfileId,
   type AgentContextScope,
+  type AgentContextSourceInput,
+  type AgentContextSourceKind,
+  type AgentContextTruncationRange,
   type AgentRunDraft,
   type AgentTokenEstimator,
   type CompactContextCommand,
@@ -18,6 +21,9 @@ import {
   type ContextCompactionRevision,
   type ContextDraft,
   type EvictableContextSource,
+  type PackedAgentContext,
+  type PackedAgentContextSourceManifest,
+  type PackedAgentContextTokenStats,
   type PlanExecutionRecord,
   type PreviewContextBudgetCommand,
   type ProtectedContextFact
@@ -32,6 +38,7 @@ import {
 } from "@novel-studio/shared";
 
 import type { AgentRunDraftSession, AgentRunDraftView } from "./agent-run-draft-session.js";
+import type { AgentContextProfile } from "./agent-context-profile.js";
 import {
   calculateResolvedContextBudget,
   type ResolvedAgentContextBudgetInputs
@@ -44,6 +51,7 @@ import {
   type AgentCompactionSummaryArtifact,
   type CompactionSummaryResult
 } from "./agent-compaction-summary.js";
+import { packAgentContext } from "./agent-prompt-materializer.js";
 
 /**
  * The provider-aware facts a budget is calculated from. Resolved server-side from the draft's
@@ -71,6 +79,55 @@ export interface AgentContextBudgetInputs {
   readonly contents: readonly AgentContextBudgetContent[];
   /** C4 canonical operands. Preview fails closed unless this complete proof is present. */
   readonly resolved: ResolvedAgentContextBudgetInputs;
+  /** Optional for the legacy budget preview; required by `previewPackedContext`. */
+  readonly profile?: AgentContextProfile;
+  /** Tokenizer/model identity used to build the exact provider-bound Packed Context. */
+  readonly modelProfileId?: string;
+  /** Active sources whose materialized blocks are sent to the provider. */
+  readonly activeSources?: readonly AgentContextSourceInput[];
+  /** Explicitly excluded sources retained in the audit manifest but omitted from the payload. */
+  readonly excludedSources?: readonly AgentContextSourceInput[];
+}
+
+/** An author-visible block. `checksum` binds the hidden provider wrapper; `content` stays raw. */
+export interface PackedAgentContextPreviewBlock {
+  readonly blockId: string;
+  readonly refId: string;
+  readonly sourceKind: AgentContextSourceKind;
+  readonly order: number;
+  readonly content: string;
+  readonly checksum: string;
+  readonly sourceChecksum: string;
+  readonly tokenCount: number;
+  readonly precision: AgentContextPrecision;
+  readonly truncationRange: AgentContextTruncationRange | null;
+}
+
+/** Renderer-safe projection of the exact Packed Context accepted by Main for a future run start. */
+export interface PackedAgentContextPreview {
+  readonly budget: ContextBudgetSnapshot;
+  readonly packedContextId: string;
+  readonly payloadChecksum: string;
+  readonly tokenStats: PackedAgentContextTokenStats;
+  readonly sources: readonly PackedAgentContextSourceManifest[];
+  readonly blocks: readonly PackedAgentContextPreviewBlock[];
+  readonly fixedBudgetExceeded: boolean;
+}
+
+export interface PackedAgentContextBinding {
+  readonly packedContext: PackedAgentContext;
+  readonly runDraft: {
+    readonly runDraftId: string;
+    readonly revision: number;
+    readonly checksum: string;
+  };
+  readonly contextDraft: {
+    readonly contextDraftId: string;
+    readonly revision: number;
+    readonly checksum: string;
+  };
+  readonly activeSources: readonly AgentContextSourceInput[];
+  readonly excludedSources: readonly AgentContextSourceInput[];
 }
 
 /**
@@ -244,6 +301,9 @@ export interface AgentContextSession {
   previewContextBudget(
     command: PreviewContextBudgetCommand
   ): Promise<Result<ContextBudgetSnapshot, UnifiedError>>;
+  previewPackedContext(
+    command: PreviewContextBudgetCommand
+  ): Promise<Result<PackedAgentContextPreview, UnifiedError>>;
   compactContext(
     command: CompactContextCommand
   ): Promise<Result<CompactContextResult, UnifiedError>>;
@@ -261,6 +321,17 @@ export interface CreateAgentContextSessionOptions {
   readonly modelAssistant?: CompactionModelAssistantPort;
   readonly createCompactionId?: () => string;
   readonly onCompactionEvent?: (event: CompactionEvent) => Promise<void> | void;
+  readonly onPackedContext?: (binding: PackedAgentContextBinding) => Promise<void> | void;
+}
+
+interface PackedPreviewReceipt {
+  readonly signature: string;
+  readonly result: Result<PackedAgentContextPreview, UnifiedError>;
+}
+
+interface InFlightPackedPreview {
+  readonly signature: string;
+  readonly request: Promise<Result<PackedAgentContextPreview, UnifiedError>>;
 }
 
 interface PendingCompactionReceipt {
@@ -307,6 +378,8 @@ export function createAgentContextSession(
   const now = options.now ?? (() => new Date().toISOString());
   const createBudgetSnapshotId = options.createBudgetSnapshotId ?? createDefaultBudgetSnapshotId;
   const receipts = new Map<string, Result<ContextBudgetSnapshot, UnifiedError>>();
+  const packedPreviewReceipts = new Map<string, PackedPreviewReceipt>();
+  const inFlightPackedPreviews = new Map<string, InFlightPackedPreview>();
   const compactionReceipts = new Map<string, CompactionCommandReceipt>();
   const inFlightCompactions = new Map<
     string,
@@ -325,6 +398,32 @@ export function createAgentContextSession(
       const result = await preview(command, resolved.value);
       receipts.set(key, result);
       return result;
+    },
+
+    previewPackedContext(command) {
+      const key = packedPreviewReceiptKey(command);
+      const signature = packedPreviewCommandSignature(command);
+      const completed = packedPreviewReceipts.get(key);
+      if (completed !== undefined) {
+        return Promise.resolve(
+          completed.signature === signature ? completed.result : err(packedContextCommandConflict())
+        );
+      }
+      const active = inFlightPackedPreviews.get(key);
+      if (active !== undefined) {
+        return active.signature === signature
+          ? active.request
+          : Promise.resolve(err(packedContextCommandConflict()));
+      }
+      const request = previewPacked(command).then((result) => {
+        packedPreviewReceipts.set(key, { signature, result });
+        if (inFlightPackedPreviews.get(key)?.request === request) {
+          inFlightPackedPreviews.delete(key);
+        }
+        return result;
+      });
+      inFlightPackedPreviews.set(key, { signature, request });
+      return request;
     },
 
     compactContext(command) {
@@ -671,6 +770,79 @@ export function createAgentContextSession(
     });
   }
 
+  async function previewPacked(
+    command: PreviewContextBudgetCommand
+  ): Promise<Result<PackedAgentContextPreview, UnifiedError>> {
+    const view = await resolvePreviewDraft(command);
+    if (!view.ok) return err(view.error);
+    const inputs = await options.budgetInputs.resolveBudgetInputs({
+      ...(command.scope === undefined ? {} : { scope: command.scope }),
+      ...(command.projectId === undefined ? {} : { projectId: command.projectId }),
+      conversationId: command.conversationId,
+      draft: view.value.runDraft,
+      contextDraft: view.value.contextDraft
+    });
+    if (!inputs.ok) return err(inputs.error);
+    if (inputs.value.resolved === undefined) return err(contextBudgetInputsIncomplete());
+
+    const calculatedAt = now();
+    const budget = calculateResolvedContextBudget({
+      contextBudgetSnapshotId: createBudgetSnapshotId(),
+      resolved: inputs.value.resolved,
+      calculatedAt
+    });
+    if (!budget.ok) return err(budget.error);
+    if (!hasValidPackingInputs(inputs.value, view.value)) {
+      return err(packedContextInputsIncomplete());
+    }
+
+    let packedContext: PackedAgentContext;
+    try {
+      packedContext = packAgentContext({
+        profile: inputs.value.profile,
+        contextSources: inputs.value.activeSources,
+        excludedContextSources: inputs.value.excludedSources,
+        modelProfileId: inputs.value.modelProfileId,
+        usedTokens: budget.value.usedTokens,
+        safeInputBudget: budget.value.safeInputBudget,
+        remainingTokens: budget.value.remainingTokens,
+        precision: budget.value.precision,
+        createdAt: calculatedAt,
+        estimator
+      });
+    } catch {
+      return err(packedContextInputsIncomplete());
+    }
+
+    const activeSources = cloneAndFreezeSources(inputs.value.activeSources);
+    const excludedSources = cloneAndFreezeSources(inputs.value.excludedSources);
+    const projection = createPackedContextPreview(budget.value, packedContext, activeSources);
+    if (projection === undefined) return err(packedContextInputsIncomplete());
+    const binding: PackedAgentContextBinding = deepFreeze({
+      packedContext,
+      runDraft: {
+        runDraftId: view.value.runDraft.runDraftId,
+        revision: view.value.runDraft.revision,
+        checksum: view.value.runDraft.checksum
+      },
+      contextDraft: {
+        contextDraftId: view.value.contextDraft.contextDraftId,
+        revision: view.value.contextDraft.revision,
+        checksum: view.value.contextDraft.checksum
+      },
+      activeSources,
+      excludedSources
+    });
+    if (options.onPackedContext !== undefined) {
+      try {
+        await options.onPackedContext(binding);
+      } catch {
+        return err(packedContextCallbackFailed());
+      }
+    }
+    return ok(projection);
+  }
+
   function resolvePreviewDraft(
     command: PreviewContextBudgetCommand
   ): Promise<Result<AgentRunDraftView, UnifiedError>> {
@@ -684,6 +856,120 @@ export function createAgentContextSession(
       runDraftChecksum: command.runDraftChecksum
     });
   }
+}
+
+type CompleteAgentContextPackingInputs = AgentContextBudgetInputs & {
+  readonly profile: AgentContextProfile;
+  readonly modelProfileId: string;
+  readonly activeSources: readonly AgentContextSourceInput[];
+  readonly excludedSources: readonly AgentContextSourceInput[];
+};
+
+function hasValidPackingInputs(
+  inputs: AgentContextBudgetInputs,
+  view: AgentRunDraftView
+): inputs is CompleteAgentContextPackingInputs {
+  return (
+    inputs.profile !== undefined &&
+    typeof inputs.modelProfileId === "string" &&
+    inputs.modelProfileId.length > 0 &&
+    Array.isArray(inputs.activeSources) &&
+    Array.isArray(inputs.excludedSources) &&
+    isAgentContextScope(inputs.profile.scope) &&
+    agentContextScopeKey(inputs.profile.scope) === agentContextScopeKey(view.runDraft.scope) &&
+    inputs.profile.operationMode === view.runDraft.operationMode &&
+    inputs.profile.contextMode === view.runDraft.contextMode &&
+    inputs.modelProfileId === view.runDraft.modelProfileId &&
+    inputs.resolved.modelProfileId === inputs.modelProfileId
+  );
+}
+
+function createPackedContextPreview(
+  budget: ContextBudgetSnapshot,
+  packedContext: PackedAgentContext,
+  activeSources: readonly AgentContextSourceInput[]
+): PackedAgentContextPreview | undefined {
+  const sourcesByRef = new Map<string, AgentContextSourceInput>();
+  for (const source of activeSources) {
+    if (source.sourceKind === "system_guidance") continue;
+    if (sourcesByRef.has(source.refId)) return undefined;
+    sourcesByRef.set(source.refId, source);
+  }
+  const activeManifestByRef = new Map(
+    packedContext.sources
+      .filter((source) => source.state === "active")
+      .map((source) => [source.refId, source] as const)
+  );
+  if (
+    sourcesByRef.size !== packedContext.blocks.length ||
+    activeManifestByRef.size !== packedContext.blocks.length
+  ) {
+    return undefined;
+  }
+  const blocks: PackedAgentContextPreviewBlock[] = [];
+  for (const block of packedContext.blocks) {
+    const source = sourcesByRef.get(block.refId);
+    const manifest = activeManifestByRef.get(block.refId);
+    if (
+      source === undefined ||
+      manifest === undefined ||
+      source.sourceKind !== block.sourceKind ||
+      manifest.sourceKind !== block.sourceKind
+    ) {
+      return undefined;
+    }
+    blocks.push({
+      blockId: block.blockId,
+      refId: block.refId,
+      sourceKind: block.sourceKind,
+      order: block.order,
+      content: source.content,
+      checksum: block.checksum,
+      sourceChecksum: manifest.sourceChecksum,
+      tokenCount: block.tokenCount,
+      precision: block.precision,
+      truncationRange: block.truncationRange
+    });
+  }
+  return deepFreeze({
+    budget: structuredClone(budget),
+    packedContextId: packedContext.packedContextId,
+    payloadChecksum: packedContext.payloadChecksum,
+    tokenStats: structuredClone(packedContext.tokenStats),
+    sources: structuredClone(packedContext.sources),
+    blocks,
+    fixedBudgetExceeded: packedContext.tokenStats.pinnedTokens > budget.safeInputBudget
+  });
+}
+
+function cloneAndFreezeSources(
+  sources: readonly AgentContextSourceInput[]
+): readonly AgentContextSourceInput[] {
+  return deepFreeze(structuredClone([...sources]));
+}
+
+function packedPreviewReceiptKey(command: PreviewContextBudgetCommand): string {
+  return `${previewScopeIdentityKey(command)}:${command.conversationId}:${command.commandId}`;
+}
+
+function packedPreviewCommandSignature(command: PreviewContextBudgetCommand): string {
+  return JSON.stringify([
+    previewScopeIdentityKey(command),
+    command.scope === undefined ? null : agentContextScopeKey(command.scope),
+    command.projectId ?? null,
+    command.conversationId,
+    command.commandId,
+    command.runDraftId,
+    command.expectedDraftRevision,
+    command.runDraftChecksum
+  ]);
+}
+
+function previewScopeIdentityKey(command: PreviewContextBudgetCommand): string {
+  if (command.scope?.kind === "standalone") return agentContextScopeKey(command.scope);
+  const workspaceId =
+    command.scope?.kind === "workspace" ? command.scope.workspaceId : command.projectId;
+  return workspaceId === undefined ? "missing" : `workspace:${workspaceId}`;
 }
 
 function compactionReceiptKey(command: Pick<CompactContextCommand, "runId" | "commandId">): string {
@@ -978,6 +1264,39 @@ function contextBudgetInputsIncomplete(): UnifiedError {
   });
 }
 
+function packedContextInputsIncomplete(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_PACKED_CONTEXT_INPUTS_INVALID",
+    category: "ValidationError",
+    message: "The server-authoritative Packed Context inputs are incomplete or invalid.",
+    recoverability: "user-action",
+    suggestedAction: "Refresh the context preview before starting the run.",
+    traceId: "agent-context-session"
+  });
+}
+
+function packedContextCommandConflict(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_PACKED_CONTEXT_COMMAND_CONFLICT",
+    category: "ValidationError",
+    message: "The Packed Context preview command ID is already bound to different inputs.",
+    recoverability: "user-action",
+    suggestedAction: "Refresh the draft and submit a new preview command ID.",
+    traceId: "agent-context-session"
+  });
+}
+
+function packedContextCallbackFailed(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_PACKED_CONTEXT_CACHE_FAILED",
+    category: "AgentError",
+    message: "The immutable Packed Context could not be retained for run start.",
+    recoverability: "retryable",
+    suggestedAction: "Retry the context preview before starting the run.",
+    traceId: "agent-context-session"
+  });
+}
+
 function compactionPromptMaterializationUnavailable(): UnifiedError {
   return createUnifiedError({
     code: "AGENT_PROMPT_MATERIALIZATION_UNAVAILABLE",
@@ -1042,6 +1361,14 @@ function compactionTargetUnreached(): UnifiedError {
     suggestedAction: "Refresh or exclude context before retrying compaction.",
     traceId: "agent-context-session"
   });
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function mergePlanExecutionFact(

@@ -6,6 +6,7 @@ import type {
 import { Plus, Trash2 } from "lucide-react";
 
 import { STORY_BIBLE_FORESHADOW_STATUS_OPTIONS } from "./story-bible-foreshadow.js";
+import { StoryBibleRelationsField } from "./story-bible-relations-field.js";
 import type { StoryBibleChapterOption, StoryBibleEditorProps } from "./workspace-shell-types.js";
 
 const PENDING_EVIDENCE_HASH = "0".repeat(64);
@@ -115,19 +116,7 @@ export function StoryBibleForeshadowEditor({ editor }: { readonly editor: StoryB
             value={details.notes ?? ""}
           />
         </label>
-        <label className="ns-story-field ns-story-field-wide">
-          <span>关联资料 ID</span>
-          <textarea
-            aria-label="伏笔关联资料 ID"
-            className="ns-story-textarea ns-story-textarea-compact"
-            onChange={(event) =>
-              editor.onDraftChange("foreshadow", {
-                relatedEntityIds: splitLines(event.currentTarget.value)
-              })
-            }
-            value={editor.draft.relatedEntityIds.join("\n")}
-          />
-        </label>
+        <StoryBibleRelationsField editor={editor} />
       </div>
 
       <section aria-label="伏笔原文证据" className="ns-foreshadow-evidence">
@@ -210,6 +199,7 @@ export function StoryBibleForeshadowEditor({ editor }: { readonly editor: StoryB
             <span>资料状态</span>
             <select
               aria-label="伏笔资料状态"
+              disabled={editor.draft.status === "deleted"}
               onChange={(event) =>
                 editor.onDraftChange("foreshadow", {
                   status: event.currentTarget.value as StoryBibleEditorProps["draft"]["status"]
@@ -220,7 +210,7 @@ export function StoryBibleForeshadowEditor({ editor }: { readonly editor: StoryB
               <option value="active">启用</option>
               <option value="draft">草稿</option>
               <option value="archived">归档</option>
-              <option value="deleted">已删除</option>
+              {editor.draft.status === "deleted" ? <option value="deleted">已删除</option> : null}
             </select>
           </label>
           <label className="ns-story-field">

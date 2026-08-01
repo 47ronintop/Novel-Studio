@@ -301,6 +301,40 @@ export function useProjectWorkflowActions({
     [setStoryBibleEditor, storyBibleBridge]
   );
 
+  const handleStoryBibleStatusActionRequest = useCallback<
+    NonNullable<StoryBibleEditorProps["onStatusActionRequest"]>
+  >(
+    (action) => {
+      if (storyBibleBridge === undefined) return;
+      const pending = storyBibleBridge.requestStatusAction(action);
+      setStoryBibleEditor(storyBibleBridge.getEditorProps());
+      void pending.then(setStoryBibleEditor);
+    },
+    [setStoryBibleEditor, storyBibleBridge]
+  );
+
+  const handleStoryBibleStatusActionCancel = useCallback(() => {
+    if (storyBibleBridge === undefined) return;
+    setStoryBibleEditor(storyBibleBridge.cancelStatusAction());
+  }, [setStoryBibleEditor, storyBibleBridge]);
+
+  const handleStoryBibleStatusActionConfirm = useCallback(() => {
+    if (storyBibleBridge === undefined) return;
+    const pending = storyBibleBridge.confirmStatusAction();
+    setStoryBibleEditor(storyBibleBridge.getEditorProps());
+    void pending.then((prepared) => {
+      setStoryBibleEditor(prepared.editor);
+      if (!prepared.readyToSave) return;
+      setStoryBibleEditor(storyBibleBridge.beginSave());
+      void storyBibleBridge
+        .saveDraft({ chapterIds: (projectWorkflow?.chapters ?? []).map((chapter) => chapter.id) })
+        .then((nextStoryBibleEditor) => {
+          setStoryBibleEditor(nextStoryBibleEditor);
+          setStoryBible(storyBibleBridge.getProps());
+        });
+    });
+  }, [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
+
   const handleSaveStoryBibleDraft = useCallback(
     (chapterIds: readonly string[]) => {
       if (storyBibleBridge === undefined) return;
@@ -464,6 +498,9 @@ export function useProjectWorkflowActions({
     handleDiscardRecoveryDraft,
     handleStoryBibleDraftChange,
     handleStoryBibleFiltersChange,
+    handleStoryBibleStatusActionRequest,
+    handleStoryBibleStatusActionCancel,
+    handleStoryBibleStatusActionConfirm,
     handleSaveStoryBibleDraft,
     handleOpenForeshadowAnalysis,
     handleToggleForeshadowAnalysisChapter,

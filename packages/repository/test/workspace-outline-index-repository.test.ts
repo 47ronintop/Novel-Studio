@@ -249,6 +249,37 @@ describe("WorkspaceOutlineIndexRepository", () => {
     expect(JSON.stringify({ chapters, storyBible })).not.toContain("BODY_MUST_NOT_APPEAR");
   });
 
+  test("stops a bounded metadata read at the chapter header without projecting its body", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-outline-writing-prefix-"));
+    roots.push(root);
+    await mkdir(join(root, "chapters"), { recursive: true });
+    await writeFile(
+      join(root, "chapters", "chapter-01.md"),
+      [
+        "---",
+        "id: chapter-01",
+        "title: Opening",
+        "wordCount: 123",
+        "---",
+        "CHAPTER_BODY_MUST_NOT_APPEAR",
+        "x".repeat(4_096)
+      ].join("\n"),
+      "utf8"
+    );
+
+    const metadata = new WorkspaceOutlineProjectMetadataRepository({
+      projectRoot: root,
+      maxHeaderBytes: 256
+    });
+    const chapters = await metadata.readChapterIndex();
+
+    expect(chapters).toMatchObject({
+      ok: true,
+      value: { entries: [{ id: "chapter-01", title: "Opening", wordCount: 123 }] }
+    });
+    expect(JSON.stringify(chapters)).not.toContain("CHAPTER_BODY_MUST_NOT_APPEAR");
+  });
+
   test("indexes direct foreshadows and includes them in revisions and checksums", async () => {
     const root = await mkdtemp(join(tmpdir(), "novel-studio-outline-foreshadows-"));
     roots.push(root);
@@ -291,7 +322,8 @@ describe("WorkspaceOutlineIndexRepository", () => {
         kind: "story_bible_asset",
         id: "foreshadow-sealed-letter",
         label: "Sealed Letter",
-        assetType: "foreshadow"
+        assetType: "foreshadow",
+        relativePath: "foreshadows/foreshadow-sealed-letter.json"
       }
     ]);
     expect(after.value.storyBibleIndexRevision).not.toBe(before.value.storyBibleIndexRevision);
@@ -369,7 +401,38 @@ describe("WorkspaceOutlineIndexRepository", () => {
     const second = await repository.readWritingIndexes(defaultLimits);
     if (!second.ok) throw second.error;
 
-    expect(second.value.entries).toEqual(first.value.entries);
+    expect(first.value.entries).toEqual([
+      {
+        kind: "chapter",
+        id: "chapter-01",
+        label: "Opening",
+        wordCount: 123,
+        relativePath: "chapters/chapter-01.md"
+      },
+      {
+        kind: "story_bible_asset",
+        id: "character-alex",
+        label: "Alex",
+        assetType: "character",
+        relativePath: "characters/alex.json"
+      }
+    ]);
+    expect(second.value.entries).toEqual([
+      {
+        kind: "chapter",
+        id: "chapter-01",
+        label: "Opening",
+        wordCount: 123,
+        relativePath: "chapters/opening.md"
+      },
+      {
+        kind: "story_bible_asset",
+        id: "character-alex",
+        label: "Alex",
+        assetType: "character",
+        relativePath: "characters/alex-renamed.json"
+      }
+    ]);
     expect(second.value.chapterIndexRevision).not.toBe(first.value.chapterIndexRevision);
     expect(second.value.chapterIndexChecksum).not.toBe(first.value.chapterIndexChecksum);
     expect(second.value.storyBibleIndexRevision).not.toBe(first.value.storyBibleIndexRevision);
@@ -401,7 +464,8 @@ describe("WorkspaceOutlineIndexRepository", () => {
         entries: [],
         truncated: true,
         truncationReasons: ["max_duration"],
-        degradedDependencies: ["chapters", "story_bible"]
+        degradedDependencies: ["chapters", "story_bible"],
+        incompleteDependencies: ["chapters", "story_bible"]
       }
     });
     expect(clock).toBeLessThan(100);

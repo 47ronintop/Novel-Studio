@@ -35,6 +35,16 @@ export type FileLifecycleAgentToolName =
   | "propose_file_delete"
   | "propose_directory_create";
 
+/** Structured Story Bible discovery and Change Set proposal tools. */
+export type StoryBibleAgentToolName =
+  | "describe_story_bible_type"
+  | "list_story_bible"
+  | "get_story_bible_references"
+  | "create_story_bible"
+  | "patch_story_bible"
+  | "set_story_bible_status"
+  | "restore_story_bible";
+
 /**
  * Phase C static tools (added when controlledExecutionEnabled / gitReadEnabled).
  * @since v1.1
@@ -67,6 +77,7 @@ export type StaticAgentToolName =
   | CoreAgentToolName
   | SearchAgentToolName
   | FileLifecycleAgentToolName
+  | StoryBibleAgentToolName
   | ControlledExecutionAgentToolName
   | NetworkAgentToolName
   | V2AgentToolName;
@@ -159,12 +170,20 @@ export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDe
 }
 
 function listV1AgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
+  const storyBibleToolsEnabled = input.capabilitySnapshot?.storyBibleStructuredToolsEnabled === true;
   const readTools: AgentToolDescriptor[] =
     input.contextMode === "writing"
       ? [
           coreTool("list_project_entries", "file_tool", "read"),
           coreTool("read_chapter", "file_tool", "read"),
           coreTool("read_story_bible", "file_tool", "read"),
+          ...(storyBibleToolsEnabled
+            ? [
+                coreTool("describe_story_bible_type", "file_tool", "read"),
+                coreTool("list_story_bible", "file_tool", "read"),
+                coreTool("get_story_bible_references", "file_tool", "read")
+              ]
+            : []),
           coreTool("read_project_text", "file_tool", "read")
         ]
       : [
@@ -240,6 +259,16 @@ function listV1AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
         })
       : [];
 
+  const storyBibleWriteTools: AgentToolDescriptor[] =
+    input.contextMode === "writing" && storyBibleToolsEnabled
+      ? [
+          coreTool("create_story_bible", "file_tool", "propose"),
+          coreTool("patch_story_bible", "file_tool", "propose"),
+          coreTool("set_story_bible_status", "file_tool", "propose"),
+          coreTool("restore_story_bible", "file_tool", "propose")
+        ]
+      : [];
+
   return [
     ...readTools,
     ...searchTools,
@@ -248,6 +277,7 @@ function listV1AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
       "file_tool",
       "propose"
     ),
+    ...storyBibleWriteTools,
     ...fileLifecycleTools,
     ...executionTools,
     ...gitTools,
@@ -260,6 +290,15 @@ function listV1AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
 
 function listV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
   const cap = input.capabilitySnapshot;
+  const storyBibleReadTools =
+    input.contextMode === "writing" && cap?.storyBibleStructuredToolsEnabled === true
+      ? [
+          coreTool("describe_story_bible_type", "file_tool", "read"),
+          coreTool("list_story_bible", "file_tool", "read"),
+          coreTool("read_story_bible", "file_tool", "read"),
+          coreTool("get_story_bible_references", "file_tool", "read")
+        ]
+      : [];
   const searchTools =
     cap?.searchEnabled === true ? [coreTool("search_project", "search_tool", "read")] : [];
 
@@ -267,6 +306,7 @@ function listV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
     return [
       coreTool("list_project_entries", "file_tool", "read"),
       coreTool("read_resource", "file_tool", "read"),
+      ...storyBibleReadTools,
       ...searchTools,
       coreTool("finish_plan", "protocol_action", "control"),
       coreTool("request_user_input", "protocol_action", "control")
@@ -300,12 +340,23 @@ function listV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
     input.externalToolDescriptors !== undefined && externalValidation.ok && cap?.mcpToolsEnabled
       ? input.externalToolDescriptors.filter((descriptor) => descriptor.source?.kind === "mcp")
       : [];
+  const storyBibleWriteTools =
+    input.contextMode === "writing" && cap?.storyBibleStructuredToolsEnabled === true
+      ? [
+          coreTool("create_story_bible", "file_tool", "propose"),
+          coreTool("patch_story_bible", "file_tool", "propose"),
+          coreTool("set_story_bible_status", "file_tool", "propose"),
+          coreTool("restore_story_bible", "file_tool", "propose")
+        ]
+      : [];
 
   return [
     coreTool("list_project_entries", "file_tool", "read"),
     coreTool("read_resource", "file_tool", "read"),
     ...searchTools,
     ...editTools,
+    ...storyBibleReadTools,
+    ...storyBibleWriteTools,
     ...lifecycleTools,
     ...networkTools,
     ...remoteExternalTools,
@@ -463,6 +514,7 @@ function isDestructive(name: StaticAgentToolName): boolean {
     name === "propose_file_delete" ||
     name === "propose_file_move" ||
     name === "propose_directory_create" ||
+    name === "set_story_bible_status" ||
     name === "run_project_task" ||
     name === "manage_path"
   );
@@ -473,6 +525,13 @@ function displayNameFor(name: StaticAgentToolName): string {
     list_project_entries: "列出项目条目",
     read_chapter: "读取章节",
     read_story_bible: "读取 Story Bible",
+    describe_story_bible_type: "查询 Story Bible 类型合同",
+    list_story_bible: "列出 Story Bible",
+    get_story_bible_references: "查询 Story Bible 引用",
+    create_story_bible: "提案创建 Story Bible",
+    patch_story_bible: "提案修改 Story Bible",
+    set_story_bible_status: "提案更改 Story Bible 状态",
+    restore_story_bible: "提案恢复 Story Bible",
     read_project_text: "读取项目文本",
     propose_chapter_write: "提案修改章节",
     propose_file_write: "提案修改文件",
@@ -506,6 +565,13 @@ function descriptionFor(name: StaticAgentToolName): string {
     list_project_entries: "列出指定目录下的项目文件条目。",
     read_chapter: "按章节 ID 读取章节正文。",
     read_story_bible: "按资产 ID 读取 Story Bible 条目。",
+    describe_story_bible_type: "返回指定 Story Bible 类型的严格数据合同、默认值和引用约束。",
+    list_story_bible: "按类型、状态和关键词稳定分页列出全部 Story Bible 条目。",
+    get_story_bible_references: "返回 Story Bible 条目的入向、出向引用及软删除影响。",
+    create_story_bible: "生成系统字段并提案创建一个严格校验的 Story Bible 条目。",
+    patch_story_bible: "使用稳定 ID 寻址的受限结构化 patch 提案修改 Story Bible。",
+    set_story_bible_status: "提案归档、启用或将 Story Bible 条目移入已删除。",
+    restore_story_bible: "按删除前状态提案恢复一个已删除的 Story Bible 条目。",
     read_project_text: "按项目相对路径读取文本文件。",
     propose_chapter_write: "提案修改章节内容，进入 Change Set 审批流程。",
     propose_file_write: "提案修改文本文件，进入 Change Set 审批流程。",
@@ -563,6 +629,155 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
   }
   if (name === "read_chapter") return strictStringObject("chapterId");
   if (name === "read_story_bible") return strictStringObject("assetId");
+  if (name === "describe_story_bible_type") return strictStringObject("type");
+  if (name === "get_story_bible_references") return strictStringObject("assetId");
+  if (name === "list_story_bible") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        types: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 128 },
+          maxItems: 10,
+          uniqueItems: true
+        },
+        statuses: {
+          type: "array",
+          items: { type: "string", enum: ["active", "draft", "archived", "deleted"] },
+          maxItems: 4,
+          uniqueItems: true
+        },
+        query: { type: "string", maxLength: 1024 },
+        cursor: { type: "string", minLength: 1, maxLength: 4096 },
+        limit: { type: "integer", minimum: 1, maximum: 100 }
+      }
+    };
+  }
+  if (name === "create_story_bible") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "value"],
+      properties: {
+        type: { type: "string", minLength: 1, maxLength: 128 },
+        value: {
+          type: "object",
+          additionalProperties: false,
+          required: ["title"],
+          properties: {
+            title: { type: "string", minLength: 1, maxLength: 512 },
+            status: { type: "string", enum: ["active", "draft", "archived"] },
+            summary: { type: "string", maxLength: 100000 },
+            aliases: { type: "array", items: { type: "string" }, maxItems: 256 },
+            relations: { type: "array", items: { type: "object" }, maxItems: 10000 },
+            details: { type: "object" },
+            extensions: { type: "object", maxProperties: 128 }
+          }
+        },
+        dependsOn: dependencyIdArraySchema(),
+        consistencyGroupId: consistencyGroupIdSchema()
+      }
+    };
+  }
+  if (name === "patch_story_bible") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["assetId", "baseRevision", "operations"],
+      properties: {
+        assetId: { type: "string", minLength: 1, maxLength: 128 },
+        baseRevision: { type: "integer", minimum: 0 },
+        baseChecksum: checksumSchema(),
+        entryRef: {
+          anyOf: [
+            { type: "null" },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["collection", "entryId", "baseEntryRevision"],
+              properties: {
+                collection: {
+                  type: "string",
+                  enum: [
+                    "volumes",
+                    "chapterOutlines",
+                    "beats",
+                    "events",
+                    "knowledgeStates",
+                    "stateHistory",
+                    "milestones"
+                  ]
+                },
+                entryId: { type: "string", minLength: 1, maxLength: 128 },
+                baseEntryRevision: { type: "integer", minimum: 1 },
+                parentEntryId: { type: "string", minLength: 1, maxLength: 128 }
+              }
+            }
+          ]
+        },
+        operations: {
+          type: "array",
+          minItems: 1,
+          maxItems: 100,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["op", "path"],
+            properties: {
+              op: { type: "string", enum: ["add", "replace", "remove"] },
+              path: { type: "string", minLength: 1, maxLength: 2048 },
+              value: {}
+            }
+          }
+        },
+        dependencies: {
+          type: "array",
+          maxItems: 100,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["path", "valueChecksum"],
+            properties: {
+              path: { type: "string", minLength: 1, maxLength: 2048 },
+              valueChecksum: checksumSchema()
+            }
+          }
+        },
+        dependsOn: dependencyIdArraySchema(),
+        consistencyGroupId: consistencyGroupIdSchema()
+      }
+    };
+  }
+  if (name === "set_story_bible_status") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["assetId", "baseRevision", "status"],
+      properties: {
+        assetId: { type: "string", minLength: 1, maxLength: 128 },
+        baseRevision: { type: "integer", minimum: 0 },
+        baseChecksum: checksumSchema(),
+        status: { type: "string", enum: ["active", "draft", "archived", "deleted"] },
+        dependsOn: dependencyIdArraySchema(),
+        consistencyGroupId: consistencyGroupIdSchema()
+      }
+    };
+  }
+  if (name === "restore_story_bible") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["assetId", "baseRevision"],
+      properties: {
+        assetId: { type: "string", minLength: 1, maxLength: 128 },
+        baseRevision: { type: "integer", minimum: 0 },
+        baseChecksum: checksumSchema(),
+        dependsOn: dependencyIdArraySchema(),
+        consistencyGroupId: consistencyGroupIdSchema()
+      }
+    };
+  }
   if (name === "read_project_text") return strictStringObject("path");
   if (name === "list_project_entries") {
     return {
@@ -785,6 +1000,23 @@ function strictStringObject(key: string): JsonObject {
     additionalProperties: false,
     required: [key],
     properties: { [key]: { type: "string", minLength: 1, maxLength: 1024 } }
+  };
+}
+
+function checksumSchema(): JsonObject {
+  return { type: "string", pattern: "^[a-f0-9]{64}$" };
+}
+
+function consistencyGroupIdSchema(): JsonObject {
+  return { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" };
+}
+
+function dependencyIdArraySchema(): JsonObject {
+  return {
+    type: "array",
+    items: { type: "string", minLength: 1, maxLength: 256 },
+    maxItems: 50,
+    uniqueItems: true
   };
 }
 

@@ -239,6 +239,83 @@ describe("Agent Context Snapshot", () => {
       })
     ).toThrow("AGENT_CONTEXT_SNAPSHOT_INVALID");
   });
+
+  test("rejects a malformed Packed Context manifest instead of accepting its outer shape", () => {
+    const packed = engineExports.createPackedAgentContext({
+      scope: {
+        kind: "workspace",
+        workspaceKind: "creativeProject",
+        workspaceId: "project_01"
+      },
+      contextProfileId: "writing",
+      blocks: [],
+      sources: [],
+      tokenStats: {
+        contextTokens: 0,
+        pinnedTokens: 0,
+        usedTokens: 10,
+        safeInputBudget: 1_000,
+        remainingTokens: 990,
+        precision: "estimated"
+      },
+      createdAt: "2026-07-31T00:00:00.000Z"
+    });
+    const snapshot = engineExports.createAgentContextSnapshot({
+      contextSnapshotId: "context_packed",
+      runId: "run_packed",
+      scope: packed.scope,
+      contextProfileId: packed.contextProfileId,
+      materialization: materializationProvenance(),
+      createdAt: "2026-07-31T00:00:00.000Z",
+      sources: [],
+      packedContextManifest: engineExports.createPackedAgentContextManifest(packed)
+    });
+
+    expect(engineExports.validateAgentContextSnapshot(snapshot as never)).toBe(true);
+    expect(
+      engineExports.validateAgentContextSnapshot({
+        ...snapshot,
+        packedContextManifest: {
+          ...snapshot.packedContextManifest,
+          tokenStats: { ...packed.tokenStats, precision: "forged" }
+        }
+      } as never)
+    ).toBe(false);
+  });
+
+  test("freezes resolved source preference scope and backfills older v1.4 snapshots", () => {
+    const snapshot = engineExports.createAgentContextSnapshot({
+      contextSnapshotId: "context_preference_scope",
+      runId: "run_preference_scope",
+      scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+      contextProfileId: "writing",
+      materialization: materializationProvenance(),
+      createdAt: "2026-07-31T00:00:00.000Z",
+      sources: [
+        {
+          refId: "story_01",
+          sourceKind: "story_bible_asset",
+          assetId: "chr_hero",
+          content: "Hero facts",
+          dirty: false,
+          selectionPolicy: "pinned",
+          preferenceScope: "project"
+        }
+      ]
+    });
+
+    expect(snapshot.sources[0]?.preferenceScope).toBe("project");
+    const legacyV14 = {
+      ...snapshot,
+      sources: snapshot.sources.map(({ preferenceScope: _preferenceScope, ...source }) => {
+        void _preferenceScope;
+        return source;
+      })
+    };
+    expect(
+      engineExports.normalizeAgentContextSnapshot(legacyV14 as never).sources[0]
+    ).toMatchObject({ preferenceScope: "automatic" });
+  });
 });
 
 function materializationProvenance() {
@@ -248,7 +325,7 @@ function materializationProvenance() {
     guidanceTemplateChecksum: "guidance",
     stablePrefixChecksum: "prefix",
     messageOrderVersion: "1.0"
-  };
+  } as const;
 }
 
 function sha256(value: string): string {

@@ -9,6 +9,12 @@ import {
   updateStoryBibleTimelineEvent,
   type StoryBibleTimelineEvent
 } from "./story-bible-timeline.js";
+import {
+  StoryBibleReferenceSelector,
+  storyBibleEntryReferenceOptions,
+  type StoryBibleReferenceOption
+} from "./story-bible-reference-selector.js";
+import { StoryBibleRelationsField } from "./story-bible-relations-field.js";
 import type { StoryBibleEditorProps } from "./workspace-shell-types.js";
 
 type TimelineSelection =
@@ -146,6 +152,7 @@ function TimelineRootFields({ editor }: { readonly editor: StoryBibleEditorProps
         <span>资料状态</span>
         <select
           aria-label="时间线资料状态"
+          disabled={editor.draft.status === "deleted"}
           onChange={(event) =>
             editor.onDraftChange("timeline", {
               status: event.currentTarget.value as StoryBibleEditorProps["draft"]["status"]
@@ -156,7 +163,7 @@ function TimelineRootFields({ editor }: { readonly editor: StoryBibleEditorProps
           <option value="active">启用</option>
           <option value="draft">草稿</option>
           <option value="archived">归档</option>
-          <option value="deleted">已删除</option>
+          {editor.draft.status === "deleted" ? <option value="deleted">已删除</option> : null}
         </select>
       </label>
       <TimelineTextArea
@@ -165,14 +172,7 @@ function TimelineRootFields({ editor }: { readonly editor: StoryBibleEditorProps
         onChange={(value) => editor.onDraftChange("timeline", { aliases: splitLines(value) })}
         value={editor.draft.aliases.join("\n")}
       />
-      <TimelineTextArea
-        ariaLabel="时间线关联资料 ID"
-        label="关联资料 ID"
-        onChange={(value) =>
-          editor.onDraftChange("timeline", { relatedEntityIds: splitLines(value) })
-        }
-        value={editor.draft.relatedEntityIds.join("\n")}
-      />
+      <StoryBibleRelationsField editor={editor} />
     </div>
   );
 }
@@ -192,21 +192,31 @@ function TimelineEventFields({
     id: chapter.id,
     label: `${chapter.order}. ${chapter.title}`
   }));
-  const characterOptions = editor.entries
-    .filter((entry) => entry.kind === "character" && entry.status !== "deleted")
-    .map((entry) => ({ id: entry.id, label: entry.title }));
-  const locationOptions = editor.entries
-    .filter(
-      (entry) =>
-        entry.kind === "world" && entry.assetType === "world.location" && entry.status !== "deleted"
-    )
-    .map((entry) => ({ id: entry.id, label: entry.title }));
-  const eventOptions = events
-    .filter((candidate) => candidate.id !== event.id)
-    .map((candidate) => ({
-      id: candidate.id,
-      label: `${candidate.sequence}. ${candidate.title}`
-    }));
+  const characterOptions = storyBibleEntryReferenceOptions(
+    editor.entries,
+    (entry) => entry.kind === "character",
+    editor.onEntrySelect
+  );
+  const locationOptions = storyBibleEntryReferenceOptions(
+    editor.entries,
+    (entry) => entry.kind === "world" && entry.assetType === "world.location",
+    editor.onEntrySelect
+  );
+  const eventOptions: StoryBibleReferenceOption[] = events.map((candidate) => ({
+    id: candidate.id,
+    title: `${candidate.sequence}. ${candidate.title}`,
+    type: "timeline.event",
+    ...(typeof candidate.status === "string" ? { status: candidate.status } : {}),
+    state: candidate.id === event.id ? "unknown" : "ready",
+    selectable: candidate.id !== event.id,
+    visible: candidate.id !== event.id,
+    ...(editor.draft.id === undefined
+      ? {}
+      : {
+          openEntryId: editor.draft.id,
+          onOpen: () => editor.onEntrySelect(editor.draft.id ?? "")
+        })
+  }));
 
   return (
     <div className="ns-timeline-detail-fields">
@@ -256,33 +266,37 @@ function TimelineEventFields({
           options={chapterOptions}
           selectedIds={event.chapterIds}
         />
-        <TimelineMultiSelect
+        <StoryBibleReferenceSelector
           ariaLabel="事件关联人物"
-          emptyLabel="暂无人物"
+          label="事件关联人物"
+          mode="multiple"
           onChange={(characterIds) => onUpdate({ characterIds })}
           options={characterOptions}
-          selectedIds={event.characterIds}
+          value={event.characterIds}
         />
-        <TimelineMultiSelect
+        <StoryBibleReferenceSelector
           ariaLabel="事件关联地点"
-          emptyLabel="暂无地点"
+          label="事件关联地点"
+          mode="multiple"
           onChange={(locationIds) => onUpdate({ locationIds })}
           options={locationOptions}
-          selectedIds={event.locationIds}
+          value={event.locationIds}
         />
-        <TimelineMultiSelect
+        <StoryBibleReferenceSelector
           ariaLabel="事件前因"
-          emptyLabel="暂无其他事件"
+          label="事件前因"
+          mode="multiple"
           onChange={(causes) => onUpdate({ causes })}
           options={eventOptions}
-          selectedIds={event.causes}
+          value={event.causes}
         />
-        <TimelineMultiSelect
+        <StoryBibleReferenceSelector
           ariaLabel="事件后果"
-          emptyLabel="暂无其他事件"
+          label="事件后果"
+          mode="multiple"
           onChange={(effects) => onUpdate({ effects })}
           options={eventOptions}
-          selectedIds={event.effects}
+          value={event.effects}
         />
       </div>
       <span className="ns-muted">{event.id}</span>

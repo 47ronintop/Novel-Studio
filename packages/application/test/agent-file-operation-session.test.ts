@@ -195,6 +195,7 @@ describe("AgentFileOperationSession", () => {
     const result = session.proposeStoryBibleWrite({
       toolCallId: "call-sb",
       assetType: "character",
+      consistencyGroupId: "fact_character_create",
       content: JSON.stringify({ id: "char-01", type: "character", name: "Alice" })
     });
     expect(result.ok).toBe(true);
@@ -202,6 +203,7 @@ describe("AgentFileOperationSession", () => {
     expect(result.value.operation.kind).toBe("create_file");
     if (result.value.operation.kind !== "create_file") return;
     expect(result.value.operation.relativePath).toBe("characters/char-01.json");
+    expect(result.value.operation.consistencyGroupId).toBe("fact_character_create");
   });
 
   test("proposeStoryBibleWrite maps foreshadows to their managed collection", () => {

@@ -34,6 +34,8 @@ interface ChangeSetOperationBase {
   readonly toolCallIdempotencyKey: string;
   /** Operations are selected as an indivisible unit during Change Set review. */
   readonly selected?: boolean;
+  /** Cross-asset facts sharing this ID must be selected and applied together. */
+  readonly consistencyGroupId?: string;
 }
 
 export interface ChangeSetModifyOperation extends ChangeSetOperationBase {
@@ -91,6 +93,21 @@ export interface ChangeSetValidation {
   readonly asset: ChangeSetValidationCheck;
 }
 
+/**
+ * Immutable authorization evidence for a Story Bible transition across the deleted boundary.
+ * It is part of the Change Set checksum, so approval is bound to the exact evidence displayed.
+ */
+export type StoryBibleStatusTransitionProof =
+  | {
+      readonly action: "delete";
+      readonly deletionImpactChecksum: string;
+    }
+  | {
+      readonly action: "restore";
+      readonly expectedStatus: "active" | "draft" | "archived";
+      readonly historyAuthorizationChecksum: string;
+    };
+
 export interface ChangeSetHunk {
   readonly hunkId: string;
   readonly range: ChangeSetRange;
@@ -114,6 +131,8 @@ export interface ChangeSetFileChange {
   readonly hunks: readonly ChangeSetHunk[];
   readonly validation: ChangeSetValidation;
   readonly selected: boolean;
+  readonly consistencyGroupId?: string;
+  readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
 }
 
 export interface ChangeSet {
@@ -146,6 +165,8 @@ export interface ChangeSetProposal {
   readonly baseChecksum: string;
   readonly range: ChangeSetRange;
   readonly replacement: string;
+  readonly consistencyGroupId?: string;
+  readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
 }
 
 export interface CreateChangeSetRevisionInput {
@@ -212,6 +233,15 @@ interface DraftFileChange {
   readonly baseChecksum: string;
   readonly baseContent: string;
   readonly hunks: readonly ChangeSetHunk[];
+  readonly consistencyGroupId?: string;
+  readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
+}
+
+export interface ChangeSetConsistencyGroupSelection {
+  readonly allGroupIds: readonly string[];
+  readonly selectedGroupIds: readonly string[];
+  readonly splitGroupIds: readonly string[];
+  readonly selectionChecksum?: string;
 }
 
 export async function createChangeSetRevision(
@@ -245,6 +275,7 @@ export async function appendChangeSetProposal(
     if (
       existing.assetType !== proposed.assetType ||
       existing.assetId !== proposed.assetId ||
+      existing.consistencyGroupId !== proposed.consistencyGroupId ||
       existing.baseChecksum !== proposed.baseChecksum ||
       existing.baseContent !== proposed.baseContent
     ) {
@@ -346,6 +377,7 @@ export async function selectChangeSetRevision(
   });
 
   const selectedOperations = selectChangeSetOperations(current.operations ?? [], input.operations);
+  assertConsistencyGroupsAreIndivisible(files, selectedOperations);
   if (selectedOperations.length > 0) {
     const selectedFiles = await finalizeChangeSet(
       {
@@ -401,6 +433,63 @@ export function checksumChangeSetText(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
+export function inspectChangeSetConsistencyGroups(
+  changeSet: ChangeSet
+): ChangeSetConsistencyGroupSelection {
+  const states = new Map<string, Set<boolean>>();
+  for (const file of changeSet.files) {
+    const selections =
+      file.hunks.length === 0 ? [file.selected] : file.hunks.map((hunk) => hunk.selected);
+    for (const selected of selections) {
+      addConsistencyGroupState(states, file.consistencyGroupId, selected);
+    }
+  }
+  for (const operation of changeSet.operations ?? []) {
+    addConsistencyGroupState(
+      states,
+      operation.consistencyGroupId,
+      operation.selected !== false
+    );
+  }
+  const allGroupIds = [...states.keys()].sort(compareIdentifiers);
+  const splitGroupIds = allGroupIds.filter((groupId) => (states.get(groupId)?.size ?? 0) > 1);
+  const selectedGroupIds = allGroupIds.filter(
+    (groupId) => states.get(groupId)?.size === 1 && states.get(groupId)?.has(true)
+  );
+  return deepFreeze({
+    allGroupIds,
+    selectedGroupIds,
+    splitGroupIds,
+    ...(allGroupIds.length === 0
+      ? {}
+      : {
+          selectionChecksum: checksumChangeSetSelection(changeSet, selectedGroupIds)
+        })
+  });
+}
+
+export function checksumChangeSetSelection(
+  changeSet: Pick<ChangeSet, "changeSetId" | "revision" | "checksum">,
+  selectedConsistencyGroupIds: readonly string[]
+): string {
+  const normalized = [...new Set(selectedConsistencyGroupIds)].sort(compareIdentifiers);
+  if (normalized.some((groupId) => !isOperationIdentifier(groupId))) {
+    throw changeSetError(
+      "CHANGE_SET_CONSISTENCY_GROUP_INVALID",
+      "The selected consistency groups contain an invalid identifier.",
+      "Refresh the Change Set and select only displayed consistency groups."
+    );
+  }
+  return checksumChangeSetText(
+    stableSerialize({
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      selectedConsistencyGroupIds: normalized
+    })
+  );
+}
+
 function createDraftFile(
   proposal: ChangeSetProposal,
   createHunkId: (() => string) | undefined
@@ -419,6 +508,12 @@ function createDraftFile(
     relativePath: path.value.relativePath,
     assetType: proposal.assetType,
     ...(proposal.assetId === undefined ? {} : { assetId: proposal.assetId }),
+    ...(proposal.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: validateConsistencyGroupId(proposal.consistencyGroupId) }),
+    ...(proposal.storyBibleStatusProof === undefined
+      ? {}
+      : { storyBibleStatusProof: cloneStoryBibleStatusProof(proposal.storyBibleStatusProof) }),
     baseChecksum: proposal.baseChecksum,
     baseContent: proposal.baseContent,
     hunks: [
@@ -461,6 +556,8 @@ async function finalizeChangeSet(
         relativePath: file.relativePath,
         assetType: file.assetType,
         assetId: file.assetId ?? null,
+        consistencyGroupId: file.consistencyGroupId ?? null,
+        storyBibleStatusProof: file.storyBibleStatusProof ?? null,
         baseChecksum: file.baseChecksum,
         candidateChecksum: file.candidateChecksum,
         selected: file.selected,
@@ -476,7 +573,12 @@ async function finalizeChangeSet(
   );
   const approvalToken = checksumChangeSetText(`${input.changeSetId}:${input.revision}:${checksum}`);
   return deepFreeze({
-    schemaVersion: "1.0",
+    schemaVersion: files.some(
+      (file) =>
+        file.consistencyGroupId !== undefined || file.storyBibleStatusProof !== undefined
+    )
+      ? "1.1"
+      : "1.0",
     changeSetId: input.changeSetId,
     revision: input.revision,
     runId: input.runId,
@@ -511,6 +613,12 @@ async function finalizeFile(
     relativePath: draft.relativePath,
     assetType: draft.assetType,
     ...(draft.assetId === undefined ? {} : { assetId: draft.assetId }),
+    ...(draft.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: draft.consistencyGroupId }),
+    ...(draft.storyBibleStatusProof === undefined
+      ? {}
+      : { storyBibleStatusProof: cloneStoryBibleStatusProof(draft.storyBibleStatusProof) }),
     baseChecksum: draft.baseChecksum,
     candidateChecksum: checksumChangeSetText(candidateContent),
     baseContent: draft.baseContent,
@@ -637,6 +745,12 @@ function toDraft(file: ChangeSetFileChange): DraftFileChange {
     relativePath: file.relativePath,
     assetType: file.assetType,
     ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
+    ...(file.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: file.consistencyGroupId }),
+    ...(file.storyBibleStatusProof === undefined
+      ? {}
+      : { storyBibleStatusProof: cloneStoryBibleStatusProof(file.storyBibleStatusProof) }),
     baseChecksum: file.baseChecksum,
     baseContent: file.baseContent,
     hunks: file.hunks.map((hunk) => ({ ...hunk }))
@@ -712,6 +826,7 @@ export function createModifyOperation(input: {
   readonly relativePath: string;
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
+  readonly consistencyGroupId?: string;
 }): ChangeSetModifyOperation {
   return freezeOperation({
     kind: "modify",
@@ -719,6 +834,9 @@ export function createModifyOperation(input: {
     relativePath: input.relativePath,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
     selected: true,
+    ...(input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.consistencyGroupId }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -730,6 +848,7 @@ export function createFileOperation(input: {
   readonly content: string;
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
+  readonly consistencyGroupId?: string;
 }): ChangeSetCreateFileOperation {
   return freezeOperation({
     kind: "create_file",
@@ -738,6 +857,9 @@ export function createFileOperation(input: {
     content: input.content,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
     selected: true,
+    ...(input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.consistencyGroupId }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -750,6 +872,7 @@ export function moveFileOperation(input: {
   readonly sourceChecksum: string;
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
+  readonly consistencyGroupId?: string;
 }): ChangeSetMoveFileOperation {
   return freezeOperation({
     kind: "move_file",
@@ -759,6 +882,9 @@ export function moveFileOperation(input: {
     sourceChecksum: input.sourceChecksum,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
     selected: true,
+    ...(input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.consistencyGroupId }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -770,6 +896,7 @@ export function deleteFileOperation(input: {
   readonly baseChecksum: string;
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
+  readonly consistencyGroupId?: string;
 }): ChangeSetDeleteFileOperation {
   return freezeOperation({
     kind: "delete_file",
@@ -778,6 +905,9 @@ export function deleteFileOperation(input: {
     baseChecksum: input.baseChecksum,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
     selected: true,
+    ...(input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.consistencyGroupId }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -788,6 +918,7 @@ export function createDirectoryOperation(input: {
   readonly relativePath: string;
   readonly toolCallIdempotencyKey: string;
   readonly dependsOn?: readonly string[];
+  readonly consistencyGroupId?: string;
 }): ChangeSetCreateDirectoryOperation {
   return freezeOperation({
     kind: "create_directory",
@@ -795,6 +926,9 @@ export function createDirectoryOperation(input: {
     relativePath: input.relativePath,
     toolCallIdempotencyKey: input.toolCallIdempotencyKey,
     selected: true,
+    ...(input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.consistencyGroupId }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
   });
 }
@@ -870,6 +1004,7 @@ function finalizeOperationsChangeSet(input: {
 }): ChangeSet {
   const operations = input.operations.map(normalizeChangeSetOperation);
   assertOperationsPreflight(operations);
+  assertConsistencyGroupsAreIndivisible(input.files, operations);
   const checksum = checksumChangeSetText(
     stableSerialize({
       changeSetId: input.changeSetId,
@@ -1117,6 +1252,12 @@ function validateChangeSetOperation(operation: ChangeSetOperation): string | und
     return `Operation ${operation.operationId} has an invalid idempotency binding.`;
   }
   if (
+    operation.consistencyGroupId !== undefined &&
+    !isOperationIdentifier(operation.consistencyGroupId)
+  ) {
+    return `Operation ${operation.operationId} has an invalid consistency group ID.`;
+  }
+  if (
     operation.dependsOn !== undefined &&
     operation.dependsOn.some((dependency) => !isOperationIdentifier(dependency))
   ) {
@@ -1300,6 +1441,8 @@ function serializeChangeSetFiles(files: readonly ChangeSetFileChange[]): readonl
     relativePath: file.relativePath,
     assetType: file.assetType,
     assetId: file.assetId ?? null,
+    consistencyGroupId: file.consistencyGroupId ?? null,
+    storyBibleStatusProof: file.storyBibleStatusProof ?? null,
     baseChecksum: file.baseChecksum,
     candidateChecksum: file.candidateChecksum,
     selected: file.selected,
@@ -1311,4 +1454,76 @@ function serializeChangeSetFiles(files: readonly ChangeSetFileChange[]): readonl
       selected: hunk.selected
     }))
   }));
+}
+
+function cloneStoryBibleStatusProof(
+  proof: StoryBibleStatusTransitionProof
+): StoryBibleStatusTransitionProof {
+  return proof.action === "delete"
+    ? { action: "delete", deletionImpactChecksum: proof.deletionImpactChecksum }
+    : {
+        action: "restore",
+        expectedStatus: proof.expectedStatus,
+        historyAuthorizationChecksum: proof.historyAuthorizationChecksum
+      };
+}
+
+function assertConsistencyGroupsAreIndivisible(
+  files: readonly (Pick<DraftFileChange, "consistencyGroupId" | "hunks"> & {
+    readonly selected?: boolean;
+  })[],
+  operations: readonly ChangeSetOperation[]
+): void {
+  const states = new Map<string, Set<boolean>>();
+  for (const file of files) {
+    const selections =
+      file.hunks.length === 0
+        ? [file.selected === true]
+        : file.hunks.map((hunk) => hunk.selected);
+    for (const selected of selections) {
+      addConsistencyGroupState(states, file.consistencyGroupId, selected);
+    }
+  }
+  for (const operation of operations) {
+    addConsistencyGroupState(
+      states,
+      operation.consistencyGroupId,
+      operation.selected !== false
+    );
+  }
+  const splitGroupId = [...states.entries()].find(([, selections]) => selections.size > 1)?.[0];
+  if (splitGroupId !== undefined) {
+    throw changeSetError(
+      "CHANGE_SET_CONSISTENCY_GROUP_SPLIT",
+      `Consistency group ${splitGroupId} cannot be partially selected.`,
+      "Select or reject every change in the consistency group together."
+    );
+  }
+}
+
+function addConsistencyGroupState(
+  states: Map<string, Set<boolean>>,
+  consistencyGroupId: string | undefined,
+  selected: boolean
+): void {
+  if (consistencyGroupId === undefined) return;
+  const groupId = validateConsistencyGroupId(consistencyGroupId);
+  const selections = states.get(groupId) ?? new Set<boolean>();
+  selections.add(selected);
+  states.set(groupId, selections);
+}
+
+function validateConsistencyGroupId(consistencyGroupId: string): string {
+  if (!isOperationIdentifier(consistencyGroupId)) {
+    throw changeSetError(
+      "CHANGE_SET_CONSISTENCY_GROUP_INVALID",
+      "Consistency group IDs must be stable identifiers up to 128 characters.",
+      "Generate a stable consistency group ID before staging the change."
+    );
+  }
+  return consistencyGroupId;
+}
+
+function compareIdentifiers(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
 }

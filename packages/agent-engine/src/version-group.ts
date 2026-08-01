@@ -1,3 +1,7 @@
+import type { JsonValue } from "@novel-studio/shared";
+import type { AgentWritePolicy } from "./agent-run-types.js";
+
+
 export type VersionGroupAssetType = "chapter" | "text";
 export type VersionGroupTransactionStatus =
   "failed" | "applied" | "rolled_back" | "partial_failure" | "awaiting_review";
@@ -24,6 +28,31 @@ export type VersionGroupPostCommitHook =
 export interface VersionGroupSynchronization {
   readonly status: "recovery_required";
   readonly failedHooks: readonly VersionGroupPostCommitHook[];
+}
+
+/** A bounded, display-only inverse patch for a Story Bible application. */
+export type StoryBibleInversePatchOperation =
+  | { readonly op: "add" | "replace"; readonly path: string; readonly value: JsonValue }
+  | { readonly op: "remove"; readonly path: string };
+
+export interface StoryBibleApplyReceiptAsset {
+  readonly assetId: string;
+  readonly relativePath: string;
+  readonly beforeRevision: number | null;
+  readonly afterRevision: number;
+  readonly beforeChecksum: string | null;
+  readonly afterChecksum: string;
+  readonly historyVersionId: string | null;
+  readonly inversePatch: readonly StoryBibleInversePatchOperation[];
+}
+
+/** Non-authoritative metadata projected from the transaction journal and History. */
+export interface StoryBibleApplyReceipt {
+  readonly schemaVersion: "1.0";
+  readonly changeSetId: string;
+  readonly consistencyGroupId: string;
+  readonly suggestionIds: readonly string[];
+  readonly assets: readonly StoryBibleApplyReceiptAsset[];
 }
 
 export interface VersionGroupWrite {
@@ -112,7 +141,7 @@ export interface RollbackReview {
 }
 
 export interface VersionGroup {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
   readonly versionGroupId: string;
   readonly runId: string;
   readonly checkpointId: string;
@@ -121,6 +150,9 @@ export interface VersionGroup {
   readonly changeSetChecksum: string;
   readonly writePolicy?: AgentWritePolicy;
   readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
+  readonly applyBatchId?: string;
+  readonly consistencyGroupId?: string;
+  readonly selectionChecksum?: string;
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWrite[];
   readonly operations?: readonly VersionGroupOperation[];
@@ -131,6 +163,7 @@ export interface VersionGroup {
   readonly rollbackReview?: RollbackReview;
   readonly failureKind?: VersionGroupFailureKind;
   readonly synchronization?: VersionGroupSynchronization;
+  readonly storyBibleReceipt?: StoryBibleApplyReceipt;
 }
 
 interface VersionGroupBaseInput {
@@ -142,10 +175,14 @@ interface VersionGroupBaseInput {
   readonly changeSetChecksum: string;
   readonly writePolicy?: AgentWritePolicy;
   readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
+  readonly applyBatchId?: string;
+  readonly consistencyGroupId?: string;
+  readonly selectionChecksum?: string;
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWrite[];
   readonly baselineByPath: Readonly<Record<string, VersionGroupBaseline>>;
   readonly undoOfVersionGroupIds?: readonly string[];
+  readonly storyBibleReceipt?: StoryBibleApplyReceipt;
 }
 
 export interface FailedVersionGroupInput extends VersionGroupBaseInput {
@@ -181,7 +218,8 @@ function baseGroup(
   );
 
   return {
-    schemaVersion: "1.0",
+    schemaVersion:
+      input.applyBatchId === undefined || input.consistencyGroupId === undefined ? "1.0" : "1.1",
     versionGroupId: input.versionGroupId,
     runId: input.runId,
     checkpointId: input.checkpointId,
@@ -190,6 +228,13 @@ function baseGroup(
     changeSetChecksum: input.changeSetChecksum,
     ...(input.writePolicy === undefined ? {} : { writePolicy: input.writePolicy }),
     ...(input.approvalSource === undefined ? {} : { approvalSource: input.approvalSource }),
+    ...(input.applyBatchId === undefined ? {} : { applyBatchId: input.applyBatchId }),
+    ...(input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.consistencyGroupId }),
+    ...(input.selectionChecksum === undefined
+      ? {}
+      : { selectionChecksum: input.selectionChecksum }),
     createdAt: input.createdAt,
     writes: input.writes,
     baselineByPath: input.baselineByPath,
@@ -201,7 +246,10 @@ function baseGroup(
       ...(input.undoOfVersionGroupIds === undefined
         ? {}
         : { undoOfVersionGroupIds: input.undoOfVersionGroupIds })
-    }
+    },
+    ...(input.storyBibleReceipt === undefined
+      ? {}
+      : { storyBibleReceipt: input.storyBibleReceipt })
   };
 }
 
@@ -253,13 +301,30 @@ function freezeVersionGroup(group: VersionGroup): VersionGroup {
             )
           )
         });
+  const storyBibleReceipt =
+    group.storyBibleReceipt === undefined
+      ? undefined
+      : Object.freeze({
+          ...group.storyBibleReceipt,
+          suggestionIds: Object.freeze([...group.storyBibleReceipt.suggestionIds]),
+          assets: Object.freeze(
+            group.storyBibleReceipt.assets.map((asset) =>
+              Object.freeze({
+                ...asset,
+                inversePatch: Object.freeze(
+                  asset.inversePatch.map((operation) => Object.freeze({ ...operation }))
+                )
+              })
+            )
+          )
+        });
   return Object.freeze({
     ...group,
     writes,
     baselineByPath,
     undoMetadata,
     ...(rollbackReview === undefined ? {} : { rollbackReview }),
-    ...(synchronization === undefined ? {} : { synchronization })
+    ...(synchronization === undefined ? {} : { synchronization }),
+    ...(storyBibleReceipt === undefined ? {} : { storyBibleReceipt })
   });
 }
-import type { AgentWritePolicy } from "./agent-run-types.js";

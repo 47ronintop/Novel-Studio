@@ -4,6 +4,7 @@ import type {
   AgentOperationMode,
   AgentRunErrorRecord,
   AgentRunEvent,
+  AgentRunPackedContextHistory,
   AgentRunRetryTarget,
   AgentRunStatusV13,
   AgentWritePolicy,
@@ -19,6 +20,7 @@ import type {
   PlanExecutionRecord,
   ProjectSearchResultItem,
   ProjectWorkspaceHealth,
+  StoryAnalysisCompletionMode,
   StoryBibleAssetType,
   StoryBibleEntityStatus
 } from "@novel-studio/application";
@@ -385,14 +387,81 @@ export interface AgentComposerReferenceControl {
 
 export type AgentComposerContextState = "normal" | "heavy" | "needs_refresh" | "compaction_failed";
 
+/** UI mirror of the packed-context selection policy. */
+export type AgentComposerContextSelectionPolicy = "automatic" | "explicit" | "pinned";
+
+/** Where an author-initiated source preference is persisted. */
+export type AgentComposerContextPreferenceScope = "run" | "project";
+
+/** Resolved origin of a source preference shown in the context inspector. */
+export type AgentComposerContextSourcePreferenceScope =
+  "automatic" | AgentComposerContextPreferenceScope;
+
+export type AgentComposerContextSourceState = "active" | "stale" | "excluded";
+
+export interface AgentComposerContextTruncationRange {
+  readonly unit: "unicode_code_point";
+  readonly start: number;
+  readonly end: number;
+  readonly originalEnd: number;
+}
+
+export interface AgentComposerContextTokenStats {
+  readonly contextTokens: number;
+  readonly pinnedTokens: number;
+  readonly usedTokens: number;
+  readonly safeInputBudget: number;
+  readonly remainingTokens: number;
+  readonly precision: AgentContextPrecision;
+}
+
+/**
+ * Author-visible projection of one immutable packed-context block. Internal prompt roles,
+ * provider metadata, and hidden instructions are intentionally absent from this UI contract.
+ */
+export interface AgentComposerContextPreviewBlock {
+  readonly blockId: string;
+  readonly refId: string;
+  readonly label: string;
+  readonly content: string;
+  readonly order: number;
+  readonly tokenCount: number;
+  readonly precision: AgentContextPrecision;
+  readonly checksum: string;
+  readonly truncationRange?: AgentComposerContextTruncationRange | null;
+}
+
 export interface AgentComposerContextSourceRow {
   readonly refId: string;
   readonly label: string;
-  readonly detail: string;
-  readonly sourceKind?: "project_conventions" | "workspace_outline";
+  readonly detail?: string;
+  readonly sourceKind?:
+    | "disk_file"
+    | "editor_buffer"
+    | "story_bible_asset"
+    | "project_conventions"
+    | "workspace_outline"
+    | "compaction_summary"
+    | "system_guidance";
   readonly relativePath?: string;
   readonly layerLabel?: string;
   readonly metadata?: readonly string[];
+  readonly selectionReason?: string;
+  readonly selectionPolicy?: AgentComposerContextSelectionPolicy;
+  readonly preferenceScope?: AgentComposerContextSourcePreferenceScope;
+  readonly priority?: number;
+  readonly state?: AgentComposerContextSourceState;
+  readonly tokenCount?: number | null;
+  readonly precision?: AgentContextPrecision;
+  readonly sourceChecksum?: string;
+  readonly sourceRevision?: number;
+  readonly truncationRange?: AgentComposerContextTruncationRange | null;
+  readonly materializationOrder?: number;
+  readonly busy?: boolean;
+  readonly onPin?: (() => void) | undefined;
+  readonly onExclude?: (() => void) | undefined;
+  readonly onRestore?: (() => void) | undefined;
+  readonly onPriorityChange?: ((priority: number) => void) | undefined;
 }
 
 export interface AgentComposerConventionsControl {
@@ -410,6 +479,15 @@ export interface AgentComposerContextStatusControl {
   readonly usageLabel: string;
   readonly precision: AgentContextPrecision;
   readonly sources: readonly AgentComposerContextSourceRow[];
+  readonly preferenceScope?: AgentComposerContextPreferenceScope;
+  readonly onPreferenceScopeChange?:
+    ((scope: AgentComposerContextPreferenceScope) => void) | undefined;
+  readonly previewBlocks?: readonly AgentComposerContextPreviewBlock[];
+  readonly previewPayloadChecksum?: string;
+  readonly previewUnavailableReason?: string;
+  readonly tokenStats?: AgentComposerContextTokenStats;
+  readonly fixedBudgetExceeded?: boolean;
+  readonly fixedBudgetMessage?: string;
   readonly conventions?: AgentComposerConventionsControl;
   readonly onCompact?: (() => void) | undefined;
   readonly onRefresh?: (() => void) | undefined;
@@ -437,6 +515,8 @@ export interface AgentRunPanelProps {
   readonly status: AgentRunStatusV13 | "idle";
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];
+  /** Historical provider-bound context; unavailable/stale is explicit rather than silently empty. */
+  readonly packedContextHistory?: AgentRunPackedContextHistory;
   readonly pendingUserInput?: AgentRunPendingUserInputProps;
   readonly pendingToolApproval?: AgentRunPendingToolApprovalProps;
   readonly diagnostic?: AgentRunErrorRecord;
@@ -703,6 +783,39 @@ export type StoryBibleWorldAssetType = Extract<StoryBibleAssetType, `world.${str
 export type StoryBibleEditorViewMode = "list" | "detail";
 export type StoryBibleEditorStatus = "idle" | "saving" | "saved" | "error";
 
+export interface StoryBibleExplicitInversePreviewFile {
+  readonly assetId: string;
+  readonly title: string;
+  readonly side: "source" | "inverse";
+  readonly hunkCount: number;
+}
+
+export type StoryBibleExplicitInversePreviewState =
+  | {
+      readonly status: "confirmation" | "applying";
+      readonly previewId: string;
+      readonly revision: number;
+      readonly checksum: string;
+      readonly expiresAt: string;
+      readonly files: readonly StoryBibleExplicitInversePreviewFile[];
+    }
+  | undefined;
+
+export interface StoryBibleEditorRelation extends JsonObject {
+  readonly relationId: string;
+  readonly sourceId: string;
+  readonly targetId: string;
+  readonly relationType: string;
+  readonly direction: "directed" | "symmetric";
+  readonly status: "active" | "ended" | "uncertain";
+  readonly validFromChapterId: string | null;
+  readonly validToChapterId: string | null;
+  readonly inversePolicy: "derived" | "explicit" | "none";
+  readonly inverseRelationId: string | null;
+  readonly evidence: JsonObject[];
+  readonly note: string;
+}
+
 interface StoryBibleEditorEntryBase<
   K extends StoryBibleEditorKind,
   A extends StoryBibleAssetType,
@@ -715,6 +828,7 @@ interface StoryBibleEditorEntryBase<
   readonly status: StoryBibleEntityStatus;
   readonly summary: string;
   readonly aliases: readonly string[];
+  readonly relations?: readonly StoryBibleEditorRelation[];
   readonly relatedEntityIds: readonly string[];
   readonly details: D;
   readonly createdAt: string;
@@ -757,6 +871,7 @@ interface StoryBibleEditorDraftBase<
   readonly status: StoryBibleEntityStatus;
   readonly summary: string;
   readonly aliases: readonly string[];
+  readonly relations?: readonly StoryBibleEditorRelation[];
   readonly relatedEntityIds: readonly string[];
   readonly details: D;
   readonly createdAt?: string;
@@ -852,7 +967,7 @@ export type StoryBibleForeshadowAnalysisState =
 
 export interface StoryBibleEditorFilters {
   readonly query: string;
-  readonly status: StoryBibleEntityStatus | "all";
+  readonly status: StoryBibleEntityStatus | "available" | "all";
   readonly worldAssetType: StoryBibleWorldAssetType | "all";
   readonly foreshadowTrackingStatus: ForeshadowTrackingStatus | "all";
 }
@@ -866,6 +981,182 @@ export type StoryBibleExternalUpdateState =
       readonly versionGroupId?: string;
     };
 
+export interface StoryBibleIncomingReferenceImpactProps {
+  readonly sourceAssetId: string;
+  readonly sourceTitle: string;
+  readonly sourceType: StoryBibleAssetType;
+  readonly sourceStatus: StoryBibleEntityStatus;
+  readonly path: string;
+  readonly kind: "detail" | "relation";
+  readonly integrity: "valid" | "deleted" | "missing" | "type-mismatch";
+  readonly relationType?: string;
+}
+
+export type StoryBibleStatusAction = "move-to-deleted" | "restore";
+
+export type StoryBibleStatusActionState =
+  | { readonly status: "idle" }
+  | {
+      readonly status: "loading";
+      readonly action: StoryBibleStatusAction;
+      readonly assetId: string;
+      readonly assetTitle: string;
+    }
+  | {
+      readonly status: "confirmation";
+      readonly action: "move-to-deleted";
+      readonly assetId: string;
+      readonly assetTitle: string;
+      readonly deletionImpactChecksum: string;
+      readonly canSetDeleted: boolean;
+      readonly affectedReferenceCount: number;
+      readonly affectedAssetIds: readonly string[];
+      readonly incoming: readonly StoryBibleIncomingReferenceImpactProps[];
+    }
+  | {
+      readonly status: "confirmation";
+      readonly action: "restore";
+      readonly assetId: string;
+      readonly assetTitle: string;
+    }
+  | {
+      readonly status: "error";
+      readonly action: StoryBibleStatusAction;
+      readonly assetId: string;
+      readonly assetTitle: string;
+      readonly message: string;
+    };
+
+export interface StoryAnalysisReviewSummaryProps {
+  readonly workflowRunId: string;
+  readonly chapterId: string;
+  readonly status: "queued" | "running" | "completed" | "partial" | "failed" | "cancelled";
+  readonly updatedAt: string;
+  readonly pendingSuggestionCount: number;
+  readonly openIssueCount: number;
+}
+
+export interface StoryAnalysisEvidenceProps {
+  readonly start: number;
+  readonly end: number;
+  readonly excerptHash: string;
+}
+
+export interface StoryAnalysisOperationProps {
+  readonly op: "add" | "replace" | "remove";
+  readonly path: string;
+  readonly beforePresent: boolean;
+  readonly beforeValue?: unknown;
+  readonly afterValue?: unknown;
+}
+
+export interface StoryAnalysisSuggestionProps {
+  readonly suggestionId: string;
+  readonly consistencyGroupId: string;
+  readonly groupSize: number;
+  readonly status: "pending" | "accepted" | "applied" | "rejected" | "stale" | "failed";
+  readonly revision: number;
+  readonly domain: string;
+  readonly action: "create" | "patch";
+  readonly targetAssetId?: string;
+  readonly proposedAssetType?: StoryBibleAssetType;
+  readonly proposedTitle?: string;
+  readonly operations: readonly StoryAnalysisOperationProps[];
+  readonly evidence: readonly StoryAnalysisEvidenceProps[];
+  readonly epistemicStatus: string;
+  readonly confidence: number;
+  readonly reason: string;
+}
+
+export interface StoryAnalysisIssueProps {
+  readonly issueId: string;
+  readonly revision: number;
+  readonly issueType: "conflict" | "ambiguity" | "unresolved_entity" | "overdue_foreshadow";
+  readonly status: "open" | "resolved" | "dismissed" | "stale";
+  readonly claims: readonly {
+    readonly value: unknown;
+    readonly evidence: readonly StoryAnalysisEvidenceProps[];
+  }[];
+  readonly affectedRefs: readonly string[];
+}
+
+export interface StoryAnalysisApplicationPreviewProps {
+  readonly changeSetId: string;
+  readonly revision: number;
+  readonly checksum: string;
+  readonly files: readonly {
+    readonly relativePath: string;
+    readonly assetId?: string;
+    readonly consistencyGroupId?: string;
+    readonly valid: boolean;
+    readonly hunkCount: number;
+  }[];
+  readonly operations: readonly {
+    readonly operationId: string;
+    readonly kind: string;
+    readonly relativePath?: string;
+    readonly consistencyGroupId?: string;
+  }[];
+}
+
+export interface StoryAnalysisApplicationResultProps {
+  readonly applyBatchId: string;
+  readonly groups: readonly {
+    readonly consistencyGroupId: string;
+    readonly status: string;
+    readonly versionGroupId?: string;
+    readonly suggestionIds: readonly string[];
+    readonly errorMessage?: string;
+  }[];
+}
+
+export interface StoryAnalysisReviewFilters {
+  readonly recordType: "all" | "change" | "review_issue";
+  readonly status: string;
+  readonly domain: string;
+}
+
+export interface StoryAnalysisReviewProps {
+  readonly open: boolean;
+  readonly status:
+    | "idle"
+    | "loading"
+    | "ready"
+    | "analyzing"
+    | "transitioning"
+    | "preparing"
+    | "applying"
+    | "saving-settings"
+    | "error";
+  readonly completionMode: StoryAnalysisCompletionMode;
+  readonly pendingCount: number;
+  readonly openIssueCount: number;
+  readonly summaries: readonly StoryAnalysisReviewSummaryProps[];
+  readonly activeWorkflowRunId?: string;
+  readonly activeChapterId?: string;
+  readonly selectedSuggestionIds: readonly string[];
+  readonly filters: StoryAnalysisReviewFilters;
+  readonly suggestions: readonly StoryAnalysisSuggestionProps[];
+  readonly issues: readonly StoryAnalysisIssueProps[];
+  readonly preview?: StoryAnalysisApplicationPreviewProps;
+  readonly result?: StoryAnalysisApplicationResultProps;
+  readonly feedback?: ProjectWorkflowFeedback;
+  readonly onOpen: () => void;
+  readonly onClose: () => void;
+  readonly onRunSelect: (workflowRunId: string) => void;
+  readonly onFiltersChange: (filters: Partial<StoryAnalysisReviewFilters>) => void;
+  readonly onSuggestionToggle: (suggestionId: string) => void;
+  readonly onAcceptSelected: () => void;
+  readonly onRejectSelected: () => void;
+  readonly onPrepareSelected: () => void;
+  readonly onApplyPrepared: () => void;
+  readonly onRefreshStaleness: () => void;
+  readonly onResolveIssue: (issueId: string, decision: string) => void;
+  readonly onDismissIssue: (issueId: string, reason: string) => void;
+  readonly onReanalyze: () => void;
+  readonly onCompletionModeChange: (mode: StoryAnalysisCompletionMode) => void;
+}
+
 export interface StoryBibleEditorProps {
   readonly activeKind: StoryBibleEditorKind;
   readonly activeTimelineEventId?: string;
@@ -878,6 +1169,9 @@ export interface StoryBibleEditorProps {
   readonly foreshadowAnalysis: StoryBibleForeshadowAnalysisState;
   readonly filters: StoryBibleEditorFilters;
   readonly externalUpdate: StoryBibleExternalUpdateState;
+  readonly statusAction?: StoryBibleStatusActionState;
+  readonly explicitInversePreview?: StoryBibleExplicitInversePreviewState;
+  readonly analysisReview?: StoryAnalysisReviewProps;
   readonly consistency?: StoryBibleConsistencyProps;
   readonly draft: StoryBibleEditorDraft;
   readonly feedback?: ProjectWorkflowFeedback;
@@ -891,8 +1185,12 @@ export interface StoryBibleEditorProps {
   readonly onNewDraft: (assetType?: StoryBibleWorldAssetType) => void;
   readonly onCancelDraft: () => void;
   readonly onSave: () => void;
+  readonly onExplicitInversePreviewCancel?: (() => void) | undefined;
   readonly onExternalUpdateReload: () => void;
   readonly onExternalUpdateContinue: () => void;
+  readonly onStatusActionRequest?: ((action: StoryBibleStatusAction) => void) | undefined;
+  readonly onStatusActionCancel?: (() => void) | undefined;
+  readonly onStatusActionConfirm?: (() => void) | undefined;
   readonly onForeshadowAnalysisOpen: () => void;
   readonly onForeshadowAnalysisChapterToggle: (chapterId: string) => void;
   readonly onForeshadowAnalysisStart: () => void;

@@ -6,6 +6,7 @@ export type {
 } from "./command-palette.js";
 export { ChapterEditor } from "./chapter-editor.js";
 export type {
+  ChapterCompletionFeedbackProps,
   ChapterEditorDiffChange,
   ChapterEditorDiffPreview,
   ChapterEditorProps,
@@ -119,6 +120,8 @@ export { AiSelectionReview } from "./ai-selection-review.js";
 export { AiWorkflowHistoryPanel } from "./ai-workflow-history-panel.js";
 export { RecoveryReview } from "./recovery-review.js";
 export { ChangeSetReview, RollbackReview } from "./change-set-review.js";
+export { StoryAnalysisReviewView } from "./story-analysis-review.js";
+export type { StoryAnalysisReviewViewProps } from "./story-analysis-review.js";
 export type {
   ChangeSetFileSelection,
   ChangeSetOperationSelection,
@@ -176,9 +179,15 @@ export type {
   AgentConversationWorkspaceShellProps,
   AgentComposerProps,
   AgentComposerQuickAction,
+  AgentComposerContextPreferenceScope,
+  AgentComposerContextPreviewBlock,
+  AgentComposerContextSelectionPolicy,
   AgentComposerContextSourceRow,
+  AgentComposerContextSourceState,
   AgentComposerContextState,
   AgentComposerContextStatusControl,
+  AgentComposerContextTokenStats,
+  AgentComposerContextTruncationRange,
   AgentComposerPermissionControl,
   AgentComposerModelControl,
   AgentComposerModelOption,
@@ -212,6 +221,15 @@ export type {
   StoryBibleConsistencyProps,
   StoryBibleConsistencyRefProps,
   StoryBibleConsistencyStatus,
+  StoryAnalysisApplicationPreviewProps,
+  StoryAnalysisApplicationResultProps,
+  StoryAnalysisEvidenceProps,
+  StoryAnalysisIssueProps,
+  StoryAnalysisOperationProps,
+  StoryAnalysisReviewFilters,
+  StoryAnalysisReviewProps,
+  StoryAnalysisReviewSummaryProps,
+  StoryAnalysisSuggestionProps,
   StoryBibleChapterOption,
   StoryBibleEditorDraft,
   StoryBibleEditorDraftFor,
@@ -219,9 +237,15 @@ export type {
   StoryBibleEditorFilters,
   StoryBibleEditorKind,
   StoryBibleEditorProps,
+  StoryBibleEditorRelation,
   StoryBibleEditorStatus,
   StoryBibleEditorViewMode,
+  StoryBibleExplicitInversePreviewFile,
+  StoryBibleExplicitInversePreviewState,
   StoryBibleExternalUpdateState,
+  StoryBibleIncomingReferenceImpactProps,
+  StoryBibleStatusAction,
+  StoryBibleStatusActionState,
   StoryBibleForeshadowChangeField,
   StoryBibleForeshadowChangeItem,
   StoryBibleForeshadowFieldChange,

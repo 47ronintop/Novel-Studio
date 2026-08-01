@@ -1,5 +1,8 @@
 import type { AgentWritePolicy } from "./agent-run-types.js";
-import type { VersionGroupAssetType } from "./version-group.js";
+import type {
+  StoryBibleApplyReceipt,
+  VersionGroupAssetType
+} from "./version-group.js";
 
 export type TransactionJournalKind = "apply" | "version_group_undo" | "run_undo";
 export type TransactionJournalStatus =
@@ -21,7 +24,7 @@ export interface TransactionJournalEntry {
 }
 
 export interface TransactionJournal {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
   readonly transactionId: string;
   readonly versionGroupId: string;
   readonly kind: TransactionJournalKind;
@@ -34,6 +37,10 @@ export interface TransactionJournal {
   readonly writePolicy?: AgentWritePolicy;
   readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken?: string;
+  readonly applyBatchId?: string;
+  readonly consistencyGroupId?: string;
+  readonly selectionChecksum?: string;
+  readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly transactionStatus: TransactionJournalStatus;
@@ -68,7 +75,8 @@ export type CreateTransactionJournalInput =
 
 export function createTransactionJournal(input: CreateTransactionJournalInput): TransactionJournal {
   return freezeJournal({
-    schemaVersion: "1.0",
+    schemaVersion:
+      input.applyBatchId === undefined || input.consistencyGroupId === undefined ? "1.0" : "1.1",
     ...input,
     updatedAt: input.createdAt,
     transactionStatus: "prepared"
@@ -112,6 +120,24 @@ function freezeJournal(journal: TransactionJournal): TransactionJournal {
     entries: Object.freeze(journal.entries.map((entry) => Object.freeze({ ...entry }))),
     ...(journal.undoOfVersionGroupIds === undefined
       ? {}
-      : { undoOfVersionGroupIds: Object.freeze([...journal.undoOfVersionGroupIds]) })
+      : { undoOfVersionGroupIds: Object.freeze([...journal.undoOfVersionGroupIds]) }),
+    ...(journal.storyBibleReceipt === undefined
+      ? {}
+      : {
+          storyBibleReceipt: Object.freeze({
+            ...journal.storyBibleReceipt,
+            suggestionIds: Object.freeze([...journal.storyBibleReceipt.suggestionIds]),
+            assets: Object.freeze(
+              journal.storyBibleReceipt.assets.map((asset) =>
+                Object.freeze({
+                  ...asset,
+                  inversePatch: Object.freeze(
+                    asset.inversePatch.map((operation) => Object.freeze({ ...operation }))
+                  )
+                })
+              )
+            )
+          })
+        })
   });
 }

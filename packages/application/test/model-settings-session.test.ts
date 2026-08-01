@@ -199,6 +199,38 @@ describe("model settings session", () => {
     expect(JSON.stringify(writes)).not.toContain("sk-");
   });
 
+  test("defaults, reads, and saves the chapter completion analysis mode", async () => {
+    let currentSettings: ProjectSettings = settings;
+    const session = createModelSettingsSession({
+      settingsPort: {
+        async readSettings() {
+          return ok(currentSettings);
+        },
+        async writeSettings(nextSettings) {
+          currentSettings = nextSettings;
+          return ok(nextSettings);
+        }
+      }
+    });
+
+    await expect(session.readStoryAnalysisSettings()).resolves.toEqual(
+      ok({ completionMode: "prompt" })
+    );
+    await expect(
+      session.saveStoryAnalysisSettings({ completionMode: "background-review" })
+    ).resolves.toEqual(ok({ completionMode: "background-review" }));
+    expect(currentSettings.storyAnalysis).toEqual({ completionMode: "background-review" });
+
+    const invalid = await session.saveStoryAnalysisSettings({
+      completionMode: "automatic-write"
+    } as never);
+    expect(invalid).toMatchObject({
+      ok: false,
+      error: { code: "STORY_ANALYSIS_SETTINGS_INVALID" }
+    });
+    expect(currentSettings.storyAnalysis).toEqual({ completionMode: "background-review" });
+  });
+
   test("tests a model profile connection without exposing secret values", async () => {
     const testerCalls: ModelProfile[] = [];
     const tester: ModelConnectionTester = {

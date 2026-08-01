@@ -11,6 +11,7 @@ describe("AgentToolCapabilitySnapshot", () => {
     expect(snap.workspaceKind).toBe("creativeProject");
     expect(snap.searchEnabled).toBe(false);
     expect(snap.fileLifecycleEnabled).toBe(false);
+    expect(snap.storyBibleStructuredToolsEnabled).toBe(false);
     expect(snap.controlledExecutionEnabled).toBe(false);
     expect(snap.gitReadEnabled).toBe(false);
     expect(snap.networkReadEnabled).toBe(false);
@@ -118,6 +119,42 @@ describe("AgentToolCapabilitySnapshot", () => {
       expect(names).toContain("search_project_text");
       expect(names).toContain("find_project_references");
     }
+  });
+
+  test("exposes structured Story Bible reads in planning and writes only in writing execution", () => {
+    const cap: AgentToolCapabilitySnapshot = {
+      ...createDefaultCapabilitySnapshot(),
+      storyBibleStructuredToolsEnabled: true,
+      featureFlagRevision: "story-bible-v1.1-test"
+    };
+    const names = (operationMode: "planning" | "execution", contextMode: "writing" | "general_file") =>
+      listAgentTools({
+        facadeVersion: "v2",
+        operationMode,
+        contextMode,
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: cap
+      }).map((tool) => tool.name);
+
+    expect(names("planning", "writing")).toEqual(
+      expect.arrayContaining([
+        "describe_story_bible_type",
+        "list_story_bible",
+        "read_story_bible",
+        "get_story_bible_references"
+      ])
+    );
+    expect(names("planning", "writing")).not.toContain("patch_story_bible");
+    expect(names("execution", "writing")).toEqual(
+      expect.arrayContaining([
+        "create_story_bible",
+        "patch_story_bible",
+        "set_story_bible_status",
+        "restore_story_bible"
+      ])
+    );
+    expect(names("execution", "general_file")).not.toContain("read_story_bible");
+    expect(names("execution", "general_file")).not.toContain("patch_story_bible");
   });
 
   test("new descriptor fields are populated for core tools", () => {

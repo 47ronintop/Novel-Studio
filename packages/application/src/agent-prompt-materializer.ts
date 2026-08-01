@@ -1,11 +1,21 @@
 import { createHash } from "node:crypto";
 
 import {
+  aggregateContextPrecision,
+  createDeterministicTokenEstimator,
+  createPackedAgentContext,
+  createPackedAgentContextManifest,
   isAgentContextScope,
+  validatePackedAgentContext,
   validateAgentContextSourceMaterialization,
+  type AgentContextPreferenceScope,
+  type AgentContextPrecision,
   type AgentContextScope,
   type AgentRunEvent,
-  type AgentContextSourceInput
+  type AgentContextSourceInput,
+  type AgentTokenEstimator,
+  type PackedAgentContext,
+  type PackedAgentContextSourceManifest
 } from "@novel-studio/agent-engine";
 import type { JsonObject } from "@novel-studio/shared";
 
@@ -64,6 +74,8 @@ export interface AgentPromptMaterializationArtifact extends Omit<
   readonly guidanceTemplateChecksum: string;
   readonly contextSources: readonly AgentContextSourceInput[];
   readonly conversationSummaryMessages: readonly MaterializedAgentMessage[];
+  /** Present for new packed runs; covered by the artifact checksum to bind the audit manifest. */
+  readonly packedContextManifestChecksum?: string;
   readonly checksum: string;
 }
 
@@ -75,6 +87,22 @@ export interface MaterializeAgentPromptInput {
   readonly contextSources?: readonly AgentContextSourceInput[];
   readonly conversationSummaryMessages?: readonly MaterializedAgentMessage[];
   readonly historyMessages?: readonly MaterializedAgentMessage[];
+  readonly packedContext?: PackedAgentContext;
+}
+
+export interface PackAgentContextInput {
+  readonly profile: AgentContextProfile;
+  readonly contextSources: readonly AgentContextSourceInput[];
+  readonly excludedContextSources?: readonly AgentContextSourceInput[];
+  /** Excluded audit records retained from an earlier v1.2 manifest after their bodies were evicted. */
+  readonly excludedSourceManifests?: readonly PackedAgentContextSourceManifest[];
+  readonly modelProfileId: string;
+  readonly usedTokens: number;
+  readonly safeInputBudget: number;
+  readonly remainingTokens: number;
+  readonly precision: AgentContextPrecision;
+  readonly createdAt: string;
+  readonly estimator?: AgentTokenEstimator;
 }
 
 export interface CreateAgentPromptMaterializationArtifactInput extends Omit<
@@ -84,6 +112,8 @@ export interface CreateAgentPromptMaterializationArtifactInput extends Omit<
   readonly runId: string;
   readonly contextSnapshotId: string;
   readonly systemGuidanceRefId?: string;
+  /** Parsing-only compatibility input; new writes derive this from packedContext. */
+  readonly packedContextManifestChecksum?: string;
 }
 
 const stableProjectSourceKinds = new Set<string>(["project_conventions", "workspace_outline"]);
@@ -93,16 +123,20 @@ export function materializeAgentPrompt(
 ): AgentPromptMaterialization {
   const sources = input.contextSources ?? [];
   assertProjectSourceProfile(sources, input.profile);
-  const stablePrefixMessages = sources
-    .filter((source) => stableProjectSourceKinds.has(source.sourceKind))
-    .sort(compareStableProjectSources)
-    .map(materializeProjectDataSource);
-  const currentAndExplicitSources = sources
-    .filter(
-      (source) =>
-        source.sourceKind !== "system_guidance" && !stableProjectSourceKinds.has(source.sourceKind)
-    )
-    .map(materializeProjectDataSource);
+  if (input.packedContext !== undefined) {
+    assertPackedContextMatchesSources(input.packedContext, input.profile, sources);
+  }
+  const orderedSources = orderedProjectContextSources(sources);
+  const packedMessages = input.packedContext?.blocks.map(({ role, content }) => ({
+    role,
+    content
+  }));
+  const sourceMessages = packedMessages ?? orderedSources.map(materializeProjectDataSource);
+  const stableCount = orderedSources.filter((source) =>
+    stableProjectSourceKinds.has(source.sourceKind)
+  ).length;
+  const stablePrefixMessages = sourceMessages.slice(0, stableCount);
+  const currentAndExplicitSources = sourceMessages.slice(stableCount);
   const dynamicSuffixMessages: MaterializedAgentMessage[] = [
     { role: "user", content: input.userRequest },
     ...(input.conversationSummaryMessages ?? []),
@@ -136,6 +170,193 @@ export function materializeAgentPrompt(
     messages: [...stablePrefixMessages, ...dynamicSuffixMessages],
     stablePrefixChecksum
   });
+}
+
+export function packAgentContext(input: PackAgentContextInput): PackedAgentContext {
+  const estimator = input.estimator ?? createDeterministicTokenEstimator();
+  const activeSources = orderedProjectContextSources(input.contextSources);
+  const excludedSources = orderedProjectContextSources(input.excludedContextSources ?? []);
+  const activeCounts = activeSources.map((source) => {
+    const message = materializeProjectDataSource(source);
+    return { source, message, count: estimator.count(message.content, input.modelProfileId) };
+  });
+  const excludedCounts = excludedSources.map((source) => {
+    const message = materializeProjectDataSource(source);
+    return { source, count: estimator.count(message.content, input.modelProfileId) };
+  });
+  const countByRef = new Map(activeCounts.map((entry) => [entry.source.refId, entry.count]));
+  const contextTokens = activeCounts.reduce((total, entry) => total + entry.count.tokens, 0);
+  const pinnedTokens = activeSources.reduce(
+    (total, source) =>
+      source.selectionPolicy === "pinned"
+        ? total + (countByRef.get(source.refId)?.tokens ?? 0)
+        : total,
+    0
+  );
+  const preservedExcluded = input.excludedSourceManifests ?? [];
+  const sourcePrecisions = [
+    ...activeCounts.map((entry) => entry.count.precision),
+    ...excludedCounts.map((entry) => entry.count.precision),
+    ...preservedExcluded.map((entry) => entry.precision)
+  ];
+  const sourceManifest = [
+    ...activeCounts.map(({ source, count }) =>
+      packedSourceManifest(source, "active", count.tokens, count.precision)
+    ),
+    ...excludedCounts.map(({ source, count }) =>
+      packedSourceManifest(source, "excluded", count.tokens, count.precision)
+    ),
+    ...preservedExcluded.map((source) => ({ ...source, state: "excluded" as const }))
+  ];
+  if (new Set(sourceManifest.map((source) => source.refId)).size !== sourceManifest.length) {
+    throw new Error("PACKED_AGENT_CONTEXT_INVALID");
+  }
+  return createPackedAgentContext({
+    scope: input.profile.scope,
+    contextProfileId: input.profile.profileId,
+    blocks: activeCounts.map(({ source, message, count }) => ({
+      refId: source.refId,
+      sourceKind: source.sourceKind,
+      role: "user" as const,
+      content: message.content,
+      tokenCount: count.tokens,
+      precision: count.precision,
+      truncationRange: source.materialization?.truncationRange ?? null
+    })),
+    sources: sourceManifest,
+    tokenStats: {
+      contextTokens,
+      pinnedTokens,
+      usedTokens: input.usedTokens,
+      safeInputBudget: input.safeInputBudget,
+      remainingTokens: input.remainingTokens,
+      precision: aggregateContextPrecision([input.precision, ...sourcePrecisions])
+    },
+    createdAt: input.createdAt
+  });
+}
+
+function orderedProjectContextSources(
+  sources: readonly AgentContextSourceInput[]
+): readonly AgentContextSourceInput[] {
+  const visibleSources = sources.filter((source) => source.sourceKind !== "system_guidance");
+  assertUniqueSourceRefs(visibleSources);
+  const stableSources = visibleSources
+    .filter((source) => stableProjectSourceKinds.has(source.sourceKind))
+    .sort(compareStableProjectSources);
+  const dynamicSources = visibleSources
+    .filter((source) => !stableProjectSourceKinds.has(source.sourceKind))
+    .map((source, index) => ({ source, index }))
+    .sort(
+      (left, right) =>
+        (right.source.priority ?? defaultSourcePriority(right.source.sourceKind)) -
+          (left.source.priority ?? defaultSourcePriority(left.source.sourceKind)) ||
+        left.index - right.index
+    )
+    .map(({ source }) => source);
+  return [...stableSources, ...dynamicSources];
+}
+
+function packedSourceManifest(
+  source: AgentContextSourceInput,
+  state: PackedAgentContextSourceManifest["state"],
+  tokenCount: number,
+  precision: AgentContextPrecision
+): PackedAgentContextSourceManifest {
+  const selectionPolicy = source.selectionPolicy ?? defaultSelectionPolicy(source.sourceKind);
+  return {
+    refId: source.refId,
+    sourceKind: source.sourceKind,
+    ...(source.relativePath === undefined ? {} : { relativePath: source.relativePath }),
+    ...(source.assetId === undefined ? {} : { assetId: source.assetId }),
+    sourceRevision: source.sourceRevision ?? 0,
+    sourceChecksum: checksum(source.content),
+    tokenCount,
+    precision,
+    state,
+    selectionReason: source.selectionReason ?? defaultSelectionReason(source.sourceKind),
+    selectionPolicy,
+    preferenceScope:
+      source.preferenceScope ?? defaultPreferenceScope(selectionPolicy, source.sourceKind),
+    priority: source.priority ?? defaultSourcePriority(source.sourceKind),
+    truncationRange: source.materialization?.truncationRange ?? null
+  };
+}
+
+function assertPackedContextMatchesSources(
+  packed: PackedAgentContext,
+  profile: AgentContextProfile,
+  sources: readonly AgentContextSourceInput[]
+): void {
+  const orderedSources = orderedProjectContextSources(sources);
+  const activeManifest = packed.sources.filter((source) => source.state === "active");
+  if (
+    !validatePackedAgentContext(packed) ||
+    packed.contextProfileId !== profile.profileId ||
+    stableSerialize(packed.scope) !== stableSerialize(profile.scope) ||
+    packed.blocks.length !== orderedSources.length ||
+    activeManifest.length !== orderedSources.length
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  for (const [index, source] of orderedSources.entries()) {
+    const block = packed.blocks[index];
+    const manifest = activeManifest[index];
+    const expectedMessage = materializeProjectDataSource(source);
+    if (
+      block === undefined ||
+      manifest === undefined ||
+      block.order !== index ||
+      block.refId !== source.refId ||
+      block.sourceKind !== source.sourceKind ||
+      block.role !== expectedMessage.role ||
+      block.content !== expectedMessage.content ||
+      stableSerialize(manifest) !==
+        stableSerialize(packedSourceManifest(source, "active", block.tokenCount, block.precision))
+    ) {
+      throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    }
+  }
+}
+
+function assertUniqueSourceRefs(sources: readonly AgentContextSourceInput[]): void {
+  const refs = new Set<string>();
+  for (const source of sources) {
+    if (refs.has(source.refId)) throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    refs.add(source.refId);
+  }
+}
+
+function defaultSelectionReason(sourceKind: AgentContextSourceInput["sourceKind"]): string {
+  if (sourceKind === "project_conventions" || sourceKind === "workspace_outline") {
+    return "Automatically selected project context";
+  }
+  return "Explicit context reference";
+}
+
+function defaultSelectionPolicy(
+  sourceKind: AgentContextSourceInput["sourceKind"]
+): PackedAgentContextSourceManifest["selectionPolicy"] {
+  return sourceKind === "project_conventions" || sourceKind === "workspace_outline"
+    ? "automatic"
+    : "explicit";
+}
+
+function defaultPreferenceScope(
+  selectionPolicy: PackedAgentContextSourceManifest["selectionPolicy"],
+  sourceKind: AgentContextSourceInput["sourceKind"]
+): AgentContextPreferenceScope {
+  return selectionPolicy === "automatic" &&
+    (sourceKind === "project_conventions" || sourceKind === "workspace_outline")
+    ? "automatic"
+    : "run";
+}
+
+function defaultSourcePriority(sourceKind: AgentContextSourceInput["sourceKind"]): number {
+  if (sourceKind === "editor_buffer") return 90;
+  if (sourceKind === "project_conventions") return 80;
+  if (sourceKind === "workspace_outline") return 60;
+  return 70;
 }
 
 function stableProjectSourceIdentity(source: AgentContextSourceInput): unknown {
@@ -307,6 +528,16 @@ export function createAgentPromptMaterializationArtifact(
 ): AgentPromptMaterializationArtifact {
   assertPersistableContextSources(input.contextSources ?? []);
   const materialization = materializeAgentPrompt(input);
+  const packedContextManifestChecksum =
+    input.packedContext === undefined
+      ? input.packedContextManifestChecksum
+      : createPackedAgentContextManifest(input.packedContext).manifestChecksum;
+  if (
+    packedContextManifestChecksum !== undefined &&
+    !/^[a-f0-9]{64}$/u.test(packedContextManifestChecksum)
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
   const unsigned = {
     ...materialization,
     schemaVersion: "1.1" as const,
@@ -321,7 +552,8 @@ export function createAgentPromptMaterializationArtifact(
       `system_guidance:${input.profile.profileId}@${AGENT_SYSTEM_GUIDANCE_VERSION}`,
     guidanceTemplateChecksum: checksum(input.systemPrompt),
     contextSources: structuredClone(input.contextSources ?? []),
-    conversationSummaryMessages: structuredClone(input.conversationSummaryMessages ?? [])
+    conversationSummaryMessages: structuredClone(input.conversationSummaryMessages ?? []),
+    ...(packedContextManifestChecksum === undefined ? {} : { packedContextManifestChecksum })
   };
   return deepFreeze({
     ...unsigned,
@@ -334,6 +566,7 @@ export function rematerializeAgentPromptArtifact(
   input: {
     readonly contextSnapshotId: string;
     readonly contextSources: readonly AgentContextSourceInput[];
+    readonly packedContext?: PackedAgentContext;
   }
 ): AgentPromptMaterializationArtifact {
   return createAgentPromptMaterializationArtifact({
@@ -344,6 +577,7 @@ export function rematerializeAgentPromptArtifact(
     toolCatalogRevision: prior.toolCatalogRevision,
     userRequest: prior.userRequest,
     contextSources: input.contextSources,
+    ...(input.packedContext === undefined ? {} : { packedContext: input.packedContext }),
     conversationSummaryMessages: prior.conversationSummaryMessages,
     systemGuidanceRefId: prior.systemGuidanceRefId
   });
@@ -367,6 +601,10 @@ export function parseAgentPromptMaterializationArtifact(
   const guidanceTemplateChecksum = checksumValue(value["guidanceTemplateChecksum"]);
   const contextSources = parseContextSources(value["contextSources"]);
   const conversationSummaryMessages = parseMessages(value["conversationSummaryMessages"]);
+  const packedContextManifestChecksum =
+    value["packedContextManifestChecksum"] === undefined
+      ? undefined
+      : checksumValue(value["packedContextManifestChecksum"]);
   if (
     runId === undefined ||
     contextSnapshotId === undefined ||
@@ -377,7 +615,9 @@ export function parseAgentPromptMaterializationArtifact(
     systemGuidanceRefId === undefined ||
     guidanceTemplateChecksum === undefined ||
     contextSources === undefined ||
-    conversationSummaryMessages === undefined
+    conversationSummaryMessages === undefined ||
+    (value["packedContextManifestChecksum"] !== undefined &&
+      packedContextManifestChecksum === undefined)
   ) {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
@@ -390,7 +630,8 @@ export function parseAgentPromptMaterializationArtifact(
     userRequest,
     contextSources,
     conversationSummaryMessages,
-    systemGuidanceRefId
+    systemGuidanceRefId,
+    ...(packedContextManifestChecksum === undefined ? {} : { packedContextManifestChecksum })
   });
   const expectedGuidanceRefPrefix = `system_guidance:${profile.profileId}@`;
   const persistedChecksumMatches =
@@ -641,7 +882,12 @@ function compareStableProjectSources(
 ): number {
   const order = (source: AgentContextSourceInput): number =>
     source.sourceKind === "project_conventions" ? 0 : 1;
-  return order(left) - order(right) || left.refId.localeCompare(right.refId);
+  return (
+    order(left) - order(right) ||
+    (right.priority ?? defaultSourcePriority(right.sourceKind)) -
+      (left.priority ?? defaultSourcePriority(left.sourceKind)) ||
+    left.refId.localeCompare(right.refId)
+  );
 }
 
 function parseMessages(value: unknown): readonly MaterializedAgentMessage[] | undefined {

@@ -38,6 +38,32 @@
     "createdAt": { "type": "string", "format": "date-time" },
     "parentVersionId": { "type": ["string", "null"] },
     "checksum": { "type": "string", "pattern": "^sha256:" },
+    "storyBibleStatusTransition": {
+      "type": "object",
+      "required": [
+        "assetId",
+        "beforeStatus",
+        "afterStatus",
+        "beforeRevision",
+        "afterRevision",
+        "afterChecksum"
+      ],
+      "properties": {
+        "assetId": { "type": "string" },
+        "beforeStatus": {
+          "type": "string",
+          "enum": ["active", "draft", "archived", "deleted"]
+        },
+        "afterStatus": {
+          "type": "string",
+          "enum": ["active", "draft", "archived", "deleted"]
+        },
+        "beforeRevision": { "type": "integer", "minimum": 0 },
+        "afterRevision": { "type": "integer", "minimum": 0 },
+        "afterChecksum": { "type": "string", "pattern": "^sha256:" }
+      },
+      "additionalProperties": false
+    },
     "snapshot": {}
   },
   "additionalProperties": true

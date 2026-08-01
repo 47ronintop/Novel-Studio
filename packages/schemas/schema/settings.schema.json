@@ -152,6 +152,17 @@
         }
       },
       "additionalProperties": true
+    },
+    "storyAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completionMode"],
+      "properties": {
+        "completionMode": {
+          "type": "string",
+          "enum": ["off", "prompt", "background-review"]
+        }
+      }
     }
   },
   "additionalProperties": true

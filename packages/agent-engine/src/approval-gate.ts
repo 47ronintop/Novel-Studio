@@ -1,16 +1,22 @@
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
-import type { ChangeSet } from "./change-set.js";
+import {
+  checksumChangeSetText,
+  inspectChangeSetConsistencyGroups,
+  type ChangeSet
+} from "./change-set.js";
 
 export interface ChangeSetApprovalBinding {
   readonly changeSetId: string;
   readonly revision: number;
   readonly checksum: string;
   readonly approvalToken: string;
+  readonly selectedConsistencyGroupIds?: readonly string[];
+  readonly selectionChecksum?: string;
 }
 
 export interface ChangeSetApproval {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
   readonly decision: "apply_selected" | "reject_all";
   readonly approvalSource: "human_confirmation" | "user_preapproved_run";
   readonly resolvedAt: string;
@@ -24,6 +30,30 @@ export interface DecideChangeSetApprovalInput {
   readonly revision: number;
   readonly checksum: string;
   readonly resolvedAt: string;
+}
+
+export interface ChangeSetGroupApprovalTokenInput {
+  readonly changeSetId: string;
+  readonly revision: number;
+  readonly checksum: string;
+  readonly applyBatchId: string;
+  readonly consistencyGroupId: string;
+  readonly selectionChecksum: string;
+}
+
+export function deriveChangeSetGroupApprovalToken(input: ChangeSetGroupApprovalTokenInput): string {
+  const approvalToken = checksumChangeSetText(
+    `${input.changeSetId}:${input.revision}:${input.checksum}`
+  );
+  return checksumChangeSetText(
+    [
+      "change-set-group-approval-v1",
+      approvalToken,
+      input.applyBatchId,
+      input.consistencyGroupId,
+      input.selectionChecksum
+    ].join(":")
+  );
 }
 
 export function decideChangeSetApproval(
@@ -61,9 +91,28 @@ export function decideChangeSetApproval(
     }
   }
 
+  const consistencyGroups = inspectChangeSetConsistencyGroups(input.changeSet);
+  if (consistencyGroups.splitGroupIds.length > 0) {
+    return failure(
+      "CHANGE_SET_CONSISTENCY_GROUP_SPLIT",
+      "A consistency group cannot be partially selected.",
+      "Select or reject every change in the consistency group together."
+    );
+  }
+  const groupedBinding =
+    consistencyGroups.selectionChecksum === undefined
+      ? {}
+      : {
+          selectedConsistencyGroupIds: consistencyGroups.selectedGroupIds,
+          selectionChecksum: consistencyGroups.selectionChecksum
+        };
+
   return ok(
     deepFreeze({
-      schemaVersion: "1.0",
+      schemaVersion:
+        input.changeSet.schemaVersion === "1.1" || consistencyGroups.allGroupIds.length > 0
+          ? "1.1"
+          : "1.0",
       decision: input.decision,
       approvalSource: "human_confirmation",
       resolvedAt: input.resolvedAt,
@@ -71,7 +120,8 @@ export function decideChangeSetApproval(
         changeSetId: input.changeSet.changeSetId,
         revision: input.changeSet.revision,
         checksum: input.changeSet.checksum,
-        approvalToken: input.changeSet.approvalToken
+        approvalToken: input.changeSet.approvalToken,
+        ...groupedBinding
       }
     })
   );

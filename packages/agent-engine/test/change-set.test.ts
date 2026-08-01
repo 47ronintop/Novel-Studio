@@ -92,6 +92,48 @@ describe("immutable Change Set revisions", () => {
     );
   });
 
+  test("binds Story Bible deleted-boundary proof into the immutable approval checksum", async () => {
+    const baseContent = '{"status":"active"}\n';
+    const proposal: ChangeSetProposal = {
+      relativePath: "characters/chr_11111111111111111111111111111111.json",
+      assetType: "text",
+      assetId: "chr_11111111111111111111111111111111",
+      baseContent,
+      baseChecksum: sha256(baseContent),
+      range: { unit: "character", start: 0, end: baseContent.length },
+      replacement: '{"status":"deleted"}\n',
+      storyBibleStatusProof: {
+        action: "delete",
+        deletionImpactChecksum: "a".repeat(64)
+      }
+    };
+    const first = await createChangeSetRevision(
+      { ...baseBinding, proposal },
+      { createHunkId: () => "story-status-hunk" }
+    );
+    const changedProof = await createChangeSetRevision(
+      {
+        ...baseBinding,
+        proposal: {
+          ...proposal,
+          storyBibleStatusProof: {
+            action: "delete",
+            deletionImpactChecksum: "b".repeat(64)
+          }
+        }
+      },
+      { createHunkId: () => "story-status-hunk" }
+    );
+
+    expect(first.files[0]?.storyBibleStatusProof).toEqual({
+      action: "delete",
+      deletionImpactChecksum: "a".repeat(64)
+    });
+    expect(first.schemaVersion).toBe("1.1");
+    expect(first.checksum).not.toBe(changedProof.checksum);
+    expect(first.approvalToken).not.toBe(changedProof.approvalToken);
+  });
+
   test("merges repeated proposals into a new revision and leaves the shown revision unchanged", async () => {
     const baseContent = "One\nTwo\nThree";
     const first = await createChangeSetRevision(
@@ -130,6 +172,42 @@ describe("immutable Change Set revisions", () => {
     });
     expect(revised.checksum).not.toBe(first.checksum);
     expect(revised.approvalToken).not.toBe(first.approvalToken);
+  });
+
+  test("keeps every file in a consistency group selected or rejected together", async () => {
+    const firstBase = "first";
+    const secondBase = "second";
+    const first = await createChangeSetRevision({
+      ...baseBinding,
+      proposal: {
+        ...characterProposal("notes/first.md", firstBase, 0, firstBase.length, "updated first"),
+        consistencyGroupId: "fact_transfer_01"
+      }
+    });
+    const grouped = await appendChangeSetProposal(first, {
+      createdAt: "2026-07-13T01:01:00.000Z",
+      proposal: {
+        ...characterProposal("notes/second.md", secondBase, 0, secondBase.length, "updated second"),
+        consistencyGroupId: "fact_transfer_01"
+      }
+    });
+
+    expect(grouped).toMatchObject({
+      schemaVersion: "1.1",
+      files: [
+        { relativePath: "notes/first.md", consistencyGroupId: "fact_transfer_01" },
+        { relativePath: "notes/second.md", consistencyGroupId: "fact_transfer_01" }
+      ]
+    });
+    await expect(
+      selectChangeSetRevision(grouped, {
+        createdAt: "2026-07-13T01:02:00.000Z",
+        files: [
+          { relativePath: "notes/first.md", selected: true },
+          { relativePath: "notes/second.md", selected: false }
+        ]
+      })
+    ).rejects.toMatchObject({ code: "CHANGE_SET_CONSISTENCY_GROUP_SPLIT" });
   });
 
   test("partial hunk selection creates a new revision and reruns syntax validation", async () => {

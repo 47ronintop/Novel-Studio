@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   agentContextScopeKey,
   createAgentContextSnapshot,
+  createPackedAgentContextManifest,
   normalizeAgentContextSnapshot,
   normalizeAgentRunEvent,
   normalizeAgentRunSnapshot,
@@ -27,6 +28,7 @@ import {
   parseAgentPromptMaterializationArtifact,
   parseCompactionSummaryArtifact,
   materializeAgentRunHistory,
+  packAgentContext,
   promptMaterializationArtifactId,
   rematerializeAgentPromptArtifact,
   type AgentPromptMaterializationArtifact,
@@ -463,7 +465,7 @@ async function buildArtifacts(
     summaryArtifact
   );
   if (!promptMaterialization.ok) return promptMaterialization;
-  const nextPrompt = promptMaterialization.value;
+  let nextPrompt = promptMaterialization.value;
   const promptBoundRefs = new Set([
     nextPrompt.systemGuidanceRefId,
     ...nextPrompt.contextSources.map((source) => source.refId)
@@ -526,21 +528,6 @@ async function buildArtifacts(
       materializationOrder: resultSources.length
     });
   }
-  const resultSnapshot: JsonObject = {
-    ...(snapshot as unknown as JsonObject),
-    contextSnapshotId: resultSnapshotId,
-    compactionRevision: nextRevision,
-    createdAt,
-    materialization: {
-      ...snapshot.materialization,
-      stablePrefixChecksum: nextPrompt.stablePrefixChecksum
-    },
-    sources: resultSources as unknown as JsonObject["sources"],
-    excludedSources: [
-      ...new Set([...(snapshot.excludedSources ?? []), ...request.evictedSourceIds])
-    ]
-  };
-
   const beforeBudget = calculateCompactionBudget({
     context,
     material: material.value,
@@ -562,6 +549,55 @@ async function buildArtifacts(
   if (budget.value.usedTokens > request.targetTokens) {
     return err(composerError("AGENT_CONTEXT_COMPACTION_TARGET_UNREACHED"));
   }
+  const retainedExcluded =
+    snapshot.packedContextManifest?.schemaVersion === "1.2"
+      ? snapshot.packedContextManifest.sources.filter((source) => source.state === "excluded")
+      : [];
+  const canCreatePackedContext =
+    snapshot.packedContextManifest?.schemaVersion === "1.2" ||
+    snapshot.excludedSources.length === 0;
+  let packedContextManifest: AgentContextSnapshot["packedContextManifest"] = null;
+  if (canCreatePackedContext) {
+    try {
+      const packedContext = packAgentContext({
+        profile: nextPrompt.profile,
+        contextSources: nextPrompt.contextSources,
+        excludedContextSources: material.value.prompt.contextSources.filter((source) =>
+          evicted.has(source.refId)
+        ),
+        excludedSourceManifests: retainedExcluded,
+        modelProfileId: context.normalizedRun.providerCapabilitySnapshot.profileId,
+        usedTokens: budget.value.usedTokens,
+        safeInputBudget: budget.value.safeInputBudget,
+        remainingTokens: budget.value.remainingTokens,
+        precision: budget.value.precision,
+        createdAt
+      });
+      nextPrompt = rematerializeAgentPromptArtifact(nextPrompt, {
+        contextSnapshotId: resultSnapshotId,
+        contextSources: nextPrompt.contextSources,
+        packedContext
+      });
+      packedContextManifest = createPackedAgentContextManifest(packedContext);
+    } catch {
+      return err(composerError("AGENT_CONTEXT_COMPACTION_SNAPSHOT_INVALID"));
+    }
+  }
+  const resultSnapshot: JsonObject = {
+    ...(snapshot as unknown as JsonObject),
+    contextSnapshotId: resultSnapshotId,
+    compactionRevision: nextRevision,
+    createdAt,
+    materialization: {
+      ...snapshot.materialization,
+      stablePrefixChecksum: nextPrompt.stablePrefixChecksum
+    },
+    sources: resultSources as unknown as JsonObject["sources"],
+    excludedSources: [
+      ...new Set([...(snapshot.excludedSources ?? []), ...request.evictedSourceIds])
+    ],
+    packedContextManifest: packedContextManifest as unknown as JsonObject
+  };
   const beforeTokens = beforeBudget.value.usedTokens;
   const afterTokens = budget.value.usedTokens;
 

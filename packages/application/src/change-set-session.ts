@@ -18,9 +18,10 @@ import {
   type ChangeSetRange,
   type ChangeSetFileSelection,
   type DecideChangeSetCommand,
+  type StoryBibleStatusTransitionProof,
   type AgentWritePolicy
 } from "@novel-studio/agent-engine";
-import { createUnifiedError, err, type Result, type UnifiedError } from "@novel-studio/shared";
+import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { consumeAgentRunProposalAuthorization } from "./agent-write-authorization.js";
 
 export interface ChangeSetProposalTarget {
@@ -36,6 +37,7 @@ export interface ChangeSetProposalTarget {
 export interface ChangeSetCandidateValidationPortInput {
   readonly runId: string;
   readonly projectId: string;
+  readonly checkpointId: string;
   readonly relativePath: string;
   readonly assetType: ChangeSetAssetType;
   readonly assetId?: string;
@@ -78,10 +80,12 @@ interface ChangeSetProposalBinding {
   readonly range: ChangeSetRange;
   readonly baseHash: string;
   readonly replacement: string;
+  readonly consistencyGroupId?: string;
 }
 
 interface InternalChangeSetProposalBinding extends ChangeSetProposalBinding {
   readonly writePolicy?: AgentWritePolicy;
+  readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
 }
 
 export interface ProposeChapterWriteInput extends ChangeSetProposalBinding {
@@ -94,6 +98,9 @@ export interface ProposeFileWriteInput extends ChangeSetProposalBinding {
 
 export interface ProposeStoryBibleWriteInput extends ChangeSetProposalBinding {
   readonly assetId: string;
+  /** Set only after Repository has generated and validated every v1.1 system field. */
+  readonly repositoryPrepared?: boolean;
+  readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
 }
 
 export interface SelectChangeSetSessionRevisionInput {
@@ -127,6 +134,11 @@ export interface ChangeSetSession {
     input: SelectChangeSetSessionRevisionInput
   ): Promise<Result<ChangeSet, UnifiedError>>;
   readChangeSet(changeSetId: string, revision?: number): Promise<Result<ChangeSet, UnifiedError>>;
+  readLatestChangeSet(input: {
+    readonly runId: string;
+    readonly projectId: string;
+    readonly checkpointId: string;
+  }): Promise<Result<ChangeSet | undefined, UnifiedError>>;
   decide(
     command: DecideChangeSetCommand
   ): Promise<Result<ChangeSet | ChangeSetApproval, UnifiedError>>;
@@ -197,7 +209,13 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
         baseContent: target.content,
         baseChecksum: binding.baseHash,
         range: binding.range,
-        replacement: binding.replacement
+        replacement: binding.replacement,
+        ...(binding.consistencyGroupId === undefined
+          ? {}
+          : { consistencyGroupId: binding.consistencyGroupId }),
+        ...(binding.storyBibleStatusProof === undefined
+          ? {}
+          : { storyBibleStatusProof: binding.storyBibleStatusProof })
       };
       const validateCandidate = candidateValidator(binding);
       const revisionOptions = {
@@ -234,7 +252,9 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     }
   }
 
-  function candidateValidator(binding: Pick<ChangeSetProposalBinding, "runId" | "projectId">) {
+  function candidateValidator(
+    binding: Pick<ChangeSetProposalBinding, "runId" | "projectId" | "checkpointId">
+  ) {
     return async (input: {
       readonly relativePath: string;
       readonly assetType: ChangeSetAssetType;
@@ -244,6 +264,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       const validated = await options.port.validateCandidate({
         runId: binding.runId,
         projectId: binding.projectId,
+        checkpointId: binding.checkpointId,
         relativePath: input.relativePath,
         assetType: input.assetType,
         ...(input.assetId === undefined ? {} : { assetId: input.assetId }),
@@ -361,6 +382,13 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           "Refresh the Story Bible asset and retry."
         );
       }
+      if (!input.repositoryPrepared && isStoryBibleV11Text(target.value.content)) {
+        return failure(
+          "STORY_BIBLE_STRUCTURED_TOOL_REQUIRED",
+          "Story Bible v1.1 assets must be changed with a structured Story Bible tool.",
+          "Read the current asset and use patch_story_bible or set_story_bible_status."
+        );
+      }
       return propose(input, target.value);
     },
 
@@ -403,6 +431,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           const validation = await options.port.validateCandidate({
             runId: input.runId,
             projectId: input.projectId,
+            checkpointId: input.checkpointId,
             relativePath: input.operation.relativePath,
             assetType: "text",
             candidateContent: input.operation.content
@@ -466,7 +495,13 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
             ...(input.operations === undefined ? {} : { operations: input.operations }),
             createdAt: now()
           },
-          { validateCandidate: candidateValidator(input) }
+          {
+            validateCandidate: candidateValidator({
+              runId: input.runId,
+              projectId: input.projectId,
+              checkpointId: current.value.checkpointId
+            })
+          }
         );
         const persisted = await options.port.persistChangeSet(selected);
         if (!persisted.ok) return persisted;
@@ -478,6 +513,14 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     },
 
     readChangeSet: findRevision,
+
+    async readLatestChangeSet(input) {
+      if (options.port.readLatestChangeSet === undefined) return ok(undefined);
+      const restored = await options.port.readLatestChangeSet(input);
+      if (!restored.ok) return restored;
+      if (restored.value !== undefined) rememberRevision(restored.value);
+      return restored;
+    },
 
     async decide(command) {
       const receiptKey = `${command.projectId}:${command.commandId}`;
@@ -515,7 +558,13 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
               ...(command.operations === undefined ? {} : { operations: command.operations }),
               createdAt: now()
             },
-            { validateCandidate: candidateValidator(command) }
+            {
+              validateCandidate: candidateValidator({
+                runId: command.runId,
+                projectId: command.projectId,
+                checkpointId: current.value.checkpointId
+              })
+            }
           );
           const persisted = await options.port.persistChangeSet(selected);
           if (!persisted.ok) {
@@ -589,6 +638,21 @@ function isDestructiveOperation(operation: ChangeSetOperation): boolean {
     operation.kind === "delete_file" ||
     operation.kind === "create_directory"
   );
+}
+
+function isStoryBibleV11Text(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      "schemaVersion" in parsed &&
+      parsed.schemaVersion === "1.1"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function failure(

@@ -5,7 +5,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { createDesktopApplication } from "@novel-studio/application";
 import type { ApplicationCommandId } from "@novel-studio/application";
@@ -1863,7 +1863,165 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("为查清旧案进入王都。");
   });
 
-  test("renders focused character fields and keeps secondary settings collapsed", () => {
+  test("hides deleted Story Bible entries by default and can show them explicitly", () => {
+    const application = createDesktopApplication();
+    const entries: StoryBibleEditorProps["entries"] = [
+      {
+        id: "chr_available",
+        kind: "character",
+        assetType: "character",
+        title: "可用人物",
+        status: "draft",
+        summary: "",
+        aliases: [],
+        relatedEntityIds: [],
+        details: {},
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-06T00:00:00.000Z"
+      },
+      {
+        id: "chr_deleted",
+        kind: "character",
+        assetType: "character",
+        title: "已删除人物",
+        status: "deleted",
+        summary: "",
+        aliases: [],
+        relatedEntityIds: [],
+        details: {},
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-06T00:00:00.000Z"
+      }
+    ];
+    const renderList = (status: StoryBibleEditorProps["filters"]["status"]) =>
+      renderToStaticMarkup(
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          storyBibleEditor={createStoryBibleEditorProps({
+            entries,
+            filters: {
+              query: "",
+              status,
+              worldAssetType: "all",
+              foreshadowTrackingStatus: "all"
+            }
+          })}
+        />
+      );
+
+    const availableHtml = renderList("available");
+    expect(availableHtml).toContain('data-story-entry-id="chr_available"');
+    expect(availableHtml).not.toContain('data-story-entry-id="chr_deleted"');
+    expect(availableHtml).toContain('<option value="available" selected="">未删除</option>');
+
+    const deletedHtml = renderList("deleted");
+    expect(deletedHtml).not.toContain('data-story-entry-id="chr_available"');
+    expect(deletedHtml).toContain('data-story-entry-id="chr_deleted"');
+  });
+
+  test("previews incoming references before moving a Story Bible asset to deleted", () => {
+    const application = createDesktopApplication();
+    const actions: string[] = [];
+    const tree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          viewMode: "detail",
+          draft: {
+            id: "chr_hero",
+            kind: "character",
+            assetType: "character",
+            title: "林舟",
+            status: "active",
+            summary: "",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {}
+          },
+          statusAction: {
+            status: "confirmation",
+            action: "move-to-deleted",
+            assetId: "chr_hero",
+            assetTitle: "林舟",
+            deletionImpactChecksum: "d".repeat(64),
+            canSetDeleted: true,
+            affectedReferenceCount: 2,
+            affectedAssetIds: ["fsh_secret"],
+            incoming: [
+              {
+                sourceAssetId: "fsh_secret",
+                sourceTitle: "密信伏笔",
+                sourceType: "foreshadow",
+                sourceStatus: "active",
+                path: "/details/relatedCharacterIds/0",
+                kind: "detail",
+                integrity: "valid"
+              }
+            ]
+          },
+          onStatusActionRequest: (action) => actions.push(`request:${action}`),
+          onStatusActionCancel: () => actions.push("cancel"),
+          onStatusActionConfirm: () => actions.push("confirm")
+        })}
+      />
+    );
+
+    findElementByAriaLabel(tree, "移入已删除")?.props.onClick?.();
+    findElementByAriaLabel(tree, "取消移入已删除")?.props.onClick?.();
+    findElementByAriaLabel(tree, "确认移入已删除")?.props.onClick?.();
+    const html = renderToStaticMarkup(tree);
+
+    expect(actions).toEqual(["request:move-to-deleted", "cancel", "confirm"]);
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-label="移入已删除确认"');
+    expect(html).toContain("不会物理删除，也不会级联修改引用方");
+    expect(html).toContain("2 条入向引用");
+    expect(html).toContain("密信伏笔");
+    expect(html).toContain("/details/relatedCharacterIds/0");
+    expect(html).not.toContain('<option value="deleted">已删除</option>');
+  });
+
+  test("requires confirmation before restoring a deleted Story Bible asset", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          viewMode: "detail",
+          draft: {
+            id: "chr_hero",
+            kind: "character",
+            assetType: "character",
+            title: "林舟",
+            status: "deleted",
+            summary: "",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {}
+          },
+          statusAction: {
+            status: "confirmation",
+            action: "restore",
+            assetId: "chr_hero",
+            assetTitle: "林舟"
+          },
+          onStatusActionRequest: () => undefined
+        })}
+      />
+    );
+
+    expect(html).toContain('aria-label="恢复资料"');
+    expect(html).toContain('aria-label="恢复资料确认"');
+    expect(html).toContain('aria-label="确认恢复资料"');
+  });
+
+  test("renders every strict character field without the illegal appearance chapter field", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -1873,6 +2031,36 @@ describe("WorkspaceShell", () => {
         storyBibleEditor={createStoryBibleEditorProps({
           viewMode: "detail",
           chapterOptions: [{ id: "ch_01", title: "第一章", order: 1, status: "draft" }],
+          entries: [
+            {
+              id: "timeline_main",
+              kind: "timeline",
+              assetType: "timeline.events",
+              title: "主时间线",
+              status: "active",
+              summary: "",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {},
+              timelineEvents: [
+                {
+                  id: `evt_${"1".repeat(32)}`,
+                  sequence: 1,
+                  title: "发现档案",
+                  status: "confirmed",
+                  timeLabel: "第一日",
+                  summary: "",
+                  chapterIds: ["ch_01"],
+                  characterIds: ["chr_hero"],
+                  locationIds: [],
+                  causes: [],
+                  effects: []
+                }
+              ],
+              createdAt: "2026-07-05T00:00:00.000Z",
+              updatedAt: "2026-07-06T00:00:00.000Z"
+            }
+          ],
           draft: {
             id: "chr_hero",
             kind: "character",
@@ -1891,7 +2079,57 @@ describe("WorkspaceShell", () => {
                 turningPoints: ["发现老师隐瞒真相"],
                 end: "主动承担后果"
               },
-              appearanceChapterIds: ["ch_01"]
+              personality: {
+                traits: ["谨慎"],
+                values: ["忠诚"],
+                fears: ["背叛"],
+                desires: ["真相"]
+              },
+              voice: {
+                tone: "克制",
+                vocabulary: ["证据"],
+                catchphrases: ["先查清楚"],
+                forbiddenExpressions: ["随便"]
+              },
+              secrets: [
+                {
+                  secretId: `sec_${"2".repeat(32)}`,
+                  content: "真实身份",
+                  knownByIds: ["chr_friend"],
+                  revealStatus: "hidden"
+                }
+              ],
+              abilities: ["追踪"],
+              limitations: ["怕水"],
+              currentState: {
+                locationId: null,
+                physical: "疲惫",
+                emotional: "警惕",
+                heldItemIds: [],
+                asOfChapterId: "ch_01",
+                asOfEventId: `evt_${"1".repeat(32)}`
+              },
+              knowledgeStates: [
+                {
+                  knowledgeStateId: `knw_${"3".repeat(32)}`,
+                  entryRevision: 2,
+                  subject: "老师隐瞒真相",
+                  state: "suspected",
+                  sourceChapterId: "ch_01",
+                  validFromChapterId: "ch_01",
+                  validToChapterId: null,
+                  note: "尚无实证"
+                }
+              ],
+              stateHistory: [
+                {
+                  stateHistoryId: `sth_${"4".repeat(32)}`,
+                  entryRevision: 3,
+                  timelineEventId: `evt_${"1".repeat(32)}`,
+                  chapterId: "ch_01",
+                  note: "开始怀疑老师"
+                }
+              ]
             }
           }
         })}
@@ -1908,12 +2146,123 @@ describe("WorkspaceShell", () => {
       "人物弧起点",
       "人物弧转折",
       "人物弧目标状态",
-      "关联章节"
+      "性格记录方式",
+      "性格特质",
+      "价值观",
+      "恐惧",
+      "欲望",
+      "语言风格记录方式",
+      "说话语气",
+      "常用词汇",
+      "口头禅",
+      "禁用表达",
+      "人物能力",
+      "人物限制",
+      "人物当前位置",
+      "人物身体状态",
+      "人物情绪状态",
+      "人物持有物品",
+      "人物状态截止章节",
+      "人物状态截止事件",
+      "秘密内容 1",
+      "秘密知情者 1",
+      "秘密揭示状态 1",
+      "知识主题 1",
+      "知识认知状态 1",
+      "知识来源章节 1",
+      "知识生效章节 1",
+      "知识失效章节 1",
+      "知识备注 1",
+      "状态历史事件 1",
+      "状态历史章节 1",
+      "状态历史备注 1"
     ]) {
       expect(html).toContain(`aria-label="${label}"`);
     }
     expect(html).toContain("补充设定");
-    expect(html).toContain("第一章");
+    expect(html).toContain(`稳定 ID：knw_${"3".repeat(32)}`);
+    expect(html).toContain(`稳定 ID：sth_${"4".repeat(32)}`);
+    expect(html).not.toContain('aria-label="关联章节"');
+  });
+
+  test("preserves stable record IDs while leaving new character record IDs to the bridge", () => {
+    const application = createDesktopApplication();
+    const knowledgeStateId = `knw_${"8".repeat(32)}`;
+    const updates: Array<{ readonly kind: string; readonly patch: Record<string, unknown> }> = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    act(() => {
+      root.render(
+        <WorkspaceShell
+          shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          storyBibleEditor={createStoryBibleEditorProps({
+            viewMode: "detail",
+            draft: {
+              id: "chr_hero",
+              kind: "character",
+              assetType: "character",
+              title: "林舟",
+              summary: "",
+              status: "active",
+              aliases: [],
+              relatedEntityIds: [],
+              details: {
+                knowledgeStates: [
+                  {
+                    knowledgeStateId,
+                    entryRevision: 4,
+                    subject: "旧知识",
+                    state: "known",
+                    futureSystemField: "keep"
+                  }
+                ]
+              }
+            },
+            onDraftChange: (kind, patch) => updates.push({ kind, patch })
+          })}
+        />
+      );
+    });
+
+    const subject = host.querySelector<HTMLTextAreaElement>('[aria-label="知识主题 1"]');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(
+        subject,
+        "更新后的知识"
+      );
+      subject?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(updates.at(-1)).toMatchObject({
+      kind: "character",
+      patch: {
+        details: {
+          knowledgeStates: [
+            {
+              knowledgeStateId,
+              entryRevision: 4,
+              subject: "更新后的知识",
+              futureSystemField: "keep"
+            }
+          ]
+        }
+      }
+    });
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="新增人物知识状态"]')?.click());
+    const added = (
+      (updates.at(-1)?.patch["details"] as Record<string, unknown> | undefined)?.[
+        "knowledgeStates"
+      ] as Array<Record<string, unknown>> | undefined
+    )?.[1];
+    expect(added).toMatchObject({ entryRevision: 1, subject: "新知识", state: "known" });
+    expect(added).not.toHaveProperty("knowledgeStateId");
+
+    act(() => root.unmount());
+    host.remove();
   });
 
   test("filters one world list and requires an existing world type before creation", () => {
@@ -1975,7 +2324,7 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("地点");
   });
 
-  test("locks an existing world asset type and shows only its minimum fields", () => {
+  test("locks an existing world asset type and exposes all strict rule fields", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -2005,10 +2354,81 @@ describe("WorkspaceShell", () => {
     );
 
     expect(html).toMatch(/aria-label="世界观类型"[^>]*disabled/u);
-    expect(html).toContain('aria-label="规则正文"');
-    expect(html).toContain('aria-label="适用范围"');
-    expect(html).toContain('aria-label="限制或例外"');
+    for (const label of [
+      "规则正文",
+      "规则陈述",
+      "适用范围",
+      "代价",
+      "规则约束",
+      "局限",
+      "例外",
+      "已知违规事件"
+    ]) {
+      expect(html).toContain(`aria-label="${label}"`);
+    }
     expect(html).not.toContain('aria-label="地理"');
+  });
+
+  test.each([
+    ["world.location", ["地理", "文化", "地点限制", "所属区域", "关联势力"]],
+    [
+      "world.faction",
+      [
+        "势力目标",
+        "结构",
+        "成员或影响范围",
+        "成员人物",
+        "势力资源",
+        "盟友势力",
+        "敌对势力",
+        "影响地点"
+      ]
+    ],
+    ["world.glossary", ["定义", "术语别名", "首次出现说明", "首次出现章节", "关联规则"]],
+    [
+      "world.item",
+      [
+        "外观",
+        "来源",
+        "物品能力",
+        "物品限制",
+        "物品持有者",
+        "物品当前位置",
+        "当前状态",
+        "物品状态截止章节",
+        "物品状态截止事件",
+        "物品状态历史"
+      ]
+    ],
+    [
+      "world.lore",
+      ["背景说明", "历史时期", "制度机构", "风俗", "传说", "社会系统", "关联规则", "关联术语"]
+    ]
+  ] as const)("exposes every strict %s field", (assetType, labels) => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "world",
+          viewMode: "detail",
+          draft: {
+            kind: "world",
+            assetType,
+            title: "严格字段测试",
+            summary: "",
+            status: "active",
+            aliases: [],
+            relatedEntityIds: [],
+            details: {}
+          }
+        })}
+      />
+    );
+
+    for (const label of labels) expect(html).toContain(`aria-label="${label}"`);
   });
 
   test("renders the outline in stored volume order with unassigned and missing chapters", () => {
@@ -2064,6 +2484,63 @@ describe("WorkspaceShell", () => {
     expect(html).toContain("ch_missing");
     expect(html).toContain("无法保存大纲");
     expect(save?.props.disabled).toBe(true);
+  });
+
+  test("renders an indivisible explicit inverse preview with separate confirm and cancel actions", () => {
+    const application = createDesktopApplication();
+    const onSave = vi.fn();
+    const onCancel = vi.fn();
+    const tree = (
+      <WorkspaceShell
+        shellState={{ ...application.getShellState(), activeActivity: "storyBible" }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        storyBibleEditor={createStoryBibleEditorProps({
+          activeKind: "character",
+          viewMode: "detail",
+          dirty: true,
+          draft: {
+            id: "chr_source",
+            kind: "character",
+            assetType: "character",
+            title: "当前人物",
+            summary: "",
+            status: "active",
+            aliases: [],
+            relations: [],
+            relatedEntityIds: [],
+            details: {}
+          },
+          explicitInversePreview: {
+            status: "confirmation",
+            previewId: "preview_1",
+            revision: 2,
+            checksum: "a".repeat(64),
+            expiresAt: "2026-08-01T00:10:00.000Z",
+            files: [
+              { assetId: "chr_source", title: "当前人物", side: "source", hunkCount: 2 },
+              { assetId: "chr_target", title: "目标人物", side: "inverse", hunkCount: 1 }
+            ]
+          },
+          onSave,
+          onExplicitInversePreviewCancel: onCancel
+        })}
+      />
+    );
+    const html = renderToStaticMarkup(tree);
+    const confirm = findElementByAriaLabel(tree, "确认保存双端关系");
+    const cancel = findElementByAriaLabel(tree, "取消双端关系预览");
+    const regularSave = findElementByAriaLabel(tree, "保存设定");
+
+    expect(html).toContain('aria-label="显式双向关系变更预览"');
+    expect(html).toContain("当前资料");
+    expect(html).toContain("反向端资料");
+    expect(html).toContain("任一端失败时不会保留半套关系");
+    expect(regularSave?.props.disabled).toBe(true);
+    confirm?.props.onClick?.();
+    cancel?.props.onClick?.();
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   test("edits volumes and chapter outlines without discarding unknown nested fields", () => {
@@ -3000,7 +3477,7 @@ describe("WorkspaceShell", () => {
       "计划回收章节",
       "实际回收章节",
       "伏笔备注",
-      "伏笔关联资料 ID",
+      "关联资料",
       "证据 1 章节",
       "证据 1 原文片段"
     ]) {
@@ -3758,7 +4235,7 @@ function createStoryBibleEditorProps(
     foreshadowAnalysis: { status: "closed", selectedChapterIds: [] },
     filters: {
       query: "",
-      status: "all",
+      status: "available",
       worldAssetType: "all",
       foreshadowTrackingStatus: "all"
     },

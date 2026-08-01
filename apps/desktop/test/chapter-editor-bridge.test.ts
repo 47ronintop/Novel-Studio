@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { ok } from "@novel-studio/shared";
 import type { ChapterEditorSnapshot, NovelStudioApi } from "@novel-studio/application";
@@ -202,5 +202,45 @@ describe("chapter editor bridge", () => {
 
     expect(bridge.beginSave()).toMatchObject({ saveStatus: "Saving", dirty: true });
     expect(calls).toEqual([]);
+  });
+
+  test("returns the chapter completion analysis disposition when status is saved", async () => {
+    const completedSnapshot = {
+      ...snapshot,
+      state: {
+        ...snapshot.state,
+        chapter: {
+          ...snapshot.state.chapter,
+          frontmatter: {
+            ...snapshot.state.chapter.frontmatter,
+            status: "done" as const
+          }
+        }
+      }
+    } satisfies ChapterEditorSnapshot;
+    const saveWithStatus = vi.fn(async () =>
+      ok({
+        chapter: completedSnapshot,
+        completionAnalysis: {
+          status: "prompt" as const,
+          mode: "prompt" as const,
+          chapterId: snapshot.state.chapter.frontmatter.id
+        }
+      })
+    );
+    const api = {
+      chapter: { saveWithStatus }
+    } as unknown as NovelStudioApi;
+    const bridge = createChapterEditorBridge(api);
+
+    const result = await bridge.saveWithStatus("done");
+
+    expect(saveWithStatus).toHaveBeenCalledWith("done");
+    expect(result.editor.chapter.frontmatter.status).toBe("done");
+    expect(result.completionAnalysis).toEqual({
+      status: "prompt",
+      mode: "prompt",
+      chapterId: snapshot.state.chapter.frontmatter.id
+    });
   });
 });

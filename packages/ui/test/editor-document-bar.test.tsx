@@ -23,5 +23,23 @@ describe("EditorDocumentBar", () => {
     expect(html).toContain('aria-label="保存当前文档"');
     expect(html).toContain('aria-label="查找当前文档"');
     expect(html).not.toContain('aria-label="切换专注模式"');
+    expect(html).not.toContain('aria-label="章节状态"');
+  });
+
+  test("renders the current chapter status only for a chapter document", () => {
+    const html = renderToStaticMarkup(
+      <EditorDocumentBar
+        tabs={[{ id: "chapter:ch_opening", label: "开篇.md", active: true, dirty: false }]}
+        dirty={false}
+        saving={false}
+        chapterStatus="done"
+        chapterStatusBusy
+        onChapterStatusChange={() => undefined}
+      />
+    );
+
+    expect(html).toContain('aria-label="章节状态"');
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('<option value="done" selected="">完成</option>');
   });
 });

@@ -12,6 +12,7 @@ import {
   createAgentPromptMaterializationArtifact,
   materializeAgentPrompt,
   materializeAgentRunHistory,
+  packAgentContext,
   parseAgentPromptMaterializationArtifact,
   rematerializeAgentPromptArtifact
 } from "../src/agent-prompt-materializer.js";
@@ -93,6 +94,156 @@ describe("Agent prompt materializer", () => {
     ]);
     expect(output.stablePrefixMessages).toHaveLength(2);
     expect(output.dynamicSuffixMessages[0]?.content).toBe("Edit the notes");
+  });
+
+  it("packs the exact author-visible sources consumed by prompt materialization", () => {
+    const contextSources = [
+      {
+        refId: "outline-low",
+        sourceKind: "workspace_outline" as const,
+        content: "low priority outline",
+        dirty: false,
+        priority: 20
+      },
+      {
+        refId: "current-file",
+        sourceKind: "disk_file" as const,
+        relativePath: "notes.md",
+        content: "current body",
+        dirty: false,
+        sourceRevision: 7,
+        selectionPolicy: "pinned" as const,
+        preferenceScope: "run" as const,
+        priority: 100
+      },
+      {
+        refId: "outline-high",
+        sourceKind: "workspace_outline" as const,
+        content: "high priority outline",
+        dirty: false,
+        priority: 90
+      },
+      {
+        refId: "hidden-guidance",
+        sourceKind: "system_guidance" as const,
+        content: "hidden app guidance",
+        dirty: false
+      }
+    ];
+    const excludedContextSources = [
+      {
+        refId: "excluded-character",
+        sourceKind: "story_bible_asset" as const,
+        assetId: "character_1",
+        content: "excluded character",
+        dirty: false,
+        selectionReason: "Excluded for this run",
+        preferenceScope: "run" as const
+      }
+    ];
+    const estimator = {
+      count(text: string) {
+        return { tokens: text.length, precision: "reported" as const };
+      }
+    };
+    const packed = packAgentContext({
+      profile,
+      contextSources,
+      excludedContextSources,
+      modelProfileId: "model_1",
+      usedTokens: 200,
+      safeInputBudget: 2_000,
+      remainingTokens: 1_000,
+      precision: "reported",
+      createdAt: "2026-07-31T00:00:00.000Z",
+      estimator
+    });
+    const prompt = materializeAgentPrompt({
+      profile,
+      systemPrompt: "trusted app prompt",
+      toolCatalogRevision: "catalog_1",
+      userRequest: "Edit the notes",
+      contextSources,
+      packedContext: packed
+    });
+
+    expect(packed.blocks.map((block) => block.refId)).toEqual([
+      "outline-high",
+      "outline-low",
+      "current-file"
+    ]);
+    expect(packed.sources.map((source) => [source.refId, source.state])).toEqual([
+      ["outline-high", "active"],
+      ["outline-low", "active"],
+      ["current-file", "active"],
+      ["excluded-character", "excluded"]
+    ]);
+    expect(packed.sources.some((source) => source.refId === "hidden-guidance")).toBe(false);
+    expect(packed.tokenStats.pinnedTokens).toBe(packed.blocks[2]?.tokenCount);
+    expect(packed.sources.find((source) => source.refId === "current-file")?.sourceRevision).toBe(
+      7
+    );
+    expect(prompt.stablePrefixMessages.map((message) => message.content)).toEqual(
+      packed.blocks.slice(0, 2).map((block) => block.content)
+    );
+    expect(prompt.dynamicSuffixMessages.at(-1)?.content).toBe(packed.blocks[2]?.content);
+    expect(Object.isFrozen(packed)).toBe(true);
+
+    expect(() =>
+      materializeAgentPrompt({
+        profile,
+        systemPrompt: "trusted app prompt",
+        toolCatalogRevision: "catalog_1",
+        userRequest: "Edit the notes",
+        contextSources: contextSources.map((source) =>
+          source.refId === "current-file" ? { ...source, content: "changed body" } : source
+        ),
+        packedContext: packed
+      })
+    ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  });
+
+  it("uses priority to order dynamic context sources while preserving stable ties", () => {
+    const packed = packAgentContext({
+      profile,
+      contextSources: [
+        {
+          refId: "character-low",
+          sourceKind: "story_bible_asset",
+          assetId: "character-low",
+          content: "low priority character",
+          dirty: false,
+          priority: 20
+        },
+        {
+          refId: "chapter-current",
+          sourceKind: "editor_buffer",
+          content: "current chapter",
+          dirty: true,
+          priority: 70
+        },
+        {
+          refId: "character-high",
+          sourceKind: "story_bible_asset",
+          assetId: "character-high",
+          content: "high priority character",
+          dirty: false,
+          priority: 90
+        }
+      ],
+      modelProfileId: "model_1",
+      usedTokens: 200,
+      safeInputBudget: 2_000,
+      remainingTokens: 1_000,
+      precision: "reported",
+      createdAt: "2026-07-31T00:00:00.000Z"
+    });
+
+    expect(packed.blocks.map((block) => block.refId)).toEqual([
+      "character-high",
+      "chapter-current",
+      "character-low"
+    ]);
   });
 
   it("does not invalidate the stable prefix for a request or current-file body change", () => {
@@ -251,6 +402,46 @@ describe("Agent prompt materializer", () => {
     expect(JSON.stringify(refreshed.messages)).toContain("new body");
     expect(JSON.stringify(refreshed.messages)).not.toContain("old body");
     expect(refreshed.stablePrefixChecksum).toBe(artifact.stablePrefixChecksum);
+  });
+
+  it("binds a packed-context manifest checksum into the frozen prompt artifact", () => {
+    const contextSources = [
+      {
+        refId: "current-file",
+        sourceKind: "disk_file" as const,
+        relativePath: "notes.md",
+        content: "frozen body",
+        dirty: false
+      }
+    ];
+    const packed = packAgentContext({
+      profile,
+      contextSources,
+      modelProfileId: "model_1",
+      usedTokens: 20,
+      safeInputBudget: 2_000,
+      remainingTokens: 1_980,
+      precision: "estimated",
+      createdAt: "2026-08-01T00:00:00.000Z"
+    });
+    const artifact = createAgentPromptMaterializationArtifact({
+      runId: "run_1",
+      contextSnapshotId: "context_1",
+      profile,
+      systemPrompt: "trusted app prompt",
+      toolCatalogRevision: "catalog_1",
+      userRequest: "Edit the notes",
+      contextSources,
+      packedContext: packed
+    });
+
+    expect(artifact.packedContextManifestChecksum).toMatch(/^[a-f0-9]{64}$/);
+    expect(() =>
+      parseAgentPromptMaterializationArtifact({
+        ...artifact,
+        packedContextManifestChecksum: "f".repeat(64)
+      } as unknown as JsonObject)
+    ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
   });
 
   it("replays a frozen artifact after profile and guidance versions advance", () => {

@@ -1,7 +1,19 @@
 import { describe, expect, test } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createSchemaValidator, type ValidationIssue } from "../src/index.js";
+import {
+  STORY_BIBLE_V11_ASSET_TYPES,
+  createSchemaValidator,
+  createStoryBibleCreateValueSchema,
+  createStoryBibleDefaultDetails,
+  createStoryBibleV11Schema,
+  createStoryBibleWriteCandidateSchema,
+  describeStoryBibleType,
+  storyBibleSchemaFileName,
+  validateStoryBibleV11Asset,
+  type StoryBibleV11AssetType,
+  type ValidationIssue
+} from "../src/index.js";
 
 const rootDir = process.cwd();
 const schemaDir = join(rootDir, "packages", "schemas", "schema");
@@ -143,6 +155,91 @@ describe("schema contract coverage", () => {
 
     expect(result.valid).toBe(true);
     expect(fixture.experimentalUserField).toBe("must stay");
+  });
+
+  test.each(STORY_BIBLE_V11_ASSET_TYPES)(
+    "keeps generated strict %s schema in sync with the runtime contract",
+    (assetType) => {
+      const generated = createStoryBibleV11Schema(assetType, "writeStrict");
+      const persisted = readJson(
+        join(schemaDir, `${storyBibleSchemaFileName(assetType)}.schema.json`)
+      );
+      const fixture = strictStoryBibleFixture(assetType);
+
+      expect(persisted).toEqual(generated);
+      expect(createSchemaValidator(persisted)(fixture)).toEqual({ valid: true, issues: [] });
+    }
+  );
+
+  test("rejects new unknown Story Bible fields but permits bounded persisted passthrough", () => {
+    const fixture = strictStoryBibleFixture("character");
+    const unknownRoot = validateStoryBibleV11Asset(
+      { ...fixture, futureRootField: true },
+      "writeStrict"
+    );
+    const unknownDetail = validateStoryBibleV11Asset(
+      { ...fixture, details: { futureDetailField: true } },
+      "writeStrict"
+    );
+    const passthrough = {
+      sourceSchemaVersion: "1.0",
+      rootFields: { futureRootField: true },
+      detailFieldsByPointer: { "/futureDetailField": { value: true } }
+    };
+
+    expect(unknownRoot.valid).toBe(false);
+    expect(unknownDetail.valid).toBe(false);
+    expect(validateStoryBibleV11Asset({ ...fixture, passthrough }, "writeStrict").valid).toBe(
+      false
+    );
+    expect(
+      validateStoryBibleV11Asset({ ...fixture, passthrough }, "persistedStrict").valid
+    ).toBe(true);
+  });
+
+  test.each(STORY_BIBLE_V11_ASSET_TYPES)(
+    "derives the %s Agent type description from the strict schemas",
+    (assetType) => {
+      const description = describeStoryBibleType(assetType);
+
+      expect(description).toMatchObject({
+        schemaVersion: "1.1",
+        type: assetType,
+        createValueSchema: createStoryBibleCreateValueSchema(assetType),
+        writeCandidateSchema: createStoryBibleWriteCandidateSchema(assetType),
+        systemManagedFields: expect.arrayContaining([
+          "id",
+          "type",
+          "revision",
+          "passthrough"
+        ]),
+        referenceConstraints: {
+          relationSourceMustEqualOwner: true,
+          relationTargetMustExist: true,
+          arrayIndexPatchAllowed: false
+        }
+      });
+      expect(
+        createSchemaValidator(description["createValueSchema"] as Record<string, unknown>)({
+          title: "Created by Agent"
+        }).valid
+      ).toBe(true);
+    }
+  );
+
+  test("creates characters with a complete mutable current state", () => {
+    expect(createStoryBibleDefaultDetails("character")).toEqual({
+      currentState: {
+        locationId: null,
+        physical: "",
+        emotional: "",
+        heldItemIds: [],
+        asOfChapterId: null,
+        asOfEventId: null
+      },
+      knowledgeStates: [],
+      stateHistory: []
+    });
   });
 
   test.each([
@@ -423,4 +520,46 @@ function expectIssueShape(issue: ValidationIssue): void {
   expect(typeof issue.schemaPath).toBe("string");
   expect(typeof issue.keyword).toBe("string");
   expect(typeof issue.message).toBe("string");
+}
+
+function strictStoryBibleFixture(type: StoryBibleV11AssetType): Record<string, unknown> {
+  const ids: Record<StoryBibleV11AssetType, string> = {
+    character: "chr_11111111111111111111111111111111",
+    "world.location": "loc_11111111111111111111111111111111",
+    "world.faction": "fac_11111111111111111111111111111111",
+    "world.rule": "rule_11111111111111111111111111111111",
+    "world.glossary": "term_11111111111111111111111111111111",
+    "world.item": "item_11111111111111111111111111111111",
+    "world.lore": "lore_11111111111111111111111111111111",
+    outline: "outline_main",
+    foreshadow: "fsh_11111111111111111111111111111111",
+    "timeline.events": "timeline_main"
+  };
+  const details: Record<StoryBibleV11AssetType, Record<string, unknown>> = {
+    character: {},
+    "world.location": {},
+    "world.faction": {},
+    "world.rule": {},
+    "world.glossary": {},
+    "world.item": {},
+    "world.lore": {},
+    outline: { volumes: [], chapterOutlines: [] },
+    foreshadow: { trackingStatus: "planned", milestones: [] },
+    "timeline.events": { events: [] }
+  };
+  return {
+    schemaVersion: "1.1",
+    id: ids[type],
+    type,
+    title: "Fixture",
+    status: "active",
+    summary: "",
+    aliases: [],
+    relations: [],
+    details: details[type],
+    extensions: {},
+    createdAt: "2026-07-31T00:00:00.000Z",
+    updatedAt: "2026-07-31T00:00:00.000Z",
+    revision: 1
+  };
 }

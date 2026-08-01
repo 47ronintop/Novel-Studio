@@ -410,6 +410,8 @@ function searchTypeForStoryAsset(asset: StoryBibleRegularAsset): SearchIndexEntr
     case "world.faction":
     case "world.rule":
     case "world.glossary":
+    case "world.item":
+    case "world.lore":
       return "story.world";
   }
 }
@@ -426,6 +428,8 @@ function storyAssetRelativePath(asset: StoryBibleRegularAsset): string {
     case "world.faction":
     case "world.rule":
     case "world.glossary":
+    case "world.item":
+    case "world.lore":
       return toProjectRelativePath(join("world", `${asset.id}.json`));
   }
 }

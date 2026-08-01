@@ -6,6 +6,12 @@ import {
   type AgentContextProfileId,
   type AgentContextScope
 } from "./agent-context-scope.js";
+import {
+  validatePackedAgentContextManifest,
+  type AgentContextPreferenceScope,
+  type AgentContextSelectionPolicy,
+  type PackedAgentContextManifest
+} from "./packed-agent-context.js";
 
 export type AgentContextSourceKind =
   | "disk_file"
@@ -69,8 +75,21 @@ export interface WorkspaceOutlineSourceMaterialization extends AgentContextSourc
   readonly dependencyManifest: JsonObject;
   readonly dependencyManifestChecksum: string;
   readonly dependencyRevisionChecksum: string;
+  /** Optional v1.0-compatible proof used to attribute aggregate changes to exact source paths. */
+  readonly dependencyEntries?: readonly WorkspaceOutlineDependencyEntry[];
+  readonly dependencyEntriesChecksum?: string;
   readonly materializedChecksum: string;
   readonly rereadHint: string;
+}
+
+export interface WorkspaceOutlineDependencyEntry {
+  readonly kind: "directory" | "file" | "chapter" | "story_bible_asset";
+  readonly id: string;
+  readonly label: string;
+  readonly relativePath?: string;
+  readonly depth?: number;
+  readonly wordCount?: number;
+  readonly assetType?: string;
 }
 
 export type AgentContextSourceMaterialization =
@@ -94,6 +113,10 @@ export interface AgentContextSourceInput {
   readonly materialization?: AgentContextSourceMaterialization;
   /** Preserved across refresh/hydrate; new sources default to revision zero. */
   readonly sourceRevision?: number;
+  readonly selectionReason?: string;
+  readonly selectionPolicy?: AgentContextSelectionPolicy;
+  readonly priority?: number;
+  readonly preferenceScope?: AgentContextPreferenceScope;
 }
 
 export interface AgentCurrentContextSource {
@@ -137,7 +160,14 @@ export interface AgentContextSourceV13 extends AgentContextSourceV12 {
   readonly evictionPointer: AgentContextEvictionPointer | null;
 }
 
-export type AgentContextSource = AgentContextSourceV13;
+export interface AgentContextSourceV14 extends AgentContextSourceV13 {
+  readonly selectionReason: string;
+  readonly selectionPolicy: AgentContextSelectionPolicy;
+  readonly preferenceScope: AgentContextPreferenceScope;
+  readonly priority: number;
+}
+
+export type AgentContextSource = AgentContextSourceV14;
 
 /** The persisted v1.0 context snapshot shape. Retained for read compatibility. */
 export interface AgentContextSnapshotV10 {
@@ -186,7 +216,16 @@ export interface AgentContextSnapshotV13 extends Omit<
   readonly sources: readonly AgentContextSourceV13[];
 }
 
-export type AgentContextSnapshot = AgentContextSnapshotV13;
+export interface AgentContextSnapshotV14 extends Omit<
+  AgentContextSnapshotV13,
+  "schemaVersion" | "sources"
+> {
+  readonly schemaVersion: "1.4";
+  readonly sources: readonly AgentContextSourceV14[];
+  readonly packedContextManifest: PackedAgentContextManifest | null;
+}
+
+export type AgentContextSnapshot = AgentContextSnapshotV14;
 
 export interface CreateAgentContextSnapshotInput {
   readonly contextSnapshotId: string;
@@ -200,13 +239,14 @@ export interface CreateAgentContextSnapshotInput {
   readonly materializationArtifactSourceRefs?: readonly string[];
   readonly excludedSources?: readonly string[];
   readonly compactionRevision?: number;
+  readonly packedContextManifest?: PackedAgentContextManifest | null;
 }
 
 export function createAgentContextSnapshot(
   input: CreateAgentContextSnapshotInput
 ): AgentContextSnapshot {
   const snapshot: AgentContextSnapshot = {
-    schemaVersion: "1.3",
+    schemaVersion: "1.4",
     contextSnapshotId: input.contextSnapshotId,
     runId: input.runId,
     scope: input.scope,
@@ -215,27 +255,49 @@ export function createAgentContextSnapshot(
     createdAt: input.createdAt,
     compactionRevision: input.compactionRevision ?? 0,
     sources: input.sources.map(
-      ({ content, materialization, sourceRevision, ...source }, materializationOrder) => ({
-        ...source,
-        checksum: checksumText(content),
-        capturedAt: input.createdAt,
-        layer: defaultLayerForSource(source.sourceKind),
-        sourceRevision: sourceRevision ?? 0,
-        tokenCount: materialization?.tokenCount ?? null,
-        precision: "unknown" as const,
-        state: "active" as const,
-        artifactId:
-          input.materializationArtifactId !== undefined &&
-          (input.materializationArtifactSourceRefs === undefined ||
-            input.materializationArtifactSourceRefs.includes(source.refId))
-            ? input.materializationArtifactId
-            : null,
-        materializationOrder,
-        sourceMaterialization: materialization ?? null,
-        evictionPointer: null
-      })
+      (
+        {
+          content,
+          materialization,
+          sourceRevision,
+          selectionReason,
+          selectionPolicy,
+          priority,
+          preferenceScope,
+          ...source
+        },
+        materializationOrder
+      ) => {
+        const resolvedSelectionPolicy =
+          selectionPolicy ?? defaultSelectionPolicy(source.sourceKind);
+        return {
+          ...source,
+          checksum: checksumText(content),
+          capturedAt: input.createdAt,
+          layer: defaultLayerForSource(source.sourceKind),
+          sourceRevision: sourceRevision ?? 0,
+          tokenCount: materialization?.tokenCount ?? null,
+          precision: "unknown" as const,
+          state: "active" as const,
+          artifactId:
+            input.materializationArtifactId !== undefined &&
+            (input.materializationArtifactSourceRefs === undefined ||
+              input.materializationArtifactSourceRefs.includes(source.refId))
+              ? input.materializationArtifactId
+              : null,
+          materializationOrder,
+          sourceMaterialization: materialization ?? null,
+          evictionPointer: null,
+          selectionReason: selectionReason ?? defaultSelectionReason(source.sourceKind),
+          selectionPolicy: resolvedSelectionPolicy,
+          preferenceScope:
+            preferenceScope ?? defaultPreferenceScope(resolvedSelectionPolicy, source.sourceKind),
+          priority: priority ?? defaultSourcePriority(source.sourceKind)
+        };
+      }
     ),
-    excludedSources: input.excludedSources ?? []
+    excludedSources: input.excludedSources ?? [],
+    packedContextManifest: input.packedContextManifest ?? null
   };
   if (!validateAgentContextSnapshot(snapshot as unknown as JsonObject)) {
     throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
@@ -257,45 +319,71 @@ export function normalizeAgentContextSnapshot(
     readonly guidanceTemplateChecksum?: string;
     readonly stablePrefixChecksum?: string;
   }
-): AgentContextSnapshotV13 {
-  if (value["schemaVersion"] === "1.3") {
-    if (!validateAgentContextSnapshot(value)) {
+): AgentContextSnapshotV14 {
+  if (value["schemaVersion"] === "1.4") {
+    const normalized = {
+      ...value,
+      sources: Array.isArray(value["sources"])
+        ? value["sources"].map((source) =>
+            isRecord(source) && source["preferenceScope"] === undefined
+              ? { ...source, preferenceScope: "automatic" }
+              : source
+          )
+        : value["sources"]
+    } as JsonObject;
+    if (!validateAgentContextSnapshot(normalized)) {
       throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
     }
     return {
-      ...value,
-      scope: normalizeAgentContextScope(value["scope"])
-    } as unknown as AgentContextSnapshotV13;
+      ...normalized,
+      scope: normalizeAgentContextScope(normalized["scope"])
+    } as unknown as AgentContextSnapshotV14;
   }
   if (
     value["schemaVersion"] !== "1.0" &&
     value["schemaVersion"] !== "1.1" &&
-    value["schemaVersion"] !== "1.2"
+    value["schemaVersion"] !== "1.2" &&
+    value["schemaVersion"] !== "1.3"
   ) {
     throw new Error("AGENT_CONTEXT_SNAPSHOT_VERSION_UNSUPPORTED");
   }
   if (fallback === undefined) throw new Error("AGENT_CONTEXT_SNAPSHOT_SCOPE_REQUIRED");
   const rawSources = Array.isArray(value["sources"]) ? value["sources"] : [];
-  const sources = rawSources.map((source, materializationOrder) => ({
-    ...(source as JsonObject),
-    ...(value["schemaVersion"] === "1.0"
-      ? {
-          layer: "tool_result" as const,
-          sourceRevision: 0,
-          tokenCount: null,
-          precision: "unknown" as const,
-          state: "active" as const
-        }
-      : {}),
-    artifactId:
-      value["schemaVersion"] === "1.2" ? ((source as JsonObject)["artifactId"] ?? null) : null,
-    materializationOrder,
-    sourceMaterialization: null,
-    evictionPointer: null
-  }));
+  const sources = rawSources.map((source, materializationOrder) => {
+    const record = source as JsonObject;
+    const sourceKind = isSourceKind(record["sourceKind"]) ? record["sourceKind"] : "disk_file";
+    return {
+      ...record,
+      ...(value["schemaVersion"] === "1.0"
+        ? {
+            layer: "tool_result" as const,
+            sourceRevision: 0,
+            tokenCount: null,
+            precision: "unknown" as const,
+            state: "active" as const
+          }
+        : {}),
+      artifactId:
+        value["schemaVersion"] === "1.2" || value["schemaVersion"] === "1.3"
+          ? (record["artifactId"] ?? null)
+          : null,
+      materializationOrder:
+        value["schemaVersion"] === "1.3"
+          ? (record["materializationOrder"] ?? materializationOrder)
+          : materializationOrder,
+      sourceMaterialization:
+        value["schemaVersion"] === "1.3" ? (record["sourceMaterialization"] ?? null) : null,
+      evictionPointer:
+        value["schemaVersion"] === "1.3" ? (record["evictionPointer"] ?? null) : null,
+      selectionReason: defaultSelectionReason(sourceKind),
+      selectionPolicy: defaultSelectionPolicy(sourceKind),
+      preferenceScope: "automatic" as const,
+      priority: defaultSourcePriority(sourceKind)
+    };
+  });
   return {
     ...value,
-    schemaVersion: "1.3",
+    schemaVersion: "1.4",
     scope: fallback.scope,
     contextProfileId: fallback.contextProfileId,
     materialization: {
@@ -305,12 +393,13 @@ export function normalizeAgentContextSnapshot(
       stablePrefixChecksum: fallback.stablePrefixChecksum ?? "legacy",
       messageOrderVersion: "1.0"
     },
-    sources
-  } as unknown as AgentContextSnapshotV13;
+    sources,
+    packedContextManifest: null
+  } as unknown as AgentContextSnapshotV14;
 }
 
 export function validateAgentContextSnapshot(value: JsonObject): boolean {
-  if (value["schemaVersion"] !== "1.3") return false;
+  if (value["schemaVersion"] !== "1.4") return false;
   if (
     typeof value["contextSnapshotId"] !== "string" ||
     typeof value["runId"] !== "string" ||
@@ -320,7 +409,9 @@ export function validateAgentContextSnapshot(value: JsonObject): boolean {
     !Array.isArray(value["excludedSources"]) ||
     !value["excludedSources"].every((sourceId) => typeof sourceId === "string") ||
     !isContextProfileId(value["contextProfileId"]) ||
-    !isMaterializationProvenance(value["materialization"])
+    !isMaterializationProvenance(value["materialization"]) ||
+    (value["packedContextManifest"] !== null &&
+      !isPackedContextManifest(value["packedContextManifest"]))
   ) {
     return false;
   }
@@ -333,13 +424,13 @@ export function validateAgentContextSnapshot(value: JsonObject): boolean {
   }
   return value["sources"].every(
     (source) =>
-      isAgentContextSourceV13(source) &&
+      isAgentContextSourceV14(source) &&
       sourceMatchesSnapshotIdentity(source, scope, contextProfileId)
   );
 }
 
 function sourceMatchesSnapshotIdentity(
-  source: AgentContextSourceV13,
+  source: AgentContextSourceV14,
   scope: AgentContextScope,
   contextProfileId: AgentContextProfileId
 ): boolean {
@@ -358,7 +449,7 @@ function sourceMatchesSnapshotIdentity(
     : scope.workspaceKind === "creativeProject";
 }
 
-function isAgentContextSourceV13(value: unknown): value is AgentContextSourceV13 {
+function isAgentContextSourceV14(value: unknown): value is AgentContextSourceV14 {
   if (!isRecord(value)) return false;
   const sourceKind = value["sourceKind"];
   const materialization = value["sourceMaterialization"];
@@ -383,7 +474,19 @@ function isAgentContextSourceV13(value: unknown): value is AgentContextSourceV13
     (value["range"] === undefined || isSourceRange(value["range"])) &&
     (materialization === null || validateAgentContextSourceMaterialization(materialization)) &&
     (evictionPointer === null || isEvictionPointer(evictionPointer));
-  if (!baseValid || !isSourceMaterializationBindingValid(sourceKind, materialization, value)) {
+  if (
+    !baseValid ||
+    typeof value["selectionReason"] !== "string" ||
+    value["selectionReason"].length === 0 ||
+    (value["selectionPolicy"] !== "automatic" &&
+      value["selectionPolicy"] !== "explicit" &&
+      value["selectionPolicy"] !== "pinned") ||
+    (value["preferenceScope"] !== "automatic" &&
+      value["preferenceScope"] !== "run" &&
+      value["preferenceScope"] !== "project") ||
+    !isPriority(value["priority"]) ||
+    !isSourceMaterializationBindingValid(sourceKind, materialization, value)
+  ) {
     return false;
   }
   if (evictionPointer === null) return true;
@@ -396,6 +499,50 @@ function isAgentContextSourceV13(value: unknown): value is AgentContextSourceV13
     evictionPointer.dependencyManifestChecksum === materialization.dependencyManifestChecksum &&
     evictionPointer.rereadHint === materialization.rereadHint
   );
+}
+
+function defaultSelectionReason(sourceKind: AgentContextSourceKind): string {
+  if (sourceKind === "system_guidance") return "System-authored guidance";
+  if (sourceKind === "project_conventions" || sourceKind === "workspace_outline") {
+    return "Automatically selected project context";
+  }
+  return "Explicit context reference";
+}
+
+function defaultSelectionPolicy(sourceKind: AgentContextSourceKind): AgentContextSelectionPolicy {
+  return sourceKind === "project_conventions" ||
+    sourceKind === "workspace_outline" ||
+    sourceKind === "system_guidance"
+    ? "automatic"
+    : "explicit";
+}
+
+function defaultPreferenceScope(
+  selectionPolicy: AgentContextSelectionPolicy,
+  sourceKind: AgentContextSourceKind
+): AgentContextPreferenceScope {
+  return selectionPolicy === "automatic" &&
+    (sourceKind === "project_conventions" ||
+      sourceKind === "workspace_outline" ||
+      sourceKind === "system_guidance")
+    ? "automatic"
+    : "run";
+}
+
+function defaultSourcePriority(sourceKind: AgentContextSourceKind): number {
+  if (sourceKind === "system_guidance") return 100;
+  if (sourceKind === "editor_buffer") return 90;
+  if (sourceKind === "project_conventions") return 80;
+  if (sourceKind === "workspace_outline") return 60;
+  return 70;
+}
+
+function isPriority(value: unknown): value is number {
+  return isNonNegativeInteger(value) && value <= 100;
+}
+
+function isPackedContextManifest(value: unknown): value is PackedAgentContextManifest {
+  return validatePackedAgentContextManifest(value);
 }
 
 export function validateAgentContextSourceMaterialization(
@@ -423,8 +570,40 @@ export function validateAgentContextSourceMaterialization(
     value["dependencyManifest"]["readerVersion"] === value["readerVersion"] &&
     isChecksum(value["dependencyManifestChecksum"]) &&
     isChecksum(value["dependencyRevisionChecksum"]) &&
+    isWorkspaceOutlineDependencyEntriesProof(
+      value["dependencyEntries"],
+      value["dependencyEntriesChecksum"]
+    ) &&
     isChecksum(value["materializedChecksum"]) &&
     isNonEmptyString(value["rereadHint"])
+  );
+}
+
+function isWorkspaceOutlineDependencyEntriesProof(
+  entries: unknown,
+  proofChecksum: unknown
+): boolean {
+  if (entries === undefined && proofChecksum === undefined) return true;
+  return (
+    Array.isArray(entries) &&
+    entries.every(isWorkspaceOutlineDependencyEntry) &&
+    isChecksum(proofChecksum)
+  );
+}
+
+function isWorkspaceOutlineDependencyEntry(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value["kind"] === "directory" ||
+      value["kind"] === "file" ||
+      value["kind"] === "chapter" ||
+      value["kind"] === "story_bible_asset") &&
+    isNonEmptyString(value["id"]) &&
+    isNonEmptyString(value["label"]) &&
+    (value["relativePath"] === undefined || isNonEmptyString(value["relativePath"])) &&
+    (value["depth"] === undefined || isNonNegativeInteger(value["depth"])) &&
+    (value["wordCount"] === undefined || isNonNegativeInteger(value["wordCount"])) &&
+    (value["assetType"] === undefined || isNonEmptyString(value["assetType"]))
   );
 }
 

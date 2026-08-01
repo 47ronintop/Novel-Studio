@@ -8,6 +8,7 @@ import {
 } from "@novel-studio/shared";
 import type {
   ChapterSummary,
+  ChapterStatus,
   CreateChapterInput,
   DeleteChapterInput,
   DuplicateChapterInput,
@@ -45,8 +46,10 @@ import type {
   ModelConnectionResult,
   ModelProfile,
   ModelSettingsSession,
-  ModelSettingsSnapshot
+  ModelSettingsSnapshot,
+  StoryAnalysisSettings
 } from "./model-settings-session.js";
+import { DEFAULT_STORY_ANALYSIS_SETTINGS } from "./model-settings-session.js";
 import type { ModelDiscoverySnapshot } from "./model-discovery-session.js";
 import type { AgentUsageSession } from "./agent-usage-session.js";
 import type {
@@ -99,10 +102,16 @@ import type {
   ProjectSearchSourcesChangedInput
 } from "./project-search-session.js";
 import type {
+  CreateStoryBibleAssetCommand,
   MemoryRecord,
+  SaveStoryBibleAssetCandidateCommand,
+  SaveStoryBibleStatusTransitionCommand,
   StoryBibleAsset,
   StoryBibleConsistencyReport,
   StoryBibleContextCandidateOptions,
+  StoryBibleEditableAsset,
+  StoryBibleReferenceImpact,
+  StoryBibleRestorableStatus,
   StoryBibleSession,
   StoryBibleSnapshot
 } from "./story-bible-session.js";
@@ -111,6 +120,25 @@ import type {
   ForeshadowAnalysisResult,
   ForeshadowAnalysisSession
 } from "./foreshadow-analysis-session.js";
+import type {
+  AnalyzeChapterStoryInput,
+  StoryAnalysisHistoryRecord,
+  StoryAnalysisHistorySummary,
+  StoryAnalysisRecordTransition,
+  StoryAnalysisSession
+} from "./story-analysis-session.js";
+import type {
+  StoryAnalysisApplicationPreview,
+  StoryAnalysisApplicationResult,
+  StoryAnalysisApplicationSession
+} from "./story-analysis-application-session.js";
+import type {
+  StoryBibleExplicitInverseApplyResult,
+  StoryBibleExplicitInverseCancelResult,
+  StoryBibleExplicitInversePreview,
+  StoryBibleExplicitInverseSession,
+  StoryBibleExplicitInverseSourceCommand
+} from "./story-bible-explicit-inverse-session.js";
 import type {
   UserPreferencesSaveInput,
   UserPreferencesSession,
@@ -157,6 +185,22 @@ export interface ProjectRecoveryApplyResultDto {
 export interface ProjectChapterSelectionDto {
   readonly workspace: ProjectWorkspaceSnapshotDto;
   readonly chapterEditor: ChapterEditorSnapshot;
+}
+
+export type ChapterCompletionAnalysisDisposition =
+  | { readonly status: "not-triggered" }
+  | { readonly status: "disabled"; readonly mode: "off" }
+  | { readonly status: "prompt"; readonly mode: "prompt"; readonly chapterId: string }
+  | {
+      readonly status: "scheduled";
+      readonly mode: "background-review";
+      readonly chapterId: string;
+    }
+  | { readonly status: "unavailable"; readonly code: string };
+
+export interface ChapterStatusUpdateResult {
+  readonly chapter: ChapterEditorSnapshot;
+  readonly completionAnalysis: ChapterCompletionAnalysisDisposition;
 }
 
 export interface ProjectCreationPreviewDto {
@@ -276,6 +320,37 @@ export interface DesktopApplication {
   notifyProjectSearchSourcesChanged(input: ProjectSearchSourcesChangedInput): Promise<void>;
   loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
   saveStoryBibleAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  readStoryBibleAssetForEditing(
+    assetId: string
+  ): Promise<Result<StoryBibleEditableAsset, UnifiedError>>;
+  createStoryBibleAsset(
+    input: CreateStoryBibleAssetCommand
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  saveStoryBibleAssetCandidate(
+    input: SaveStoryBibleAssetCandidateCommand
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  prepareStoryBibleExplicitInverseChange(input: {
+    readonly source: StoryBibleExplicitInverseSourceCommand;
+  }): Promise<Result<StoryBibleExplicitInversePreview, UnifiedError>>;
+  applyStoryBibleExplicitInverseChange(input: {
+    readonly previewId: string;
+    readonly revision: number;
+    readonly checksum: string;
+  }): Promise<Result<StoryBibleExplicitInverseApplyResult, UnifiedError>>;
+  cancelStoryBibleExplicitInverseChange(input: {
+    readonly previewId: string;
+    readonly revision: number;
+    readonly checksum: string;
+  }): Promise<Result<StoryBibleExplicitInverseCancelResult, UnifiedError>>;
+  saveStoryBibleStatusTransition(
+    input: SaveStoryBibleStatusTransitionCommand
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  getStoryBibleReferences(
+    assetId: string
+  ): Promise<Result<StoryBibleReferenceImpact, UnifiedError>>;
+  resolveStoryBibleRestoreStatus(
+    assetId: string
+  ): Promise<Result<StoryBibleRestorableStatus, UnifiedError>>;
   saveStoryBibleMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
   buildStoryBibleConsistencyReport(): Promise<Result<StoryBibleConsistencyReport, UnifiedError>>;
   buildStoryBibleContextCandidates(
@@ -284,6 +359,33 @@ export interface DesktopApplication {
   detectForeshadows(
     input: ForeshadowAnalysisInput
   ): Promise<Result<ForeshadowAnalysisResult, UnifiedError>>;
+  analyzeChapterStory(
+    input: AnalyzeChapterStoryInput
+  ): Promise<Result<StoryAnalysisHistoryRecord, UnifiedError>>;
+  listStoryAnalyses(): Promise<Result<readonly StoryAnalysisHistorySummary[], UnifiedError>>;
+  readStoryAnalysis(
+    workflowRunId: string
+  ): Promise<Result<StoryAnalysisHistoryRecord, UnifiedError>>;
+  transitionStoryAnalysisRecord(input: {
+    readonly workflowRunId: string;
+    readonly recordId: string;
+    readonly expectedRevision: number;
+    readonly transition: StoryAnalysisRecordTransition;
+  }): Promise<Result<StoryAnalysisHistoryRecord, UnifiedError>>;
+  refreshStoryAnalysisStaleness(
+    workflowRunId: string
+  ): Promise<Result<StoryAnalysisHistoryRecord, UnifiedError>>;
+  prepareStoryAnalysisApplication(input: {
+    readonly workflowRunId: string;
+    readonly suggestionIds: readonly string[];
+  }): Promise<Result<StoryAnalysisApplicationPreview, UnifiedError>>;
+  applyStoryAnalysisApplication(input: {
+    readonly workflowRunId: string;
+    readonly suggestionIds: readonly string[];
+    readonly changeSetId: string;
+    readonly revision: number;
+    readonly checksum: string;
+  }): Promise<Result<StoryAnalysisApplicationResult, UnifiedError>>;
   generateActiveChapterSuggestion(
     request: AiWritingSuggestionRequest
   ): Promise<Result<AiWritingSuggestion, UnifiedError>>;
@@ -305,6 +407,9 @@ export interface DesktopApplication {
   readActiveChapterState(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   editActiveChapter(nextBody: string): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
   saveActiveChapter(): Promise<Result<ChapterEditorSnapshot, UnifiedError>>;
+  saveActiveChapterStatus(
+    status: ChapterStatus
+  ): Promise<Result<ChapterStatusUpdateResult, UnifiedError>>;
   listActiveChapterVersions(): Promise<Result<readonly ChapterVersionSummary[], UnifiedError>>;
   previewActiveChapterVersion(
     versionId: string
@@ -324,6 +429,10 @@ export interface DesktopApplication {
   testModelProfileConnection(
     profileId: string
   ): Promise<Result<ModelConnectionResult, UnifiedError>>;
+  readStoryAnalysisSettings(): Promise<Result<StoryAnalysisSettings, UnifiedError>>;
+  saveStoryAnalysisSettings(
+    settings: StoryAnalysisSettings
+  ): Promise<Result<StoryAnalysisSettings, UnifiedError>>;
   listAgentUsage(query: AgentUsageQuery): Promise<Result<AgentUsageReport, UnifiedError>>;
   clearAgentUsage(command: ClearAgentUsageCommand): Promise<Result<AgentUsageReport, UnifiedError>>;
   loadPluginRegistry(): Promise<Result<PluginSettingsSnapshot, UnifiedError>>;
@@ -362,6 +471,13 @@ export interface DesktopApplicationOptions {
   readonly userPreferencesSession?: UserPreferencesSession;
   readonly storyBibleSession?: StoryBibleSession;
   readonly createForeshadowAnalysisSession?: (projectRoot: string) => ForeshadowAnalysisSession;
+  readonly createStoryAnalysisSession?: (projectRoot: string) => StoryAnalysisSession;
+  readonly createStoryAnalysisApplicationSession?: (
+    projectRoot: string
+  ) => StoryAnalysisApplicationSession;
+  readonly createStoryBibleExplicitInverseSession?: (
+    projectRoot: string
+  ) => StoryBibleExplicitInverseSession;
   readonly createProjectSearchSession?: (projectRoot: string) => ProjectSearchSession;
   readonly aiWritingWorkflowSession?: AiWritingWorkflowSession;
   readonly workflowRunHistory?: WorkflowRunHistoryPort;
@@ -427,6 +543,12 @@ export function createDesktopApplication(
   const userPreferencesSession = options.userPreferencesSession;
   const storyBibleSession = options.storyBibleSession;
   const createForeshadowAnalysisSession = options.createForeshadowAnalysisSession;
+  const createStoryAnalysisSession = options.createStoryAnalysisSession;
+  const createStoryAnalysisApplicationSession = options.createStoryAnalysisApplicationSession;
+  const createStoryBibleExplicitInverseSession = options.createStoryBibleExplicitInverseSession;
+  let activeStoryBibleExplicitInverseBinding:
+    | { readonly projectRoot: string; readonly session: StoryBibleExplicitInverseSession }
+    | undefined;
   const createProjectSearchSession = options.createProjectSearchSession;
   const initialProjectSnapshot = activeProjectWorkspaceSession?.getSnapshot();
   let activeProjectSearchBinding: ActiveProjectSearchBinding | undefined =
@@ -469,6 +591,8 @@ export function createDesktopApplication(
 
   const refreshProjectScopedBindings = (projectRoot: string | undefined): void => {
     projectScopeGeneration += 1;
+    activeStoryBibleExplicitInverseBinding?.session.clearPreviews();
+    activeStoryBibleExplicitInverseBinding = undefined;
     refreshProjectSearchBinding(projectRoot);
     try {
       options.onActiveProjectRootChange?.(projectRoot);
@@ -860,6 +984,118 @@ export function createDesktopApplication(
       }
       return saved;
     },
+    async readStoryBibleAssetForEditing(assetId) {
+      if (
+        storyBibleSession?.readStoryAssetForEditing === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      return storyBibleSession.readStoryAssetForEditing(assetId);
+    },
+    async createStoryBibleAsset(input) {
+      if (
+        storyBibleSession?.createStoryAsset === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      const saved = await storyBibleSession.createStoryAsset(input);
+      if (saved.ok) await invalidateActiveProjectSearch("story-bible-save");
+      return saved;
+    },
+    async saveStoryBibleAssetCandidate(input) {
+      if (
+        storyBibleSession?.saveStoryAssetCandidate === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      const saved = await storyBibleSession.saveStoryAssetCandidate(input);
+      if (saved.ok) await invalidateActiveProjectSearch("story-bible-save");
+      return saved;
+    },
+    async prepareStoryBibleExplicitInverseChange(input) {
+      const binding = getStoryBibleExplicitInverseBinding();
+      if (binding === undefined || activeEngineeringWorkspaceSession !== undefined) {
+        return storyBibleUnavailable();
+      }
+      const generation = projectScopeGeneration;
+      const result = await binding.session.prepareStoryBibleExplicitInverseChange(input);
+      if (
+        generation !== projectScopeGeneration ||
+        activeEngineeringWorkspaceSession !== undefined ||
+        activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== binding.projectRoot
+      ) {
+        return storyBibleExplicitInverseWorkspaceChanged();
+      }
+      return result;
+    },
+    async applyStoryBibleExplicitInverseChange(input) {
+      const binding = getStoryBibleExplicitInverseBinding();
+      if (binding === undefined || activeEngineeringWorkspaceSession !== undefined) {
+        return storyBibleUnavailable();
+      }
+      const generation = projectScopeGeneration;
+      const result = await binding.session.applyStoryBibleExplicitInverseChange(input);
+      if (
+        generation !== projectScopeGeneration ||
+        activeEngineeringWorkspaceSession !== undefined ||
+        activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== binding.projectRoot
+      ) {
+        return storyBibleExplicitInverseWorkspaceChanged();
+      }
+      if (result.ok && result.value.applied) {
+        storyBibleSession?.clearSnapshot?.();
+        await invalidateActiveProjectSearch("story-bible-save");
+      }
+      return result;
+    },
+    async cancelStoryBibleExplicitInverseChange(input) {
+      const binding = getStoryBibleExplicitInverseBinding();
+      if (binding === undefined || activeEngineeringWorkspaceSession !== undefined) {
+        return storyBibleUnavailable();
+      }
+      const generation = projectScopeGeneration;
+      const result = await binding.session.cancelStoryBibleExplicitInverseChange(input);
+      if (
+        generation !== projectScopeGeneration ||
+        activeEngineeringWorkspaceSession !== undefined ||
+        activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== binding.projectRoot
+      ) {
+        return storyBibleExplicitInverseWorkspaceChanged();
+      }
+      return result;
+    },
+    async saveStoryBibleStatusTransition(input) {
+      if (
+        storyBibleSession?.saveStoryAssetStatusTransition === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      const saved = await storyBibleSession.saveStoryAssetStatusTransition(input);
+      if (saved.ok) await invalidateActiveProjectSearch("story-bible-save");
+      return saved;
+    },
+    async getStoryBibleReferences(assetId) {
+      if (
+        storyBibleSession?.getStoryAssetReferences === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      return storyBibleSession.getStoryAssetReferences(assetId);
+    },
+    async resolveStoryBibleRestoreStatus(assetId) {
+      if (
+        storyBibleSession?.resolveStoryAssetRestoreStatus === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      return storyBibleSession.resolveStoryAssetRestoreStatus(assetId);
+    },
     async saveStoryBibleMemory(memory) {
       if (storyBibleSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return storyBibleUnavailable();
@@ -903,6 +1139,112 @@ export function createDesktopApplication(
         activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== projectRoot
       ) {
         return foreshadowScanWorkspaceChanged();
+      }
+      return result;
+    },
+    async analyzeChapterStory(input) {
+      const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+      if (
+        projectRoot === undefined ||
+        createStoryAnalysisSession === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      const generation = projectScopeGeneration;
+      const result = await createStoryAnalysisSession(projectRoot).analyzeChapter(input);
+      if (
+        generation !== projectScopeGeneration ||
+        activeEngineeringWorkspaceSession !== undefined ||
+        activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== projectRoot
+      ) {
+        return storyAnalysisWorkspaceChanged();
+      }
+      return result;
+    },
+    async listStoryAnalyses() {
+      const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+      if (
+        projectRoot === undefined ||
+        createStoryAnalysisSession === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      return createStoryAnalysisSession(projectRoot).listAnalyses();
+    },
+    async readStoryAnalysis(workflowRunId) {
+      const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+      if (
+        projectRoot === undefined ||
+        createStoryAnalysisSession === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      return createStoryAnalysisSession(projectRoot).readAnalysis(workflowRunId);
+    },
+    async transitionStoryAnalysisRecord(input) {
+      const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+      if (
+        projectRoot === undefined ||
+        createStoryAnalysisSession === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      return createStoryAnalysisSession(projectRoot).transitionRecord(input);
+    },
+    async refreshStoryAnalysisStaleness(workflowRunId) {
+      const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+      if (
+        projectRoot === undefined ||
+        createStoryAnalysisSession === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      return createStoryAnalysisSession(projectRoot).refreshStaleness(workflowRunId);
+    },
+    async prepareStoryAnalysisApplication(input) {
+      const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+      if (
+        projectRoot === undefined ||
+        createStoryAnalysisApplicationSession === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      const generation = projectScopeGeneration;
+      const result =
+        await createStoryAnalysisApplicationSession(projectRoot).prepareApplication(input);
+      if (
+        generation !== projectScopeGeneration ||
+        activeEngineeringWorkspaceSession !== undefined ||
+        activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== projectRoot
+      ) {
+        return storyAnalysisWorkspaceChanged();
+      }
+      return result;
+    },
+    async applyStoryAnalysisApplication(input) {
+      const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+      if (
+        projectRoot === undefined ||
+        createStoryAnalysisApplicationSession === undefined ||
+        activeEngineeringWorkspaceSession !== undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      const generation = projectScopeGeneration;
+      const result =
+        await createStoryAnalysisApplicationSession(projectRoot).applyApplication(input);
+      if (
+        generation !== projectScopeGeneration ||
+        activeEngineeringWorkspaceSession !== undefined ||
+        activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== projectRoot
+      ) {
+        return storyAnalysisWorkspaceChanged();
       }
       return result;
     },
@@ -1013,6 +1355,26 @@ export function createDesktopApplication(
 
       return createChapterSnapshot(activeChapterEditorSession, saved.value);
     },
+    async saveActiveChapterStatus(status) {
+      const activeChapterEditorSession = getActiveChapterEditorSession();
+      if (activeChapterEditorSession === undefined) {
+        return chapterEditorUnavailable();
+      }
+
+      const saved = await activeChapterEditorSession.saveWithStatus(status);
+      if (!saved.ok) {
+        return saved;
+      }
+      const chapter = await createChapterSnapshot(activeChapterEditorSession, saved.value.state);
+      if (!chapter.ok) {
+        return chapter;
+      }
+      const completionAnalysis = await resolveChapterCompletionAnalysis(
+        saved.value.state.chapter.frontmatter.id,
+        saved.value.completedTransition
+      );
+      return ok({ chapter: chapter.value, completionAnalysis });
+    },
     async listActiveChapterVersions() {
       const activeChapterEditorSession = getActiveChapterEditorSession();
       if (activeChapterEditorSession === undefined) {
@@ -1077,6 +1439,17 @@ export function createDesktopApplication(
       }
 
       return modelSettingsSession.testModelProfileConnection(profileId);
+    },
+    async readStoryAnalysisSettings() {
+      return modelSettingsSession === undefined
+        ? ok(DEFAULT_STORY_ANALYSIS_SETTINGS)
+        : modelSettingsSession.readStoryAnalysisSettings();
+    },
+    async saveStoryAnalysisSettings(settings) {
+      if (modelSettingsSession === undefined) {
+        return modelSettingsUnavailable();
+      }
+      return modelSettingsSession.saveStoryAnalysisSettings(settings);
     },
     async listAgentUsage(query) {
       if (agentUsageSession === undefined) return agentUsageUnavailable();
@@ -1282,6 +1655,27 @@ export function createDesktopApplication(
     return activeProjectSearchBinding?.session;
   }
 
+  function getStoryBibleExplicitInverseBinding():
+    | { readonly projectRoot: string; readonly session: StoryBibleExplicitInverseSession }
+    | undefined {
+    const projectRoot = activeProjectWorkspaceSession?.getSnapshot()?.projectRoot;
+    if (projectRoot === undefined || createStoryBibleExplicitInverseSession === undefined) {
+      return undefined;
+    }
+    if (activeStoryBibleExplicitInverseBinding?.projectRoot === projectRoot) {
+      return activeStoryBibleExplicitInverseBinding;
+    }
+    try {
+      activeStoryBibleExplicitInverseBinding = {
+        projectRoot,
+        session: createStoryBibleExplicitInverseSession(projectRoot)
+      };
+      return activeStoryBibleExplicitInverseBinding;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function invalidateActiveProjectSearch(
     reason: ProjectSearchInvalidationReason
   ): Promise<void> {
@@ -1293,6 +1687,55 @@ export function createDesktopApplication(
       await session.invalidate(reason);
     } catch {
       // The source write already committed; search can retry cache invalidation on its next rebuild.
+    }
+  }
+
+  async function resolveChapterCompletionAnalysis(
+    chapterId: string,
+    completedTransition: boolean
+  ): Promise<ChapterCompletionAnalysisDisposition> {
+    if (!completedTransition) {
+      return { status: "not-triggered" };
+    }
+
+    const generation = projectScopeGeneration;
+    const workspace = activeProjectWorkspaceSession?.getSnapshot();
+    if (workspace === undefined || activeEngineeringWorkspaceSession !== undefined) {
+      return { status: "unavailable", code: "STORY_ANALYSIS_WORKSPACE_UNAVAILABLE" };
+    }
+
+    const settings =
+      modelSettingsSession === undefined
+        ? ok(DEFAULT_STORY_ANALYSIS_SETTINGS)
+        : await modelSettingsSession.readStoryAnalysisSettings();
+    if (!settings.ok) {
+      return { status: "unavailable", code: settings.error.code };
+    }
+    if (
+      generation !== projectScopeGeneration ||
+      activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== workspace.projectRoot
+    ) {
+      return { status: "unavailable", code: "STORY_ANALYSIS_WORKSPACE_CHANGED" };
+    }
+    if (settings.value.completionMode === "off") {
+      return { status: "disabled", mode: "off" };
+    }
+    if (createStoryAnalysisSession === undefined) {
+      return { status: "unavailable", code: "STORY_ANALYSIS_UNAVAILABLE" };
+    }
+    if (settings.value.completionMode === "prompt") {
+      return { status: "prompt", mode: "prompt", chapterId };
+    }
+
+    try {
+      const session = createStoryAnalysisSession(workspace.projectRoot);
+      void session.analyzeChapter({ chapterId, trigger: "chapter_completed" }).then(
+        () => undefined,
+        () => undefined
+      );
+      return { status: "scheduled", mode: "background-review", chapterId };
+    } catch {
+      return { status: "unavailable", code: "STORY_ANALYSIS_SCHEDULE_FAILED" };
     }
   }
 }
@@ -1521,6 +1964,32 @@ function foreshadowScanWorkspaceChanged<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Run the analysis again in the current project.",
       traceId: "application-foreshadow-analysis"
+    })
+  );
+}
+
+function storyAnalysisWorkspaceChanged<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_ANALYSIS_WORKSPACE_CHANGED",
+      category: "UserError",
+      message: "The active workspace changed before Story Analysis finished.",
+      recoverability: "user-action",
+      suggestedAction: "Run the analysis again in the current project.",
+      traceId: "application-story-analysis"
+    })
+  );
+}
+
+function storyBibleExplicitInverseWorkspaceChanged<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_BIBLE_EXPLICIT_INVERSE_WORKSPACE_CHANGED",
+      category: "UserError",
+      message: "The active workspace changed before the explicit inverse edit finished.",
+      recoverability: "user-action",
+      suggestedAction: "Reload the Story Bible entry and prepare the two-sided preview again.",
+      traceId: "application-story-bible-explicit-inverse"
     })
   );
 }

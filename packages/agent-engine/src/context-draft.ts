@@ -73,7 +73,26 @@ export interface ContextDraftV11 extends Omit<
   readonly activeResourceRef: ContextDraftActiveResourceRef | null;
 }
 
-export type ContextDraft = ContextDraftV11;
+export type ContextDraftSourceOverrideDecision = "automatic" | "pinned" | "excluded";
+
+export type ContextDraftSourceOverride =
+  | {
+      readonly refId: string;
+      readonly decision: "automatic";
+      readonly priority?: never;
+    }
+  | {
+      readonly refId: string;
+      readonly decision: "pinned" | "excluded";
+      readonly priority: number;
+    };
+
+export interface ContextDraftV12 extends Omit<ContextDraftV11, "schemaVersion"> {
+  readonly schemaVersion: "1.2";
+  readonly sourceOverrides: readonly ContextDraftSourceOverride[];
+}
+
+export type ContextDraft = ContextDraftV12;
 
 export type ContextDraftMutation =
   | { readonly kind: "add_ref"; readonly ref: ContextDraftRef }
@@ -85,6 +104,18 @@ export type ContextDraftMutation =
   | {
       readonly kind: "set_active_resource";
       readonly ref: ContextDraftActiveResourceRef | null;
+    }
+  | {
+      readonly kind: "set_source_override";
+      readonly refId: string;
+      readonly decision: "automatic" | null;
+      readonly priority?: never;
+    }
+  | {
+      readonly kind: "set_source_override";
+      readonly refId: string;
+      readonly decision: "pinned" | "excluded";
+      readonly priority: number;
     };
 
 export interface CreateContextDraftInput {
@@ -94,12 +125,13 @@ export interface CreateContextDraftInput {
   readonly contextMode: AgentContextMode;
   readonly refs?: readonly ContextDraftRef[];
   readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
+  readonly sourceOverrides?: readonly ContextDraftSourceOverride[];
   readonly updatedAt: string;
 }
 
 export function createContextDraft(input: CreateContextDraftInput): ContextDraft {
   return finalizeContextDraft({
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     contextDraftId: input.contextDraftId,
     conversationId: input.conversationId,
     scope: input.scope,
@@ -110,6 +142,7 @@ export function createContextDraft(input: CreateContextDraftInput): ContextDraft
       input.scope.kind === "standalone"
         ? null
         : activeResourceForMode(input.activeResourceRef ?? null, input.contextMode),
+    sourceOverrides: input.scope.kind === "standalone" ? [] : (input.sourceOverrides ?? []),
     updatedAt: input.updatedAt
   });
 }
@@ -171,6 +204,63 @@ export function applyContextDraftMutation(
       }
       return ok(nextRevision(draft, [...draft.refs], updatedAt, mutation.ref));
     }
+    case "set_source_override": {
+      if (draft.scope.kind === "standalone") {
+        return err(
+          contextDraftError(
+            "CONTEXT_DRAFT_REF_SCOPE_INVALID",
+            "Standalone conversations cannot customize project context sources."
+          )
+        );
+      }
+      if (!isValidOverrideRefId(mutation.refId)) {
+        return err(
+          contextDraftError(
+            "CONTEXT_DRAFT_SOURCE_OVERRIDE_INVALID",
+            "The context source override reference is invalid."
+          )
+        );
+      }
+      if (
+        ((mutation.decision === "pinned" || mutation.decision === "excluded") &&
+          (mutation.priority === undefined || !isValidPriority(mutation.priority))) ||
+        ((mutation.decision === "automatic" || mutation.decision === null) &&
+          mutation.priority !== undefined)
+      ) {
+        return err(
+          contextDraftError(
+            "CONTEXT_DRAFT_SOURCE_PRIORITY_INVALID",
+            "The context source priority must be an integer from 0 to 100."
+          )
+        );
+      }
+      const remaining = draft.sourceOverrides.filter(
+        (override) => override.refId !== mutation.refId
+      );
+      let sourceOverrides: readonly ContextDraftSourceOverride[];
+      if (mutation.decision === null) {
+        sourceOverrides = remaining;
+      } else if (mutation.decision === "automatic") {
+        sourceOverrides = [...remaining, { refId: mutation.refId, decision: "automatic" }];
+      } else {
+        const priority = mutation.priority;
+        if (priority === undefined) {
+          return err(
+            contextDraftError(
+              "CONTEXT_DRAFT_SOURCE_PRIORITY_INVALID",
+              "The context source priority must be an integer from 0 to 100."
+            )
+          );
+        }
+        sourceOverrides = [
+          ...remaining,
+          { refId: mutation.refId, decision: mutation.decision, priority }
+        ];
+      }
+      return ok(
+        nextRevision(draft, [...draft.refs], updatedAt, draft.activeResourceRef, sourceOverrides)
+      );
+    }
   }
 }
 
@@ -193,7 +283,7 @@ export function setContextDraftMode(
       ? draft.refs.filter((ref) => ref.kind !== "chapter" && ref.kind !== "story_bible")
       : draft.refs;
   return finalizeContextDraft({
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     contextDraftId: draft.contextDraftId,
     conversationId: draft.conversationId,
     scope: draft.scope,
@@ -201,6 +291,7 @@ export function setContextDraftMode(
     revision: draft.revision + 1,
     refs,
     activeResourceRef: activeResourceForMode(draft.activeResourceRef, contextMode),
+    sourceOverrides: draft.sourceOverrides,
     updatedAt
   });
 }
@@ -214,7 +305,8 @@ export function checksumContextDraft(draft: Omit<ContextDraft, "checksum">): str
       contextMode: draft.contextMode,
       revision: draft.revision,
       refs: draft.refs,
-      activeResourceRef: draft.activeResourceRef
+      activeResourceRef: draft.activeResourceRef,
+      sourceOverrides: draft.sourceOverrides
     })
   );
 }
@@ -225,18 +317,33 @@ export function normalizeContextDraft(
 ): ContextDraft {
   const { projectId: _legacyProjectId, ...withoutLegacyProjectId } = value;
   void _legacyProjectId;
+  if (value["schemaVersion"] === "1.2") {
+    const scope = normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind);
+    const sourceOverrides = normalizeSourceOverrides(value["sourceOverrides"]);
+    return deepFreeze({
+      ...withoutLegacyProjectId,
+      scope,
+      sourceOverrides
+    } as unknown as ContextDraft);
+  }
   if (value["schemaVersion"] === "1.1") {
     const scope = normalizeAgentContextScope(value["scope"], undefined, legacyWorkspaceKind);
-    return deepFreeze({ ...withoutLegacyProjectId, scope } as unknown as ContextDraft);
+    return deepFreeze({
+      ...withoutLegacyProjectId,
+      schemaVersion: "1.2",
+      scope,
+      sourceOverrides: []
+    } as unknown as ContextDraft);
   }
   if (value["schemaVersion"] !== "1.0") throw new Error("CONTEXT_DRAFT_VERSION_UNSUPPORTED");
   const scope = normalizeAgentContextScope(undefined, value["projectId"], legacyWorkspaceKind);
   return deepFreeze({
     ...withoutLegacyProjectId,
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     scope,
     refs: scope.kind === "standalone" ? [] : value["refs"],
-    activeResourceRef: null
+    activeResourceRef: null,
+    sourceOverrides: []
   } as unknown as ContextDraft);
 }
 
@@ -288,10 +395,11 @@ function nextRevision(
   draft: ContextDraft,
   refs: readonly ContextDraftRef[],
   updatedAt: string,
-  activeResourceRef = draft.activeResourceRef
+  activeResourceRef = draft.activeResourceRef,
+  sourceOverrides = draft.sourceOverrides
 ): ContextDraft {
   return finalizeContextDraft({
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     contextDraftId: draft.contextDraftId,
     conversationId: draft.conversationId,
     scope: draft.scope,
@@ -299,12 +407,77 @@ function nextRevision(
     revision: draft.revision + 1,
     refs: draft.scope.kind === "standalone" ? [] : refs,
     activeResourceRef: draft.scope.kind === "standalone" ? null : activeResourceRef,
+    sourceOverrides: draft.scope.kind === "standalone" ? [] : sourceOverrides,
     updatedAt
   });
 }
 
 function finalizeContextDraft(draft: Omit<ContextDraft, "checksum">): ContextDraft {
-  return deepFreeze({ ...draft, checksum: checksumContextDraft(draft) });
+  const canonical = {
+    ...draft,
+    sourceOverrides: [...draft.sourceOverrides].sort((left, right) =>
+      left.refId.localeCompare(right.refId)
+    )
+  };
+  return deepFreeze({ ...canonical, checksum: checksumContextDraft(canonical) });
+}
+
+function isValidOverrideRefId(value: string): boolean {
+  if (value.length === 0 || value.length > 512) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const characterCode = value.charCodeAt(index);
+    if (characterCode <= 31 || characterCode === 127) return false;
+  }
+  return true;
+}
+
+function isValidPriority(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 100;
+}
+
+function normalizeSourceOverrides(value: unknown): readonly ContextDraftSourceOverride[] {
+  if (!Array.isArray(value)) throw new Error("CONTEXT_DRAFT_SOURCE_OVERRIDE_INVALID");
+  const overrides: ContextDraftSourceOverride[] = [];
+  const refs = new Set<string>();
+  for (const candidate of value) {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      throw new Error("CONTEXT_DRAFT_SOURCE_OVERRIDE_INVALID");
+    }
+    const override = candidate as Record<string, unknown>;
+    const refId = override["refId"];
+    const decision = override["decision"];
+    if (
+      typeof refId !== "string" ||
+      !isValidOverrideRefId(refId) ||
+      refs.has(refId) ||
+      (decision !== "automatic" && decision !== "pinned" && decision !== "excluded")
+    ) {
+      throw new Error("CONTEXT_DRAFT_SOURCE_OVERRIDE_INVALID");
+    }
+    if (decision === "automatic") {
+      if (
+        override["priority"] !== undefined ||
+        Object.keys(override).some((key) => key !== "refId" && key !== "decision")
+      ) {
+        throw new Error("CONTEXT_DRAFT_SOURCE_OVERRIDE_INVALID");
+      }
+      overrides.push({ refId, decision });
+    } else {
+      const priority = override["priority"];
+      if (
+        typeof priority !== "number" ||
+        !isValidPriority(priority) ||
+        Object.keys(override).some(
+          (key) => key !== "refId" && key !== "decision" && key !== "priority"
+        )
+      ) {
+        throw new Error("CONTEXT_DRAFT_SOURCE_OVERRIDE_INVALID");
+      }
+      overrides.push({ refId, decision, priority });
+    }
+    refs.add(refId);
+  }
+  return overrides;
 }
 
 function contextDraftError(code: string, message: string): UnifiedError {

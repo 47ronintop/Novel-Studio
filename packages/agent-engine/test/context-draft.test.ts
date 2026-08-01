@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   applyContextDraftMutation,
   createContextDraft,
+  normalizeContextDraft,
   refreshContextDraft,
   type ContextDraft,
   type ContextDraftRef
@@ -31,7 +32,7 @@ function baseDraft(
 describe("Context Draft value object", () => {
   test("creates revision 1 with a checksum and no refs by default", () => {
     const draft = baseDraft();
-    expect(draft.schemaVersion).toBe("1.1");
+    expect(draft.schemaVersion).toBe("1.2");
     expect(draft.revision).toBe(1);
     expect(draft.refs).toEqual([]);
     expect(draft.activeResourceRef).toBeNull();
@@ -288,5 +289,119 @@ describe("Context Draft value object", () => {
     expect(refreshed.revision).toBe(draft.revision + 1);
     expect(refreshed.refs).toEqual(draft.refs);
     expect(structuredClone(refreshed)).toEqual(refreshed);
+  });
+
+  test("pins, excludes, reprioritizes, and restores one source with checksum-bound revisions", () => {
+    const draft = baseDraft({ refs: [chapterRef] });
+    const pinned = applyContextDraftMutation(
+      draft,
+      {
+        kind: "set_source_override",
+        refId: chapterRef.refId,
+        decision: "pinned",
+        priority: 90
+      },
+      "t1"
+    );
+    expect(pinned).toMatchObject({
+      ok: true,
+      value: {
+        revision: draft.revision + 1,
+        sourceOverrides: [{ refId: chapterRef.refId, decision: "pinned", priority: 90 }]
+      }
+    });
+    if (!pinned.ok) return;
+    expect(pinned.value.checksum).not.toBe(draft.checksum);
+
+    const excluded = applyContextDraftMutation(
+      pinned.value,
+      {
+        kind: "set_source_override",
+        refId: chapterRef.refId,
+        decision: "excluded",
+        priority: 30
+      },
+      "t2"
+    );
+    expect(excluded).toMatchObject({
+      ok: true,
+      value: {
+        sourceOverrides: [{ refId: chapterRef.refId, decision: "excluded", priority: 30 }]
+      }
+    });
+    if (!excluded.ok) return;
+
+    const automatic = applyContextDraftMutation(
+      excluded.value,
+      { kind: "set_source_override", refId: chapterRef.refId, decision: "automatic" },
+      "t3"
+    );
+    expect(automatic).toMatchObject({
+      ok: true,
+      value: {
+        sourceOverrides: [{ refId: chapterRef.refId, decision: "automatic" }]
+      }
+    });
+    if (!automatic.ok) return;
+
+    const restored = applyContextDraftMutation(
+      automatic.value,
+      { kind: "set_source_override", refId: chapterRef.refId, decision: null },
+      "t4"
+    );
+    expect(restored).toMatchObject({ ok: true, value: { sourceOverrides: [] } });
+  });
+
+  test("rejects malformed source overrides and upgrades legacy drafts with no overrides", () => {
+    expect(
+      applyContextDraftMutation(
+        baseDraft(),
+        JSON.parse('{"kind":"set_source_override","refId":"chapter:ch_01","decision":"pinned"}'),
+        "t1"
+      )
+    ).toMatchObject({ ok: false, error: { code: "CONTEXT_DRAFT_SOURCE_PRIORITY_INVALID" } });
+    expect(
+      applyContextDraftMutation(
+        baseDraft(),
+        {
+          kind: "set_source_override",
+          refId: "chapter:ch_01",
+          decision: "pinned",
+          priority: 101
+        },
+        "t1"
+      )
+    ).toMatchObject({ ok: false, error: { code: "CONTEXT_DRAFT_SOURCE_PRIORITY_INVALID" } });
+    expect(
+      applyContextDraftMutation(
+        baseDraft(),
+        JSON.parse(
+          '{"kind":"set_source_override","refId":"chapter:ch_01","decision":"automatic","priority":50}'
+        ),
+        "t1"
+      )
+    ).toMatchObject({ ok: false, error: { code: "CONTEXT_DRAFT_SOURCE_PRIORITY_INVALID" } });
+
+    expect(() =>
+      normalizeContextDraft({
+        ...baseDraft(),
+        sourceOverrides: [{ refId: "chapter:ch_01", decision: "automatic", priority: 50 }]
+      })
+    ).toThrow("CONTEXT_DRAFT_SOURCE_OVERRIDE_INVALID");
+    expect(
+      normalizeContextDraft({
+        ...baseDraft(),
+        sourceOverrides: [{ refId: "chapter:ch_01", decision: "automatic" }]
+      }).sourceOverrides
+    ).toEqual([{ refId: "chapter:ch_01", decision: "automatic" }]);
+
+    const v11 = baseDraft() as unknown as Record<string, unknown>;
+    const normalized = normalizeContextDraft({
+      ...v11,
+      schemaVersion: "1.1",
+      activeResourceRef: null,
+      sourceOverrides: undefined
+    });
+    expect(normalized).toMatchObject({ schemaVersion: "1.2", sourceOverrides: [] });
   });
 });

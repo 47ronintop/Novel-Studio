@@ -1,5 +1,13 @@
 import type { ContextCandidate } from "@novel-studio/context-engine";
 import {
+  collectStoryBibleDeclaredChapterReferences,
+  isStoryBibleV11AssetType,
+  validateStoryBibleCreateValue,
+  type StoryBibleReferenceTargetType,
+  type StoryBibleV11AssetType,
+  type ValidationIssue
+} from "@novel-studio/schemas";
+import {
   createUnifiedError,
   err,
   type ChapterCatalogRepositoryPort,
@@ -9,12 +17,16 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 
+import { validateStoryBibleCandidate } from "./story-bible-candidate.js";
+
 export type StoryBibleAssetType =
   | "character"
   | "world.location"
   | "world.faction"
   | "world.rule"
   | "world.glossary"
+  | "world.item"
+  | "world.lore"
   | "outline"
   | "timeline.events"
   | "foreshadow";
@@ -25,14 +37,151 @@ export type MemoryOrigin = "user" | "user-confirmed-ai" | "ai-unconfirmed";
 export type MemoryConfidence = "confirmed" | "needs-review" | "deprecated";
 export type StoryBibleContextCandidate = ContextCandidate;
 
+export interface StoryBibleRelation extends JsonObject {
+  readonly relationId: string;
+  readonly sourceId: string;
+  readonly targetId: string;
+  readonly relationType: string;
+  readonly direction: "directed" | "symmetric";
+  readonly status: "active" | "ended" | "uncertain";
+  readonly validFromChapterId: string | null;
+  readonly validToChapterId: string | null;
+  readonly inversePolicy: "derived" | "explicit" | "none";
+  readonly inverseRelationId: string | null;
+  readonly evidence: JsonObject[];
+  readonly note: string;
+}
+
+export interface StoryBibleWriteCandidate extends JsonObject {
+  readonly schemaVersion: "1.1";
+  readonly id: string;
+  readonly type: StoryBibleV11AssetType;
+  readonly title: string;
+  readonly status: StoryBibleEntityStatus;
+  readonly summary: string;
+  readonly aliases: string[];
+  readonly relations: StoryBibleRelation[];
+  readonly details: JsonObject;
+  readonly extensions: JsonObject;
+  readonly createdAt: string;
+}
+
+export interface StoryBibleCreateValue extends JsonObject {
+  readonly title: string;
+  readonly status?: Exclude<StoryBibleEntityStatus, "deleted">;
+  readonly summary?: string;
+  readonly aliases?: string[];
+  readonly relations?: StoryBibleRelation[];
+  readonly details?: JsonObject;
+  readonly extensions?: JsonObject;
+}
+
+export interface StoryBibleEditableAsset {
+  readonly asset: StoryBibleAsset;
+  readonly persistedSchemaVersion: "1.0" | "1.1";
+  readonly checksum: string;
+  readonly revision: number;
+  readonly passthroughPresent: boolean;
+  readonly passthroughFieldCount: number;
+}
+
+export interface CreateStoryBibleAssetCommand {
+  readonly type: StoryBibleV11AssetType;
+  readonly value: StoryBibleCreateValue;
+}
+
+export interface SaveStoryBibleAssetCandidateCommand {
+  readonly candidate: StoryBibleWriteCandidate;
+  readonly baseRevision: number;
+  readonly baseChecksum?: string;
+}
+
+export type SaveStoryBibleStatusTransitionCommand =
+  | (SaveStoryBibleAssetCandidateCommand & {
+      readonly action: "move-to-deleted";
+      readonly expectedDeletionImpactChecksum: string;
+    })
+  | (SaveStoryBibleAssetCandidateCommand & {
+      readonly action: "restore";
+    });
+
+export interface StoryBibleReferenceImpactItem {
+  readonly sourceAssetId: string;
+  readonly sourceType: StoryBibleV11AssetType;
+  readonly sourceTitle: string;
+  readonly sourceStatus: StoryBibleEntityStatus;
+  readonly sourceRevision: number;
+  readonly targetAssetId: string;
+  readonly targetType?: StoryBibleV11AssetType;
+  readonly targetTitle?: string;
+  readonly targetStatus?: StoryBibleEntityStatus;
+  readonly targetReferenceType?: StoryBibleReferenceTargetType | "chapter";
+  readonly expectedTargetTypes: readonly (StoryBibleReferenceTargetType | "chapter")[];
+  readonly integrity: "valid" | "deleted" | "missing" | "type-mismatch";
+  readonly warnings: readonly {
+    readonly code:
+      | "target-deleted"
+      | "target-missing"
+      | "target-type-mismatch"
+      | "chapter-missing"
+      | "duplicate-relation-id"
+      | "explicit-inverse-invalid"
+      | "explicit-inverse-inconsistent";
+    readonly message: string;
+  }[];
+  readonly kind: "detail" | "relation";
+  readonly path: string;
+  readonly relationId?: string;
+  readonly relationType?: string;
+}
+
+export interface StoryBibleReferenceImpact {
+  readonly assetId: string;
+  readonly deletionImpactChecksum: string;
+  readonly incoming: readonly StoryBibleReferenceImpactItem[];
+  readonly outgoing: readonly StoryBibleReferenceImpactItem[];
+  readonly canSetDeleted: boolean;
+  readonly deletionImpact: {
+    readonly affectedReferenceCount: number;
+    readonly affectedAssetIds: readonly string[];
+    readonly cascades: false;
+  };
+}
+
+export type StoryBibleRestorableStatus = Exclude<StoryBibleEntityStatus, "deleted">;
+
+interface CreateStoryBibleAssetRepositoryInput extends CreateStoryBibleAssetCommand {
+  readonly knownChapterIds?: readonly string[];
+}
+
+interface SaveStoryBibleAssetCandidateRepositoryInput extends SaveStoryBibleAssetCandidateCommand {
+  readonly knownChapterIds?: readonly string[];
+}
+
+interface SaveStoryBibleStatusTransitionRepositoryInput extends SaveStoryBibleAssetCandidateRepositoryInput {
+  readonly statusTransition:
+    | {
+        readonly action: "move-to-deleted";
+        readonly expectedDeletionImpactChecksum: string;
+      }
+    | {
+        readonly action: "restore";
+        readonly restoreStatus: StoryBibleRestorableStatus;
+      };
+}
+
 interface StoryBibleAssetBase extends JsonObject {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.0" | "1.1";
   readonly id: string;
   readonly title: string;
   readonly status: StoryBibleEntityStatus;
   readonly summary: string;
   readonly aliases?: string[];
+  readonly relations?: JsonObject[];
+  readonly extensions?: JsonObject;
   readonly relatedEntityIds?: string[];
+  readonly revision?: number;
+  readonly passthrough?: JsonObject;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -102,12 +251,33 @@ export interface StoryBibleConsistencyReport {
 export interface StoryBibleRepositoryPort {
   readStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
   saveStoryAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  readCompatibleStoryAsset?(
+    assetId: string
+  ): Promise<Result<StoryBibleEditableAsset, UnifiedError>>;
+  createStoryAsset?(
+    input: CreateStoryBibleAssetRepositoryInput
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  saveStoryAssetCandidate?(
+    input: SaveStoryBibleAssetCandidateRepositoryInput
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  saveStoryAssetStatusTransition?(
+    input: SaveStoryBibleStatusTransitionRepositoryInput
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  getStoryBibleReferences?(
+    assetId: string,
+    knownChapterIds?: readonly string[]
+  ): Promise<Result<StoryBibleReferenceImpact, UnifiedError>>;
   saveMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
 }
 
 export interface StoryBibleSessionOptions {
   readonly repository?: StoryBibleRepositoryPort;
   readonly chapterCatalog?: Pick<ChapterCatalogRepositoryPort, "listChapters">;
+  readonly resolveRestoreStatus?: (
+    assetId: string,
+    currentRevision: number,
+    currentChecksum: string
+  ) => Promise<Result<StoryBibleRestorableStatus, UnifiedError>>;
 }
 
 export interface StoryBibleContextCandidateOptions {
@@ -132,6 +302,24 @@ export interface StoryBibleSession {
   clearSnapshot?(): void;
   loadStoryBible(): Promise<Result<StoryBibleSnapshot, UnifiedError>>;
   saveStoryAsset(asset: StoryBibleAsset): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  readStoryAssetForEditing?(
+    assetId: string
+  ): Promise<Result<StoryBibleEditableAsset, UnifiedError>>;
+  createStoryAsset?(
+    input: CreateStoryBibleAssetCommand
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  saveStoryAssetCandidate?(
+    input: SaveStoryBibleAssetCandidateCommand
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  saveStoryAssetStatusTransition?(
+    input: SaveStoryBibleStatusTransitionCommand
+  ): Promise<Result<StoryBibleAsset, UnifiedError>>;
+  getStoryAssetReferences?(
+    assetId: string
+  ): Promise<Result<StoryBibleReferenceImpact, UnifiedError>>;
+  resolveStoryAssetRestoreStatus?(
+    assetId: string
+  ): Promise<Result<StoryBibleRestorableStatus, UnifiedError>>;
   saveMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>>;
   buildConsistencyReport(): Promise<Result<StoryBibleConsistencyReport, UnifiedError>>;
   buildContextCandidates(
@@ -164,6 +352,22 @@ export function createStoryBibleSession(options: StoryBibleSessionOptions = {}):
         return storyBibleUnavailable();
       }
 
+      if (options.repository.readCompatibleStoryAsset !== undefined) {
+        const current = await options.repository.readCompatibleStoryAsset(asset.id);
+        if (current.ok) {
+          const transition = validateDeletedStatusBoundary(
+            current.value.asset.status,
+            asset.status
+          );
+          if (!transition.ok) return err(transition.error);
+        } else if (current.error.code !== "STORY_BIBLE_ASSET_NOT_FOUND") {
+          return current;
+        } else if (asset.status === "deleted") {
+          const transition = validateDeletedStatusBoundary("active", "deleted");
+          if (!transition.ok) return err(transition.error);
+        }
+      }
+
       const saved = await options.repository.saveStoryAsset(asset);
       if (saved.ok) {
         const loaded = await options.repository.readStoryBible();
@@ -173,6 +377,163 @@ export function createStoryBibleSession(options: StoryBibleSessionOptions = {}):
       }
 
       return saved;
+    },
+    async readStoryAssetForEditing(assetId) {
+      if (options.repository?.readCompatibleStoryAsset === undefined) {
+        return storyBibleUnavailable();
+      }
+      return options.repository.readCompatibleStoryAsset(assetId);
+    },
+    async createStoryAsset(input) {
+      if (options.repository?.createStoryAsset === undefined) {
+        return storyBibleUnavailable();
+      }
+      if (!isStoryBibleV11AssetType(input.type)) {
+        return storyBibleCandidateInvalid([
+          {
+            instancePath: "/type",
+            schemaPath: "#/properties/type",
+            keyword: "enum",
+            message: "must be a supported Story Bible type"
+          }
+        ]);
+      }
+      const validation = validateStoryBibleCreateValue(input.type, input.value);
+      if (!validation.valid) return storyBibleCandidateInvalid(validation.issues);
+      const knownChapterIds = await readKnownChapterIds();
+      if (!knownChapterIds.ok) return knownChapterIds;
+      const saved = await options.repository.createStoryAsset({
+        ...input,
+        ...(knownChapterIds.value === undefined ? {} : { knownChapterIds: knownChapterIds.value })
+      });
+      if (saved.ok) await refreshSnapshot();
+      return saved;
+    },
+    async saveStoryAssetCandidate(input) {
+      if (options.repository?.saveStoryAssetCandidate === undefined) {
+        return storyBibleUnavailable();
+      }
+      let allowLegacyId = input.baseRevision === 0;
+      if (options.repository.readCompatibleStoryAsset !== undefined) {
+        const current = await options.repository.readCompatibleStoryAsset(input.candidate.id);
+        if (!current.ok) return current;
+        const transition = validateDeletedStatusBoundary(
+          current.value.asset.status,
+          input.candidate.status
+        );
+        if (!transition.ok) return err(transition.error);
+        allowLegacyId =
+          current.value.persistedSchemaVersion === "1.0" ||
+          current.value.asset.passthrough?.["sourceSchemaVersion"] === "1.0";
+      }
+      const knownAssetIds = snapshot === undefined ? undefined : storyBibleAssetIds(snapshot);
+      const validation = validateStoryBibleCandidate(input.candidate, {
+        assetType: input.candidate.type,
+        ...(knownAssetIds === undefined ? {} : { knownAssetIds }),
+        ...(allowLegacyId ? { allowLegacyId: true } : {})
+      });
+      if (!validation.valid) return storyBibleCandidateInvalid(validation.issues);
+      const knownChapterIds = await readKnownChapterIds();
+      if (!knownChapterIds.ok) return knownChapterIds;
+      const saved = await options.repository.saveStoryAssetCandidate({
+        ...input,
+        ...(knownChapterIds.value === undefined ? {} : { knownChapterIds: knownChapterIds.value })
+      });
+      if (saved.ok) await refreshSnapshot();
+      return saved;
+    },
+    async saveStoryAssetStatusTransition(input) {
+      if (
+        options.repository?.readCompatibleStoryAsset === undefined ||
+        options.repository.saveStoryAssetStatusTransition === undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      const current = await options.repository.readCompatibleStoryAsset(input.candidate.id);
+      if (!current.ok) return current;
+      let statusTransition: SaveStoryBibleStatusTransitionRepositoryInput["statusTransition"];
+      if (input.action === "move-to-deleted") {
+        if (
+          current.value.asset.status === "deleted" ||
+          input.candidate.status !== "deleted" ||
+          !/^[a-f0-9]{64}$/u.test(input.expectedDeletionImpactChecksum)
+        ) {
+          return storyBibleStatusTransitionInvalid();
+        }
+        statusTransition = {
+          action: "move-to-deleted",
+          expectedDeletionImpactChecksum: input.expectedDeletionImpactChecksum
+        };
+      } else {
+        if (
+          current.value.asset.status !== "deleted" ||
+          options.resolveRestoreStatus === undefined
+        ) {
+          return storyBibleStatusTransitionInvalid();
+        }
+        const restoreStatus = await options.resolveRestoreStatus(
+          input.candidate.id,
+          current.value.revision,
+          current.value.checksum
+        );
+        if (!restoreStatus.ok) return restoreStatus;
+        if (input.candidate.status !== restoreStatus.value) {
+          return storyBibleStatusTransitionInvalid();
+        }
+        statusTransition = { action: "restore", restoreStatus: restoreStatus.value };
+      }
+      const allowLegacyId =
+        current.value.persistedSchemaVersion === "1.0" ||
+        current.value.asset.passthrough?.["sourceSchemaVersion"] === "1.0";
+      const knownAssetIds = snapshot === undefined ? undefined : storyBibleAssetIds(snapshot);
+      const validation = validateStoryBibleCandidate(input.candidate, {
+        assetType: input.candidate.type,
+        ...(knownAssetIds === undefined ? {} : { knownAssetIds }),
+        ...(allowLegacyId ? { allowLegacyId: true } : {})
+      });
+      if (!validation.valid) return storyBibleCandidateInvalid(validation.issues);
+      const knownChapterIds = await readKnownChapterIds();
+      if (!knownChapterIds.ok) return knownChapterIds;
+      const saved = await options.repository.saveStoryAssetStatusTransition({
+        candidate: input.candidate,
+        baseRevision: input.baseRevision,
+        ...(input.baseChecksum === undefined ? {} : { baseChecksum: input.baseChecksum }),
+        statusTransition,
+        ...(knownChapterIds.value === undefined ? {} : { knownChapterIds: knownChapterIds.value })
+      });
+      if (saved.ok) await refreshSnapshot();
+      return saved;
+    },
+    async getStoryAssetReferences(assetId) {
+      if (options.repository?.getStoryBibleReferences === undefined) {
+        return storyBibleUnavailable();
+      }
+      const knownChapterIds = await readKnownChapterIds();
+      if (!knownChapterIds.ok) return knownChapterIds;
+      return options.repository.getStoryBibleReferences(assetId, knownChapterIds.value);
+    },
+    async resolveStoryAssetRestoreStatus(assetId) {
+      if (
+        options.repository?.readCompatibleStoryAsset === undefined ||
+        options.resolveRestoreStatus === undefined
+      ) {
+        return storyBibleUnavailable();
+      }
+      const current = await options.repository.readCompatibleStoryAsset(assetId);
+      if (!current.ok) return current;
+      if (current.value.asset.status !== "deleted") {
+        return err(
+          createUnifiedError({
+            code: "STORY_BIBLE_RESTORE_NOT_DELETED",
+            category: "ValidationError",
+            message: "Only a deleted Story Bible asset can be restored.",
+            recoverability: "user-action",
+            suggestedAction: "Reload the Story Bible entry before retrying restore.",
+            traceId: "application-story-bible-restore"
+          })
+        );
+      }
+      return options.resolveRestoreStatus(assetId, current.value.revision, current.value.checksum);
     },
     async saveMemory(memory) {
       if (options.repository === undefined) {
@@ -229,6 +590,80 @@ export function createStoryBibleSession(options: StoryBibleSessionOptions = {}):
       };
     }
   };
+
+  async function refreshSnapshot(): Promise<void> {
+    if (options.repository === undefined) return;
+    const loaded = await options.repository.readStoryBible();
+    if (loaded.ok) snapshot = loaded.value;
+  }
+
+  async function readKnownChapterIds(): Promise<
+    Result<readonly string[] | undefined, UnifiedError>
+  > {
+    if (options.chapterCatalog === undefined) return { ok: true, value: undefined };
+    const chapters = await options.chapterCatalog.listChapters();
+    return chapters.ok
+      ? { ok: true, value: chapters.value.map((chapter) => chapter.id) }
+      : chapters;
+  }
+}
+
+function storyBibleAssetIds(snapshot: StoryBibleSnapshot): ReadonlySet<string> {
+  return new Set([
+    ...snapshot.characters.map((asset) => asset.id),
+    ...snapshot.worldAssets.map((asset) => asset.id),
+    ...(snapshot.outline === undefined ? [] : [snapshot.outline.id]),
+    ...snapshot.foreshadows.map((asset) => asset.id),
+    ...(snapshot.timeline === undefined ? [] : [snapshot.timeline.id])
+  ]);
+}
+
+function storyBibleCandidateInvalid<T>(
+  issues: readonly ValidationIssue[]
+): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_BIBLE_CANDIDATE_INVALID",
+      category: "ValidationError",
+      message: "Story Bible changes do not match the v1.1 data contract.",
+      recoverability: "user-action",
+      suggestedAction: "Correct the highlighted Story Bible fields and retry.",
+      traceId: "application-story-bible-candidate",
+      redactedDetail: { issues: issues.map((issue) => ({ ...issue })) }
+    })
+  );
+}
+
+function validateDeletedStatusBoundary(
+  currentStatus: StoryBibleEntityStatus,
+  nextStatus: StoryBibleEntityStatus
+): Result<void, UnifiedError> {
+  return (currentStatus === "deleted") === (nextStatus === "deleted")
+    ? { ok: true, value: undefined }
+    : err(
+        createUnifiedError({
+          code: "STORY_BIBLE_STATUS_TRANSITION_COMMAND_REQUIRED",
+          category: "ValidationError",
+          message:
+            "Moving a Story Bible asset into or out of deleted requires a dedicated command.",
+          recoverability: "user-action",
+          suggestedAction: "Use the Story Bible delete or restore command.",
+          traceId: "application-story-bible-status-transition"
+        })
+      );
+}
+
+function storyBibleStatusTransitionInvalid<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "STORY_BIBLE_STATUS_TRANSITION_INVALID",
+      category: "ValidationError",
+      message: "The Story Bible status transition does not match the dedicated command.",
+      recoverability: "user-action",
+      suggestedAction: "Reload the Story Bible entry and prepare the status command again.",
+      traceId: "application-story-bible-status-transition"
+    })
+  );
 }
 
 /**
@@ -314,7 +749,10 @@ function createConsistencyReport(
     }
   }
 
-  issues.push(...createForeshadowConsistencyIssues(snapshot.foreshadows, chapterIds));
+  if (chapterIds !== undefined) {
+    issues.push(...createChapterReferenceConsistencyIssues(snapshot, chapterIds));
+  }
+  issues.push(...createForeshadowConsistencyIssues(snapshot.foreshadows));
 
   return {
     status: issues.length > 0 ? "attention" : "healthy",
@@ -364,34 +802,49 @@ function consistencyKindForAsset(asset: StoryBibleAsset): StoryBibleConsistencyR
   return "world";
 }
 
+function createChapterReferenceConsistencyIssues(
+  snapshot: StoryBibleSnapshot,
+  chapterIds: ReadonlySet<string>
+): readonly StoryBibleConsistencyIssue[] {
+  const assets: readonly StoryBibleAsset[] = [
+    ...snapshot.characters,
+    ...snapshot.worldAssets,
+    ...(snapshot.outline === undefined ? [] : [snapshot.outline]),
+    ...(snapshot.timeline === undefined ? [] : [snapshot.timeline]),
+    ...snapshot.foreshadows
+  ];
+  const issues: StoryBibleConsistencyIssue[] = [];
+  for (const asset of [...assets].sort((left, right) => compareStableText(left.id, right.id))) {
+    const missingChapterIds = new Set(
+      collectStoryBibleDeclaredChapterReferences(asset)
+        .map((reference) => reference.chapterId)
+        .filter((chapterId) => !chapterIds.has(chapterId))
+    );
+    for (const chapterId of [...missingChapterIds].sort(compareStableText)) {
+      const foreshadow = asset.type === "foreshadow";
+      issues.push({
+        id: `story-consistency.${consistencyKindForAsset(asset)}.${asset.id}.missing-chapter.${chapterId}`,
+        severity: "warning",
+        title: foreshadow
+          ? "Foreshadow references a missing chapter"
+          : "Story Bible entry references a missing chapter",
+        message: `${asset.title} references chapter ${chapterId}, but that chapter is not in the project catalog.`,
+        sourceRef: assetRef(asset),
+        targetRef: chapterRef(chapterId),
+        suggestedAction: `Open ${asset.title} and replace or remove the missing chapter reference.`
+      });
+    }
+  }
+  return issues;
+}
+
 function createForeshadowConsistencyIssues(
-  foreshadows: readonly ForeshadowAsset[],
-  chapterIds: ReadonlySet<string> | undefined
+  foreshadows: readonly ForeshadowAsset[]
 ): readonly StoryBibleConsistencyIssue[] {
   const issues: StoryBibleConsistencyIssue[] = [];
   const orderedForeshadows = [...foreshadows].sort((left, right) =>
     compareStableText(left.id, right.id)
   );
-
-  if (chapterIds !== undefined) {
-    for (const foreshadow of orderedForeshadows) {
-      const missingChapterIds = new Set(
-        referencedChapterIds(foreshadow).filter((chapterId) => !chapterIds.has(chapterId))
-      );
-      for (const chapterId of [...missingChapterIds].sort(compareStableText)) {
-        issues.push({
-          id: `story-consistency.foreshadow.${foreshadow.id}.missing-chapter.${chapterId}`,
-          severity: "warning",
-          title: "Foreshadow references a missing chapter",
-          message: `${foreshadow.title} references chapter ${chapterId}, but that chapter is not in the project catalog.`,
-          sourceRef: assetRef(foreshadow),
-          targetRef: chapterRef(chapterId),
-          suggestedAction:
-            "Open the foreshadow and replace or remove the missing chapter reference."
-        });
-      }
-    }
-  }
 
   issues.push(...duplicateForeshadowSourceIssues(orderedForeshadows));
 
@@ -416,16 +869,6 @@ function createForeshadowConsistencyIssues(
   }
 
   return issues.sort((left, right) => compareStableText(left.id, right.id));
-}
-
-function referencedChapterIds(foreshadow: ForeshadowAsset): readonly string[] {
-  const details = foreshadow.details;
-  return [
-    details.plantedChapterId,
-    details.plannedPayoffChapterId,
-    details.actualPayoffChapterId,
-    ...(details.sourceRefs ?? []).map((sourceRef) => sourceRef.chapterId)
-  ].filter(hasNonEmptyText);
 }
 
 function duplicateForeshadowSourceIssues(

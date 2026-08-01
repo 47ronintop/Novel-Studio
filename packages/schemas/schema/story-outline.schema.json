@@ -1,0 +1,426 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema.story-outline.v1.1.writeStrict",
+  "title": "outline Story Bible asset (writeStrict)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "type",
+    "title",
+    "status",
+    "summary",
+    "aliases",
+    "relations",
+    "details",
+    "extensions",
+    "createdAt",
+    "updatedAt",
+    "revision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^outline_main$"
+    },
+    "type": {
+      "const": "outline"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "draft",
+        "archived",
+        "deleted"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 100000
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 256,
+      "uniqueItems": true
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relationId",
+          "sourceId",
+          "targetId",
+          "relationType",
+          "direction",
+          "status",
+          "validFromChapterId",
+          "validToChapterId",
+          "inversePolicy",
+          "inverseRelationId",
+          "evidence",
+          "note"
+        ],
+        "properties": {
+          "relationId": {
+            "type": "string",
+            "pattern": "^rel_[a-f0-9]{32}$"
+          },
+          "sourceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "targetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "relationType": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "directed",
+              "symmetric"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "ended",
+              "uncertain"
+            ]
+          },
+          "validFromChapterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validToChapterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inversePolicy": {
+            "type": "string",
+            "enum": [
+              "derived",
+              "explicit",
+              "none"
+            ]
+          },
+          "inverseRelationId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^rel_[a-f0-9]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chapterId",
+                "start",
+                "end",
+                "excerptHash"
+              ],
+              "properties": {
+                "chapterId": {
+                  "type": "string",
+                  "pattern": "^ch_[A-Za-z0-9_-]+$"
+                },
+                "start": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "excerptHash": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "maxItems": 10000
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "volumes",
+        "chapterOutlines"
+      ],
+      "properties": {
+        "premise": {
+          "type": "string"
+        },
+        "themes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "volumeId",
+              "entryRevision",
+              "title",
+              "summary",
+              "goals",
+              "chapterIds"
+            ],
+            "properties": {
+              "volumeId": {
+                "type": "string",
+                "pattern": "^vol_[a-f0-9]{32}$"
+              },
+              "entryRevision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "summary": {
+                "type": "string"
+              },
+              "goals": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "chapterIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              }
+            }
+          }
+        },
+        "chapterOutlines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "chapterOutlineId",
+              "chapterId",
+              "entryRevision",
+              "goal",
+              "conflict",
+              "turningPoint",
+              "notes",
+              "characterIds",
+              "locationIds",
+              "foreshadowIds",
+              "beats",
+              "expectedStateChanges",
+              "deviations"
+            ],
+            "properties": {
+              "chapterOutlineId": {
+                "type": "string",
+                "pattern": "^cho_[a-f0-9]{32}$"
+              },
+              "chapterId": {
+                "type": "string",
+                "pattern": "^ch_[A-Za-z0-9_-]+$"
+              },
+              "entryRevision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "goal": {
+                "type": "string"
+              },
+              "conflict": {
+                "type": "string"
+              },
+              "turningPoint": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "string"
+              },
+              "povCharacterId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "characterIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "locationIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "foreshadowIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "beats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "beatId",
+                    "entryRevision",
+                    "title"
+                  ],
+                  "properties": {
+                    "beatId": {
+                      "type": "string",
+                      "pattern": "^beat_[a-f0-9]{32}$"
+                    },
+                    "entryRevision": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "purpose": {
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "string"
+                    },
+                    "scene": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "expectedStateChanges": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "actualOutcome": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "deviations": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(?:[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+|[a-z][a-z0-9-]*/[a-z][a-z0-9-]*)$"
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

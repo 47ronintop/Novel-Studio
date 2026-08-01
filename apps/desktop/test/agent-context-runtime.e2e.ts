@@ -275,7 +275,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await openQueuedEngineeringWorkspace(page);
     await ensureAgentConversation(page);
     await configureLocalModel(page, baseUrl);
-    const sourceTrigger = page.getByLabel("会话输入区").getByTitle("查看来源");
+    const sourceTrigger = page.getByLabel("会话输入区").getByTitle("查看上下文");
     await sourceTrigger.click();
     const sourcePanel = page.getByRole("dialog", { name: "上下文用量" });
     await sourcePanel.getByRole("button", { name: "创建约定文件" }).click();
@@ -318,7 +318,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await queueDirectorySelection(creativeApp, creativeRoot);
     await openAgentPanel(page);
     await configureLocalModel(page, baseUrl);
-    const creativeSourceTrigger = page.getByLabel("会话输入区").getByTitle("查看来源");
+    const creativeSourceTrigger = page.getByLabel("会话输入区").getByTitle("查看上下文");
     await creativeSourceTrigger.click();
     const creativeSourcePanel = page.getByRole("dialog", { name: "上下文用量" });
     await creativeSourcePanel.getByRole("button", { name: "创建约定文件" }).click();
@@ -716,7 +716,7 @@ async function expectWorkspaceSourcePanel(
   page: Page,
   input: { readonly conventionsLabel: string; readonly outlineLabel: string }
 ): Promise<void> {
-  const trigger = page.getByLabel("会话输入区").getByTitle("查看来源");
+  const trigger = page.getByLabel("会话输入区").getByTitle("查看上下文");
   await expect(trigger).toBeVisible();
   await trigger.click();
   const panel = page.getByRole("dialog", { name: "上下文用量" });

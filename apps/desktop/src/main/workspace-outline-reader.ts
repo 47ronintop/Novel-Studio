@@ -4,6 +4,7 @@ import {
   WORKSPACE_OUTLINE_READER_VERSION,
   checksumProjectContext,
   truncateContextText,
+  workspaceOutlineDependencyRevisionChecksum,
   type WorkspaceOutlineDependencyManifest,
   type WorkspaceOutlineEntry,
   type WorkspaceOutlineLimits,
@@ -32,6 +33,7 @@ import {
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 const WORKSPACE_OUTLINE_TOKEN_LIMIT = 1_500;
+const WORKSPACE_OUTLINE_DEPENDENCY_READ_ATTEMPTS = 2;
 
 export interface DesktopWorkspaceOutlineReaderOptions {
   /** Bound by Main to a canonical-root/no-symlink guarded metadata/index implementation. */
@@ -56,6 +58,8 @@ interface BuiltWorkspaceOutline {
   readonly entries: readonly WorkspaceOutlineEntry[];
   readonly text: string;
   readonly dependencyManifest: WorkspaceOutlineDependencyManifest;
+  /** True only when a wall-clock cap prevented an authoritative dependency classification. */
+  readonly transientDependencyGap?: boolean;
 }
 
 /**
@@ -75,7 +79,7 @@ export class DesktopWorkspaceOutlineReader implements WorkspaceOutlineReader {
   public async read(
     input: WorkspaceOutlineReadInput
   ): Promise<Result<WorkspaceOutlineReadResult, UnifiedError>> {
-    const built = await this.build(input);
+    const built = await this.buildWithStableDependencies(input);
     if (!built.ok) return built;
 
     const truncated = truncateContextText({
@@ -102,8 +106,24 @@ export class DesktopWorkspaceOutlineReader implements WorkspaceOutlineReader {
   public async readDependencyManifest(
     input: Omit<WorkspaceOutlineReadInput, "modelProfileId">
   ): Promise<Result<WorkspaceOutlineDependencyManifest, UnifiedError>> {
-    const built = await this.build(input);
+    const built = await this.buildWithStableDependencies(input);
     return built.ok ? ok(built.value.dependencyManifest) : built;
+  }
+
+  private async buildWithStableDependencies(
+    input: Omit<WorkspaceOutlineReadInput, "modelProfileId">
+  ): Promise<Result<BuiltWorkspaceOutline, UnifiedError>> {
+    for (let attempt = 0; attempt < WORKSPACE_OUTLINE_DEPENDENCY_READ_ATTEMPTS; attempt += 1) {
+      const built = await this.build(input);
+      if (!built.ok || built.value.transientDependencyGap !== true) {
+        return built;
+      }
+    }
+    return outlineError({
+      code: "WORKSPACE_OUTLINE_DEPENDENCY_SCAN_INCOMPLETE",
+      message: "The writing outline dependency index could not be read within its bounded scan.",
+      suggestedAction: "Retry after the workspace metadata index becomes responsive."
+    });
   }
 
   private async build(
@@ -293,7 +313,8 @@ export class DesktopWorkspaceOutlineReader implements WorkspaceOutlineReader {
         omittedEntryCount: index.value.omittedEntryCount,
         degradedDependencies: index.value.degradedDependencies
       }),
-      dependencyManifest
+      dependencyManifest,
+      ...(index.value.incompleteDependencies.length === 0 ? {} : { transientDependencyGap: true })
     });
   }
 }
@@ -314,8 +335,8 @@ export function sameWorkspaceOutlineDependencyManifest(
   right: WorkspaceOutlineDependencyManifest
 ): boolean {
   return (
-    checksumProjectContext(dependencyIdentity(left)) ===
-    checksumProjectContext(dependencyIdentity(right))
+    workspaceOutlineDependencyRevisionChecksum(left) ===
+    workspaceOutlineDependencyRevisionChecksum(right)
   );
 }
 
@@ -517,17 +538,6 @@ function quote(value: string): string {
 
 function checksumText(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-function dependencyIdentity(manifest: WorkspaceOutlineDependencyManifest) {
-  return {
-    schemaVersion: manifest.schemaVersion,
-    readerVersion: manifest.readerVersion,
-    profileId: manifest.profileId,
-    workspace: manifest.workspace,
-    limits: manifest.limits,
-    dependency: manifest.dependency
-  } as const;
 }
 
 function isProfileWorkspaceCombination(

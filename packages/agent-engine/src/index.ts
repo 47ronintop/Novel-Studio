@@ -24,6 +24,7 @@ export type {
   NamespacedExternalToolId,
   NetworkAgentToolName,
   SearchAgentToolName,
+  StoryBibleAgentToolName,
   StaticAgentToolName,
   V2AgentToolName
 } from "./tool-registry.js";
@@ -116,10 +117,38 @@ export type {
   ContextDraft,
   ContextDraftV10,
   ContextDraftV11,
+  ContextDraftV12,
   ContextDraftMutation,
   ContextDraftRef,
+  ContextDraftSourceOverride,
+  ContextDraftSourceOverrideDecision,
   CreateContextDraftInput
 } from "./context-draft.js";
+export {
+  createPackedAgentContext,
+  createPackedAgentContextManifest,
+  packedAgentContextManifestChecksum,
+  packedAgentContextPayloadChecksum,
+  rebuildPackedAgentContextFromManifest,
+  validatePackedAgentContext,
+  validatePackedAgentContextManifest
+} from "./packed-agent-context.js";
+export type {
+  AgentContextPreferenceScope,
+  AgentContextSelectionPolicy,
+  CreatePackedAgentContextInput,
+  PackedAgentContext,
+  PackedAgentContextBlock,
+  PackedAgentContextBlockManifest,
+  PackedAgentContextManifest,
+  PackedAgentContextManifestV10,
+  PackedAgentContextManifestV11,
+  PackedAgentContextManifestV12,
+  PackedAgentContextRebuildResult,
+  PackedAgentContextRebuildSource,
+  PackedAgentContextSourceManifest,
+  PackedAgentContextTokenStats
+} from "./packed-agent-context.js";
 export {
   createAgentContextSnapshot,
   findStaleContextSources,
@@ -203,6 +232,7 @@ export type {
   AgentContextSnapshotV11,
   AgentContextSnapshotV12,
   AgentContextSnapshotV13,
+  AgentContextSnapshotV14,
   AgentContextMaterializationProvenance,
   AgentContextSource,
   AgentContextSourceIdentity,
@@ -214,9 +244,11 @@ export type {
   AgentContextSourceV11,
   AgentContextSourceV12,
   AgentContextSourceV13,
+  AgentContextSourceV14,
   AgentContextTruncationRange,
   AgentContextWorkspaceTrust,
   ProjectConventionsSourceMaterialization,
+  WorkspaceOutlineDependencyEntry,
   WorkspaceOutlineSourceMaterialization,
   CreateAgentContextSnapshotInput
 } from "./context-snapshot.js";
@@ -255,6 +287,7 @@ export type {
   ChangeSetExternalValidation,
   ChangeSetFileChange,
   ChangeSetFileSelection,
+  ChangeSetConsistencyGroupSelection,
   ChangeSetHunk,
   ChangeSetProposal,
   ChangeSetRange,
@@ -265,6 +298,7 @@ export type {
   ChangeSetValidationCheck,
   CreateChangeSetRevisionInput,
   SelectChangeSetRevisionInput,
+  StoryBibleStatusTransitionProof,
   ChangeSetCreateDirectoryOperation,
   ChangeSetCreateFileOperation,
   ChangeSetDeleteFileOperation,
@@ -274,10 +308,12 @@ export type {
   ChangeSetOperationKind,
   ChangeSetOperationSelection
 } from "./change-set.js";
-export { decideChangeSetApproval } from "./approval-gate.js";
+export { checksumChangeSetSelection, inspectChangeSetConsistencyGroups } from "./change-set.js";
+export { decideChangeSetApproval, deriveChangeSetGroupApprovalToken } from "./approval-gate.js";
 export type {
   ChangeSetApproval,
   ChangeSetApprovalBinding,
+  ChangeSetGroupApprovalTokenInput,
   DecideChangeSetApprovalInput
 } from "./approval-gate.js";
 export { createAppliedVersionGroup, createFailedVersionGroup } from "./version-group.js";
@@ -295,7 +331,10 @@ export type {
   VersionGroupUndoMetadata,
   VersionGroupUndoStatus,
   VersionGroupWrite,
-  VersionGroupWriteStatus
+  VersionGroupWriteStatus,
+  StoryBibleApplyReceipt,
+  StoryBibleApplyReceiptAsset,
+  StoryBibleInversePatchOperation
 } from "./version-group.js";
 export {
   createTransactionJournal,

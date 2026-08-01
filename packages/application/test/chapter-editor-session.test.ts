@@ -78,4 +78,52 @@ describe("chapter editor session", () => {
     expect(saved.value.saveStatus).toBe("Saved");
     expect(saved.value.chapter.frontmatter.updatedAt).toBe("2026-07-04T00:00:00.000Z");
   });
+
+  test("persists status with the current body and reports only the first transition to done", async () => {
+    const writes: ChapterDocument[] = [];
+    const repository: ChapterDraftRepositoryPort = {
+      async readChapter() {
+        return ok(originalChapter);
+      },
+      async writeChapter(chapter) {
+        writes.push(structuredClone(chapter));
+        return ok(chapter);
+      }
+    };
+    const session = createChapterEditorSession({
+      chapterId,
+      repository,
+      now: () => "2026-07-31T00:00:00.000Z"
+    });
+    await session.load();
+    await session.edit("Completed chapter body.\n");
+
+    const completed = await session.saveWithStatus("done");
+    expect(completed).toMatchObject({
+      ok: true,
+      value: {
+        previousStatus: "draft",
+        nextStatus: "done",
+        completedTransition: true,
+        state: {
+          dirty: false,
+          chapter: {
+            body: "Completed chapter body.\n",
+            frontmatter: { status: "done" }
+          }
+        }
+      }
+    });
+
+    const repeated = await session.saveWithStatus("done");
+    expect(repeated).toMatchObject({
+      ok: true,
+      value: {
+        previousStatus: "done",
+        nextStatus: "done",
+        completedTransition: false
+      }
+    });
+    expect(writes).toHaveLength(1);
+  });
 });

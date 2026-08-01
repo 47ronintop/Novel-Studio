@@ -1,3 +1,4 @@
+import type { ChapterStatus } from "@novel-studio/shared";
 import { Maximize2, Save, Search, Sparkles, X } from "lucide-react";
 
 export interface EditorDocumentTab {
@@ -19,6 +20,9 @@ export interface EditorDocumentBarProps {
   readonly selectionAction?:
     | { readonly label: string; readonly onInvoke: () => void }
     | undefined;
+  readonly chapterStatus?: ChapterStatus | undefined;
+  readonly chapterStatusBusy?: boolean | undefined;
+  readonly onChapterStatusChange?: ((status: ChapterStatus) => void) | undefined;
 }
 
 export function EditorDocumentBar({
@@ -28,7 +32,10 @@ export function EditorDocumentBar({
   onSave,
   onFind,
   onFocusModeToggle,
-  selectionAction
+  selectionAction,
+  chapterStatus,
+  chapterStatusBusy = false,
+  onChapterStatusChange
 }: EditorDocumentBarProps) {
   return (
     <header className="ns-document-bar" aria-label="打开的文档">
@@ -68,6 +75,25 @@ export function EditorDocumentBar({
         ))}
       </div>
       <div className="ns-document-actions">
+        {chapterStatus === undefined || onChapterStatusChange === undefined ? null : (
+          <label className="ns-document-status-control">
+            <span className="ns-visually-hidden">章节状态</span>
+            <select
+              aria-label="章节状态"
+              disabled={chapterStatusBusy}
+              onChange={(event) =>
+                onChapterStatusChange(event.currentTarget.value as ChapterStatus)
+              }
+              value={chapterStatus}
+            >
+              <option value="draft">草稿</option>
+              <option value="revision">修订</option>
+              <option value="review">审阅</option>
+              <option value="done">完成</option>
+              <option value="archived">归档</option>
+            </select>
+          </label>
+        )}
         {selectionAction === undefined ? null : (
           <button
             aria-label={selectionAction.label}

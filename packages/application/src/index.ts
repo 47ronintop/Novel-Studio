@@ -69,6 +69,8 @@ export type {
   NovelStudioApi,
   ProjectConventionsCreateResult,
   ReadAgentPermissionSummaryQuery,
+  WorkspaceContextPolicyUpdate,
+  WorkspaceContextSourcePreferenceUpdate,
   ProjectDirectorySelectionDto,
   ProjectTextFileSelectionDto
 } from "./novel-studio-api.js";
@@ -80,11 +82,14 @@ export type {
   ChapterSuggestionDiffPreview,
   ChapterEditorState,
   ChapterEditorSnapshot,
+  ChapterStatusSaveResult,
   ChapterDraftRepositoryPort
 } from "./chapter-editor-session.js";
 export { createChapterEditorSession } from "./chapter-editor-session.js";
 export type {
   ActivityId,
+  ChapterCompletionAnalysisDisposition,
+  ChapterStatusUpdateResult,
   DesktopApplication,
   DesktopApplicationOptions,
   DesktopShellState,
@@ -99,6 +104,7 @@ export type {
   WorkspaceLayoutState
 } from "./desktop-application.js";
 export type {
+  ChapterStatus,
   CreativeNavigatorMode,
   WorkbenchMode,
   WorkspaceCapability,
@@ -194,7 +200,10 @@ export type {
   MemoryOrigin,
   MemoryRecord,
   MemoryRecordType,
+  CreateStoryBibleAssetCommand,
   ForeshadowAsset,
+  SaveStoryBibleAssetCandidateCommand,
+  SaveStoryBibleStatusTransitionCommand,
   StoryBibleConsistencyIssue,
   StoryBibleConsistencyRef,
   StoryBibleConsistencyRefKind,
@@ -206,19 +215,50 @@ export type {
   StoryBibleContextCandidate,
   StoryBibleContextCandidateOptions,
   StoryBibleEntityStatus,
+  StoryBibleEditableAsset,
+  StoryBibleReferenceImpact,
+  StoryBibleReferenceImpactItem,
+  StoryBibleRestorableStatus,
   StoryBibleMentionScanInput,
   StoryBibleMentionSuggestion,
   StoryBibleRepositoryPort,
   StoryBibleRegularAsset,
   StoryBibleRegularAssetType,
+  StoryBibleRelation,
   StoryBibleSession,
   StoryBibleSessionOptions,
-  StoryBibleSnapshot
+  StoryBibleSnapshot,
+  StoryBibleCreateValue,
+  StoryBibleWriteCandidate
 } from "./story-bible-session.js";
 export {
   createStoryBibleSession,
   findStoryBibleMentionSuggestions
 } from "./story-bible-session.js";
+export { validateStoryBibleCandidate } from "./story-bible-candidate.js";
+export { createStoryBibleExplicitInverseSession } from "./story-bible-explicit-inverse-session.js";
+export type {
+  StoryBibleExplicitInverseApplyResult,
+  StoryBibleExplicitInverseCancelResult,
+  StoryBibleExplicitInverseCompatibleRead,
+  StoryBibleExplicitInversePersistedAsset,
+  StoryBibleExplicitInversePreparedWrite,
+  StoryBibleExplicitInversePreview,
+  StoryBibleExplicitInverseRepositoryPort,
+  StoryBibleExplicitInverseSession,
+  StoryBibleExplicitInverseSessionOptions,
+  StoryBibleExplicitInverseSourceCommand
+} from "./story-bible-explicit-inverse-session.js";
+export { checksumStoryBibleSelectorValue, prepareStoryBiblePatch } from "./story-bible-patch.js";
+export type {
+  PrepareStoryBiblePatchInput,
+  PreparedStoryBiblePatch,
+  StoryBiblePatchAsset,
+  StoryBiblePatchDependency,
+  StoryBiblePatchEntryRef,
+  StoryBiblePatchOperation,
+  StoryBibleStableEntryCollection
+} from "./story-bible-patch.js";
 export {
   createForeshadowAnalysisSession,
   resolveDefaultForeshadowAnalysisRuntimeProfile
@@ -259,6 +299,8 @@ export {
 export type {
   AutosaveSettings,
   HistorySettings,
+  StoryAnalysisCompletionMode,
+  StoryAnalysisSettings,
   ModelConnectionResult,
   ModelConnectionTester,
   ModelProfile,
@@ -271,8 +313,10 @@ export type {
   ProjectSettingsPort
 } from "./model-settings-session.js";
 export {
+  DEFAULT_STORY_ANALYSIS_SETTINGS,
   createModelSettingsSession,
-  resolveDefaultModelRuntimeProfile
+  resolveDefaultModelRuntimeProfile,
+  resolveStoryAnalysisSettings
 } from "./model-settings-session.js";
 export type {
   PluginRegistryPort,
@@ -461,6 +505,7 @@ export {
   materializeAgentRunHistory,
   materializeAgentPrompt,
   materializeProjectDataSource,
+  packAgentContext,
   parseAgentPromptMaterializationArtifact,
   promptMaterializationArtifactId,
   rematerializeAgentPromptArtifact
@@ -481,6 +526,7 @@ export type {
   CreateAgentPromptMaterializationArtifactInput,
   AgentPromptMaterialization,
   MaterializeAgentPromptInput,
+  PackAgentContextInput,
   MaterializedAgentMessage,
   MaterializedAgentMessageRole
 } from "./agent-prompt-materializer.js";
@@ -501,7 +547,10 @@ export type {
   CompactionModelAssistantPort,
   CompactionRunRepositoryPort,
   CompactionUsageSinkPort,
-  CreateAgentContextSessionOptions
+  CreateAgentContextSessionOptions,
+  PackedAgentContextBinding,
+  PackedAgentContextPreview,
+  PackedAgentContextPreviewBlock
 } from "./agent-context-session.js";
 export { createAgentPlanExecutionSession } from "./agent-plan-execution-session.js";
 export type {
@@ -608,6 +657,7 @@ export type {
   AgentContextSourceReadResult,
   AgentReadToolExecutor,
   AgentReadToolResult,
+  AgentStoryBibleToolExecutor,
   AgentTaskApprovalResolver,
   AgentGitToolSessionPort,
   AgentTaskSandboxPortRef,
@@ -615,6 +665,7 @@ export type {
   AgentRunModelDriver,
   AgentRunPersistencePort,
   AgentRunReadResult,
+  AgentRunPackedContextHistory,
   AgentRunSession,
   AgentRunStartFacts,
   AgentRunStartModelFacts,
@@ -643,6 +694,9 @@ export type {
 } from "./change-set-session.js";
 export type {
   CreateVersionGroupSessionOptions,
+  VersionGroupApplyApprovedInput,
+  VersionGroupApplyBatchGroupResult,
+  VersionGroupApplyBatchResult,
   VersionGroupSession,
   VersionGroupSessionHooks,
   VersionGroupSessionTransactionPort,
@@ -806,6 +860,70 @@ export {
   type AgentFileOperationSession,
   type FileOperationSessionOptions
 } from "./agent-file-operation-session.js";
+export { createStoryBibleAgentToolSession } from "./story-bible-agent-tool-session.js";
+export {
+  checksumStoryAnalysisSelectors,
+  materializeStoryObserverOutput,
+  refreshStoryAnalysisStaleness,
+  transitionStoryAnalysisRecord
+} from "./story-analysis-engine.js";
+export type {
+  MaterializeStoryObserverInput,
+  MaterializedStoryObserverOutput,
+  StoryAnalysisAsset,
+  StoryAnalysisAssetRead,
+  StoryObserverValidationError
+} from "./story-analysis-engine.js";
+export {
+  createStoryAnalysisSession,
+  resolveDefaultStoryAnalysisRuntimeProfile
+} from "./story-analysis-session.js";
+export { createStoryAnalysisApplicationSession } from "./story-analysis-application-session.js";
+export { createStoryAnalysisChangeSetPreparationPort } from "./story-analysis-change-set-preparation.js";
+export type {
+  StoryAnalysisApplicationPreview,
+  StoryAnalysisApplicationPreviewDto,
+  StoryAnalysisApplicationResult,
+  StoryAnalysisApplicationResultDto,
+  StoryAnalysisApplicationSession,
+  StoryAnalysisApplicationSessionOptions,
+  StoryAnalysisChangeSetPreparationPort
+} from "./story-analysis-application-session.js";
+export type { StoryAnalysisChangeSetPreparationOptions } from "./story-analysis-change-set-preparation.js";
+export type {
+  AnalyzeChapterStoryInput,
+  StoryAnalysisAuthorTransition,
+  StoryAnalysisCatalogItem,
+  StoryAnalysisCatalogPage,
+  StoryAnalysisContextSnapshotPort,
+  StoryAnalysisHistoryPort,
+  StoryAnalysisHistoryRecord,
+  StoryAnalysisHistorySummary,
+  StoryAnalysisRecordDto,
+  StoryAnalysisReviewCommand,
+  StoryAnalysisRepositoryPort,
+  StoryAnalysisRuntimeProfile,
+  StoryAnalysisSession,
+  StoryAnalysisSessionOptions,
+  StoryAnalysisRecordTransition,
+  StoryAnalysisUsagePort
+} from "./story-analysis-session.js";
+export {
+  describeStoryBibleType,
+  isStoryBibleV11AssetType,
+  validateStoryBibleV11Asset
+} from "@novel-studio/schemas";
+export { validateStoryAnalysisBundle } from "@novel-studio/schemas";
+export type {
+  StoryBibleAgentFieldDiff,
+  StoryBibleAgentToolAsset,
+  StoryBibleAgentToolRepositoryPort,
+  StoryBibleAgentToolSession,
+  StoryBibleAgentToolSessionOptions,
+  StoryBibleAgentWriteToolName,
+  StoryBiblePreparedAgentProposal,
+  StoryBibleRestoreAuthorization
+} from "./story-bible-agent-tool-session.js";
 export {
   authorizePluginToolCall,
   type AuthorizePluginToolCallInput,

@@ -229,6 +229,7 @@ export interface WorkflowRunRecord extends JsonObject {
   steps: WorkflowRunStepRecord[];
   error?: WorkflowRunErrorSummary;
   retryPolicy?: WorkflowRunRetryPolicySummary;
+  storyAnalysis?: JsonObject;
 }
 
 export interface WorkflowRunSummary extends JsonObject {

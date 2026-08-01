@@ -4,6 +4,7 @@ import type {
   ChapterDraftRepositoryPort,
   ChapterFrontmatter,
   ChapterHistoryRepositoryPort,
+  ChapterStatus,
   ChapterVersionContent,
   ChapterVersionSummary,
   RecoveryRepositoryPort
@@ -22,6 +23,13 @@ export interface ChapterEditorSnapshot {
   readonly versions: readonly ChapterVersionSummary[];
 }
 
+export interface ChapterStatusSaveResult {
+  readonly state: ChapterEditorState;
+  readonly previousStatus: ChapterStatus;
+  readonly nextStatus: ChapterStatus;
+  readonly completedTransition: boolean;
+}
+
 export interface ChapterEditorSessionOptions {
   readonly chapterId: string;
   readonly repository: ChapterDraftRepositoryPort;
@@ -38,6 +46,9 @@ export interface ChapterEditorSession {
   edit(nextBody: string): Promise<Result<ChapterEditorState, UnifiedError>>;
   applyAiEdit(nextBody: string): Promise<Result<ChapterEditorState, UnifiedError>>;
   save(): Promise<Result<ChapterEditorState, UnifiedError>>;
+  saveWithStatus(
+    nextStatus: ChapterStatus
+  ): Promise<Result<ChapterStatusSaveResult, UnifiedError>>;
   listVersions(): Promise<Result<readonly ChapterVersionSummary[], UnifiedError>>;
   previewVersion(versionId: string): Promise<Result<ChapterVersionContent, UnifiedError>>;
   restoreVersion(versionId: string): Promise<Result<ChapterEditorState, UnifiedError>>;
@@ -65,6 +76,7 @@ export function createChapterEditorSession(
     `session_${sanitizeRecoveryId(options.projectId ?? "project")}_${sanitizeRecoveryId(options.chapterId)}`;
   let state: ChapterEditorState | undefined;
   let persistedBody = "";
+  let persistedStatus: ChapterStatus | undefined;
 
   return {
     getState: () => state,
@@ -80,6 +92,7 @@ export function createChapterEditorSession(
         saveStatus: "Saved"
       };
       persistedBody = result.value.body;
+      persistedStatus = result.value.frontmatter.status;
 
       return ok(state);
     },
@@ -92,7 +105,8 @@ export function createChapterEditorSession(
         ...state.chapter,
         body: nextBody
       };
-      const dirty = nextBody !== persistedBody;
+      const dirty =
+        nextBody !== persistedBody || state.chapter.frontmatter.status !== persistedStatus;
 
       state = {
         chapter: nextChapter,
@@ -129,61 +143,36 @@ export function createChapterEditorSession(
       return this.edit(nextBody);
     },
     async save() {
+      return persistCurrentState();
+    },
+    async saveWithStatus(nextStatus) {
       if (state === undefined) {
         return err(createChapterSessionError("CHAPTER_SESSION_NOT_LOADED"));
       }
-
-      if (!state.dirty) {
-        return ok(state);
+      if (!isChapterStatus(nextStatus)) {
+        return err(createChapterSessionError("CHAPTER_STATUS_INVALID"));
       }
-
-      const savingState: ChapterEditorState = {
-        ...state,
-        saveStatus: "Saving"
-      };
-      state = savingState;
-
-      const chapterToPersist: ChapterDocument = {
-        body: savingState.chapter.body,
-        frontmatter: updateChapterFrontmatter(savingState.chapter.frontmatter, now())
-      };
-
-      const writeResult = await options.repository.writeChapter(chapterToPersist);
-      if (!writeResult.ok) {
+      const previousStatus = persistedStatus ?? state.chapter.frontmatter.status;
+      if (state.chapter.frontmatter.status !== nextStatus) {
         state = {
-          ...savingState,
+          chapter: {
+            ...state.chapter,
+            frontmatter: { ...state.chapter.frontmatter, status: nextStatus }
+          },
+          dirty: true,
           saveStatus: "Unsaved"
         };
-        return writeResult;
+        const recoveryResult = await writeRecoveryRecord(true);
+        if (!recoveryResult.ok) return recoveryResult;
       }
-
-      persistedBody = chapterToPersist.body;
-      state = {
-        chapter: chapterToPersist,
-        dirty: false,
-        saveStatus: "Saved"
-      };
-
-      if (options.historyRepository !== undefined) {
-        const snapshotResult = await options.historyRepository.snapshotChapterVersion({
-          chapterId: options.chapterId,
-          body: chapterToPersist.body,
-          reason: "manual-save",
-          createdBy: "user",
-          parentVersionId: null
-        });
-
-        if (!snapshotResult.ok) {
-          return snapshotResult;
-        }
-      }
-
-      const recoveryResult = await writeRecoveryRecord(false);
-      if (!recoveryResult.ok) {
-        return recoveryResult;
-      }
-
-      return ok(state);
+      const saved = await persistCurrentState();
+      if (!saved.ok) return saved;
+      return ok({
+        state: saved.value,
+        previousStatus,
+        nextStatus,
+        completedTransition: previousStatus !== "done" && nextStatus === "done"
+      });
     },
     async listVersions() {
       if (options.historyRepository === undefined) {
@@ -241,6 +230,7 @@ export function createChapterEditorSession(
         saveStatus: "Saved"
       };
       persistedBody = restoredChapter.body;
+      persistedStatus = restoredChapter.frontmatter.status;
 
       const recoveryResult = await writeRecoveryRecord(false);
       if (!recoveryResult.ok) {
@@ -283,6 +273,43 @@ export function createChapterEditorSession(
 
     return ok(undefined);
   }
+
+  async function persistCurrentState(): Promise<Result<ChapterEditorState, UnifiedError>> {
+    if (state === undefined) {
+      return err(createChapterSessionError("CHAPTER_SESSION_NOT_LOADED"));
+    }
+    if (!state.dirty) return ok(state);
+
+    const savingState: ChapterEditorState = { ...state, saveStatus: "Saving" };
+    state = savingState;
+    const chapterToPersist: ChapterDocument = {
+      body: savingState.chapter.body,
+      frontmatter: updateChapterFrontmatter(savingState.chapter.frontmatter, now())
+    };
+    const writeResult = await options.repository.writeChapter(chapterToPersist);
+    if (!writeResult.ok) {
+      state = { ...savingState, saveStatus: "Unsaved" };
+      return writeResult;
+    }
+
+    persistedBody = chapterToPersist.body;
+    persistedStatus = chapterToPersist.frontmatter.status;
+    state = { chapter: chapterToPersist, dirty: false, saveStatus: "Saved" };
+
+    if (options.historyRepository !== undefined) {
+      const snapshotResult = await options.historyRepository.snapshotChapterVersion({
+        chapterId: options.chapterId,
+        body: chapterToPersist.body,
+        reason: "manual-save",
+        createdBy: "user",
+        parentVersionId: null
+      });
+      if (!snapshotResult.ok) return snapshotResult;
+    }
+
+    const recoveryResult = await writeRecoveryRecord(false);
+    return recoveryResult.ok ? ok(state) : recoveryResult;
+  }
 }
 
 function updateChapterFrontmatter(
@@ -312,6 +339,17 @@ function createChapterSessionError(code: string): UnifiedError {
 function sanitizeRecoveryId(value: string): string {
   const sanitized = value.replace(/[^A-Za-z0-9_-]/g, "_");
   return sanitized.length === 0 ? "unknown" : sanitized;
+}
+
+function isChapterStatus(value: unknown): value is ChapterStatus {
+  return (
+    value === "draft" ||
+    value === "revision" ||
+    value === "review" ||
+    value === "done" ||
+    value === "archived" ||
+    value === "deleted"
+  );
 }
 
 function buildSuggestionDiff(currentBody: string, nextBody: string): ChapterSuggestionDiffPreview {

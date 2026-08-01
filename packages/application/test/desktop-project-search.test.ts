@@ -148,6 +148,15 @@ describe("DesktopApplication project search", () => {
       async saveStoryAsset(asset: StoryBibleAsset) {
         return failAssetSave ? err(testError("STORY_BIBLE_SAVE_FAILED")) : ok(asset);
       },
+      async readStoryAssetForEditing() {
+        throw new Error("not used");
+      },
+      async createStoryAsset() {
+        return ok(characterAsset());
+      },
+      async saveStoryAssetCandidate() {
+        return ok(characterAsset());
+      },
       async saveMemory(memory: MemoryRecord) {
         return ok(memory);
       },
@@ -179,15 +188,43 @@ describe("DesktopApplication project search", () => {
     });
 
     const savedAsset = await application.saveStoryBibleAsset(characterAsset());
+    const createdAsset = await application.createStoryBibleAsset({
+      type: "character",
+      value: { title: "Created hero" }
+    });
+    const savedCandidate = await application.saveStoryBibleAssetCandidate({
+      candidate: {
+        schemaVersion: "1.1",
+        id: "chr_hero",
+        type: "character",
+        title: "Updated hero",
+        status: "active",
+        summary: "Updated summary.",
+        aliases: [],
+        relations: [],
+        details: {},
+        extensions: {},
+        createdAt: "2026-07-05T00:00:00.000Z"
+      },
+      baseRevision: 0,
+      baseChecksum: "a".repeat(64)
+    });
     failInvalidation = true;
     const savedMemory = await application.saveStoryBibleMemory(memoryRecord());
     failAssetSave = true;
     const failedAsset = await application.saveStoryBibleAsset(characterAsset());
 
     expect(savedAsset.ok).toBe(true);
+    expect(createdAsset.ok).toBe(true);
+    expect(savedCandidate.ok).toBe(true);
     expect(savedMemory.ok).toBe(true);
     expect(failedAsset.ok).toBe(false);
-    expect(invalidationReasons).toEqual(["story-bible-save", "story-bible-save"]);
+    expect(invalidationReasons).toEqual([
+      "story-bible-save",
+      "story-bible-save",
+      "story-bible-save",
+      "story-bible-save"
+    ]);
   });
 
   test("invalidates Agent changes only for the active project's managed Story Bible paths", async () => {

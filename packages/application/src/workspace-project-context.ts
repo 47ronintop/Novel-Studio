@@ -226,11 +226,17 @@ export function createWorkspaceOutlineSource(input: {
     canonicalRootIdentity: manifest.workspace.canonicalRootIdentity
   };
   const dependencyRevisionChecksum = workspaceOutlineDependencyRevisionChecksum(manifest);
+  const dependencyEntries = Object.freeze(
+    input.result.entries.map((entry) => Object.freeze({ ...entry }))
+  );
+  const dependencyEntriesChecksum = checksum(stableSerialize(dependencyEntries));
   const artifactId = contextSourceMaterializationArtifactId("workspace_outline", {
     readerVersion: manifest.readerVersion,
     sourceIdentity,
     dependencyManifestChecksum: input.result.dependencyManifestChecksum,
     dependencyRevisionChecksum,
+    dependencyEntries,
+    dependencyEntriesChecksum,
     materializedChecksum: input.result.materializedChecksum,
     tokenCount: input.result.tokenCount,
     truncationRange: input.result.truncationRange
@@ -255,6 +261,8 @@ export function createWorkspaceOutlineSource(input: {
       dependencyManifest: manifest as unknown as JsonObject,
       dependencyManifestChecksum: input.result.dependencyManifestChecksum,
       dependencyRevisionChecksum,
+      dependencyEntries,
+      dependencyEntriesChecksum,
       materializedChecksum: input.result.materializedChecksum,
       rereadHint: workspaceOutlineRereadHint(manifest.profileId)
     }
@@ -376,11 +384,19 @@ function assertContextSourceMaterializationIntegrity(
 
   const manifest =
     materialization.dependencyManifest as unknown as WorkspaceOutlineDependencyManifest;
+  const dependencyEntriesIdentity =
+    materialization.dependencyEntries === undefined
+      ? {}
+      : {
+          dependencyEntries: materialization.dependencyEntries,
+          dependencyEntriesChecksum: materialization.dependencyEntriesChecksum
+        };
   const expectedArtifactId = contextSourceMaterializationArtifactId("workspace_outline", {
     readerVersion: materialization.readerVersion,
     sourceIdentity: materialization.sourceIdentity,
     dependencyManifestChecksum: materialization.dependencyManifestChecksum,
     dependencyRevisionChecksum: materialization.dependencyRevisionChecksum,
+    ...dependencyEntriesIdentity,
     materializedChecksum: materialization.materializedChecksum,
     tokenCount: materialization.tokenCount,
     truncationRange: materialization.truncationRange
@@ -390,6 +406,9 @@ function assertContextSourceMaterializationIntegrity(
     checksumProjectContext(manifest) !== materialization.dependencyManifestChecksum ||
     workspaceOutlineDependencyRevisionChecksum(manifest) !==
       materialization.dependencyRevisionChecksum ||
+    (materialization.dependencyEntries !== undefined &&
+      checksum(stableSerialize(materialization.dependencyEntries)) !==
+        materialization.dependencyEntriesChecksum) ||
     checksum(source.content) !== materialization.materializedChecksum ||
     materialization.artifactId !== expectedArtifactId
   ) {

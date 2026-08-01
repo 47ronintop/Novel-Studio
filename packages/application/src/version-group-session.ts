@@ -3,8 +3,14 @@ import type {
   ChangeSet,
   ChangeSetApproval,
   ChangeSetOperation,
+  StoryBibleApplyReceipt,
+  StoryBibleStatusTransitionProof,
   VersionGroup,
   VersionGroupPostCommitHook
+} from "@novel-studio/agent-engine";
+import {
+  deriveChangeSetGroupApprovalToken,
+  inspectChangeSetConsistencyGroups
 } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { consumeAgentRunApprovalAuthorization } from "./agent-write-authorization.js";
@@ -17,6 +23,7 @@ export interface VersionGroupTransactionApplyFile {
   readonly candidateChecksum: string;
   readonly baseContent: string;
   readonly candidateContent: string;
+  readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
 }
 
 export interface VersionGroupTransactionApplyInput {
@@ -28,6 +35,10 @@ export interface VersionGroupTransactionApplyInput {
   readonly writePolicy: AgentWritePolicy;
   readonly approvalSource: "human_confirmation" | "user_preapproved_run";
   readonly approvalToken: string;
+  readonly applyBatchId?: string;
+  readonly consistencyGroupId?: string;
+  readonly selectionChecksum?: string;
+  readonly storyBibleSuggestionIds?: readonly string[];
   readonly files: readonly VersionGroupTransactionApplyFile[];
   /** Selected v1.1 lifecycle operations; text files may legitimately be empty. */
   readonly operations?: readonly ChangeSetOperation[];
@@ -86,11 +97,40 @@ export interface VersionGroupSessionHooks {
   }): Promise<void>;
 }
 
+export interface VersionGroupApplyApprovedInput {
+  readonly changeSet: ChangeSet;
+  readonly approval: ChangeSetApproval;
+  readonly group?: {
+    readonly applyBatchId: string;
+    readonly consistencyGroupId: string;
+    readonly storyBibleSuggestionIds?: readonly string[];
+  };
+}
+
+export interface VersionGroupApplyBatchGroupResult {
+  readonly consistencyGroupId: string;
+  readonly status: VersionGroup["transactionStatus"];
+  readonly versionGroup?: VersionGroup;
+  readonly error?: UnifiedError;
+  readonly storyBibleReceipt?: StoryBibleApplyReceipt;
+}
+
+export interface VersionGroupApplyBatchResult {
+  readonly schemaVersion: "1.0";
+  readonly applyBatchId: string;
+  readonly changeSetId: string;
+  readonly selectionChecksum: string;
+  readonly groups: readonly VersionGroupApplyBatchGroupResult[];
+}
+
 export interface VersionGroupSession {
-  applyApproved(input: {
+  applyApproved(input: VersionGroupApplyApprovedInput): Promise<Result<VersionGroup, UnifiedError>>;
+  applyApprovedBatch(input: {
     readonly changeSet: ChangeSet;
     readonly approval: ChangeSetApproval;
-  }): Promise<Result<VersionGroup, UnifiedError>>;
+    readonly applyBatchId: string;
+    readonly storyBibleSuggestionIdsByGroup?: Readonly<Record<string, readonly string[]>>;
+  }): Promise<Result<VersionGroupApplyBatchResult, UnifiedError>>;
   recoverOnStartup(): Promise<Result<readonly VersionGroup[], UnifiedError>>;
   undoVersionGroup(input: {
     readonly versionGroupId: string;
@@ -123,16 +163,47 @@ export interface CreateVersionGroupSessionOptions {
   readonly hooks: VersionGroupSessionHooks;
 }
 
+const BATCH_APPROVAL_VALIDATED = Symbol("batch-approval-validated");
+type InternalVersionGroupApplyApprovedInput = VersionGroupApplyApprovedInput & {
+  readonly [BATCH_APPROVAL_VALIDATED]?: true;
+};
+
 export function createVersionGroupSession(
   options: CreateVersionGroupSessionOptions
 ): VersionGroupSession {
-  return {
+  const session: VersionGroupSession = {
     async applyApproved(input) {
-      const binding = validateApprovalBinding(input.changeSet, input.approval);
+      const internalInput = input as InternalVersionGroupApplyApprovedInput;
+      const binding = internalInput[BATCH_APPROVAL_VALIDATED]
+        ? ok(undefined)
+        : validateApprovalBinding(input.changeSet, input.approval);
       if (!binding.ok) return binding;
-      const selectedFiles = input.changeSet.files.filter((file) => file.selected);
+      const consistencyGroups = inspectChangeSetConsistencyGroups(input.changeSet);
+      if (input.group === undefined && consistencyGroups.selectedGroupIds.length > 0) {
+        return err(versionGroupError("VERSION_GROUP_GROUPED_APPLY_REQUIRED"));
+      }
+      if (
+        input.group !== undefined &&
+        (!isGroupIdentifier(input.group.applyBatchId) ||
+          !consistencyGroups.selectedGroupIds.includes(input.group.consistencyGroupId) ||
+          input.approval.approvalSource !== "human_confirmation" ||
+          input.approval.binding.selectionChecksum === undefined ||
+          hasSelectedUngroupedChanges(input.changeSet) ||
+          !validSuggestionIds(input.group.storyBibleSuggestionIds))
+      ) {
+        return err(versionGroupError("VERSION_GROUP_CONSISTENCY_GROUP_INVALID"));
+      }
+      const selectedFiles = input.changeSet.files.filter(
+        (file) =>
+          file.selected &&
+          (input.group === undefined ||
+            file.consistencyGroupId === input.group.consistencyGroupId)
+      );
       const selectedOperations = (input.changeSet.operations ?? []).filter(
-        (operation) => operation.selected !== false
+        (operation) =>
+          operation.selected !== false &&
+          (input.group === undefined ||
+            operation.consistencyGroupId === input.group.consistencyGroupId)
       );
       if (
         (selectedFiles.length === 0 && selectedOperations.length === 0) ||
@@ -152,6 +223,17 @@ export function createVersionGroupSession(
       const failedHooks: VersionGroupPostCommitHook[] = [];
       let committedGroup: VersionGroup | undefined;
       let result: Result<VersionGroup, UnifiedError> | undefined;
+      const approvalToken =
+        input.group === undefined
+          ? input.approval.binding.approvalToken
+          : deriveChangeSetGroupApprovalToken({
+              changeSetId: input.changeSet.changeSetId,
+              revision: input.changeSet.revision,
+              checksum: input.changeSet.checksum,
+              applyBatchId: input.group.applyBatchId,
+              consistencyGroupId: input.group.consistencyGroupId,
+              selectionChecksum: input.approval.binding.selectionChecksum ?? ""
+            });
       await options.hooks.pauseAutosave(relativePaths);
       try {
         result = await options.transaction.apply({
@@ -162,7 +244,17 @@ export function createVersionGroupSession(
           checksum: input.changeSet.checksum,
           writePolicy: input.changeSet.writePolicy ?? "write_before_confirmation",
           approvalSource: input.approval.approvalSource,
-          approvalToken: input.approval.binding.approvalToken,
+          approvalToken,
+          ...(input.group === undefined
+            ? {}
+            : {
+                applyBatchId: input.group.applyBatchId,
+                consistencyGroupId: input.group.consistencyGroupId,
+                selectionChecksum: input.approval.binding.selectionChecksum ?? "",
+                ...(input.group.storyBibleSuggestionIds === undefined
+                  ? {}
+                  : { storyBibleSuggestionIds: input.group.storyBibleSuggestionIds })
+              }),
           files: selectedFiles.map((file) => ({
             relativePath: file.relativePath,
             assetType: file.assetType,
@@ -170,7 +262,10 @@ export function createVersionGroupSession(
             baseChecksum: file.baseChecksum,
             candidateChecksum: file.candidateChecksum,
             baseContent: file.baseContent,
-            candidateContent: file.candidateContent
+            candidateContent: file.candidateContent,
+            ...(file.storyBibleStatusProof === undefined
+              ? {}
+              : { storyBibleStatusProof: file.storyBibleStatusProof })
           })),
           ...(selectedOperations.length === 0 ? {} : { operations: selectedOperations })
         });
@@ -226,6 +321,73 @@ export function createVersionGroupSession(
         // The committed transaction remains authoritative even if recovery reporting is unavailable.
       }
       return ok(synchronized);
+    },
+
+    async applyApprovedBatch(input) {
+      const consistencyGroups = inspectChangeSetConsistencyGroups(input.changeSet);
+      const suggestionEntries = Object.entries(input.storyBibleSuggestionIdsByGroup ?? {});
+      const suggestionIds = suggestionEntries.flatMap(([, ids]) => [...ids]);
+      if (
+        !isGroupIdentifier(input.applyBatchId) ||
+        consistencyGroups.selectedGroupIds.length === 0 ||
+        input.approval.approvalSource !== "human_confirmation" ||
+        input.approval.binding.selectionChecksum === undefined ||
+        hasSelectedUngroupedChanges(input.changeSet) ||
+        suggestionEntries.some(
+          ([groupId, ids]) =>
+            !consistencyGroups.selectedGroupIds.includes(groupId) || !validSuggestionIds(ids)
+        ) ||
+        new Set(suggestionIds).size !== suggestionIds.length
+      ) {
+        return err(versionGroupError("VERSION_GROUP_APPLY_BATCH_INVALID"));
+      }
+      const binding = validateApprovalBinding(input.changeSet, input.approval);
+      if (!binding.ok) return binding;
+
+      const groups: VersionGroupApplyBatchGroupResult[] = [];
+      for (const consistencyGroupId of consistencyGroups.selectedGroupIds) {
+        const groupInput: InternalVersionGroupApplyApprovedInput = {
+          changeSet: input.changeSet,
+          approval: input.approval,
+          group: {
+            applyBatchId: input.applyBatchId,
+            consistencyGroupId,
+            ...(input.storyBibleSuggestionIdsByGroup?.[consistencyGroupId] === undefined
+              ? {}
+              : {
+                  storyBibleSuggestionIds:
+                    input.storyBibleSuggestionIdsByGroup[consistencyGroupId]
+                })
+          },
+          [BATCH_APPROVAL_VALIDATED]: true
+        };
+        const result = await session.applyApproved(groupInput);
+        groups.push(
+          result.ok
+            ? Object.freeze({
+                consistencyGroupId,
+                status: result.value.transactionStatus,
+                versionGroup: result.value,
+                ...(result.value.storyBibleReceipt === undefined
+                  ? {}
+                  : { storyBibleReceipt: result.value.storyBibleReceipt })
+              })
+            : Object.freeze({
+                consistencyGroupId,
+                status: "failed" as const,
+                error: result.error
+              })
+        );
+      }
+      return ok(
+        Object.freeze({
+          schemaVersion: "1.0" as const,
+          applyBatchId: input.applyBatchId,
+          changeSetId: input.changeSet.changeSetId,
+          selectionChecksum: input.approval.binding.selectionChecksum,
+          groups: Object.freeze(groups)
+        })
+      );
     },
 
     async recoverOnStartup() {
@@ -299,6 +461,7 @@ export function createVersionGroupSession(
       );
     }
   };
+  return session;
 }
 
 async function runUndo(
@@ -548,6 +711,17 @@ function validateApprovalBinding(
   changeSet: ChangeSet,
   approval: ChangeSetApproval
 ): Result<void, UnifiedError> {
+  const consistencyGroups = inspectChangeSetConsistencyGroups(changeSet);
+  const expectedGroupIds = consistencyGroups.selectedGroupIds;
+  const approvedGroupIds = approval.binding.selectedConsistencyGroupIds;
+  const groupedBindingInvalid =
+    consistencyGroups.allGroupIds.length === 0
+      ? approvedGroupIds !== undefined || approval.binding.selectionChecksum !== undefined
+      : approval.schemaVersion !== "1.1" ||
+        approvedGroupIds === undefined ||
+        approval.binding.selectionChecksum !== consistencyGroups.selectionChecksum ||
+        approvedGroupIds.length !== expectedGroupIds.length ||
+        approvedGroupIds.some((groupId, index) => groupId !== expectedGroupIds[index]);
   if (
     approval.decision !== "apply_selected" ||
     (approval.approvalSource === "user_preapproved_run" &&
@@ -555,7 +729,9 @@ function validateApprovalBinding(
     approval.binding.changeSetId !== changeSet.changeSetId ||
     approval.binding.revision !== changeSet.revision ||
     approval.binding.checksum !== changeSet.checksum ||
-    approval.binding.approvalToken !== changeSet.approvalToken
+    approval.binding.approvalToken !== changeSet.approvalToken ||
+    consistencyGroups.splitGroupIds.length > 0 ||
+    groupedBindingInvalid
   ) {
     return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
   }
@@ -566,6 +742,28 @@ function validateApprovalBinding(
     return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
   }
   return ok(undefined);
+}
+
+function isGroupIdentifier(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/u.test(value);
+}
+
+function validSuggestionIds(ids: readonly string[] | undefined): boolean {
+  return (
+    ids === undefined ||
+    (ids.length <= 1024 &&
+      new Set(ids).size === ids.length &&
+      ids.every((id) => /^sug_[A-Za-z0-9_-]{1,128}$/u.test(id)))
+  );
+}
+
+function hasSelectedUngroupedChanges(changeSet: ChangeSet): boolean {
+  return (
+    changeSet.files.some((file) => file.selected && file.consistencyGroupId === undefined) ||
+    (changeSet.operations ?? []).some(
+      (operation) => operation.selected !== false && operation.consistencyGroupId === undefined
+    )
+  );
 }
 
 function isDestructiveOperation(operation: ChangeSetOperation): boolean {

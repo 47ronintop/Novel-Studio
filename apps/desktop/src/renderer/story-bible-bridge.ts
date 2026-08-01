@@ -1,16 +1,21 @@
 import type {
+  StoryBibleCreateValue,
+  StoryBibleEditableAsset,
   ForeshadowAsset,
   MemoryRecord,
   NovelStudioApi,
   StoryBibleAsset,
   StoryBibleConsistencyRef,
   StoryBibleConsistencyReport,
+  StoryBibleReferenceImpact,
   StoryBibleRegularAsset,
-  StoryBibleSnapshot
+  StoryBibleExplicitInverseSourceCommand,
+  StoryBibleSnapshot,
+  StoryBibleWriteCandidate
 } from "@novel-studio/application";
 import type { ContextDraftActiveResourceRef } from "@novel-studio/agent-engine";
 import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
-import { createForeshadowEvidence } from "@novel-studio/shared";
+import { createForeshadowEvidence, createUnifiedError } from "@novel-studio/shared";
 import {
   storyBibleForeshadowValidationMessage,
   storyBibleOutlineValidationMessage,
@@ -28,8 +33,12 @@ import type {
   StoryBibleForeshadowAnalysisState,
   StoryBibleEditorKind,
   StoryBibleEditorProps,
+  StoryBibleEditorRelation,
+  StoryBibleExplicitInversePreviewState,
   StoryBibleWorldAssetType,
   StoryBibleConsistencyProps,
+  StoryBibleStatusAction,
+  StoryBibleStatusActionState,
   StoryTimelineEvent,
   StoryBibleSummaryAsset,
   StoryBibleSummaryProps
@@ -37,6 +46,7 @@ import type {
 
 import {
   createForeshadowConfirmationPlan,
+  type ForeshadowConfirmationOperation,
   type ForeshadowConfirmationPlan
 } from "./foreshadow-confirmation-plan.js";
 
@@ -50,11 +60,13 @@ export interface StoryBibleBridge {
   load(workspaceId: string): Promise<StoryBibleSummaryProps>;
   selectKind(kind: StoryBibleEditorKind): StoryBibleEditorProps;
   selectEntry(entryId: string): StoryBibleEditorProps;
+  selectEntryForEditing(entryId: string): Promise<StoryBibleEditorProps>;
   beginCreate(
     kind: StoryBibleEditorKind,
     assetType?: StoryBibleWorldAssetType
   ): StoryBibleEditorProps;
   cancelDraft(): StoryBibleEditorProps;
+  cancelExplicitInversePreview(): Promise<StoryBibleEditorProps>;
   updateDraft<K extends StoryBibleEditorKind>(
     kind: K,
     draft: Partial<StoryBibleEditorDraftFor<K>>
@@ -80,6 +92,9 @@ export interface StoryBibleBridge {
   handleExternalUpdate(input: StoryBibleExternalUpdateInput): Promise<StoryBibleEditorProps>;
   reloadExternalUpdate(): Promise<StoryBibleEditorProps>;
   continueExternalUpdate(): StoryBibleEditorProps;
+  requestStatusAction(action: StoryBibleStatusAction): Promise<StoryBibleEditorProps>;
+  cancelStatusAction(): StoryBibleEditorProps;
+  confirmStatusAction(): Promise<StoryBibleStatusActionPreparation>;
   beginSave(): StoryBibleEditorProps;
   saveDraft(options?: StoryBibleSaveOptions): Promise<StoryBibleEditorProps>;
 }
@@ -111,8 +126,14 @@ export interface StoryBibleSaveOptions {
   readonly chapterIds?: readonly string[];
 }
 
+export interface StoryBibleStatusActionPreparation {
+  readonly editor: StoryBibleEditorProps;
+  readonly readyToSave: boolean;
+}
+
 export interface StoryBibleBridgeOptions {
   readonly createAssetIdentity?: () => string;
+  readonly createEntryIdentity?: () => string;
   readonly now?: () => string;
 }
 
@@ -131,6 +152,8 @@ interface StoryBibleEditorState {
   readonly filters: StoryBibleEditorFilters;
   readonly foreshadowAnalysis: StoryBibleForeshadowAnalysisState;
   readonly externalUpdate: StoryBibleEditorProps["externalUpdate"];
+  readonly statusAction: StoryBibleStatusActionState;
+  readonly explicitInversePreview?: StoryBibleExplicitInversePreviewState;
   readonly feedback?: StoryBibleEditorProps["feedback"];
 }
 
@@ -143,9 +166,16 @@ interface PendingStoryBibleExternalUpdate extends StoryBibleExternalUpdateInput 
   readonly affectedPaths: readonly StoryBibleAffectedPath[];
 }
 
+type PendingStoryBibleStatusTransition =
+  | {
+      readonly action: "move-to-deleted";
+      readonly expectedDeletionImpactChecksum: string;
+    }
+  | { readonly action: "restore" };
+
 const DEFAULT_FILTERS: StoryBibleEditorFilters = {
   query: "",
-  status: "all",
+  status: "available",
   worldAssetType: "all",
   foreshadowTrackingStatus: "all"
 };
@@ -155,6 +185,7 @@ export function createStoryBibleBridge(
   options: StoryBibleBridgeOptions = {}
 ): StoryBibleBridge {
   const createAssetIdentity = options.createAssetIdentity ?? createRandomAssetIdentity;
+  const createEntryIdentity = options.createEntryIdentity ?? createRandomAssetIdentity;
   const now = options.now ?? (() => new Date().toISOString());
   let props: StoryBibleSummaryProps = { assets: [] };
   let snapshot = emptySnapshot();
@@ -165,7 +196,12 @@ export function createStoryBibleBridge(
   let consistency: StoryBibleConsistencyProps | undefined;
   let baselineDraft = emptyDraft("character");
   let baselineAsset: StoryBibleAsset | undefined;
+  let baselineEditableAsset: StoryBibleEditableAsset | undefined;
+  let entryLoadGeneration = 0;
   let externalRefreshGeneration = 0;
+  let statusActionGeneration = 0;
+  let explicitInverseGeneration = 0;
+  let pendingStatusTransition: PendingStoryBibleStatusTransition | undefined;
   let pendingExternalUpdates: PendingStoryBibleExternalUpdate[] = [];
   let validateExternalBaselineBeforeSave = false;
   const handledVersionGroupIds = new Set<string>();
@@ -178,7 +214,8 @@ export function createStoryBibleBridge(
     draft: baselineDraft,
     filters: DEFAULT_FILTERS,
     foreshadowAnalysis: closedForeshadowAnalysis(),
-    externalUpdate: { status: "none" }
+    externalUpdate: { status: "none" },
+    statusAction: { status: "idle" }
   };
   let editorProps = createEditorProps(snapshot, editorState, consistency);
 
@@ -227,10 +264,17 @@ export function createStoryBibleBridge(
     },
     selectKind(kind) {
       if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
+      if (editorState.explicitInversePreview !== undefined) {
+        return requireExplicitInversePreviewCancellation();
+      }
+      statusActionGeneration += 1;
+      pendingStatusTransition = undefined;
       foreshadowAnalysisGeneration += 1;
       foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(kind);
       baselineAsset = undefined;
+      baselineEditableAsset = undefined;
+      entryLoadGeneration += 1;
       const externalUpdate = externalUpdateAfterNavigation();
       editorState = {
         ...editorState,
@@ -241,33 +285,54 @@ export function createStoryBibleBridge(
         dirty: false,
         draft: baselineDraft,
         foreshadowAnalysis: closedForeshadowAnalysis(),
-        externalUpdate
+        externalUpdate,
+        statusAction: { status: "idle" }
       };
       deleteFeedback();
       return publishEditor();
     },
-    selectEntry(entryId) {
-      if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
-      const entries = createEditorEntries(snapshot);
-      let activeTimelineEventId: string | undefined;
-      let entry = entries.find((candidate) => candidate.id === entryId);
-      if (entry === undefined) {
-        entry = entries.find(
-          (candidate) =>
-            candidate.kind === "timeline" &&
-            candidate.timelineEvents.some((event) => event.id === entryId)
-        );
-        if (entry !== undefined) activeTimelineEventId = entryId;
+    selectEntry: selectEntryFromSnapshot,
+    async selectEntryForEditing(entryId) {
+      const blockedByDirtyDraft = editorState.dirty && editorState.draft.id !== entryId;
+      const selected = selectEntryFromSnapshot(entryId);
+      if (blockedByDirtyDraft) return selected;
+      const assetId = editorState.draft.id;
+      if (
+        assetId === undefined ||
+        typeof api.storyBible.readAsset !== "function" ||
+        isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)
+      ) {
+        return selected;
       }
-      if (entry === undefined) {
+      const token = entryLoadGeneration;
+      const timelineEventIndex = selectedTimelineEventIndex(
+        baselineAsset,
+        editorState.activeTimelineEventId
+      );
+      const read = await api.storyBible.readAsset(assetId);
+      if (token !== entryLoadGeneration || editorState.draft.id !== assetId || !read.ok) {
+        if (!read.ok && token === entryLoadGeneration && editorState.draft.id === assetId) {
+          editorState = {
+            ...editorState,
+            status: "error",
+            feedback: { kind: "error", message: read.error.message }
+          };
+          return publishEditor();
+        }
         return editorProps;
       }
-
-      foreshadowAnalysisGeneration += 1;
-      foreshadowConfirmationPlan = undefined;
+      baselineEditableAsset = read.value;
+      snapshot = replaceStoryBibleAsset(snapshot, read.value.asset);
+      if (snapshotBinding !== undefined) snapshotBinding = { ...snapshotBinding, snapshot };
+      props = toProps(snapshot);
+      const entry = createEditorEntries(snapshot).find((candidate) => candidate.id === assetId);
+      if (entry === undefined) return editorProps;
+      baselineAsset = read.value.asset;
       baselineDraft = draftFromEntry(entry);
-      baselineAsset = findExistingAsset(snapshot, entry.id);
-      const externalUpdate = externalUpdateAfterNavigation();
+      const activeTimelineEventId =
+        entry.kind === "timeline" && timelineEventIndex !== undefined
+          ? entry.timelineEvents[timelineEventIndex]?.id
+          : undefined;
       editorState = {
         ...editorState,
         activeKind: entry.kind,
@@ -275,15 +340,19 @@ export function createStoryBibleBridge(
         viewMode: "detail",
         status: "idle",
         dirty: false,
-        draft: baselineDraft,
-        foreshadowAnalysis: closedForeshadowAnalysis(),
-        externalUpdate
+        draft: baselineDraft
       };
       deleteFeedback();
       return publishEditor();
     },
     beginCreate(kind, assetType) {
       if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
+      if (editorState.explicitInversePreview !== undefined) {
+        return requireExplicitInversePreviewCancellation();
+      }
+      statusActionGeneration += 1;
+      explicitInverseGeneration += 1;
+      pendingStatusTransition = undefined;
       if (kind === "world" && assetType === undefined) {
         throw new Error("A world asset type is required before creating a world draft.");
       }
@@ -294,6 +363,8 @@ export function createStoryBibleBridge(
       foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(kind, assetType);
       baselineAsset = undefined;
+      baselineEditableAsset = undefined;
+      entryLoadGeneration += 1;
       const externalUpdate = externalUpdateAfterNavigation();
       editorState = {
         ...editorState,
@@ -304,17 +375,27 @@ export function createStoryBibleBridge(
         dirty: false,
         draft: baselineDraft,
         foreshadowAnalysis: closedForeshadowAnalysis(),
-        externalUpdate
+        externalUpdate,
+        statusAction: { status: "idle" },
+        explicitInversePreview: undefined
       };
       deleteFeedback();
       return publishEditor();
     },
     cancelDraft() {
       if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
+      if (editorState.explicitInversePreview !== undefined) {
+        return requireExplicitInversePreviewCancellation();
+      }
+      statusActionGeneration += 1;
+      explicitInverseGeneration += 1;
+      pendingStatusTransition = undefined;
       foreshadowAnalysisGeneration += 1;
       foreshadowConfirmationPlan = undefined;
       baselineDraft = emptyDraft(editorState.activeKind);
       baselineAsset = undefined;
+      baselineEditableAsset = undefined;
+      entryLoadGeneration += 1;
       const externalUpdate = externalUpdateAfterNavigation();
       editorState = {
         ...editorState,
@@ -324,12 +405,73 @@ export function createStoryBibleBridge(
         dirty: false,
         draft: baselineDraft,
         foreshadowAnalysis: closedForeshadowAnalysis(),
-        externalUpdate
+        externalUpdate,
+        statusAction: { status: "idle" },
+        explicitInversePreview: undefined
       };
       deleteFeedback();
       return publishEditor();
     },
+    async cancelExplicitInversePreview() {
+      const preview = editorState.explicitInversePreview;
+      if (preview === undefined) return editorProps;
+      if (typeof api.storyBible.cancelExplicitInverseChange !== "function") {
+        editorState = {
+          ...editorState,
+          status: "error",
+          feedback: { kind: "error", message: storyBibleExplicitInverseUnavailable().message }
+        };
+        return publishEditor();
+      }
+      const generation = loadGeneration;
+      const token = ++explicitInverseGeneration;
+      let canceled: Awaited<
+        ReturnType<NonNullable<NovelStudioApi["storyBible"]["cancelExplicitInverseChange"]>>
+      >;
+      try {
+        canceled = await api.storyBible.cancelExplicitInverseChange({
+          previewId: preview.previewId,
+          revision: preview.revision,
+          checksum: preview.checksum
+        });
+      } catch {
+        canceled = { ok: false, error: storyBibleExplicitInverseUnavailable() };
+      }
+      if (generation !== loadGeneration || token !== explicitInverseGeneration) return editorProps;
+      if (!canceled.ok || !canceled.value.canceled) {
+        editorState = {
+          ...editorState,
+          status: "error",
+          dirty: true,
+          explicitInversePreview: preview,
+          feedback: {
+            kind: "error",
+            message: canceled.ok
+              ? "双端关系预览未能撤销，请重试后再编辑或离开。"
+              : canceled.error.message
+          }
+        };
+        return publishEditor();
+      }
+      editorState = {
+        ...editorState,
+        status: "idle",
+        dirty: true,
+        explicitInversePreview: undefined,
+        feedback: {
+          kind: "info",
+          message: "已取消双端关系预览，当前草稿仍保留。"
+        }
+      };
+      return publishEditor();
+    },
     updateDraft(kind, draft) {
+      if (editorState.explicitInversePreview !== undefined) {
+        return requireExplicitInversePreviewCancellation();
+      }
+      statusActionGeneration += 1;
+      explicitInverseGeneration += 1;
+      pendingStatusTransition = undefined;
       assertDraftPatch(editorState.draft, kind, draft);
       const nextDraft = mergeDraftPatch(editorState.draft, draft);
       if (pendingExternalUpdates.length > 0) validateExternalBaselineBeforeSave = true;
@@ -339,7 +481,9 @@ export function createStoryBibleBridge(
         viewMode: "detail",
         status: "idle",
         dirty: !draftsEqual(nextDraft, baselineDraft),
-        draft: nextDraft
+        draft: nextDraft,
+        statusAction: { status: "idle" },
+        explicitInversePreview: undefined
       };
       deleteFeedback();
       return publishEditor();
@@ -812,14 +956,14 @@ export function createStoryBibleBridge(
         const change = changes.find((item) => item.changeId === operation.changeId);
         if (change?.status !== "applying") continue;
         try {
-          const saved = await api.storyBible.saveAsset(operation.asset);
+          const saved = await saveForeshadowOperation(operation);
           if (token !== foreshadowAnalysisGeneration) {
             return { editor: editorProps, applied: false };
           }
           changes = replaceForeshadowChange(changes, operation.changeId, {
             ...change,
             status: saved.ok ? "succeeded" : "failed",
-            ...(saved.ok ? {} : { errorMessage: saved.error.message })
+            ...(saved.ok ? { assetId: saved.value.id } : { errorMessage: saved.error.message })
           });
           anySucceeded ||= saved.ok;
         } catch {
@@ -912,6 +1056,9 @@ export function createStoryBibleBridge(
       }
       const affectedPaths = input.relativePaths.flatMap(parseStoryBibleAffectedPath);
       if (affectedPaths.length === 0) return editorProps;
+      statusActionGeneration += 1;
+      pendingStatusTransition = undefined;
+      editorState = { ...editorState, statusAction: { status: "idle" } };
       rememberHandledVersionGroup(input.versionGroupId);
       const update: PendingStoryBibleExternalUpdate = { ...input, affectedPaths };
       pendingExternalUpdates = [...pendingExternalUpdates, update];
@@ -936,8 +1083,217 @@ export function createStoryBibleBridge(
       editorState = { ...editorState, externalUpdate: { status: "none" } };
       return publishEditor();
     },
+    async requestStatusAction(action) {
+      const assetId = editorState.draft.id;
+      const assetTitle = editorState.draft.title.trim() || assetId || "故事资料";
+      if (assetId === undefined || editorState.viewMode !== "detail") return editorProps;
+      if (editorState.dirty) {
+        editorState = {
+          ...editorState,
+          statusAction: {
+            status: "error",
+            action,
+            assetId,
+            assetTitle,
+            message: "请先保存或放弃当前修改，再更改资料状态。"
+          }
+        };
+        return publishEditor();
+      }
+      if (
+        (action === "move-to-deleted" && editorState.draft.status === "deleted") ||
+        (action === "restore" && editorState.draft.status !== "deleted")
+      ) {
+        return editorProps;
+      }
+
+      const token = ++statusActionGeneration;
+      editorState = {
+        ...editorState,
+        statusAction: { status: "loading", action, assetId, assetTitle }
+      };
+      publishEditor();
+      if (action === "restore") {
+        editorState = {
+          ...editorState,
+          statusAction: { status: "confirmation", action, assetId, assetTitle }
+        };
+        return publishEditor();
+      }
+
+      let impact: Result<StoryBibleReferenceImpact, UnifiedError>;
+      try {
+        impact =
+          api.storyBible.getReferences === undefined
+            ? {
+                ok: false,
+                error: statusActionError("STORY_BIBLE_REFERENCE_IMPACT_UNAVAILABLE")
+              }
+            : await api.storyBible.getReferences(assetId);
+      } catch {
+        impact = {
+          ok: false,
+          error: statusActionError("STORY_BIBLE_REFERENCE_IMPACT_UNAVAILABLE")
+        };
+      }
+      if (
+        token !== statusActionGeneration ||
+        editorState.draft.id !== assetId ||
+        editorState.draft.status === "deleted"
+      ) {
+        return editorProps;
+      }
+      if (!impact.ok) {
+        editorState = {
+          ...editorState,
+          statusAction: {
+            status: "error",
+            action,
+            assetId,
+            assetTitle,
+            message: impact.error.message
+          }
+        };
+        return publishEditor();
+      }
+      editorState = {
+        ...editorState,
+        statusAction: deletionConfirmationState(impact.value, assetTitle)
+      };
+      return publishEditor();
+    },
+    cancelStatusAction() {
+      statusActionGeneration += 1;
+      editorState = { ...editorState, statusAction: { status: "idle" } };
+      return publishEditor();
+    },
+    async confirmStatusAction() {
+      const confirmation = editorState.statusAction;
+      if (confirmation.status !== "confirmation") {
+        return { editor: editorProps, readyToSave: false };
+      }
+      const { action, assetId, assetTitle } = confirmation;
+      const token = ++statusActionGeneration;
+      editorState = {
+        ...editorState,
+        statusAction: { status: "loading", action, assetId, assetTitle }
+      };
+      publishEditor();
+
+      if (action === "move-to-deleted") {
+        if (!confirmation.canSetDeleted) {
+          editorState = {
+            ...editorState,
+            statusAction: {
+              status: "error",
+              action,
+              assetId,
+              assetTitle,
+              message: "大纲和时间线单例不能移入已删除。"
+            }
+          };
+          return { editor: publishEditor(), readyToSave: false };
+        }
+        let impact: Result<StoryBibleReferenceImpact, UnifiedError>;
+        try {
+          impact =
+            api.storyBible.getReferences === undefined
+              ? {
+                  ok: false,
+                  error: statusActionError("STORY_BIBLE_REFERENCE_IMPACT_UNAVAILABLE")
+                }
+              : await api.storyBible.getReferences(assetId);
+        } catch {
+          impact = {
+            ok: false,
+            error: statusActionError("STORY_BIBLE_REFERENCE_IMPACT_UNAVAILABLE")
+          };
+        }
+        if (token !== statusActionGeneration || editorState.draft.id !== assetId) {
+          return { editor: editorProps, readyToSave: false };
+        }
+        if (!impact.ok) {
+          editorState = {
+            ...editorState,
+            statusAction: {
+              status: "error",
+              action,
+              assetId,
+              assetTitle,
+              message: impact.error.message
+            }
+          };
+          return { editor: publishEditor(), readyToSave: false };
+        }
+        if (deletionImpactSignature(impact.value) !== deletionConfirmationSignature(confirmation)) {
+          editorState = {
+            ...editorState,
+            statusAction: {
+              status: "error",
+              action,
+              assetId,
+              assetTitle,
+              message: "入向引用影响已变化，请重新检查后再确认。"
+            }
+          };
+          return { editor: publishEditor(), readyToSave: false };
+        }
+        editorState = {
+          ...editorState,
+          dirty: true,
+          draft: { ...editorState.draft, status: "deleted" },
+          statusAction: { status: "idle" }
+        };
+        pendingStatusTransition = {
+          action: "move-to-deleted",
+          expectedDeletionImpactChecksum: impact.value.deletionImpactChecksum
+        };
+        return { editor: publishEditor(), readyToSave: true };
+      }
+
+      let restored: Result<"active" | "draft" | "archived", UnifiedError>;
+      try {
+        restored =
+          api.storyBible.resolveRestoreStatus === undefined
+            ? {
+                ok: false,
+                error: statusActionError("STORY_BIBLE_RESTORE_STATUS_UNAVAILABLE")
+              }
+            : await api.storyBible.resolveRestoreStatus(assetId);
+      } catch {
+        restored = {
+          ok: false,
+          error: statusActionError("STORY_BIBLE_RESTORE_STATUS_UNAVAILABLE")
+        };
+      }
+      if (token !== statusActionGeneration || editorState.draft.id !== assetId) {
+        return { editor: editorProps, readyToSave: false };
+      }
+      if (!restored.ok) {
+        editorState = {
+          ...editorState,
+          statusAction: {
+            status: "error",
+            action,
+            assetId,
+            assetTitle,
+            message: restored.error.message
+          }
+        };
+        return { editor: publishEditor(), readyToSave: false };
+      }
+      editorState = {
+        ...editorState,
+        dirty: true,
+        draft: { ...editorState.draft, status: restored.value },
+        statusAction: { status: "idle" }
+      };
+      pendingStatusTransition = { action: "restore" };
+      return { editor: publishEditor(), readyToSave: true };
+    },
     beginSave() {
-      editorState = { ...editorState, status: "saving" };
+      statusActionGeneration += 1;
+      editorState = { ...editorState, status: "saving", statusAction: { status: "idle" } };
       deleteFeedback();
       return publishEditor();
     },
@@ -1012,16 +1368,53 @@ export function createStoryBibleBridge(
           return publishEditor();
         }
       }
-      const saved = await api.storyBible.saveAsset(
-        toStoryAsset(normalizedDraft, now(), snapshot, createAssetIdentity)
-      );
+      const attemptedStatusTransition = pendingStatusTransition;
+      const explicitInversePreview = editorState.explicitInversePreview;
+      if (
+        attemptedStatusTransition === undefined &&
+        explicitInversePreview?.status === "confirmation"
+      ) {
+        return applyExplicitInversePreview(
+          normalizedDraft,
+          explicitInversePreview as NonNullable<StoryBibleExplicitInversePreviewState> & {
+            readonly status: "confirmation";
+          },
+          generation,
+          workspaceId
+        );
+      }
+      if (
+        attemptedStatusTransition === undefined &&
+        requiresExplicitInversePairWrite(
+          storyBibleRelations(baselineEditableAsset?.asset.relations),
+          normalizedDraft.relations ?? []
+        )
+      ) {
+        const explicitCommand = existingDraftCandidateCommand(normalizedDraft);
+        if (!explicitCommand.ok) {
+          editorState = {
+            ...editorState,
+            status: "error",
+            dirty: true,
+            draft: normalizedDraft,
+            feedback: { kind: "error", message: explicitCommand.error.message }
+          };
+          return publishEditor();
+        }
+        return prepareExplicitInversePreview(normalizedDraft, explicitCommand.value, generation);
+      }
+      const saved = await saveStructuredDraft(normalizedDraft, attemptedStatusTransition);
 
       if (!saved.ok) {
+        if (attemptedStatusTransition !== undefined) pendingStatusTransition = undefined;
         editorState = {
           ...editorState,
           status: "error",
-          dirty: true,
-          draft: normalizedDraft,
+          dirty: attemptedStatusTransition === undefined,
+          draft:
+            attemptedStatusTransition === undefined
+              ? normalizedDraft
+              : { ...normalizedDraft, status: baselineDraft.status },
           feedback: {
             kind: "error",
             message: saved.error.message
@@ -1030,42 +1423,469 @@ export function createStoryBibleBridge(
         return publishEditor();
       }
 
-      if (generation !== loadGeneration) return editorProps;
-      const nextSnapshot = await unwrap(api.storyBible.load());
-      if (generation !== loadGeneration) return editorProps;
-      const nextConsistency = toConsistencyProps(
-        await unwrap(api.storyBible.buildConsistencyReport())
+      return finishSavedDraft(
+        normalizedDraft,
+        saved.value.id,
+        generation,
+        workspaceId,
+        "故事圣经已保存。"
       );
-      if (generation !== loadGeneration) return editorProps;
-      snapshot = nextSnapshot;
-      snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
-      consistency = nextConsistency;
-      props = toProps(snapshot);
-      baselineDraft = draftFromSnapshot(snapshot, { ...normalizedDraft, id: saved.value.id });
-      baselineAsset = findExistingAsset(snapshot, saved.value.id);
-      clearPendingExternalUpdate();
-      const activeTimelineEventId =
-        editorState.activeTimelineEventId !== undefined &&
-        draftHasTimelineEvent(baselineDraft, editorState.activeTimelineEventId)
-          ? editorState.activeTimelineEventId
-          : undefined;
+    }
+  };
+
+  function existingDraftCandidateCommand(
+    draft: StoryBibleEditorDraft
+  ): Result<StoryBibleExplicitInverseSourceCommand, UnifiedError> {
+    if (draft.id === undefined || baselineEditableAsset === undefined) {
+      return {
+        ok: false,
+        error: storyBibleEditingBaselineUnavailable()
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        candidate: {
+          schemaVersion: "1.1",
+          id: draft.id,
+          type: draft.assetType,
+          title: draft.title,
+          status: draft.status,
+          summary: draft.summary,
+          aliases: [...draft.aliases],
+          relations: (draft.relations ?? []).map((relation) => ({ ...relation })),
+          details: toStrictStoryBibleDetails(draft, createEntryIdentity),
+          extensions: jsonObjectValue(baselineEditableAsset.asset.extensions),
+          createdAt: baselineEditableAsset.asset.createdAt
+        },
+        baseRevision: baselineEditableAsset.revision,
+        baseChecksum: baselineEditableAsset.checksum
+      }
+    };
+  }
+
+  async function prepareExplicitInversePreview(
+    draft: StoryBibleEditorDraft,
+    command: StoryBibleExplicitInverseSourceCommand,
+    generation: number
+  ): Promise<StoryBibleEditorProps> {
+    if (typeof api.storyBible.prepareExplicitInverseChange !== "function") {
       editorState = {
         ...editorState,
-        activeKind: baselineDraft.kind,
-        activeTimelineEventId,
-        viewMode: "detail",
-        status: "saved",
-        dirty: false,
-        draft: baselineDraft,
-        externalUpdate: { status: "none" },
+        status: "error",
+        dirty: true,
+        draft,
+        explicitInversePreview: undefined,
+        feedback: { kind: "error", message: storyBibleExplicitInverseUnavailable().message }
+      };
+      return publishEditor();
+    }
+    const token = ++explicitInverseGeneration;
+    let prepared: Awaited<
+      ReturnType<NonNullable<NovelStudioApi["storyBible"]["prepareExplicitInverseChange"]>>
+    >;
+    try {
+      prepared = await api.storyBible.prepareExplicitInverseChange({ source: command });
+    } catch {
+      prepared = { ok: false, error: storyBibleExplicitInverseUnavailable() };
+    }
+    if (generation !== loadGeneration || token !== explicitInverseGeneration) return editorProps;
+    if (!prepared.ok) {
+      editorState = {
+        ...editorState,
+        status: "error",
+        dirty: true,
+        draft,
+        explicitInversePreview: undefined,
+        feedback: { kind: "error", message: prepared.error.message }
+      };
+      return publishEditor();
+    }
+    const entries = createEditorEntries(snapshot);
+    editorState = {
+      ...editorState,
+      status: "idle",
+      dirty: true,
+      draft,
+      explicitInversePreview: {
+        status: "confirmation",
+        previewId: prepared.value.previewId,
+        revision: prepared.value.changeSet.revision,
+        checksum: prepared.value.changeSet.checksum,
+        expiresAt: prepared.value.expiresAt,
+        files: prepared.value.affectedAssetIds.map((assetId) => {
+          const file = prepared.value.changeSet.files.find(
+            (candidate) => candidate.assetId === assetId
+          );
+          return {
+            assetId,
+            title: entries.find((entry) => entry.id === assetId)?.title ?? assetId,
+            side: assetId === draft.id ? "source" : "inverse",
+            hunkCount: file?.hunks.length ?? 1
+          };
+        })
+      },
+      feedback: {
+        kind: "info",
+        message: "请确认显式双向关系的两端差异；确认前不会写入任何资料。"
+      }
+    };
+    return publishEditor();
+  }
+
+  function requireExplicitInversePreviewCancellation(): StoryBibleEditorProps {
+    editorState = {
+      ...editorState,
+      feedback: {
+        kind: "error",
+        message: "请先取消当前双端关系预览，再继续编辑或离开。"
+      }
+    };
+    return publishEditor();
+  }
+
+  async function applyExplicitInversePreview(
+    draft: StoryBibleEditorDraft,
+    preview: NonNullable<StoryBibleExplicitInversePreviewState> & {
+      readonly status: "confirmation";
+    },
+    generation: number,
+    workspaceId: string | undefined
+  ): Promise<StoryBibleEditorProps> {
+    if (typeof api.storyBible.applyExplicitInverseChange !== "function") {
+      editorState = {
+        ...editorState,
+        status: "error",
+        dirty: true,
+        draft,
+        feedback: { kind: "error", message: storyBibleExplicitInverseUnavailable().message }
+      };
+      return publishEditor();
+    }
+    const token = ++explicitInverseGeneration;
+    editorState = {
+      ...editorState,
+      status: "saving",
+      explicitInversePreview: { ...preview, status: "applying" }
+    };
+    publishEditor();
+    let applied: Awaited<
+      ReturnType<NonNullable<NovelStudioApi["storyBible"]["applyExplicitInverseChange"]>>
+    >;
+    try {
+      applied = await api.storyBible.applyExplicitInverseChange({
+        previewId: preview.previewId,
+        revision: preview.revision,
+        checksum: preview.checksum
+      });
+    } catch {
+      applied = { ok: false, error: storyBibleExplicitInverseUnavailable() };
+    }
+    if (generation !== loadGeneration || token !== explicitInverseGeneration) return editorProps;
+    if (!applied.ok || !applied.value.applied) {
+      const batchError = applied.ok
+        ? applied.value.batch.groups.find((group) => group.error !== undefined)?.error
+        : undefined;
+      editorState = {
+        ...editorState,
+        status: "error",
+        dirty: true,
+        draft,
+        explicitInversePreview: preview,
         feedback: {
-          kind: "info",
-          message: "故事圣经已保存。"
+          kind: "error",
+          message: applied.ok
+            ? (batchError?.message ?? "双端关系未能原子提交，当前草稿仍保留。")
+            : applied.error.message
         }
       };
       return publishEditor();
     }
-  };
+    if (draft.id === undefined) return editorProps;
+    return finishSavedDraft(
+      draft,
+      draft.id,
+      generation,
+      workspaceId,
+      "显式双向关系的两端资料已原子保存。"
+    );
+  }
+
+  async function finishSavedDraft(
+    normalizedDraft: StoryBibleEditorDraft,
+    savedAssetId: string,
+    generation: number,
+    workspaceId: string | undefined,
+    message: string
+  ): Promise<StoryBibleEditorProps> {
+    if (generation !== loadGeneration) return editorProps;
+    let nextSnapshot = await unwrap(api.storyBible.load());
+    if (generation !== loadGeneration) return editorProps;
+    const editable =
+      typeof api.storyBible.readAsset === "function"
+        ? await api.storyBible.readAsset(savedAssetId)
+        : undefined;
+    if (generation !== loadGeneration) return editorProps;
+    if (editable?.ok === true) {
+      baselineEditableAsset = editable.value;
+      nextSnapshot = replaceStoryBibleAsset(nextSnapshot, editable.value.asset);
+    } else {
+      baselineEditableAsset = undefined;
+    }
+    const nextConsistency = toConsistencyProps(
+      await unwrap(api.storyBible.buildConsistencyReport())
+    );
+    if (generation !== loadGeneration) return editorProps;
+    snapshot = nextSnapshot;
+    snapshotBinding = workspaceId === undefined ? undefined : { workspaceId, snapshot };
+    consistency = nextConsistency;
+    props = toProps(snapshot);
+    baselineDraft = draftFromSnapshot(snapshot, { ...normalizedDraft, id: savedAssetId });
+    baselineAsset = baselineEditableAsset?.asset ?? findExistingAsset(snapshot, savedAssetId);
+    pendingStatusTransition = undefined;
+    clearPendingExternalUpdate();
+    const activeTimelineEventId =
+      editorState.activeTimelineEventId !== undefined &&
+      draftHasTimelineEvent(baselineDraft, editorState.activeTimelineEventId)
+        ? editorState.activeTimelineEventId
+        : undefined;
+    editorState = {
+      ...editorState,
+      activeKind: baselineDraft.kind,
+      activeTimelineEventId,
+      viewMode: "detail",
+      status: "saved",
+      dirty: false,
+      draft: baselineDraft,
+      externalUpdate: { status: "none" },
+      statusAction: { status: "idle" },
+      explicitInversePreview: undefined,
+      feedback: { kind: "info", message }
+    };
+    return publishEditor();
+  }
+
+  function selectEntryFromSnapshot(entryId: string): StoryBibleEditorProps {
+    if (isForeshadowAnalysisApplying(editorState.foreshadowAnalysis)) return editorProps;
+    if (editorState.explicitInversePreview !== undefined) {
+      return requireExplicitInversePreviewCancellation();
+    }
+    if (editorState.dirty && editorState.draft.id !== entryId) {
+      editorState = {
+        ...editorState,
+        feedback: {
+          kind: "error",
+          message: "当前资料有未保存修改。请先保存或放弃草稿，再打开目标资料。"
+        }
+      };
+      return publishEditor();
+    }
+    statusActionGeneration += 1;
+    explicitInverseGeneration += 1;
+    pendingStatusTransition = undefined;
+    entryLoadGeneration += 1;
+    const entries = createEditorEntries(snapshot);
+    let activeTimelineEventId: string | undefined;
+    let entry = entries.find((candidate) => candidate.id === entryId);
+    if (entry === undefined) {
+      entry = entries.find(
+        (candidate) =>
+          candidate.kind === "timeline" &&
+          candidate.timelineEvents.some((event) => event.id === entryId)
+      );
+      if (entry !== undefined) activeTimelineEventId = entryId;
+    }
+    if (entry === undefined) return editorProps;
+
+    foreshadowAnalysisGeneration += 1;
+    foreshadowConfirmationPlan = undefined;
+    baselineDraft = draftFromEntry(entry);
+    baselineAsset = findExistingAsset(snapshot, entry.id);
+    baselineEditableAsset = undefined;
+    const externalUpdate = externalUpdateAfterNavigation();
+    editorState = {
+      ...editorState,
+      activeKind: entry.kind,
+      activeTimelineEventId,
+      viewMode: "detail",
+      status: "idle",
+      dirty: false,
+      draft: baselineDraft,
+      foreshadowAnalysis: closedForeshadowAnalysis(),
+      externalUpdate,
+      statusAction: { status: "idle" },
+      explicitInversePreview: undefined
+    };
+    deleteFeedback();
+    return publishEditor();
+  }
+
+  function saveStructuredDraft(
+    draft: StoryBibleEditorDraft,
+    statusTransition?: PendingStoryBibleStatusTransition
+  ): Promise<Result<StoryBibleAsset, UnifiedError>> {
+    if (
+      typeof api.storyBible.createAsset !== "function" ||
+      typeof api.storyBible.saveAssetCandidate !== "function"
+    ) {
+      return statusTransition === undefined
+        ? api.storyBible.saveAsset(toStoryAsset(draft, now(), snapshot, createAssetIdentity))
+        : Promise.resolve({
+            ok: false,
+            error: storyBibleStatusTransitionUnavailable()
+          });
+    }
+    if (draft.id === undefined) {
+      const details = toStrictStoryBibleDetails(draft, createEntryIdentity);
+      const value: StoryBibleCreateValue = {
+        title: draft.title,
+        ...(draft.status === "deleted" ? {} : { status: draft.status }),
+        summary: draft.summary,
+        aliases: [...draft.aliases],
+        relations: [],
+        details,
+        extensions: {}
+      };
+      return api.storyBible.createAsset({ type: draft.assetType, value });
+    }
+    const command = existingDraftCandidateCommand(draft);
+    if (!command.ok) return Promise.resolve(command);
+    if (statusTransition !== undefined) {
+      return typeof api.storyBible.saveStatusTransition === "function"
+        ? api.storyBible.saveStatusTransition({ ...command.value, ...statusTransition })
+        : Promise.resolve({ ok: false, error: storyBibleStatusTransitionUnavailable() });
+    }
+    return api.storyBible.saveAssetCandidate(command.value);
+  }
+
+  async function saveForeshadowOperation(
+    operation: ForeshadowConfirmationOperation
+  ): Promise<Result<StoryBibleAsset, UnifiedError>> {
+    if (
+      typeof api.storyBible.readAsset !== "function" ||
+      typeof api.storyBible.createAsset !== "function" ||
+      typeof api.storyBible.saveAssetCandidate !== "function"
+    ) {
+      return api.storyBible.saveAsset(operation.asset);
+    }
+    if (operation.baseAsset === undefined) {
+      return api.storyBible.createAsset({
+        type: "foreshadow",
+        value: {
+          title: operation.asset.title,
+          status: operation.asset.status === "deleted" ? "active" : operation.asset.status,
+          summary: operation.asset.summary,
+          aliases: [...(operation.asset.aliases ?? [])],
+          relations: relationsFromRelatedIds(
+            operation.asset.id,
+            operation.asset.relatedEntityIds ?? []
+          ),
+          details: strictForeshadowOperationDetails(operation),
+          extensions: {}
+        }
+      });
+    }
+
+    const baseline = await api.storyBible.readAsset(operation.asset.id);
+    if (!baseline.ok) return baseline;
+    if (baseline.value.asset.type !== "foreshadow") {
+      return {
+        ok: false,
+        error: storyBibleEditingBaselineUnavailable()
+      };
+    }
+    const candidate: StoryBibleWriteCandidate = {
+      schemaVersion: "1.1",
+      id: baseline.value.asset.id,
+      type: "foreshadow",
+      title: operation.asset.title,
+      status: operation.asset.status,
+      summary: operation.asset.summary,
+      aliases: [...(operation.asset.aliases ?? baseline.value.asset.aliases ?? [])],
+      relations: storyBibleRelations(baseline.value.asset.relations).map((relation) => ({
+        ...relation
+      })),
+      details: strictForeshadowOperationDetails(
+        operation,
+        jsonObjectValue(baseline.value.asset.details)
+      ),
+      extensions: jsonObjectValue(baseline.value.asset.extensions),
+      createdAt: baseline.value.asset.createdAt
+    };
+    return api.storyBible.saveAssetCandidate({
+      candidate,
+      baseRevision: baseline.value.revision,
+      baseChecksum: baseline.value.checksum
+    });
+  }
+
+  function relationsFromRelatedIds(
+    sourceId: string,
+    relatedEntityIds: readonly string[]
+  ): StoryBibleEditorRelation[] {
+    return [...new Set(relatedEntityIds)].map((targetId, index) => ({
+      relationId: `rel_${stableHexIdentity(`${sourceId}:relation:${targetId}:${index}`)}`,
+      sourceId,
+      targetId,
+      relationType: "story.related",
+      direction: "directed",
+      status: "active",
+      validFromChapterId: null,
+      validToChapterId: null,
+      inversePolicy: "none",
+      inverseRelationId: null,
+      evidence: [],
+      note: ""
+    }));
+  }
+
+  function strictForeshadowOperationDetails(
+    operation: ForeshadowConfirmationOperation,
+    baseline: JsonObject = {}
+  ): JsonObject {
+    const details = operation.asset.details;
+    const sourceRefs = recordArray(details.sourceRefs);
+    const milestones = recordArray(baseline["milestones"]);
+    const milestoneEvidence = new Set(
+      milestones.map((milestone) => {
+        const evidence = jsonObjectValue(milestone["evidence"]);
+        return `${String(milestone["chapterId"])}\u0000${String(evidence["excerptHash"])}`;
+      })
+    );
+    for (const [index, sourceRef] of sourceRefs.entries()) {
+      const chapterId = stringValue(sourceRef["chapterId"]);
+      const excerpt = stringValue(sourceRef["excerpt"]);
+      const excerptHash = stringValue(sourceRef["excerptHash"]);
+      if (chapterId === undefined || excerpt === undefined || excerptHash === undefined) continue;
+      const evidenceKey = `${chapterId}\u0000${excerptHash}`;
+      if (milestoneEvidence.has(evidenceKey)) continue;
+      milestoneEvidence.add(evidenceKey);
+      const isPayoff =
+        details.trackingStatus === "paid-off" && details.actualPayoffChapterId === chapterId;
+      milestones.push({
+        milestoneId: strictEntryId(
+          "fsm",
+          undefined,
+          `${operation.changeId}:milestone:${chapterId}:${excerptHash}:${index}`
+        ),
+        entryRevision: 1,
+        kind: isPayoff ? "payoff" : operation.baseAsset === undefined ? "plant" : "progress",
+        chapterId,
+        timelineEventId: null,
+        evidence: {
+          start: 0,
+          end: Math.max(1, [...excerpt].length),
+          excerptHash
+        },
+        note: ""
+      });
+    }
+    return {
+      ...baseline,
+      ...details,
+      milestones
+    };
+  }
 
   function deleteFeedback(): void {
     if (editorState.feedback === undefined) {
@@ -1080,7 +1900,8 @@ export function createStoryBibleBridge(
       draft: editorState.draft,
       filters: editorState.filters,
       foreshadowAnalysis: editorState.foreshadowAnalysis,
-      externalUpdate: editorState.externalUpdate
+      externalUpdate: editorState.externalUpdate,
+      statusAction: editorState.statusAction
     };
   }
 
@@ -1121,10 +1942,7 @@ export function createStoryBibleBridge(
       }
       return failExternalRefresh(updates, "故事资料已由 Agent 更新，但重新加载失败；请重试。");
     }
-    if (
-      generation !== externalRefreshGeneration ||
-      snapshotBinding?.workspaceId !== workspaceId
-    ) {
+    if (generation !== externalRefreshGeneration || snapshotBinding?.workspaceId !== workspaceId) {
       return editorProps;
     }
     if (!loaded.ok) return failExternalRefresh(updates, loaded.error.message);
@@ -1182,8 +2000,7 @@ export function createStoryBibleBridge(
     const affectedEntryIds = affectedEntryIdsForSnapshot(updates, snapshot);
     const allApply = updates.every((update) => update.reason === "agent-change-set-apply");
     const allUndo = updates.every((update) => update.reason === "agent-run-undo");
-    const currentEntryId =
-      previousState.viewMode === "detail" ? previousState.draft.id : undefined;
+    const currentEntryId = previousState.viewMode === "detail" ? previousState.draft.id : undefined;
     const targetEntryId =
       allApply && affectedEntryIds.length === 1
         ? affectedEntryIds[0]
@@ -1194,12 +2011,12 @@ export function createStoryBibleBridge(
     if (targetEntry !== undefined) {
       baselineDraft = draftFromEntry(targetEntry);
       baselineAsset = findExistingAsset(snapshot, targetEntry.id);
+      baselineEditableAsset = undefined;
+      entryLoadGeneration += 1;
       const activeTimelineEventId =
         targetEntry.kind === "timeline" &&
         previousState.activeTimelineEventId !== undefined &&
-        targetEntry.timelineEvents.some(
-          (event) => event.id === previousState.activeTimelineEventId
-        )
+        targetEntry.timelineEvents.some((event) => event.id === previousState.activeTimelineEventId)
           ? previousState.activeTimelineEventId
           : undefined;
       editorState = {
@@ -1227,6 +2044,8 @@ export function createStoryBibleBridge(
       : (affectedKinds[0] ?? previousState.activeKind);
     baselineDraft = emptyDraft(activeKind);
     baselineAsset = undefined;
+    baselineEditableAsset = undefined;
+    entryLoadGeneration += 1;
     editorState = {
       ...previousState,
       activeKind,
@@ -1246,6 +2065,9 @@ export function createStoryBibleBridge(
   function reset(): void {
     foreshadowAnalysisGeneration += 1;
     externalRefreshGeneration += 1;
+    statusActionGeneration += 1;
+    explicitInverseGeneration += 1;
+    pendingStatusTransition = undefined;
     foreshadowConfirmationPlan = undefined;
     handledVersionGroupIds.clear();
     clearPendingExternalUpdate();
@@ -1255,6 +2077,8 @@ export function createStoryBibleBridge(
     props = { assets: [] };
     baselineDraft = emptyDraft(editorState.activeKind);
     baselineAsset = undefined;
+    baselineEditableAsset = undefined;
+    entryLoadGeneration += 1;
     editorState = {
       ...editorState,
       activeTimelineEventId: undefined,
@@ -1263,11 +2087,371 @@ export function createStoryBibleBridge(
       dirty: false,
       draft: baselineDraft,
       foreshadowAnalysis: closedForeshadowAnalysis(),
-      externalUpdate: { status: "none" }
+      externalUpdate: { status: "none" },
+      statusAction: { status: "idle" },
+      explicitInversePreview: undefined
     };
     deleteFeedback();
     publishEditor();
   }
+}
+
+function selectedTimelineEventIndex(
+  asset: StoryBibleAsset | undefined,
+  eventId: string | undefined
+): number | undefined {
+  if (asset?.type !== "timeline.events" || eventId === undefined) return undefined;
+  const events = asset.details?.["events"];
+  if (!Array.isArray(events)) return undefined;
+  const index = events.findIndex(
+    (event) => isRecord(event) && (event["eventId"] === eventId || event["id"] === eventId)
+  );
+  return index < 0 ? undefined : index;
+}
+
+function replaceStoryBibleAsset(
+  snapshot: StoryBibleSnapshot,
+  asset: StoryBibleAsset
+): StoryBibleSnapshot {
+  switch (asset.type) {
+    case "character":
+      return {
+        ...snapshot,
+        characters: replaceAsset(snapshot.characters, asset)
+      };
+    case "world.location":
+    case "world.faction":
+    case "world.rule":
+    case "world.glossary":
+    case "world.item":
+    case "world.lore":
+      return {
+        ...snapshot,
+        worldAssets: replaceAsset(snapshot.worldAssets, asset)
+      };
+    case "outline":
+      return { ...snapshot, outline: asset };
+    case "timeline.events":
+      return { ...snapshot, timeline: asset };
+    case "foreshadow":
+      return {
+        ...snapshot,
+        foreshadows: replaceAsset(snapshot.foreshadows, asset)
+      };
+  }
+}
+
+function replaceAsset<T extends StoryBibleAsset>(assets: readonly T[], asset: T): T[] {
+  const index = assets.findIndex((candidate) => candidate.id === asset.id);
+  return index < 0
+    ? [...assets, asset]
+    : assets.map((candidate, candidateIndex) => (candidateIndex === index ? asset : candidate));
+}
+
+function toStrictStoryBibleDetails(
+  draft: StoryBibleEditorDraft,
+  createEntryIdentity: () => string
+): JsonObject {
+  switch (draft.assetType) {
+    case "outline":
+      return strictOutlineDetails(draft.details, draft.id ?? draft.title);
+    case "timeline.events":
+      return strictTimelineDetails(draft.details, draft.id ?? draft.title);
+    case "foreshadow":
+      return {
+        ...draft.details,
+        trackingStatus: draft.details.trackingStatus,
+        milestones: Array.isArray(draft.details.milestones) ? draft.details.milestones : []
+      };
+    case "character":
+      return strictCharacterDetails(draft.details, createEntryIdentity);
+    case "world.location":
+    case "world.faction":
+    case "world.rule":
+    case "world.glossary":
+      return { ...draft.details };
+    case "world.item": {
+      const details = { ...draft.details };
+      if (Array.isArray(details["stateHistory"])) {
+        details["stateHistory"] = strictStateHistory(details["stateHistory"], createEntryIdentity);
+      }
+      return details;
+    }
+    case "world.lore":
+      return { ...draft.details };
+  }
+}
+
+function strictCharacterDetails(
+  rawDetails: JsonObject,
+  createEntryIdentity: () => string
+): JsonObject {
+  const details: JsonObject = { ...rawDetails };
+  delete details["appearanceChapterIds"];
+  const goals = details["goals"];
+  if (Array.isArray(goals)) {
+    details["goals"] = {
+      external: typeof goals[0] === "string" ? goals[0] : "",
+      internal: typeof goals[1] === "string" ? goals[1] : ""
+    };
+  }
+  const arc = details["arc"];
+  if (isRecord(arc)) {
+    details["arc"] = {
+      start: typeof arc["start"] === "string" ? arc["start"] : "",
+      turningPoints: stringArray(arc["turningPoints"]),
+      targetState:
+        typeof arc["targetState"] === "string"
+          ? arc["targetState"]
+          : typeof arc["end"] === "string"
+            ? arc["end"]
+            : ""
+    };
+  }
+  if (Array.isArray(details["knowledgeStates"])) {
+    details["knowledgeStates"] = strictStableRecords(
+      details["knowledgeStates"],
+      "knw",
+      "knowledgeStateId",
+      createEntryIdentity
+    );
+  }
+  if (Array.isArray(details["stateHistory"])) {
+    details["stateHistory"] = strictStateHistory(details["stateHistory"], createEntryIdentity);
+  }
+  return details;
+}
+
+function strictStateHistory(value: unknown, createEntryIdentity: () => string): JsonObject[] {
+  return strictStableRecords(value, "sth", "stateHistoryId", createEntryIdentity);
+}
+
+function strictStableRecords(
+  value: unknown,
+  prefix: "knw" | "sth",
+  idField: "knowledgeStateId" | "stateHistoryId",
+  createEntryIdentity: () => string
+): JsonObject[] {
+  const records = recordArray(value);
+  const pattern = new RegExp(`^${prefix}_[a-f0-9]{32}$`, "u");
+  const usedIds = new Set(
+    records.flatMap((entry) => {
+      const id = entry[idField];
+      return typeof id === "string" && pattern.test(id) ? [id] : [];
+    })
+  );
+  return records.map((entry) => {
+    const currentId = entry[idField];
+    const stableId =
+      typeof currentId === "string" && pattern.test(currentId)
+        ? currentId
+        : allocateStableRecordId(prefix, usedIds, createEntryIdentity);
+    usedIds.add(stableId);
+    return {
+      ...entry,
+      [idField]: stableId,
+      entryRevision: positiveInteger(entry["entryRevision"])
+    };
+  });
+}
+
+function allocateStableRecordId(
+  prefix: "knw" | "sth",
+  usedIds: ReadonlySet<string>,
+  createEntryIdentity: () => string
+): string {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const identity = createEntryIdentity();
+    if (!/^[a-f0-9]{32}$/u.test(identity)) {
+      throw new Error("Story Bible entry identity must be 32 lowercase hexadecimal characters.");
+    }
+    const id = `${prefix}_${identity}`;
+    if (!usedIds.has(id)) return id;
+  }
+  throw new Error("Story Bible entry identity allocation collided repeatedly.");
+}
+
+function strictOutlineDetails(details: JsonObject, seed: string): JsonObject {
+  const volumes = recordArray(details["volumes"]).map((volume, index) => ({
+    volumeId: strictEntryId("vol", volume["volumeId"] ?? volume["id"], `${seed}:volume:${index}`),
+    entryRevision: positiveInteger(volume["entryRevision"]),
+    title: nonEmptyString(volume["title"]) ?? `未命名卷 ${index + 1}`,
+    summary: stringValue(volume["summary"]) ?? "",
+    goals: stringArray(volume["goals"]),
+    chapterIds: stringArray(volume["chapterIds"])
+  }));
+  const chapterOutlines = recordArray(details["chapterOutlines"]).flatMap((chapter) => {
+    const chapterId = nonEmptyString(chapter["chapterId"]);
+    if (chapterId === undefined) return [];
+    const beats = recordArray(chapter["beats"]).map((beat, beatIndex) => ({
+      beatId: strictEntryId(
+        "beat",
+        beat["beatId"] ?? beat["id"],
+        `${seed}:chapter:${chapterId}:beat:${beatIndex}`
+      ),
+      entryRevision: positiveInteger(beat["entryRevision"]),
+      title: nonEmptyString(beat["title"]) ?? `节拍 ${beatIndex + 1}`,
+      purpose: stringValue(beat["purpose"]) ?? "",
+      result: stringValue(beat["result"]) ?? "",
+      scene: stringValue(beat["scene"]) ?? ""
+    }));
+    return [
+      {
+        chapterOutlineId: strictEntryId(
+          "cho",
+          chapter["chapterOutlineId"],
+          `${seed}:chapter:${chapterId}`
+        ),
+        chapterId,
+        entryRevision: positiveInteger(chapter["entryRevision"]),
+        goal: stringValue(chapter["goal"]) ?? "",
+        conflict: stringValue(chapter["conflict"]) ?? "",
+        turningPoint: stringValue(chapter["turningPoint"]) ?? "",
+        notes: stringValue(chapter["notes"]) ?? "",
+        povCharacterId: nullableString(chapter["povCharacterId"]),
+        characterIds: stringArray(chapter["characterIds"]),
+        locationIds: stringArray(chapter["locationIds"]),
+        foreshadowIds: stringArray(chapter["foreshadowIds"]),
+        beats,
+        expectedStateChanges: stringArray(chapter["expectedStateChanges"]),
+        actualOutcome: nullableString(chapter["actualOutcome"]),
+        deviations: stringArray(chapter["deviations"])
+      }
+    ];
+  });
+  return {
+    ...(typeof details["premise"] === "string" ? { premise: details["premise"] } : {}),
+    ...(Array.isArray(details["themes"]) ? { themes: stringArray(details["themes"]) } : {}),
+    volumes,
+    chapterOutlines
+  };
+}
+
+function strictTimelineDetails(details: JsonObject, seed: string): JsonObject {
+  return {
+    events: recordArray(details["events"]).map((event, index) => {
+      const eventId = strictEntryId(
+        "evt",
+        event["eventId"] ?? event["id"],
+        `${seed}:event:${index}`
+      );
+      const timeValue = isRecord(event["time"]) ? event["time"] : {};
+      const time: JsonObject = {
+        mode: timelineTimeMode(timeValue["mode"]),
+        label: stringValue(timeValue["label"]) ?? stringValue(event["timeLabel"]) ?? "",
+        uncertain: timeValue["uncertain"] === true,
+        ...(typeof timeValue["absolute"] === "string" ? { absolute: timeValue["absolute"] } : {}),
+        ...(typeof timeValue["anchorEventId"] === "string" || timeValue["anchorEventId"] === null
+          ? { anchorEventId: timeValue["anchorEventId"] }
+          : {}),
+        ...(isRecord(timeValue["offset"]) || timeValue["offset"] === null
+          ? { offset: timeValue["offset"] as JsonObject | null }
+          : {})
+      };
+      return {
+        eventId,
+        entryRevision: positiveInteger(event["entryRevision"]),
+        title: nonEmptyString(event["title"]) ?? eventId,
+        sequence: positiveInteger(event["sequence"], index + 1),
+        time,
+        ...(typeof event["duration"] === "string" || event["duration"] === null
+          ? { duration: event["duration"] }
+          : {}),
+        summary: stringValue(event["summary"]) ?? "",
+        chapterIds: stringArray(event["chapterIds"]),
+        characterIds: stringArray(event["characterIds"]),
+        locationIds: stringArray(event["locationIds"]),
+        parallelEventIds: stringArray(event["parallelEventIds"]),
+        causes: stringArray(event["causes"]),
+        effects: stringArray(event["effects"]),
+        stateChanges: recordArray(event["stateChanges"])
+      };
+    })
+  };
+}
+
+function strictEntryId(prefix: string, value: unknown, seed: string): string {
+  if (typeof value === "string" && new RegExp(`^${prefix}_[a-f0-9]{32}$`, "u").test(value)) {
+    return value;
+  }
+  return `${prefix}_${stableHexIdentity(seed)}`;
+}
+
+function stableHexIdentity(seed: string): string {
+  const words = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+  for (const character of seed) {
+    const code = character.codePointAt(0) ?? 0;
+    for (let index = 0; index < words.length; index += 1) {
+      const current = words[index] ?? 0;
+      words[index] = Math.imul(current ^ (code + index * 131), 0x01000193) >>> 0;
+    }
+  }
+  return words.map((word) => word.toString(16).padStart(8, "0")).join("");
+}
+
+function timelineTimeMode(value: unknown): "absolute" | "relative" | "sequence-only" | "unknown" {
+  return value === "absolute" || value === "relative" || value === "sequence-only"
+    ? value
+    : "unknown";
+}
+
+function recordArray(value: unknown): JsonObject[] {
+  return Array.isArray(value) ? value.filter(isRecord).map((entry) => entry as JsonObject) : [];
+}
+
+function positiveInteger(value: unknown, fallback = 1): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function jsonObjectValue(value: unknown): JsonObject {
+  return isRecord(value) ? (value as JsonObject) : {};
+}
+
+function storyBibleEditingBaselineUnavailable(): UnifiedError {
+  return {
+    schemaVersion: "1.0",
+    errorId: "err_story_bible_editing_baseline_unavailable",
+    code: "STORY_BIBLE_EDITING_BASELINE_UNAVAILABLE",
+    category: "ValidationError",
+    message: "The Story Bible entry changed before its editing baseline was loaded.",
+    recoverability: "user-action",
+    suggestedAction: "Reload the Story Bible entry before saving.",
+    traceId: "renderer-story-bible-editing",
+    createdAt: new Date().toISOString()
+  };
+}
+
+function storyBibleStatusTransitionUnavailable(): UnifiedError {
+  return {
+    ...storyBibleEditingBaselineUnavailable(),
+    errorId: "err_story_bible_status_transition_unavailable",
+    code: "STORY_BIBLE_STATUS_TRANSITION_UNAVAILABLE",
+    message: "The dedicated Story Bible status command is unavailable.",
+    suggestedAction: "Reload the Story Bible entry before retrying the status change."
+  };
+}
+
+function storyBibleExplicitInverseUnavailable(): UnifiedError {
+  return createUnifiedError({
+    code: "STORY_BIBLE_EXPLICIT_INVERSE_UNAVAILABLE",
+    category: "ValidationError",
+    message: "当前版本无法安全预览并原子保存显式双向关系。",
+    recoverability: "user-action",
+    suggestedAction: "重新加载应用后再试；当前草稿尚未写入。",
+    traceId: "story-bible-renderer-explicit-inverse"
+  });
 }
 
 function parseStoryBibleAffectedPath(relativePath: string): StoryBibleAffectedPath[] {
@@ -1275,11 +2459,7 @@ function parseStoryBibleAffectedPath(relativePath: string): StoryBibleAffectedPa
   const regular = /^(characters|world|foreshadows)\/([A-Za-z0-9_-]+)\.json$/u.exec(normalized);
   if (regular?.[1] !== undefined && regular[2] !== undefined) {
     const kind =
-      regular[1] === "characters"
-        ? "character"
-        : regular[1] === "world"
-          ? "world"
-          : "foreshadow";
+      regular[1] === "characters" ? "character" : regular[1] === "world" ? "world" : "foreshadow";
     return [{ kind, assetId: regular[2] }];
   }
   if (normalized === "outline/outline.json") return [{ kind: "outline" }];
@@ -1477,6 +2657,10 @@ function createEditorProps(
     foreshadowAnalysis: state.foreshadowAnalysis,
     filters: state.filters,
     externalUpdate: state.externalUpdate,
+    statusAction: state.statusAction,
+    ...(state.explicitInversePreview === undefined
+      ? {}
+      : { explicitInversePreview: state.explicitInversePreview }),
     ...(consistency === undefined ? {} : { consistency }),
     draft: state.draft,
     ...(state.feedback === undefined ? {} : { feedback: state.feedback }),
@@ -1487,8 +2671,12 @@ function createEditorProps(
     onNewDraft: () => undefined,
     onCancelDraft: () => undefined,
     onSave: () => undefined,
+    onExplicitInversePreviewCancel: () => undefined,
     onExternalUpdateReload: () => undefined,
     onExternalUpdateContinue: () => undefined,
+    onStatusActionRequest: () => undefined,
+    onStatusActionCancel: () => undefined,
+    onStatusActionConfirm: () => undefined,
     onForeshadowAnalysisOpen: () => undefined,
     onForeshadowAnalysisChapterToggle: () => undefined,
     onForeshadowAnalysisStart: () => undefined,
@@ -1499,6 +2687,64 @@ function createEditorProps(
     onForeshadowAnalysisRetryFailed: () => undefined,
     onForeshadowAnalysisClose: () => undefined
   };
+}
+
+function deletionConfirmationState(
+  impact: StoryBibleReferenceImpact,
+  assetTitle: string
+): Extract<
+  StoryBibleStatusActionState,
+  { readonly status: "confirmation"; readonly action: "move-to-deleted" }
+> {
+  return {
+    status: "confirmation",
+    action: "move-to-deleted",
+    assetId: impact.assetId,
+    assetTitle,
+    deletionImpactChecksum: impact.deletionImpactChecksum,
+    canSetDeleted: impact.canSetDeleted,
+    affectedReferenceCount: impact.deletionImpact.affectedReferenceCount,
+    affectedAssetIds: [...impact.deletionImpact.affectedAssetIds],
+    incoming: impact.incoming.map((reference) => ({
+      sourceAssetId: reference.sourceAssetId,
+      sourceTitle: reference.sourceTitle,
+      sourceType: reference.sourceType,
+      sourceStatus: reference.sourceStatus,
+      path: reference.path,
+      kind: reference.kind,
+      integrity: reference.integrity,
+      ...(reference.relationType === undefined ? {} : { relationType: reference.relationType })
+    }))
+  };
+}
+
+function deletionImpactSignature(impact: StoryBibleReferenceImpact): string {
+  return impact.deletionImpactChecksum;
+}
+
+function deletionConfirmationSignature(
+  state: Extract<
+    StoryBibleStatusActionState,
+    { readonly status: "confirmation"; readonly action: "move-to-deleted" }
+  >
+): string {
+  return state.deletionImpactChecksum;
+}
+
+function statusActionError(
+  code: "STORY_BIBLE_REFERENCE_IMPACT_UNAVAILABLE" | "STORY_BIBLE_RESTORE_STATUS_UNAVAILABLE"
+): UnifiedError {
+  const references = code === "STORY_BIBLE_REFERENCE_IMPACT_UNAVAILABLE";
+  return createUnifiedError({
+    code,
+    category: "ValidationError",
+    message: references
+      ? "无法读取最新入向引用影响，本次未执行删除。"
+      : "无法从 History 确定删除前状态，本次未执行恢复。",
+    recoverability: "retryable",
+    suggestedAction: references ? "重新检查引用影响。" : "重试恢复或从 History 手动恢复。",
+    traceId: "desktop-story-bible-status-action"
+  });
 }
 
 function toConsistencyProps(report: StoryBibleConsistencyReport): StoryBibleConsistencyProps {
@@ -1557,13 +2803,18 @@ function createEditorEntries(snapshot: StoryBibleSnapshot): readonly StoryBibleE
 }
 
 function assetEntry(asset: StoryBibleAsset): StoryBibleEditorEntry {
+  const relations =
+    asset.relations === undefined ? undefined : storyBibleRelations(asset.relations);
   const common = {
     id: asset.id,
     title: asset.title,
     status: asset.status,
     summary: asset.summary,
     aliases: [...(asset.aliases ?? [])],
-    relatedEntityIds: [...(asset.relatedEntityIds ?? [])],
+    ...(relations === undefined ? {} : { relations }),
+    relatedEntityIds: [
+      ...(asset.relatedEntityIds ?? relations?.map((relation) => relation.targetId) ?? [])
+    ],
     createdAt: asset.createdAt,
     updatedAt: asset.updatedAt
   };
@@ -1574,6 +2825,8 @@ function assetEntry(asset: StoryBibleAsset): StoryBibleEditorEntry {
     case "world.faction":
     case "world.rule":
     case "world.glossary":
+    case "world.item":
+    case "world.lore":
       return { ...common, kind: "world", assetType: asset.type, details: asset.details ?? {} };
     case "outline":
       return { ...common, kind: "outline", assetType: asset.type, details: asset.details ?? {} };
@@ -1627,7 +2880,8 @@ function toTimelineEvent(
     return undefined;
   }
 
-  const id = typeof value.id === "string" && value.id.length > 0 ? value.id : undefined;
+  const idValue = value.eventId ?? value.id;
+  const id = typeof idValue === "string" && idValue.length > 0 ? idValue : undefined;
   if (id === undefined) {
     return undefined;
   }
@@ -1640,7 +2894,13 @@ function toTimelineEvent(
   const status =
     typeof value.status === "string" && value.status.length > 0 ? value.status : "active";
   const summary = typeof value.summary === "string" ? value.summary : "";
-  const timeLabel = typeof value.timeLabel === "string" ? value.timeLabel : "";
+  const time = isRecord(value.time) ? value.time : undefined;
+  const timeLabel =
+    typeof time?.label === "string"
+      ? time.label
+      : typeof value.timeLabel === "string"
+        ? value.timeLabel
+        : "";
   const chapterIds = Array.isArray(value.chapterIds)
     ? value.chapterIds.filter((chapterId): chapterId is string => typeof chapterId === "string")
     : [];
@@ -1671,10 +2931,48 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
+function storyBibleRelations(value: unknown): StoryBibleEditorRelation[] {
+  return Array.isArray(value)
+    ? value.filter(isRecord).map((relation) => relation as StoryBibleEditorRelation)
+    : [];
+}
+
+function requiresExplicitInversePairWrite(
+  previousRelations: readonly StoryBibleEditorRelation[],
+  nextRelations: readonly StoryBibleEditorRelation[]
+): boolean {
+  const previousById = new Map(
+    previousRelations.map((relation) => [relation.relationId, relation])
+  );
+  const nextById = new Map(nextRelations.map((relation) => [relation.relationId, relation]));
+  for (const relationId of new Set([...previousById.keys(), ...nextById.keys()])) {
+    const previous = previousById.get(relationId);
+    const next = nextById.get(relationId);
+    if (previous?.inversePolicy !== "explicit" && next?.inversePolicy !== "explicit") continue;
+    if (previous === undefined || next === undefined) return true;
+    if (
+      previous.sourceId !== next.sourceId ||
+      previous.targetId !== next.targetId ||
+      previous.direction !== next.direction ||
+      previous.status !== next.status ||
+      previous.validFromChapterId !== next.validFromChapterId ||
+      previous.validToChapterId !== next.validToChapterId ||
+      previous.inversePolicy !== next.inversePolicy ||
+      previous.inverseRelationId !== next.inverseRelationId
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function draftHasTimelineEvent(draft: StoryBibleEditorDraft, eventId: string): boolean {
   if (draft.kind !== "timeline") return false;
   const events = draft.details["events"];
-  return Array.isArray(events) && events.some((event) => isRecord(event) && event.id === eventId);
+  return (
+    Array.isArray(events) &&
+    events.some((event) => isRecord(event) && (event.id === eventId || event.eventId === eventId))
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1690,6 +2988,7 @@ function emptyDraft(
     status: "active" as const,
     summary: "",
     aliases: [],
+    relations: [],
     relatedEntityIds: []
   };
   switch (kind) {
@@ -1704,7 +3003,7 @@ function emptyDraft(
         ...common,
         kind,
         assetType: "foreshadow",
-        details: { trackingStatus: "planned", origin: "manual" }
+        details: { trackingStatus: "planned", origin: "manual", milestones: [] }
       };
     case "timeline":
       return { ...common, kind, assetType: "timeline.events", details: {} };
@@ -1712,12 +3011,18 @@ function emptyDraft(
 }
 
 function normalizeDraft(draft: StoryBibleEditorDraft): StoryBibleEditorDraft {
+  const relations = draft.relations === undefined ? undefined : [...draft.relations];
+  const useLegacyRelatedIds =
+    relations === undefined || (relations.length === 0 && draft.relatedEntityIds.length > 0);
   return {
     ...draft,
     title: draft.title.trim(),
     summary: draft.summary.trim(),
     aliases: draft.aliases.map((alias) => alias.trim()).filter((alias) => alias.length > 0),
-    relatedEntityIds: draft.relatedEntityIds.map((id) => id.trim()).filter((id) => id.length > 0)
+    ...(relations === undefined ? {} : { relations }),
+    relatedEntityIds: useLegacyRelatedIds
+      ? draft.relatedEntityIds.map((id) => id.trim()).filter((id) => id.length > 0)
+      : [...new Set(relations.map((relation) => relation.targetId))]
   } as StoryBibleEditorDraft;
 }
 
@@ -1726,6 +3031,9 @@ function validateStoryBibleDraft(
   snapshot: StoryBibleSnapshot,
   saveOptions: StoryBibleSaveOptions | undefined
 ): string | undefined {
+  if (draft.id === undefined && draft.status === "deleted") {
+    return "新资料不能以已删除状态创建。";
+  }
   if (draft.kind === "outline") {
     if (saveOptions?.chapterIds === undefined) {
       return "无法保存大纲：当前章节目录不可用。";
@@ -1800,6 +3108,7 @@ function toStoryAsset(
   }
   const id = draft.id ?? defaultAssetId(draft, createAssetIdentity);
   const details = mergeJsonObjects(existing?.details ?? {}, draft.details);
+  if (draft.assetType === "character") delete details["appearanceChapterIds"];
   const common = {
     ...(existing ?? {}),
     schemaVersion: "1.0",
@@ -1878,6 +3187,10 @@ function defaultAssetId(draft: StoryBibleEditorDraft, createAssetIdentity: () =>
       return `rule_${identity}`;
     case "world.glossary":
       return `term_${identity}`;
+    case "world.item":
+      return `item_${identity}`;
+    case "world.lore":
+      return `lore_${identity}`;
     case "foreshadow":
       return `fsh_${identity}`;
   }
@@ -1890,6 +3203,7 @@ function draftFromEntry(entry: StoryBibleEditorEntry): StoryBibleEditorDraft {
     status: entry.status,
     summary: entry.summary,
     aliases: [...entry.aliases],
+    relations: [...(entry.relations ?? [])],
     relatedEntityIds: [...entry.relatedEntityIds],
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt
@@ -1925,6 +3239,7 @@ function assertDraftPatch<K extends StoryBibleEditorKind>(
     "status",
     "summary",
     "aliases",
+    "relations",
     "relatedEntityIds",
     "details"
   ]);
@@ -1963,7 +3278,9 @@ const WORLD_ASSET_TYPES = new Set<StoryBibleAsset["type"]>([
   "world.location",
   "world.faction",
   "world.rule",
-  "world.glossary"
+  "world.glossary",
+  "world.item",
+  "world.lore"
 ]);
 
 function mergeDraftPatch<K extends StoryBibleEditorKind>(

@@ -4,6 +4,7 @@ import {
   createAgentRunToolCatalogSnapshot,
   computeAgentRunToolCatalogRevision,
   createAgentContextSnapshot,
+  createPackedAgentContextManifest,
   createDefaultCapabilitySnapshot,
   createEffectiveCapabilityState,
   isCapabilityEffective,
@@ -19,6 +20,7 @@ import {
   normalizeAgentRunEvent,
   normalizeAgentRunSnapshot,
   NO_AGENT_PROMPT_CACHE_CAPABILITY,
+  rebuildPackedAgentContextFromManifest,
   validateAgentRunToolCatalogSnapshot,
   validateExternalToolDescriptors,
   validateAgentToolArguments,
@@ -54,6 +56,8 @@ import {
   type CreatePlanArtifactInput,
   type PlanArtifact,
   type PermissionSummary,
+  type PackedAgentContext,
+  type PackedAgentContextRebuildResult,
   type PlanOpenQuestion,
   type PlanStep,
   type PlanTargetRef,
@@ -110,7 +114,9 @@ import {
   createAgentPromptMaterializationArtifact,
   materializeAgentConversationContext,
   materializeAgentPrompt,
+  materializeProjectDataSource,
   materializeAgentRunHistory,
+  packAgentContext,
   parseAgentPromptMaterializationArtifact,
   promptMaterializationArtifactId,
   rematerializeAgentPromptArtifact,
@@ -124,6 +130,7 @@ import {
   type AgentPromptCacheIdentityArtifact
 } from "./agent-prompt-cache.js";
 import {
+  checksumProjectContext,
   createAgentContextSourceMaterializationArtifact,
   parseAgentContextSourceMaterializationArtifact
 } from "./workspace-project-context.js";
@@ -166,6 +173,10 @@ import {
   type AssembledToolCall,
   type ToolCallDispatchFailure
 } from "./agent-tool-call-pipeline.js";
+import type {
+  StoryBibleAgentWriteToolName,
+  StoryBiblePreparedAgentProposal
+} from "./story-bible-agent-tool-session.js";
 
 export type AgentModelMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -390,7 +401,18 @@ export interface AgentFileOperationSessionPort {
     readonly assetType: string;
     readonly content: string;
     readonly dependsOn?: readonly string[];
+    readonly consistencyGroupId?: string;
   }): Result<{ readonly operation: unknown; readonly operationId: string }, UnifiedError>;
+}
+
+export interface AgentStoryBibleToolExecutor {
+  prepare(input: {
+    readonly runId: string;
+    readonly projectId: string;
+    readonly toolName: StoryBibleAgentWriteToolName;
+    readonly arguments: JsonObject;
+    readonly signal: AbortSignal;
+  }): Promise<Result<StoryBiblePreparedAgentProposal, UnifiedError>>;
 }
 
 /** The model facts the preflight resolves server-side from the run draft's `modelProfileId`. */
@@ -424,6 +446,9 @@ export interface AgentRunStartFacts {
   readonly requestedReasoningEffort?: AgentReasoningEffort;
   readonly model: AgentRunStartModelFacts;
   readonly initialContextSources: readonly AgentContextSourceInput[];
+  /** Main-owned immutable context assembled by the matching pre-start preview. */
+  readonly packedContext?: PackedAgentContext;
+  readonly excludedContextSourceIds?: readonly string[];
   /**
    * The provider-aware budget the preflight recalculated for this start (Task 1.4). Its id binds onto
    * the run snapshot so compaction (Task 1.5) works against the same budget the run started with. The
@@ -576,6 +601,7 @@ export interface AnswerAgentUserInputCommand {
 export interface AgentRunReadResult {
   readonly snapshot: AgentRunSnapshot;
   readonly events: readonly AgentRunEvent[];
+  readonly packedContextHistory: AgentRunPackedContextHistory;
   readonly pendingUserInput?: AgentUserInputRequest;
   readonly planArtifact?: PlanArtifact;
   readonly planExecution?: PlanExecutionRecord;
@@ -583,6 +609,13 @@ export interface AgentRunReadResult {
   readonly rollbackReview?: JsonObject;
   readonly diagnostic?: AgentRunErrorRecord;
 }
+
+export type AgentRunPackedContextHistory =
+  | PackedAgentContextRebuildResult
+  | {
+      readonly status: "unavailable";
+      readonly reason: "not_recorded" | "prompt_artifact_missing";
+    };
 
 export interface AgentVersionGroupExecutor {
   apply(input: {
@@ -728,6 +761,8 @@ export interface CreateAgentRunSessionOptions {
   ) => Result<string, UnifiedError>;
   /** Phase B: file lifecycle operation session. When absent, lifecycle tools return UNAVAILABLE. */
   readonly fileOperationSession?: AgentFileOperationSessionPort;
+  /** Structured Story Bible proposals, prepared through the shared candidate validator. */
+  readonly storyBibleToolExecutor?: AgentStoryBibleToolExecutor;
   /**
    * Phase E: external tool executor (plugin: / mcp: namespaced tools).
    * When absent, any external tool call returns AGENT_TOOL_RUNTIME_UNAVAILABLE.
@@ -823,6 +858,37 @@ interface RunRuntime {
   systemGuidanceSource?: AgentContextSourceInput;
 }
 
+function rebuildHistoricalPackedContext(
+  runtime: RunRuntime | undefined
+): AgentRunPackedContextHistory {
+  const manifest = runtime?.contextSnapshot?.packedContextManifest;
+  if (manifest === undefined || manifest === null) {
+    return { status: "unavailable", reason: "not_recorded" };
+  }
+  if (manifest.schemaVersion !== "1.2") {
+    return rebuildPackedAgentContextFromManifest({ manifest, sources: [] });
+  }
+  const artifact = runtime?.promptArtifact;
+  if (artifact === undefined) {
+    return { status: "unavailable", reason: "prompt_artifact_missing" };
+  }
+  if (artifact.packedContextManifestChecksum !== manifest.manifestChecksum) {
+    return { status: "stale", reason: "manifest_mismatch" };
+  }
+  return rebuildPackedAgentContextFromManifest({
+    manifest,
+    sources: artifact.contextSources
+      .filter((source) => source.sourceKind !== "system_guidance")
+      .map((source) => ({
+        refId: source.refId,
+        sourceKind: source.sourceKind,
+        sourceRevision: source.sourceRevision ?? 0,
+        sourceContent: source.content,
+        blockContent: materializeProjectDataSource(source).content
+      }))
+  });
+}
+
 type ToolCallOutcome =
   | "continue"
   | "paused"
@@ -834,6 +900,9 @@ const readToolNames = new Set<string>([
   "list_project_entries",
   "read_chapter",
   "read_story_bible",
+  "describe_story_bible_type",
+  "list_story_bible",
+  "get_story_bible_references",
   "read_project_text"
 ]);
 
@@ -855,6 +924,17 @@ const fileLifecycleToolNames = new Set<string>([
   "create_resource",
   "manage_path"
 ]);
+
+const storyBibleWriteToolNames = new Set<StoryBibleAgentWriteToolName>([
+  "create_story_bible",
+  "patch_story_bible",
+  "set_story_bible_status",
+  "restore_story_bible"
+]);
+
+function isStoryBibleWriteToolName(name: string): name is StoryBibleAgentWriteToolName {
+  return storyBibleWriteToolNames.has(name as StoryBibleAgentWriteToolName);
+}
 
 function isExternalToolName(name: string): boolean {
   return name.startsWith("plugin:") || name.startsWith("mcp:");
@@ -949,6 +1029,7 @@ function isCompatibleEffectiveCapabilityState(
     AgentToolCapabilitySnapshot,
     | "searchEnabled"
     | "fileLifecycleEnabled"
+    | "storyBibleStructuredToolsEnabled"
     | "controlledExecutionEnabled"
     | "gitReadEnabled"
     | "networkReadEnabled"
@@ -957,6 +1038,7 @@ function isCompatibleEffectiveCapabilityState(
   >)[] = [
     "searchEnabled",
     "fileLifecycleEnabled",
+    "storyBibleStructuredToolsEnabled",
     "controlledExecutionEnabled",
     "gitReadEnabled",
     "networkReadEnabled",
@@ -1016,6 +1098,14 @@ function verifyFrozenProviderNameMapping(
 function capabilityNameForTool(descriptor: AgentToolDescriptor): string | undefined {
   const toolId = canonicalToolId(descriptor);
   if (searchToolNames.has(toolId)) return "search";
+  if (
+    isStoryBibleWriteToolName(toolId) ||
+    (readToolNames.has(toolId) &&
+      (toolId === "describe_story_bible_type" ||
+        toolId === "list_story_bible" ||
+        toolId === "get_story_bible_references"))
+  )
+    return "story_bible_structured_tools";
   if (fileLifecycleToolNames.has(toolId)) return "file_lifecycle";
   if (toolId === "run_project_task") return "controlled_execution";
   if (toolId === "git_status" || toolId === "git_diff") return "git_read";
@@ -1451,6 +1541,66 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     });
   }
 
+  /**
+   * Repack from the exact frozen prompt sources. Previously evicted bodies are intentionally not
+   * re-read; their v1.2 manifest records are retained as excluded audit metadata.
+   */
+  function createRuntimePackedContext(
+    snapshot: AgentRunSnapshot,
+    runtime: RunRuntime,
+    createdAt: string,
+    newlyExcludedSources: readonly AgentContextSourceInput[] = []
+  ): Result<PackedAgentContext | undefined, UnifiedError> {
+    const prompt = runtime.promptArtifact;
+    if (prompt === undefined) return ok(undefined);
+    if (snapshot.contextBudgetSnapshotId === null) {
+      return err(
+        applicationError(
+          "AGENT_CONTEXT_BUDGET_INPUTS_INVALID",
+          "The refreshed packed context has no frozen budget identity."
+        )
+      );
+    }
+    const budget = calculateRuntimeBudget(
+      snapshot,
+      runtime,
+      snapshot.contextBudgetSnapshotId,
+      createdAt
+    );
+    if (!budget.ok) return err(budget.error);
+    const priorManifest = runtime.contextSnapshot?.packedContextManifest;
+    const retainedExcluded =
+      priorManifest?.schemaVersion === "1.2"
+        ? priorManifest.sources.filter((source) => source.state === "excluded")
+        : [];
+    try {
+      return ok(
+        packAgentContext({
+          profile: prompt.profile,
+          contextSources: prompt.contextSources,
+          excludedContextSources: newlyExcludedSources,
+          excludedSourceManifests: retainedExcluded,
+          modelProfileId: snapshot.providerCapabilitySnapshot.profileId,
+          usedTokens: budget.value.usedTokens,
+          safeInputBudget: budget.value.safeInputBudget,
+          remainingTokens: budget.value.remainingTokens,
+          precision: budget.value.precision,
+          createdAt,
+          ...(options.contextBudgetEstimator === undefined
+            ? {}
+            : { estimator: options.contextBudgetEstimator })
+        })
+      );
+    } catch {
+      return err(
+        applicationError(
+          "AGENT_CONTEXT_PACKED_CONTEXT_INVALID",
+          "The refreshed packed context could not be reconstructed safely."
+        )
+      );
+    }
+  }
+
   function providerMappingFor(snapshot: AgentRunSnapshot): FrozenProviderNameMapping {
     const existing = providerMappingsByRun.get(snapshot.runId);
     if (existing !== undefined) return existing;
@@ -1781,6 +1931,177 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       if (!written.ok) return err(written.error);
     }
     return ok(undefined);
+  }
+
+  async function refreshContextAfterOwnWrite(input: {
+    readonly runId: string;
+    readonly snapshot: AgentRunSnapshot;
+    readonly runtime: RunRuntime;
+    readonly changeSet: ChangeSet;
+    readonly versionGroup: JsonObject;
+  }): Promise<
+    Result<
+      | undefined
+      | {
+          readonly contextSnapshotId: string;
+          readonly refreshedSourceRefs: readonly string[];
+        },
+      UnifiedError
+    >
+  > {
+    if (input.runtime.contextSnapshot === undefined || options.contextSourceReader === undefined) {
+      return ok(undefined);
+    }
+
+    const expectedChecksumByPath = new Map(
+      input.changeSet.files
+        .filter((file) => file.selected)
+        .map((file) => [file.relativePath, file.candidateChecksum] as const)
+    );
+    const deletedPaths = new Set(
+      (input.changeSet.operations ?? []).flatMap((operation) => {
+        if (operation.selected === false) return [];
+        if (operation.kind === "delete_file") return [operation.relativePath];
+        return operation.kind === "move_file" ? [operation.sourcePath] : [];
+      })
+    );
+    const mutationPaths = new Set([
+      ...versionGroupRelativePaths(input.versionGroup),
+      ...expectedChecksumByPath.keys(),
+      ...deletedPaths
+    ]);
+    if (mutationPaths.size === 0) return ok(undefined);
+
+    const candidates = input.runtime.contextSources.filter(
+      (source) =>
+        source.sourceKind === "workspace_outline" ||
+        (source.relativePath !== undefined && mutationPaths.has(source.relativePath))
+    );
+    if (candidates.length === 0) return ok(undefined);
+
+    const current = await options.contextSourceReader.readCurrentSources({
+      runId: input.runId,
+      sources: candidates,
+      purpose: "refresh"
+    });
+    if (!current.ok) return err(current.error);
+    const currentByRef = new Map(current.value.map((source) => [source.refId, source]));
+    const refreshedRefs = new Set<string>();
+    const refreshedContentByRef = new Map<string, string>();
+    const nextSources = input.runtime.contextSources.flatMap((source) => {
+      const refreshed = currentByRef.get(source.refId);
+      if (refreshed === undefined) return [source];
+      const directPath = source.relativePath;
+      if (refreshed.status === "missing") {
+        if (directPath !== undefined && deletedPaths.has(directPath)) {
+          refreshedRefs.add(source.refId);
+          return [];
+        }
+        return [source];
+      }
+      const expectedChecksum =
+        directPath === undefined ? undefined : expectedChecksumByPath.get(directPath);
+      if (
+        source.sourceKind === "workspace_outline" &&
+        (refreshed.source === undefined ||
+          !workspaceOutlineRefreshIsBoundToChangeSet(
+            source,
+            refreshed.source,
+            mutationPaths,
+            input.changeSet
+          ))
+      ) {
+        // An outline is an aggregate. If a dependency outside this Change Set moved as well, keep
+        // the frozen source so the next drive reports stale instead of absorbing external work.
+        return [source];
+      }
+      if (
+        source.sourceKind !== "workspace_outline" &&
+        (expectedChecksum === undefined ||
+          refreshed.content === undefined ||
+          sha256(refreshed.content) !== expectedChecksum)
+      ) {
+        // The transaction did not prove this exact body. Keep the frozen source so the ordinary
+        // drive-time stale check fails closed for a concurrent/external modification.
+        return [source];
+      }
+      const sourceRevision = (source.sourceRevision ?? 0) + 1;
+      refreshedRefs.add(source.refId);
+      if (refreshed.source !== undefined) {
+        refreshedContentByRef.set(source.refId, refreshed.source.content);
+        return [{ ...refreshed.source, sourceRevision }];
+      }
+      if (refreshed.content !== undefined) {
+        refreshedContentByRef.set(source.refId, refreshed.content);
+        return [{ ...source, content: refreshed.content, sourceRevision }];
+      }
+      return [source];
+    });
+    if (refreshedRefs.size === 0) return ok(undefined);
+
+    const materializations = await persistContextSourceMaterializations(input.runId, nextSources);
+    if (!materializations.ok) return materializations;
+    input.runtime.contextSources.splice(0, input.runtime.contextSources.length, ...nextSources);
+    const baseContextId =
+      options.createContextSnapshotId?.(input.runId) ?? `context_${input.runId}`;
+    const contextSnapshotId = `${baseContextId}_r${input.snapshot.runRevision + 1}`;
+    const createdAt = new Date().toISOString();
+    let packedContext: PackedAgentContext | undefined;
+    if (input.runtime.promptArtifact !== undefined) {
+      const promptSourceRefs = new Set(
+        input.runtime.promptArtifact.contextSources.map((source) => source.refId)
+      );
+      let promptArtifact = rematerializeAgentPromptArtifact(input.runtime.promptArtifact, {
+        contextSnapshotId,
+        contextSources: nextSources.filter((source) => promptSourceRefs.has(source.refId))
+      });
+      replacePromptArtifact(input.runtime, promptArtifact);
+      const packed = createRuntimePackedContext(input.snapshot, input.runtime, createdAt);
+      if (!packed.ok) return packed;
+      packedContext = packed.value;
+      if (packedContext !== undefined) {
+        promptArtifact = rematerializeAgentPromptArtifact(promptArtifact, {
+          contextSnapshotId,
+          contextSources: promptArtifact.contextSources,
+          packedContext
+        });
+        replacePromptArtifact(input.runtime, promptArtifact);
+      }
+      if (options.repository.writePromptMaterialization !== undefined) {
+        const persisted = await options.repository.writePromptMaterialization(
+          input.runId,
+          asJsonObject(promptArtifact)
+        );
+        if (!persisted.ok) return err(persisted.error);
+      }
+    }
+    rewriteBoundContextHistory(
+      input.runtime,
+      refreshedRefs,
+      refreshedContentByRef,
+      new Set(input.runtime.promptArtifact?.contextSources.map((source) => source.refId) ?? [])
+    );
+    input.runtime.contextSnapshot = createAgentContextSnapshot({
+      contextSnapshotId,
+      runId: input.runId,
+      ...contextSnapshotIdentity(
+        input.snapshot,
+        input.runtime.promptArtifact?.stablePrefixChecksum ?? input.snapshot.cachePrefixChecksum
+      ),
+      createdAt,
+      sources: snapshotSourcesFor(input.runtime),
+      excludedSources: input.runtime.contextSnapshot?.excludedSources ?? [],
+      packedContextManifest:
+        packedContext === undefined ? null : createPackedAgentContextManifest(packedContext),
+      ...(promptArtifactBinding(input.runtime) ?? {})
+    });
+    if (options.repository.writeContextSnapshot !== undefined) {
+      const persisted = await options.repository.writeContextSnapshot(
+        asJsonObject(input.runtime.contextSnapshot)
+      );
+      if (!persisted.ok) return err(persisted.error);
+    }
+    return ok({ contextSnapshotId, refreshedSourceRefs: [...refreshedRefs] });
   }
 
   async function hydrateContextSourceMaterializations(
@@ -2632,7 +2953,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         "Review the Agent configuration and retry from the composer."
     });
     let result: AgentRunCommandResult = { ok: false, error: normalized };
-    if (diagnostics !== undefined && command.projectId !== undefined) {
+    if (
+      diagnostics !== undefined &&
+      command.projectId !== undefined &&
+      command.runDraftId !== undefined
+    ) {
       const recorded = await diagnostics.recordPreflightError({
         projectId: command.projectId,
         runDraftId: command.runDraftId,
@@ -2741,32 +3066,34 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const staleRefs = findStaleContextSources(runtime.contextSnapshot, current.value);
       if (staleRefs.length > 0) {
-        const stale = await recordEvent(runId, {
+        // Persist the recovery diagnostic before exposing the actionable stale status. The
+        // renderer enables refresh/exclude as soon as `context_stale` arrives, so publishing that
+        // event first would allow a user command to race `error_recorded` persistence for this run.
+        const recorded = await recordActiveError({
+          runId,
+          status: modelStatusFor(snapshot),
+          error: createUnifiedError({
+            code: "AGENT_CONTEXT_STALE",
+            category: "AgentError",
+            message: "One or more context sources changed after the run snapshot was created.",
+            recoverability: "user-action",
+            suggestedAction: "Refresh or exclude the stale context sources before continuing.",
+            traceId: "agent-run-session",
+            redactedDetail: { staleRefs }
+          }),
+          recoveryState: "awaiting_context_refresh",
+          ...(runtime.currentCheckpointId === undefined
+            ? {}
+            : { checkpointId: runtime.currentCheckpointId }),
+          detail: { staleRefs }
+        });
+        if (recorded?.ok === false) return;
+        await recordEvent(runId, {
           runId,
           status: "awaiting_context_refresh",
           type: "context_stale",
           detail: { staleRefs }
         });
-        if (stale.ok) {
-          await recordActiveError({
-            runId,
-            status: "awaiting_context_refresh",
-            error: createUnifiedError({
-              code: "AGENT_CONTEXT_STALE",
-              category: "AgentError",
-              message: "One or more context sources changed after the run snapshot was created.",
-              recoverability: "user-action",
-              suggestedAction: "Refresh or exclude the stale context sources before continuing.",
-              traceId: "agent-run-session",
-              redactedDetail: { staleRefs }
-            }),
-            recoveryState: "awaiting_context_refresh",
-            ...(runtime.currentCheckpointId === undefined
-              ? {}
-              : { checkpointId: runtime.currentCheckpointId }),
-            detail: { staleRefs }
-          });
-        }
         return;
       }
     }
@@ -3942,6 +4269,226 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         })
       });
       return "continue";
+    }
+
+    if (isStoryBibleWriteToolName(dispatchName)) {
+      if (options.storyBibleToolExecutor === undefined || options.changeSetSession === undefined) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "AGENT_CHANGE_SET_UNAVAILABLE",
+          "Structured Story Bible operations are unavailable for this project."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const prepared = await options.storyBibleToolExecutor.prepare({
+        runId,
+        projectId: snapshot.projectId,
+        toolName: dispatchName,
+        arguments: dispatchArguments,
+        signal: runtime.controller.signal
+      });
+      if (!isCurrent(runId, runtime.generation)) return "terminal";
+      if (!prepared.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          prepared.error.code,
+          prepared.error.message,
+          prepared.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      if (
+        prepared.value.kind === "replace" &&
+        hasDirtyProposalTarget(runtime.contextSources, undefined, undefined, prepared.value.assetId)
+      ) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "CHANGE_SET_DIRTY_TARGET",
+          "Save and refresh the dirty Story Bible asset before creating a Change Set."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const contextSnapshotId =
+        runtime.contextSnapshot?.contextSnapshotId ??
+        options.createContextSnapshotId?.(runId) ??
+        `context_${runId}`;
+      if (runtime.contextSnapshot === undefined) {
+        runtime.contextSnapshot = createAgentContextSnapshot({
+          contextSnapshotId,
+          runId,
+          ...contextSnapshotIdentity(snapshot),
+          createdAt: new Date().toISOString(),
+          sources: snapshotSourcesFor(runtime),
+          ...(promptArtifactBinding(runtime) ?? {})
+        });
+        if (options.repository.writeContextSnapshot !== undefined) {
+          const persistedContext = await options.repository.writeContextSnapshot(
+            asJsonObject(runtime.contextSnapshot)
+          );
+          if (!persistedContext.ok) throw persistedContext.error;
+        }
+      }
+      await recordEvent(runId, {
+        runId,
+        status: "staging_changes",
+        type: "tool_started",
+        snapshotPatch: { contextSnapshotId },
+        detail: { toolCallId: call.toolCallId, toolName: descriptor.name }
+      });
+      const checkpointId =
+        runtime.currentCheckpointId ?? `checkpoint_${runId}_r${snapshot.runRevision + 1}`;
+      let proposed: Awaited<ReturnType<ChangeSetSession["proposeStoryBibleWrite"]>>;
+      if (prepared.value.kind === "create") {
+        if (options.fileOperationSession === undefined) {
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            "AGENT_CHANGE_SET_UNAVAILABLE",
+            "Story Bible creation is unavailable for this project."
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        const operation = options.fileOperationSession.proposeStoryBibleWrite({
+          toolCallId: call.toolCallId,
+          assetType: prepared.value.assetType,
+          content: prepared.value.content,
+          ...(prepared.value.consistencyGroupId === undefined
+            ? {}
+            : { consistencyGroupId: prepared.value.consistencyGroupId }),
+          ...(readStringArray(dispatchArguments, "dependsOn").length === 0
+            ? {}
+            : { dependsOn: readStringArray(dispatchArguments, "dependsOn") })
+        });
+        if (!operation.ok) {
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            operation.error.code,
+            operation.error.message,
+            operation.error
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        const operationInput = {
+          runId,
+          projectId: snapshot.projectId,
+          checkpointId,
+          contextSnapshotId,
+          writePolicy: snapshot.writePolicy,
+          toolCallId: call.toolCallId,
+          operation: operation.value.operation as ChangeSetOperation
+        };
+        const authorized = authorizeProposalIfPreapproved(operationInput);
+        try {
+          proposed = await options.changeSetSession.proposeOperation(operationInput);
+        } finally {
+          if (authorized) revokeAgentRunProposalAuthorization(operationInput);
+        }
+      } else {
+        if (prepared.value.baseContent === undefined || prepared.value.baseChecksum === undefined) {
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            "STORY_BIBLE_PREPARED_PROPOSAL_INVALID",
+            "The prepared Story Bible replacement is missing its base binding."
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        const proposalInput = {
+          runId,
+          projectId: snapshot.projectId,
+          checkpointId,
+          contextSnapshotId,
+          writePolicy: snapshot.writePolicy,
+          assetId: prepared.value.assetId,
+          range: {
+            unit: "character" as const,
+            start: 0,
+            end: prepared.value.baseContent.length
+          },
+          baseHash: prepared.value.baseChecksum,
+          replacement: prepared.value.content,
+          repositoryPrepared: true,
+          ...(prepared.value.storyBibleStatusProof === undefined
+            ? {}
+            : { storyBibleStatusProof: prepared.value.storyBibleStatusProof }),
+          ...(prepared.value.consistencyGroupId === undefined
+            ? {}
+            : { consistencyGroupId: prepared.value.consistencyGroupId })
+        };
+        const authorized = authorizeProposalIfPreapproved(proposalInput);
+        try {
+          proposed = await options.changeSetSession.proposeStoryBibleWrite(proposalInput);
+        } finally {
+          if (authorized) revokeAgentRunProposalAuthorization(proposalInput);
+        }
+      }
+      if (!proposed.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          proposed.error.code,
+          proposed.error.message,
+          proposed.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      runtime.consecutiveToolFailures = 0;
+      delete runtime.lastFailedToolCall;
+      runtime.changeSet = proposed.value;
+      runtime.messages.push({
+        role: "tool",
+        toolCallId: call.toolCallId,
+        content: JSON.stringify({
+          ok: true,
+          status: "awaiting_approval",
+          changeSetId: proposed.value.changeSetId,
+          revision: proposed.value.revision,
+          checksum: proposed.value.checksum,
+          proposal: {
+            action: prepared.value.action,
+            assetId: prepared.value.assetId,
+            assetType: prepared.value.assetType,
+            baseRevision: prepared.value.baseRevision ?? null,
+            nextRevision: prepared.value.nextRevision,
+            changedPaths: prepared.value.changedPaths,
+            fieldDiffs: prepared.value.fieldDiffs,
+            rebased: prepared.value.rebased,
+            ...(prepared.value.referenceImpact === undefined
+              ? {}
+              : { referenceImpact: prepared.value.referenceImpact })
+          }
+        })
+      });
+      await recordEvent(runId, {
+        runId,
+        status: "staging_changes",
+        type: "tool_completed",
+        detail: {
+          toolCallId: call.toolCallId,
+          toolName: descriptor.name,
+          assetId: prepared.value.assetId,
+          summary: `Prepared Story Bible Change Set revision ${proposed.value.revision}; target files are unchanged.`
+        }
+      });
+      return "staged";
     }
 
     // ── Phase B: file lifecycle tools ────────────────────────────────────────
@@ -5121,6 +5668,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...(startInput.initialContextSources === undefined
           ? {}
           : { contextSources: startInput.initialContextSources }),
+        ...(startInput.packedContext === undefined
+          ? {}
+          : { packedContext: startInput.packedContext }),
         conversationSummaryMessages: materializeAgentConversationContext(conversationContext)
       });
       const promptCacheCapability =
@@ -5200,6 +5750,20 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       if (!startBudget.ok) {
         await cancelConversationStart();
         return recordPreflightFailure(command, startBudget.error, preflight.value.model);
+      }
+      if (
+        startInput.packedContext !== undefined &&
+        startInput.packedContext.tokenStats.pinnedTokens > startBudget.value.safeInputBudget
+      ) {
+        await cancelConversationStart();
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_CONTEXT_FIXED_BUDGET_EXCEEDED",
+            "The selected fixed context exceeds the current model input budget."
+          ),
+          preflight.value.model
+        );
       }
       const catalogStartInput = {
         ...startInput,
@@ -5313,6 +5877,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         toolCatalogRevision: newRunCatalogRevision,
         userRequest: startInput.userRequest,
         contextSources: initialContextSources,
+        ...(startInput.packedContext === undefined
+          ? {}
+          : { packedContext: startInput.packedContext }),
         conversationSummaryMessages: materializeAgentConversationContext(conversationContext)
       });
       runtime.promptArtifact = promptArtifact;
@@ -5322,6 +5889,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...contextSnapshotIdentity(result.value),
         createdAt: new Date().toISOString(),
         sources: snapshotSourcesFor(runtime),
+        excludedSources: startInput.excludedContextSourceIds ?? [],
+        packedContextManifest:
+          startInput.packedContext === undefined
+            ? null
+            : createPackedAgentContextManifest(startInput.packedContext),
         ...(options.repository.writePromptMaterialization === undefined
           ? {}
           : promptArtifactBinding(runtime))
@@ -5593,7 +6165,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       rewriteBoundContextHistory(runtime, evictedRefs);
       runtime.contextSnapshot = nextContextSnapshot;
 
-      const receipt = await persistCommandReceipt(command.runId, scopeKey, command.commandId, completed);
+      const receipt = await persistCommandReceipt(
+        command.runId,
+        scopeKey,
+        command.commandId,
+        completed
+      );
       if (resumeAfterBudgetPressure) scheduleBudgetPressureResume(command.runId, runtime);
       return receipt;
     },
@@ -6761,11 +7338,23 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const baseContextId =
         options.createContextSnapshotId?.(command.runId) ?? `context_${command.runId}`;
       const contextSnapshotId = `${baseContextId}_r${snapshot.runRevision + 1}`;
+      const createdAt = new Date().toISOString();
+      const newlyExcludedSources =
+        command.decision === "exclude"
+          ? refreshSources.filter((source) => selectedRefs.has(source.refId))
+          : [];
+      const excludedSourceIds = [
+        ...new Set([
+          ...(runtime.contextSnapshot?.excludedSources ?? []),
+          ...(command.decision === "exclude" ? [...selectedRefs] : [])
+        ])
+      ];
+      let packedContext: PackedAgentContext | undefined;
       if (runtime.promptArtifact !== undefined) {
         const promptSourceRefs = new Set(
           runtime.promptArtifact.contextSources.map((source) => source.refId)
         );
-        const nextPromptArtifact = rematerializeAgentPromptArtifact(runtime.promptArtifact, {
+        let nextPromptArtifact = rematerializeAgentPromptArtifact(runtime.promptArtifact, {
           contextSnapshotId,
           contextSources: nextSources.filter(
             (source) =>
@@ -6774,6 +7363,22 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           )
         });
         replacePromptArtifact(runtime, nextPromptArtifact);
+        const packed = createRuntimePackedContext(
+          snapshot,
+          runtime,
+          createdAt,
+          newlyExcludedSources
+        );
+        if (!packed.ok) return packed;
+        packedContext = packed.value;
+        if (packedContext !== undefined) {
+          nextPromptArtifact = rematerializeAgentPromptArtifact(nextPromptArtifact, {
+            contextSnapshotId,
+            contextSources: nextPromptArtifact.contextSources,
+            packedContext
+          });
+          replacePromptArtifact(runtime, nextPromptArtifact);
+        }
         if (options.repository.writePromptMaterialization !== undefined) {
           const materializationPersisted = await options.repository.writePromptMaterialization(
             command.runId,
@@ -6805,10 +7410,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           snapshot,
           runtime.promptArtifact?.stablePrefixChecksum ?? snapshot.cachePrefixChecksum
         ),
-        createdAt: new Date().toISOString(),
+        createdAt,
         sources: snapshotSourcesFor(runtime),
         ...(promptArtifactBinding(runtime) ?? {}),
-        excludedSources: command.decision === "exclude" ? [...selectedRefs] : []
+        excludedSources: excludedSourceIds,
+        packedContextManifest:
+          packedContext === undefined ? null : createPackedAgentContextManifest(packedContext)
       });
       if (options.repository.writeContextSnapshot !== undefined) {
         const persistedContext = await options.repository.writeContextSnapshot(
@@ -7256,15 +7863,47 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             versionGroupId
           })
         });
+        const postWriteSnapshot = coordinator.readSnapshot(command.runId) ?? snapshot;
+        const contextRefresh = await refreshContextAfterOwnWrite({
+          runId: command.runId,
+          snapshot: postWriteSnapshot,
+          runtime,
+          changeSet,
+          versionGroup: applied.value
+        });
         const writeApplied = await recordEvent(command.runId, {
           runId: command.runId,
-          status: runtime.stopRequested ? "stopping_after_transaction" : "executing_model",
+          status:
+            !contextRefresh.ok || runtime.stopRequested
+              ? "stopping_after_transaction"
+              : "executing_model",
           type: "write_applied",
           snapshotPatch: {
             pendingChangeSetId: null,
             pendingChangeSetRevision: null,
             pendingChangeSetChecksum: null,
-            versionGroupId
+            versionGroupId,
+            ...(contextRefresh.ok && contextRefresh.value !== undefined
+              ? {
+                  contextSnapshotId: contextRefresh.value.contextSnapshotId,
+                  conventionsArtifactId:
+                    runtime.contextSources.find(
+                      (source) => source.materialization?.kind === "project_conventions"
+                    )?.materialization?.artifactId ?? null,
+                  cachePrefixChecksum:
+                    runtime.promptArtifact?.stablePrefixChecksum ??
+                    postWriteSnapshot.cachePrefixChecksum,
+                  promptCacheIdentityChecksum: nextPromptCacheIdentityChecksum(
+                    postWriteSnapshot,
+                    runtime.promptArtifact?.stablePrefixChecksum ??
+                      postWriteSnapshot.cachePrefixChecksum
+                  ),
+                  promptCacheStablePrefixMessageCount:
+                    runtime.promptArtifact === undefined
+                      ? postWriteSnapshot.promptCacheStablePrefixMessageCount
+                      : 1 + runtime.promptArtifact.stablePrefixMessages.length
+                }
+              : {})
           },
           detail: {
             versionGroupId,
@@ -7272,6 +7911,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             changeSetId: changeSet.changeSetId,
             revision: changeSet.revision,
             checksum: changeSet.checksum,
+            ...(contextRefresh.ok && contextRefresh.value !== undefined
+              ? { refreshedContextSourceRefs: [...contextRefresh.value.refreshedSourceRefs] }
+              : {}),
             ...(synchronizationStatus === undefined
               ? {}
               : {
@@ -7281,14 +7923,25 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           }
         });
         const finalResult =
-          writeApplied.ok && runtime.stopRequested
+          writeApplied.ok && !contextRefresh.ok
             ? await recordEvent(command.runId, {
                 runId: command.runId,
-                status: "cancelled",
-                type: "run_cancelled",
-                detail: { reason: "stop_requested_during_write" }
+                status: "failed",
+                type: "run_failed",
+                detail: {
+                  code: contextRefresh.error.code,
+                  message:
+                    "The write was applied, but its bound Agent context could not be refreshed safely."
+                }
               })
-            : writeApplied;
+            : writeApplied.ok && runtime.stopRequested
+              ? await recordEvent(command.runId, {
+                  runId: command.runId,
+                  status: "cancelled",
+                  type: "run_cancelled",
+                  detail: { reason: "stop_requested_during_write" }
+                })
+              : writeApplied;
         const finalReceipt = await persistCommandReceipt(
           command.runId,
           command.projectId,
@@ -7423,6 +8076,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       return ok({
         snapshot,
         events: coordinator.readEvents(runId),
+        packedContextHistory: rebuildHistoricalPackedContext(runtime),
         ...(runtime?.pendingUserInput === undefined
           ? {}
           : { pendingUserInput: runtime.pendingUserInput }),
@@ -7730,6 +8384,214 @@ function versionGroupRelativePaths(value: JsonObject): string[] {
   return [...new Set(paths)];
 }
 
+function workspaceOutlineRefreshIsBoundToChangeSet(
+  previous: AgentContextSourceInput,
+  refreshed: AgentContextSourceInput,
+  mutationPaths: ReadonlySet<string>,
+  changeSet: ChangeSet
+): boolean {
+  const previousMaterialization = previous.materialization;
+  const refreshedMaterialization = refreshed.materialization;
+  if (
+    previousMaterialization?.kind !== "workspace_outline" ||
+    refreshedMaterialization?.kind !== "workspace_outline"
+  ) {
+    return false;
+  }
+  const previousManifest = previousMaterialization.dependencyManifest;
+  const refreshedManifest = refreshedMaterialization.dependencyManifest;
+  if (
+    previousMaterialization.readerVersion !== refreshedMaterialization.readerVersion ||
+    JSON.stringify(previousMaterialization.sourceIdentity) !==
+      JSON.stringify(refreshedMaterialization.sourceIdentity) ||
+    previousManifest["profileId"] !== "writing" ||
+    refreshedManifest["profileId"] !== "writing" ||
+    !hasCompleteOutlineDependencyProof(previousManifest) ||
+    !hasCompleteOutlineDependencyProof(refreshedManifest)
+  ) {
+    return false;
+  }
+  const previousDependency = readObject(previousManifest, "dependency");
+  const refreshedDependency = readObject(refreshedManifest, "dependency");
+  if (
+    previousDependency?.["kind"] !== "writing_indexes" ||
+    refreshedDependency?.["kind"] !== "writing_indexes"
+  ) {
+    return false;
+  }
+  const previousEntries = previousMaterialization.dependencyEntries;
+  const refreshedEntries = refreshedMaterialization.dependencyEntries;
+  if (
+    previousEntries === undefined ||
+    refreshedEntries === undefined ||
+    !isChecksum(previousMaterialization.dependencyEntriesChecksum) ||
+    !isChecksum(refreshedMaterialization.dependencyEntriesChecksum) ||
+    checksumProjectContext(previousEntries) !== previousMaterialization.dependencyEntriesChecksum ||
+    checksumProjectContext(refreshedEntries) !== refreshedMaterialization.dependencyEntriesChecksum
+  ) {
+    return false;
+  }
+  const entriesByPath = (entries: typeof previousEntries) => {
+    const byPath = new Map<string, (typeof entries)[number]>();
+    for (const entry of entries) {
+      if (entry.relativePath === undefined) return undefined;
+      const path = entry.relativePath.replaceAll("\\", "/");
+      if (path.length === 0 || byPath.has(path)) return undefined;
+      byPath.set(path, entry);
+    }
+    return byPath;
+  };
+  const previousByPath = entriesByPath(previousEntries);
+  const refreshedByPath = entriesByPath(refreshedEntries);
+  if (previousByPath === undefined || refreshedByPath === undefined) return false;
+  const normalizedMutationPaths = new Set(
+    [...mutationPaths].map((path) => path.replaceAll("\\", "/"))
+  );
+  const chapterMutation = [...normalizedMutationPaths].some((path) => path.startsWith("chapters/"));
+  const storyBibleMutation = [...normalizedMutationPaths].some(isStoryBibleOutlinePath);
+  if (
+    (!chapterMutation &&
+      dependencyBucketChanged(previousDependency, refreshedDependency, [
+        "chapterIndexRevision",
+        "chapterIndexChecksum"
+      ])) ||
+    (!storyBibleMutation &&
+      dependencyBucketChanged(previousDependency, refreshedDependency, [
+        "storyBibleIndexRevision",
+        "storyBibleIndexChecksum"
+      ])) ||
+    degradedBucketChangedWithoutMutation(
+      previousDependency,
+      refreshedDependency,
+      chapterMutation,
+      storyBibleMutation
+    )
+  ) {
+    return false;
+  }
+  const expectedEntries = expectedChangedOutlineEntries(changeSet, previousByPath);
+  const allPaths = new Set([...previousByPath.keys(), ...refreshedByPath.keys()]);
+  let entriesChanged = false;
+  for (const path of allPaths) {
+    if (sameOptionalOutlineEntry(previousByPath.get(path), refreshedByPath.get(path))) {
+      continue;
+    }
+    entriesChanged = true;
+    if (!normalizedMutationPaths.has(path)) return false;
+    if (!expectedEntries.has(path)) return false;
+    const expected = expectedEntries.get(path);
+    if (
+      expected === null
+        ? refreshedByPath.has(path)
+        : !sameOptionalOutlineEntry(expected, refreshedByPath.get(path))
+    ) {
+      return false;
+    }
+  }
+  const aggregateChanged =
+    previousMaterialization.dependencyRevisionChecksum !==
+    refreshedMaterialization.dependencyRevisionChecksum;
+  // The manifest aggregate is derived from this complete entry proof. Accepting a change on only
+  // one side would mean the proof and the authoritative dependency identity disagree.
+  return aggregateChanged === entriesChanged;
+}
+
+function sameOptionalOutlineEntry(previous: unknown, refreshed: unknown): boolean {
+  if (previous === undefined || refreshed === undefined) return previous === refreshed;
+  return checksumProjectContext(previous) === checksumProjectContext(refreshed);
+}
+
+function hasCompleteOutlineDependencyProof(manifest: JsonObject): boolean {
+  const reasons = manifest["truncationReasons"];
+  if (!Array.isArray(reasons) || reasons.some((reason) => reason !== "max_tokens")) return false;
+  return reasons.length === 0 ? manifest["truncated"] === false : manifest["truncated"] === true;
+}
+
+function dependencyBucketChanged(
+  previous: JsonObject,
+  refreshed: JsonObject,
+  keys: readonly string[]
+): boolean {
+  return keys.some(
+    (key) => checksumProjectContext(previous[key]) !== checksumProjectContext(refreshed[key])
+  );
+}
+
+function degradedBucketChangedWithoutMutation(
+  previous: JsonObject,
+  refreshed: JsonObject,
+  chapterMutation: boolean,
+  storyBibleMutation: boolean
+): boolean {
+  const degraded = (value: JsonObject) =>
+    new Set(
+      Array.isArray(value["degradedDependencies"])
+        ? value["degradedDependencies"].filter(
+            (entry): entry is string => entry === "chapters" || entry === "story_bible"
+          )
+        : []
+    );
+  const before = degraded(previous);
+  const after = degraded(refreshed);
+  return (
+    (!chapterMutation && before.has("chapters") !== after.has("chapters")) ||
+    (!storyBibleMutation && before.has("story_bible") !== after.has("story_bible"))
+  );
+}
+
+function isStoryBibleOutlinePath(path: string): boolean {
+  return /^(characters|world|outline|foreshadows|timeline)\//u.test(path);
+}
+
+function expectedChangedOutlineEntries(
+  changeSet: ChangeSet,
+  previousByPath: ReadonlyMap<string, { readonly relativePath?: string }>
+): ReadonlyMap<string, unknown> {
+  const expected = new Map<string, unknown>();
+  const bindContent = (path: string, content: string) => {
+    const normalized = path.replaceAll("\\", "/");
+    const entry = storyBibleEntryFromCandidate(normalized, content);
+    if (entry !== undefined) expected.set(normalized, entry);
+  };
+  for (const file of changeSet.files.filter((candidate) => candidate.selected)) {
+    bindContent(file.relativePath, file.candidateContent);
+  }
+  for (const operation of changeSet.operations ?? []) {
+    if (operation.selected === false) continue;
+    if (operation.kind === "create_file") bindContent(operation.relativePath, operation.content);
+    if (operation.kind === "delete_file") expected.set(operation.relativePath, null);
+    if (operation.kind === "move_file") {
+      expected.set(operation.sourcePath, null);
+      const previous = previousByPath.get(operation.sourcePath);
+      if (previous !== undefined) {
+        expected.set(operation.targetPath, { ...previous, relativePath: operation.targetPath });
+      }
+    }
+  }
+  return expected;
+}
+
+function storyBibleEntryFromCandidate(relativePath: string, content: string): unknown | undefined {
+  if (!isStoryBibleOutlinePath(relativePath)) return undefined;
+  try {
+    const value = JSON.parse(content) as unknown;
+    if (!isJsonObject(value)) return undefined;
+    const id = readString(value, "id");
+    const title = readString(value, "title");
+    const assetType = readString(value, "type");
+    if (id === undefined || title === undefined || assetType === undefined) return undefined;
+    return {
+      kind: "story_bible_asset",
+      id,
+      label: title,
+      relativePath,
+      assetType
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -7893,7 +8755,11 @@ function validateProjectResourceInvocation(
       toolName === "propose_chapter_write" ||
       toolName === "propose_story_bible_edit" ||
       toolName === "propose_chapter_create" ||
-      toolName === "propose_story_bible_write")
+      toolName === "propose_story_bible_write" ||
+      toolName === "describe_story_bible_type" ||
+      toolName === "list_story_bible" ||
+      toolName === "get_story_bible_references" ||
+      isStoryBibleWriteToolName(toolName))
   ) {
     return err(
       applicationError(
@@ -8132,7 +8998,8 @@ function parseContextSnapshot(
     (value["schemaVersion"] !== "1.0" &&
       value["schemaVersion"] !== "1.1" &&
       value["schemaVersion"] !== "1.2" &&
-      value["schemaVersion"] !== "1.3") ||
+      value["schemaVersion"] !== "1.3" &&
+      value["schemaVersion"] !== "1.4") ||
     value["runId"] !== run.runId ||
     value["contextSnapshotId"] !== run.contextSnapshotId ||
     typeof value["createdAt"] !== "string" ||
@@ -8142,13 +9009,37 @@ function parseContextSnapshot(
   ) {
     return undefined;
   }
-  return normalizeAgentContextSnapshot(value, {
+  const fallback = {
     scope: run.scope,
     contextProfileId: run.contextProfileId,
     profileVersion: run.profileVersion,
     guidanceTemplateChecksum: run.guidanceTemplateChecksum,
     stablePrefixChecksum: run.cachePrefixChecksum
-  });
+  };
+  try {
+    return normalizeAgentContextSnapshot(value, fallback);
+  } catch {
+    // A corrupt audit manifest must make the historical projection stale, not prevent recovery of
+    // otherwise-valid frozen prompt/source state. Normalize the structural snapshot and preserve the
+    // untrusted manifest for rebuildPackedAgentContextFromManifest to classify.
+    if (value["schemaVersion"] !== "1.4" || value["packedContextManifest"] === undefined) {
+      return undefined;
+    }
+    try {
+      const normalized = normalizeAgentContextSnapshot(
+        { ...value, packedContextManifest: null },
+        fallback
+      );
+      return {
+        ...normalized,
+        packedContextManifest: value[
+          "packedContextManifest"
+        ] as AgentContextSnapshot["packedContextManifest"]
+      };
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 function asJsonObject(value: object): JsonObject {
@@ -8763,6 +9654,10 @@ function resolveStartInput(
       : { reasoningEffort: reasoning.value.reasoningEffort }),
     ...(command.limits === undefined ? {} : { limits: command.limits }),
     initialContextSources,
+    ...(facts.packedContext === undefined ? {} : { packedContext: facts.packedContext }),
+    ...(facts.excludedContextSourceIds === undefined
+      ? {}
+      : { excludedContextSourceIds: facts.excludedContextSourceIds }),
     ...(facts.contextBudgetSnapshotId === undefined
       ? {}
       : { contextBudgetSnapshotId: facts.contextBudgetSnapshotId }),

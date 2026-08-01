@@ -87,6 +87,7 @@ describe("Electron security baseline", () => {
       "application:agent-run:update-context-draft",
       "application:agent-run:refresh-context-draft",
       "application:agent-run:preview-context-budget",
+      "application:agent-run:preview-packed-context",
       "application:agent-run:compact-context",
       "application:agent-run:start",
       "application:agent-run:stop",
@@ -113,6 +114,7 @@ describe("Electron security baseline", () => {
       "application:chapter:load",
       "application:chapter:edit",
       "application:chapter:save",
+      "application:chapter:set-status",
       "application:chapter:list-versions",
       "application:chapter:preview-version",
       "application:chapter:restore-version",
@@ -122,16 +124,34 @@ describe("Electron security baseline", () => {
       "application:settings:save-model-profile",
       "application:settings:save-model-secret",
       "application:settings:test-model-profile",
+      "application:settings:read-story-analysis",
+      "application:settings:save-story-analysis",
       "application:settings:list-agent-usage",
       "application:settings:clear-agent-usage",
       "application:plugins:load-registry",
       "application:plugins:set-enabled",
       "application:story-bible:load",
+      "application:story-bible:read-asset",
+      "application:story-bible:create-asset",
+      "application:story-bible:save-asset-candidate",
+      "application:story-bible:prepare-explicit-inverse-change",
+      "application:story-bible:apply-explicit-inverse-change",
+      "application:story-bible:cancel-explicit-inverse-change",
+      "application:story-bible:save-status-transition",
+      "application:story-bible:get-references",
+      "application:story-bible:resolve-restore-status",
       "application:story-bible:save-asset",
       "application:story-bible:save-memory",
       "application:story-bible:build-consistency-report",
       "application:story-bible:build-context-candidates",
       "application:story-bible:detect-foreshadows",
+      "application:story-analysis:analyze",
+      "application:story-analysis:list",
+      "application:story-analysis:read",
+      "application:story-analysis:transition",
+      "application:story-analysis:refresh-staleness",
+      "application:story-analysis:prepare-application",
+      "application:story-analysis:apply-application",
       "application:studio:load-config-asset",
       "application:studio:save-config-asset",
       "application:studio:restore-config-version",
@@ -159,6 +179,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:agent-run:decide-tool-approval")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:read-permission-summary")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:decide-plan-revision")).toBe(true);
+    expect(isApplicationIpcChannel("application:agent-run:preview-packed-context")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:undo")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-conversation:search")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-conversation:delete")).toBe(true);
@@ -175,6 +196,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:settings:list-agent-usage")).toBe(true);
     expect(isApplicationIpcChannel("application:story-bible:load")).toBe(true);
     expect(isApplicationIpcChannel("application:story-bible:detect-foreshadows")).toBe(true);
+    expect(isApplicationIpcChannel("application:story-analysis:transition")).toBe(true);
     expect(isApplicationIpcChannel("application:studio:save-config-asset")).toBe(true);
     expect(isApplicationIpcChannel("application:preferences:load")).toBe(true);
     expect(isApplicationIpcChannel("fs:read-file")).toBe(false);
@@ -199,6 +221,14 @@ describe("Electron security baseline", () => {
     await api.workspace.chooseTextFile();
     await api.workspace.createProjectConventions();
     await api.workspace.updateContextPolicy("disable_conventions");
+    await api.workspace.updateContextPolicy({
+      action: "set_source_preference",
+      preference: {
+        refId: "story_bible:chr_hero",
+        decision: "pinned",
+        priority: 80
+      }
+    });
     await api.creativeProjectFiles.refresh({
       projectId: "project_security",
       workspaceId: "workspace_security"
@@ -264,8 +294,17 @@ describe("Electron security baseline", () => {
       bindingId: "binding_security",
       decision: "reject"
     });
+    await api.agentRuns.previewPackedContext({
+      projectId: "project_security",
+      conversationId: "conversation_security",
+      commandId: "preview_packed_security",
+      runDraftId: "run_draft_security",
+      expectedDraftRevision: 1,
+      runDraftChecksum: "a".repeat(64)
+    });
     await api.chapter.edit("updated chapter body");
     await api.chapter.save();
+    await api.chapter.saveWithStatus("done");
     await api.chapter.listVersions();
     await api.chapter.previewVersion("ver_01");
     await api.chapter.restoreVersion("ver_01");
@@ -283,6 +322,8 @@ describe("Electron security baseline", () => {
       timeoutMs: 60000
     });
     await api.settings.testModelProfileConnection("model_default");
+    await api.settings.readStoryAnalysisSettings();
+    await api.settings.saveStoryAnalysisSettings({ completionMode: "background-review" });
     await api.settings.listAgentUsage({
       range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" }
     });
@@ -317,6 +358,17 @@ describe("Electron security baseline", () => {
     });
     await api.storyBible.buildContextCandidates({ includeStatuses: ["active"] });
     await api.storyBible.detectForeshadows({ chapterIds: ["ch_opening"] });
+    const storyAnalysisWorkflowRunId = `wfrun_story_${"a".repeat(32)}`;
+    await api.storyAnalysis.analyzeChapter({ chapterId: "ch_opening" });
+    await api.storyAnalysis.list();
+    await api.storyAnalysis.read(storyAnalysisWorkflowRunId);
+    await api.storyAnalysis.transitionRecord({
+      workflowRunId: storyAnalysisWorkflowRunId,
+      recordId: `sug_${"b".repeat(32)}`,
+      expectedRevision: 1,
+      transition: { status: "accepted" }
+    });
+    await api.storyAnalysis.refreshStaleness(storyAnalysisWorkflowRunId);
     await api.studio.loadConfigAsset("workflow", "wf_review_chapter");
     await api.studio.saveConfigAsset({
       assetType: "workflow",
@@ -344,6 +396,7 @@ describe("Electron security baseline", () => {
       "application:workspace:choose-text-file",
       "application:workspace:create-project-conventions",
       "application:workspace:update-context-policy",
+      "application:workspace:update-context-policy",
       "application:creative-project-files:refresh",
       "application:creative-project-files:read-text-file",
       "application:creative-project-files:save-text-file",
@@ -364,8 +417,10 @@ describe("Electron security baseline", () => {
       "application:ai:list-workflow-runs",
       "application:ai:read-workflow-run",
       "application:agent-run:decide-tool-approval",
+      "application:agent-run:preview-packed-context",
       "application:chapter:edit",
       "application:chapter:save",
+      "application:chapter:set-status",
       "application:chapter:list-versions",
       "application:chapter:preview-version",
       "application:chapter:restore-version",
@@ -374,6 +429,8 @@ describe("Electron security baseline", () => {
       "application:settings:discover-models",
       "application:settings:save-model-profile",
       "application:settings:test-model-profile",
+      "application:settings:read-story-analysis",
+      "application:settings:save-story-analysis",
       "application:settings:list-agent-usage",
       "application:settings:clear-agent-usage",
       "application:plugins:load-registry",
@@ -383,6 +440,11 @@ describe("Electron security baseline", () => {
       "application:story-bible:save-memory",
       "application:story-bible:build-context-candidates",
       "application:story-bible:detect-foreshadows",
+      "application:story-analysis:analyze",
+      "application:story-analysis:list",
+      "application:story-analysis:read",
+      "application:story-analysis:transition",
+      "application:story-analysis:refresh-staleness",
       "application:studio:load-config-asset",
       "application:studio:save-config-asset",
       "application:studio:restore-config-version",
