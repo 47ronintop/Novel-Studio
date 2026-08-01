@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
+import { validateStoryBibleV11Asset } from "@novel-studio/schemas";
 import {
   createProjectPathGuard,
   verifyProjectStoragePath,
@@ -619,11 +620,15 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
     const operationIds = new Set(journal.operations.map((entry) => entry.operationId));
     if (operationIds.size !== journal.operations.length) return false;
     if (
-      journal.approvalSource === "user_preapproved_run" &&
+      (journal.approvalSource === "user_preapproved_run" ||
+        journal.approvalSource === "project_safe_auto_update") &&
       journal.operations.some((entry) => isDestructiveOperation(entry.operation.kind))
     ) {
       return false;
     }
+  }
+  if (journal.approvalSource === "project_safe_auto_update" && !isValidSafeAutoJournal(journal)) {
+    return false;
   }
   if (!hasValidMutationOrder(journal)) return false;
   const writeIds = new Set(journal.entries.map((entry) => entry.writeId));
@@ -632,7 +637,7 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
 
 function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): boolean {
   const receipt = journal.storyBibleReceipt;
-  if (receipt === undefined) return true;
+  if (receipt === undefined) return journal.approvalSource !== "project_safe_auto_update";
   if (
     journal.kind !== "apply" ||
     journal.schemaVersion !== "1.1" ||
@@ -642,6 +647,7 @@ function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): bo
     receipt.changeSetId !== journal.changeSetId ||
     receipt.consistencyGroupId !== journal.consistencyGroupId ||
     !Array.isArray(receipt.suggestionIds) ||
+    (journal.approvalSource === "project_safe_auto_update" && receipt.suggestionIds.length === 0) ||
     receipt.suggestionIds.length > 1024 ||
     new Set(receipt.suggestionIds).size !== receipt.suggestionIds.length ||
     receipt.suggestionIds.some(
@@ -714,6 +720,43 @@ function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): bo
   return true;
 }
 
+/**
+ * Safe-auto journals are an in-memory capability at apply time. Recovery cannot
+ * re-check that capability, so its durable representation must be a strict
+ * Story Bible-only projection of the originally selected patch group.
+ */
+function isValidSafeAutoJournal(journal: Partial<AgentTransactionJournal>): boolean {
+  const receipt = journal.storyBibleReceipt;
+  const entries = journal.entries;
+  if (
+    journal.schemaVersion !== "1.1" ||
+    receipt === undefined ||
+    !Array.isArray(entries) ||
+    receipt.suggestionIds.length === 0 ||
+    (journal.operations !== undefined && journal.operations.length !== 0) ||
+    entries.length !== receipt.assets.length
+  ) {
+    return false;
+  }
+  const assetsByPath = new Map(receipt.assets.map((asset) => [asset.relativePath, asset]));
+  const entryPaths = new Set(entries.map((entry) => entry.relativePath));
+  if (assetsByPath.size !== receipt.assets.length || entryPaths.size !== entries.length) {
+    return false;
+  }
+  return entries.every((entry) => {
+    const asset = assetsByPath.get(entry.relativePath);
+    return (
+      asset !== undefined &&
+      entry.candidateChecksum === asset.afterChecksum &&
+      matchesValidPersistedStoryBibleContent(
+        entry.candidateContent,
+        asset.assetId,
+        asset.afterRevision
+      )
+    );
+  });
+}
+
 function isStoryBibleInversePatchOperation(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const operation = value as {
@@ -740,6 +783,23 @@ function matchesStoryBibleContent(content: string, assetId: string, revision: nu
       value["id"] === assetId &&
       Number.isSafeInteger(value["revision"]) &&
       Number(value["revision"]) === revision
+    );
+  } catch {
+    return false;
+  }
+}
+
+function matchesValidPersistedStoryBibleContent(
+  content: string,
+  assetId: string,
+  revision: number
+): boolean {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    return (
+      validateStoryBibleV11Asset(value, "persistedStrict").valid &&
+      value["id"] === assetId &&
+      value["revision"] === revision
     );
   } catch {
     return false;
@@ -815,7 +875,8 @@ function hasValidApprovalBinding(journal: Partial<AgentTransactionJournal>): boo
     journal.selectionChecksum !== undefined;
   const hasValidGroupBinding = hasAnyGroupBinding
     ? journal.schemaVersion === "1.1" &&
-      journal.approvalSource === "human_confirmation" &&
+      (journal.approvalSource === "human_confirmation" ||
+        journal.approvalSource === "project_safe_auto_update") &&
       typeof journal.applyBatchId === "string" &&
       /^[A-Za-z0-9_-]{1,128}$/u.test(journal.applyBatchId) &&
       typeof journal.consistencyGroupId === "string" &&
@@ -842,7 +903,8 @@ function hasValidApprovalBinding(journal: Partial<AgentTransactionJournal>): boo
     (journal.writePolicy === "write_before_confirmation" ||
       journal.writePolicy === "user_preapproved_run") &&
     (journal.approvalSource === "human_confirmation" ||
-      journal.approvalSource === "user_preapproved_run") &&
+      journal.approvalSource === "user_preapproved_run" ||
+      journal.approvalSource === "project_safe_auto_update") &&
     (journal.approvalSource !== "user_preapproved_run" ||
       journal.writePolicy === "user_preapproved_run") &&
     typeof journal.changeSetRevision === "number" &&

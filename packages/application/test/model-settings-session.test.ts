@@ -214,12 +214,20 @@ describe("model settings session", () => {
     });
 
     await expect(session.readStoryAnalysisSettings()).resolves.toEqual(
-      ok({ completionMode: "prompt" })
+      ok({ completionMode: "prompt", storyBibleMaintenanceMode: "review" })
     );
     await expect(
-      session.saveStoryAnalysisSettings({ completionMode: "background-review" })
-    ).resolves.toEqual(ok({ completionMode: "background-review" }));
-    expect(currentSettings.storyAnalysis).toEqual({ completionMode: "background-review" });
+      session.saveStoryAnalysisSettings({
+        completionMode: "background-review",
+        storyBibleMaintenanceMode: "safe-auto"
+      })
+    ).resolves.toEqual(
+      ok({ completionMode: "background-review", storyBibleMaintenanceMode: "safe-auto" })
+    );
+    expect(currentSettings.storyAnalysis).toEqual({
+      completionMode: "background-review",
+      storyBibleMaintenanceMode: "safe-auto"
+    });
 
     const invalid = await session.saveStoryAnalysisSettings({
       completionMode: "automatic-write"
@@ -228,7 +236,19 @@ describe("model settings session", () => {
       ok: false,
       error: { code: "STORY_ANALYSIS_SETTINGS_INVALID" }
     });
-    expect(currentSettings.storyAnalysis).toEqual({ completionMode: "background-review" });
+    expect(currentSettings.storyAnalysis).toEqual({
+      completionMode: "background-review",
+      storyBibleMaintenanceMode: "safe-auto"
+    });
+
+    const invalidMaintenanceMode = await session.saveStoryAnalysisSettings({
+      completionMode: "background-review",
+      storyBibleMaintenanceMode: "automatic"
+    } as never);
+    expect(invalidMaintenanceMode).toMatchObject({
+      ok: false,
+      error: { code: "STORY_ANALYSIS_SETTINGS_INVALID" }
+    });
   });
 
   test("tests a model profile connection without exposing secret values", async () => {

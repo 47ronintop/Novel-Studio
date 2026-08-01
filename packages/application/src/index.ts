@@ -67,6 +67,7 @@ export type {
   ForeshadowPayoffCandidateDto,
   ForeshadowProgressCandidateDto,
   NovelStudioApi,
+  StoryAnalysisCompletionEvent,
   ProjectConventionsCreateResult,
   ReadAgentPermissionSummaryQuery,
   WorkspaceContextPolicyUpdate,
@@ -301,6 +302,7 @@ export type {
   HistorySettings,
   StoryAnalysisCompletionMode,
   StoryAnalysisSettings,
+  StoryBibleMaintenanceMode,
   ModelConnectionResult,
   ModelConnectionTester,
   ModelProfile,
@@ -880,11 +882,16 @@ export {
 } from "./story-analysis-session.js";
 export { createStoryAnalysisApplicationSession } from "./story-analysis-application-session.js";
 export { createStoryAnalysisChangeSetPreparationPort } from "./story-analysis-change-set-preparation.js";
+export {
+  selectSafeStoryAnalysisSuggestionIds,
+  STORY_ANALYSIS_SAFE_AUTO_MIN_CONFIDENCE
+} from "./story-analysis-safe-auto.js";
 export type {
   StoryAnalysisApplicationPreview,
   StoryAnalysisApplicationPreviewDto,
   StoryAnalysisApplicationResult,
   StoryAnalysisApplicationResultDto,
+  StoryAnalysisSafeAutoApplicationResult,
   StoryAnalysisApplicationSession,
   StoryAnalysisApplicationSessionOptions,
   StoryAnalysisChangeSetPreparationPort

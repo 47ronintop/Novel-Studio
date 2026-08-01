@@ -3,6 +3,7 @@ import type {
   StoryAnalysisApplicationPreviewDto,
   StoryAnalysisApplicationResultDto,
   StoryAnalysisCompletionMode,
+  StoryBibleMaintenanceMode,
   StoryAnalysisRecordDto,
   StoryAnalysisReviewCommand,
   StoryBibleAsset,
@@ -36,7 +37,12 @@ export interface StoryAnalysisBridge {
   resolveIssue(issueId: string, decision: string): Promise<StoryAnalysisReviewProps>;
   dismissIssue(issueId: string, reason: string): Promise<StoryAnalysisReviewProps>;
   analyze(chapterId?: string): Promise<StoryAnalysisReviewProps>;
+  hasOutstandingReviewForChapter(
+    chapterId: string,
+    options?: { readonly analysisScheduled?: boolean }
+  ): Promise<boolean>;
   saveCompletionMode(mode: StoryAnalysisCompletionMode): Promise<StoryAnalysisReviewProps>;
+  saveMaintenanceMode(mode: StoryBibleMaintenanceMode): Promise<StoryAnalysisReviewProps>;
 }
 
 export interface StoryAnalysisBridgeOptions {
@@ -47,6 +53,7 @@ interface StoryAnalysisBridgeState {
   readonly open: boolean;
   readonly status: StoryAnalysisReviewProps["status"];
   readonly completionMode: StoryAnalysisCompletionMode;
+  readonly maintenanceMode: StoryBibleMaintenanceMode;
   readonly summaries: StoryAnalysisReviewProps["summaries"];
   readonly activeWorkflowRunId: string | undefined;
   readonly record: StoryAnalysisRecordDto | undefined;
@@ -250,6 +257,7 @@ export function createStoryAnalysisBridge(
           ...state,
           status: "ready",
           completionMode: settings.completionMode,
+          maintenanceMode: settings.storyBibleMaintenanceMode,
           summaries: [...summaries].sort((left, right) =>
             right.updatedAt.localeCompare(left.updatedAt, "en")
           ),
@@ -274,6 +282,7 @@ export function createStoryAnalysisBridge(
         state = {
           ...state,
           completionMode: settings.completionMode,
+          maintenanceMode: settings.storyBibleMaintenanceMode,
           summaries: [...summaries].sort((left, right) =>
             right.updatedAt.localeCompare(left.updatedAt, "en")
           )
@@ -401,6 +410,7 @@ export function createStoryAnalysisBridge(
           })
         );
         if (token !== generation) return props;
+        const allGroupsApplied = result.batch.groups.every((group) => group.status === "applied");
         state = {
           ...state,
           status: "ready",
@@ -410,12 +420,16 @@ export function createStoryAnalysisBridge(
           previewSuggestionIds: [],
           result,
           feedback: {
-            kind: result.batch.groups.every((group) => group.status === "applied")
-              ? "info"
-              : "error",
-            message: result.batch.groups.every((group) => group.status === "applied")
-              ? "所选资料更新已事务写入。"
-              : "部分一致性组未能应用，请查看分组结果。"
+            // A record-sync warning is intentionally not an apply failure: the
+            // Version Group has committed and re-applying would risk a duplicate
+            // author action. It only changes a fully-applied result; a partial
+            // batch must retain its own error and recovery path.
+            kind: allGroupsApplied ? "info" : "error",
+            message: !allGroupsApplied
+              ? "部分一致性组未能应用，请查看分组结果。"
+              : result.recordSyncWarning === undefined
+                ? "所选资料更新已事务写入。"
+                : "资料已写入，但建议状态同步失败，可刷新/重试。"
           }
         };
         await refreshSummariesAfterMutation();
@@ -479,18 +493,84 @@ export function createStoryAnalysisBridge(
         return fail(error);
       }
     },
+    async hasOutstandingReviewForChapter(chapterId, options = {}) {
+      const settings = await unwrap(api.settings.readStoryAnalysisSettings());
+      if (settings.storyBibleMaintenanceMode !== "review") return false;
+      if (options.analysisScheduled === true) return true;
+      const summaries = await unwrap(api.storyAnalysis.list());
+
+      const chapterRuns = summaries.filter((summary) => summary.chapterId === chapterId);
+      if (
+        chapterRuns.some(
+          (summary) =>
+            summary.status === "queued" ||
+            summary.status === "running" ||
+            summary.status === "partial" ||
+            summary.status === "failed"
+        )
+      ) {
+        return true;
+      }
+
+      const records = await Promise.all(
+        chapterRuns.map((summary) => unwrap(api.storyAnalysis.read(summary.workflowRunId)))
+      );
+      return records.some((record) =>
+        record.storyAnalysis.records.some(
+          (entry) =>
+            (entry.recordType === "change" &&
+              (entry.status === "pending" ||
+                entry.status === "accepted" ||
+                entry.status === "failed")) ||
+            (entry.recordType === "review_issue" && entry.status === "open")
+        )
+      );
+    },
     async saveCompletionMode(mode) {
       const token = begin("saving-settings");
       try {
         const saved = await unwrap(
-          api.settings.saveStoryAnalysisSettings({ completionMode: mode })
+          api.settings.saveStoryAnalysisSettings({
+            completionMode: mode,
+            storyBibleMaintenanceMode: state.maintenanceMode
+          })
         );
         if (token !== generation) return props;
         state = {
           ...state,
           status: "ready",
           completionMode: saved.completionMode,
+          maintenanceMode: saved.storyBibleMaintenanceMode,
           feedback: { kind: "info", message: "章后资料分析设置已保存。" }
+        };
+        return publish();
+      } catch (error) {
+        if (token !== generation) return props;
+        return fail(error);
+      }
+    },
+    async saveMaintenanceMode(mode) {
+      const token = begin("saving-settings");
+      try {
+        const saved = await unwrap(
+          api.settings.saveStoryAnalysisSettings({
+            completionMode: state.completionMode,
+            storyBibleMaintenanceMode: mode
+          })
+        );
+        if (token !== generation) return props;
+        state = {
+          ...state,
+          status: "ready",
+          completionMode: saved.completionMode,
+          maintenanceMode: saved.storyBibleMaintenanceMode,
+          feedback: {
+            kind: "info",
+            message:
+              saved.storyBibleMaintenanceMode === "safe-auto"
+                ? "已开启安全自动更新；高风险建议仍需审查。"
+                : "已切换为审查后写入。"
+          }
         };
         return publish();
       } catch (error) {
@@ -508,6 +588,7 @@ function initialState(): StoryAnalysisBridgeState {
     open: false,
     status: "idle",
     completionMode: "prompt",
+    maintenanceMode: "review",
     summaries: [],
     activeWorkflowRunId: undefined,
     record: undefined,
@@ -546,6 +627,7 @@ function toProps(
     open: state.open,
     status: state.status,
     completionMode: state.completionMode,
+    maintenanceMode: state.maintenanceMode,
     pendingCount: state.summaries.reduce(
       (count, summary) => count + summary.pendingSuggestionCount,
       0
@@ -578,7 +660,8 @@ function toProps(
     onResolveIssue: () => undefined,
     onDismissIssue: () => undefined,
     onReanalyze: () => undefined,
-    onCompletionModeChange: () => undefined
+    onCompletionModeChange: () => undefined,
+    onMaintenanceModeChange: () => undefined
   };
 }
 
@@ -667,6 +750,9 @@ function toResultProps(
 ): StoryAnalysisApplicationResultProps {
   return {
     applyBatchId: result.batch.applyBatchId,
+    ...(result.recordSyncWarning === undefined
+      ? {}
+      : { recordSyncWarning: result.recordSyncWarning }),
     groups: result.batch.groups.map((group) => ({
       consistencyGroupId: group.consistencyGroupId,
       status: group.status,

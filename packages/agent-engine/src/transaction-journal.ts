@@ -1,8 +1,5 @@
 import type { AgentWritePolicy } from "./agent-run-types.js";
-import type {
-  StoryBibleApplyReceipt,
-  VersionGroupAssetType
-} from "./version-group.js";
+import type { StoryBibleApplyReceipt, VersionGroupAssetType } from "./version-group.js";
 
 export type TransactionJournalKind = "apply" | "version_group_undo" | "run_undo";
 export type TransactionJournalStatus =
@@ -35,7 +32,8 @@ export interface TransactionJournal {
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
   readonly writePolicy?: AgentWritePolicy;
-  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource?:
+    "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly approvalToken?: string;
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
@@ -63,7 +61,8 @@ export type CreateTransactionJournalInput =
   | (TransactionJournalCreateBase & {
       readonly kind: "apply";
       readonly writePolicy: AgentWritePolicy;
-      readonly approvalSource: "human_confirmation" | "user_preapproved_run";
+      readonly approvalSource:
+        "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
       readonly approvalToken: string;
     })
   | (TransactionJournalCreateBase & {

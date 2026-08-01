@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import type {
   NovelStudioApi,
+  StoryAnalysisHistorySummary,
   StoryAnalysisRecordDto,
   StoryBibleSnapshot
 } from "@novel-studio/application";
@@ -52,6 +53,10 @@ describe("Story Analysis renderer bridge", () => {
       return ok({
         schemaVersion: "1.0" as const,
         analysis: record,
+        recordSyncWarning: {
+          code: "STORY_ANALYSIS_RECORD_SYNC_FAILED",
+          message: "The durable batch committed but record synchronization failed."
+        },
         batch: {
           schemaVersion: "1.0" as const,
           applyBatchId: `apply_${"5".repeat(32)}`,
@@ -114,13 +119,21 @@ describe("Story Analysis renderer bridge", () => {
     );
     expect(applied).toMatchObject({
       selectedSuggestionIds: [],
-      result: { groups: [{ status: "applied", suggestionIds: selected.selectedSuggestionIds }] }
+      feedback: {
+        kind: "info",
+        message: "资料已写入，但建议状态同步失败，可刷新/重试。"
+      },
+      result: {
+        recordSyncWarning: { code: "STORY_ANALYSIS_RECORD_SYNC_FAILED" },
+        groups: [{ status: "applied", suggestionIds: selected.selectedSuggestionIds }]
+      }
     });
   });
 
   test("resolves review issues and persists chapter completion behavior", async () => {
     let record = analysisRecord([issue()]);
     let completionMode = "prompt" as const | "background-review";
+    let storyBibleMaintenanceMode = "review" as const | "safe-auto";
     const transitionRecord = vi.fn(async (command) => {
       record = analysisRecord([
         {
@@ -139,7 +152,8 @@ describe("Story Analysis renderer bridge", () => {
     });
     const saveStoryAnalysisSettings = vi.fn(async (settings) => {
       completionMode = settings.completionMode;
-      return ok({ completionMode });
+      storyBibleMaintenanceMode = settings.storyBibleMaintenanceMode;
+      return ok({ completionMode, storyBibleMaintenanceMode });
     });
     const api = apiFor({
       getRecord: () => record,
@@ -160,9 +174,150 @@ describe("Story Analysis renderer bridge", () => {
     );
     expect(resolved.issues[0]?.status).toBe("resolved");
     expect(saveStoryAnalysisSettings).toHaveBeenCalledWith({
-      completionMode: "background-review"
+      completionMode: "background-review",
+      storyBibleMaintenanceMode: "review"
     });
     expect(saved.completionMode).toBe("background-review");
+
+    const maintenanceSaved = await bridge.saveMaintenanceMode("safe-auto");
+    expect(saveStoryAnalysisSettings).toHaveBeenLastCalledWith({
+      completionMode: "background-review",
+      storyBibleMaintenanceMode: "safe-auto"
+    });
+    expect(maintenanceSaved.maintenanceMode).toBe("safe-auto");
+  });
+
+  test("keeps a partial application as an error when record synchronization also warns", async () => {
+    const pending = suggestion("partial");
+    const record = analysisRecord([{ ...pending, status: "accepted" as const }]);
+    const bridge = createStoryAnalysisBridge(
+      apiFor({
+        getRecord: () => record,
+        prepareApplication: vi.fn(async () =>
+          ok({
+            schemaVersion: "1.0" as const,
+            analysis: record,
+            changeSet: changeSet(),
+            suggestionIdsByGroup: { [GROUP_ID]: [pending.suggestionId] }
+          })
+        ),
+        applyApplication: vi.fn(async () =>
+          ok({
+            schemaVersion: "1.0" as const,
+            analysis: record,
+            recordSyncWarning: {
+              code: "STORY_ANALYSIS_RECORD_SYNC_FAILED",
+              message: "The durable batch committed but record synchronization failed."
+            },
+            batch: {
+              schemaVersion: "1.0" as const,
+              applyBatchId: `apply_${"7".repeat(32)}`,
+              changeSetId: changeSet().changeSetId,
+              selectionChecksum: "7".repeat(64),
+              groups: [
+                {
+                  consistencyGroupId: GROUP_ID,
+                  status: "failed" as const,
+                  error: {
+                    code: "VERSION_GROUP_FAILED",
+                    message: "The selected group could not be applied."
+                  }
+                }
+              ]
+            }
+          })
+        )
+      })
+    );
+
+    const opened = await bridge.open();
+    const selected = opened.suggestions[0];
+    if (selected === undefined) throw new Error("Expected an accepted suggestion.");
+    bridge.toggleSuggestion(selected.suggestionId);
+    await bridge.prepareSelected();
+    const applied = await bridge.applyPrepared();
+
+    expect(applied).toMatchObject({
+      feedback: { kind: "error", message: "部分一致性组未能应用，请查看分组结果。" },
+      result: { groups: [{ status: "failed" }] }
+    });
+  });
+
+  test("reports outstanding records only while manual review mode is active", async () => {
+    const bridge = createStoryAnalysisBridge(
+      apiFor({
+        getRecord: () => analysisRecord([suggestion("pending")])
+      })
+    );
+    const automaticBridge = createStoryAnalysisBridge(
+      apiFor({
+        getRecord: () => analysisRecord([suggestion("pending")]),
+        storyBibleMaintenanceMode: "safe-auto"
+      })
+    );
+
+    await expect(bridge.hasOutstandingReviewForChapter("ch_01")).resolves.toBe(true);
+    await expect(bridge.hasOutstandingReviewForChapter("ch_missing")).resolves.toBe(false);
+    await expect(
+      bridge.hasOutstandingReviewForChapter("ch_missing", { analysisScheduled: true })
+    ).resolves.toBe(true);
+    await expect(automaticBridge.hasOutstandingReviewForChapter("ch_01")).resolves.toBe(false);
+    await expect(
+      automaticBridge.hasOutstandingReviewForChapter("ch_01", { analysisScheduled: true })
+    ).resolves.toBe(false);
+
+    const api = apiFor({ getRecord: () => analysisRecord([]) });
+    const list = vi.fn(async () => {
+      throw new Error("The history refresh is temporarily unavailable.");
+    });
+    const scheduledBridge = createStoryAnalysisBridge({
+      ...api,
+      storyAnalysis: { ...api.storyAnalysis, list }
+    });
+    await expect(
+      scheduledBridge.hasOutstandingReviewForChapter("ch_01", { analysisScheduled: true })
+    ).resolves.toBe(true);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  test("checks every analysis run for a chapter, including older outstanding runs", async () => {
+    const oldWorkflowRunId = `wfrun_story_${"9".repeat(32)}`;
+    const oldRecord = {
+      ...analysisRecord([suggestion("old")]),
+      workflowRunId: oldWorkflowRunId
+    } as StoryAnalysisRecordDto;
+    const latestRecord = analysisRecord([]);
+    const summaries: readonly StoryAnalysisHistorySummary[] = [
+      {
+        workflowRunId: oldWorkflowRunId,
+        analysisRunId: ANALYSIS_RUN_ID,
+        chapterId: "ch_01",
+        status: "completed",
+        updatedAt: "2026-07-30T00:00:00.000Z",
+        pendingSuggestionCount: 1,
+        openIssueCount: 0,
+        checksum: "a".repeat(64)
+      },
+      {
+        workflowRunId: WORKFLOW_RUN_ID,
+        analysisRunId: ANALYSIS_RUN_ID,
+        chapterId: "ch_01",
+        status: "completed",
+        updatedAt: NOW,
+        pendingSuggestionCount: 0,
+        openIssueCount: 0,
+        checksum: "b".repeat(64)
+      }
+    ];
+    const bridge = createStoryAnalysisBridge(
+      apiFor({
+        getRecord: () => latestRecord,
+        summaries,
+        recordsByWorkflowRunId: { [oldWorkflowRunId]: oldRecord }
+      })
+    );
+
+    await expect(bridge.hasOutstandingReviewForChapter("ch_01")).resolves.toBe(true);
   });
 });
 
@@ -172,29 +327,35 @@ function apiFor(input: {
   readonly prepareApplication?: ReturnType<typeof vi.fn>;
   readonly applyApplication?: ReturnType<typeof vi.fn>;
   readonly saveStoryAnalysisSettings?: ReturnType<typeof vi.fn>;
+  readonly storyBibleMaintenanceMode?: "review" | "safe-auto";
+  readonly summaries?: readonly StoryAnalysisHistorySummary[];
+  readonly recordsByWorkflowRunId?: Readonly<Record<string, StoryAnalysisRecordDto>>;
 }): NovelStudioApi {
   return {
     storyAnalysis: {
       list: async () => {
         const record = input.getRecord();
-        return ok([
-          {
-            workflowRunId: WORKFLOW_RUN_ID,
-            analysisRunId: ANALYSIS_RUN_ID,
-            chapterId: "ch_01",
-            status: "completed" as const,
-            updatedAt: NOW,
-            pendingSuggestionCount: record.storyAnalysis.records.filter(
-              (entry) => entry.recordType === "change" && entry.status === "pending"
-            ).length,
-            openIssueCount: record.storyAnalysis.records.filter(
-              (entry) => entry.recordType === "review_issue" && entry.status === "open"
-            ).length,
-            checksum: "a".repeat(64)
-          }
-        ]);
+        return ok(
+          input.summaries ?? [
+            {
+              workflowRunId: WORKFLOW_RUN_ID,
+              analysisRunId: ANALYSIS_RUN_ID,
+              chapterId: "ch_01",
+              status: "completed" as const,
+              updatedAt: NOW,
+              pendingSuggestionCount: record.storyAnalysis.records.filter(
+                (entry) => entry.recordType === "change" && entry.status === "pending"
+              ).length,
+              openIssueCount: record.storyAnalysis.records.filter(
+                (entry) => entry.recordType === "review_issue" && entry.status === "open"
+              ).length,
+              checksum: "a".repeat(64)
+            }
+          ]
+        );
       },
-      read: async () => ok(input.getRecord()),
+      read: async (workflowRunId) =>
+        ok(input.recordsByWorkflowRunId?.[workflowRunId] ?? input.getRecord()),
       transitionRecord: input.transitionRecord ?? vi.fn(async () => ok(input.getRecord())),
       refreshStaleness: async () => ok(input.getRecord()),
       prepareApplication:
@@ -210,7 +371,11 @@ function apiFor(input: {
       analyzeChapter: async () => ok(input.getRecord())
     },
     settings: {
-      readStoryAnalysisSettings: async () => ok({ completionMode: "prompt" as const }),
+      readStoryAnalysisSettings: async () =>
+        ok({
+          completionMode: "prompt" as const,
+          storyBibleMaintenanceMode: input.storyBibleMaintenanceMode ?? ("review" as const)
+        }),
       saveStoryAnalysisSettings:
         input.saveStoryAnalysisSettings ?? vi.fn(async (settings) => ok(settings))
     }

@@ -14,6 +14,7 @@ import {
 } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { consumeAgentRunApprovalAuthorization } from "./agent-write-authorization.js";
+import { consumeStoryAnalysisSafeAutoApproval } from "./story-analysis-safe-auto-authorization.js";
 
 export interface VersionGroupTransactionApplyFile {
   readonly relativePath: string;
@@ -33,7 +34,8 @@ export interface VersionGroupTransactionApplyInput {
   readonly revision: number;
   readonly checksum: string;
   readonly writePolicy: AgentWritePolicy;
-  readonly approvalSource: "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource:
+    "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly approvalToken: string;
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
@@ -186,18 +188,19 @@ export function createVersionGroupSession(
         input.group !== undefined &&
         (!isGroupIdentifier(input.group.applyBatchId) ||
           !consistencyGroups.selectedGroupIds.includes(input.group.consistencyGroupId) ||
-          input.approval.approvalSource !== "human_confirmation" ||
+          !isStoryAnalysisBatchApprovalSource(input.approval.approvalSource) ||
           input.approval.binding.selectionChecksum === undefined ||
           hasSelectedUngroupedChanges(input.changeSet) ||
-          !validSuggestionIds(input.group.storyBibleSuggestionIds))
+          !validSuggestionIds(input.group.storyBibleSuggestionIds) ||
+          (input.approval.approvalSource === "project_safe_auto_update" &&
+            (input.group.storyBibleSuggestionIds?.length ?? 0) === 0))
       ) {
         return err(versionGroupError("VERSION_GROUP_CONSISTENCY_GROUP_INVALID"));
       }
       const selectedFiles = input.changeSet.files.filter(
         (file) =>
           file.selected &&
-          (input.group === undefined ||
-            file.consistencyGroupId === input.group.consistencyGroupId)
+          (input.group === undefined || file.consistencyGroupId === input.group.consistencyGroupId)
       );
       const selectedOperations = (input.changeSet.operations ?? []).filter(
         (operation) =>
@@ -208,7 +211,8 @@ export function createVersionGroupSession(
       if (
         (selectedFiles.length === 0 && selectedOperations.length === 0) ||
         selectedFiles.some((file) => !file.validation.valid) ||
-        (input.approval.approvalSource === "user_preapproved_run" &&
+        ((input.approval.approvalSource === "user_preapproved_run" ||
+          input.approval.approvalSource === "project_safe_auto_update") &&
           selectedOperations.some(isDestructiveOperation))
       ) {
         return err(versionGroupError("VERSION_GROUP_SELECTION_INVALID"));
@@ -330,14 +334,18 @@ export function createVersionGroupSession(
       if (
         !isGroupIdentifier(input.applyBatchId) ||
         consistencyGroups.selectedGroupIds.length === 0 ||
-        input.approval.approvalSource !== "human_confirmation" ||
+        !isStoryAnalysisBatchApprovalSource(input.approval.approvalSource) ||
         input.approval.binding.selectionChecksum === undefined ||
         hasSelectedUngroupedChanges(input.changeSet) ||
         suggestionEntries.some(
           ([groupId, ids]) =>
             !consistencyGroups.selectedGroupIds.includes(groupId) || !validSuggestionIds(ids)
         ) ||
-        new Set(suggestionIds).size !== suggestionIds.length
+        new Set(suggestionIds).size !== suggestionIds.length ||
+        (input.approval.approvalSource === "project_safe_auto_update" &&
+          consistencyGroups.selectedGroupIds.some(
+            (groupId) => (input.storyBibleSuggestionIdsByGroup?.[groupId]?.length ?? 0) === 0
+          ))
       ) {
         return err(versionGroupError("VERSION_GROUP_APPLY_BATCH_INVALID"));
       }
@@ -355,8 +363,7 @@ export function createVersionGroupSession(
             ...(input.storyBibleSuggestionIdsByGroup?.[consistencyGroupId] === undefined
               ? {}
               : {
-                  storyBibleSuggestionIds:
-                    input.storyBibleSuggestionIdsByGroup[consistencyGroupId]
+                  storyBibleSuggestionIds: input.storyBibleSuggestionIdsByGroup[consistencyGroupId]
                 })
           },
           [BATCH_APPROVAL_VALIDATED]: true
@@ -741,7 +748,17 @@ function validateApprovalBinding(
   ) {
     return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
   }
+  if (
+    approval.approvalSource === "project_safe_auto_update" &&
+    !consumeStoryAnalysisSafeAutoApproval(approval)
+  ) {
+    return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
+  }
   return ok(undefined);
+}
+
+function isStoryAnalysisBatchApprovalSource(source: ChangeSetApproval["approvalSource"]): boolean {
+  return source === "human_confirmation" || source === "project_safe_auto_update";
 }
 
 function isGroupIdentifier(value: string): boolean {

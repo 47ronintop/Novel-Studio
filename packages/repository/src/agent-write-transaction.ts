@@ -2190,7 +2190,8 @@ function validateTransactionInput(
           !isStableIdentifier(input.consistencyGroupId ?? "") ||
           !sha256Pattern.test(input.selectionChecksum ?? "") ||
           !("approvalSource" in input) ||
-          input.approvalSource !== "human_confirmation")
+          (input.approvalSource !== "human_confirmation" &&
+            input.approvalSource !== "project_safe_auto_update"))
       : hasAnyGroupBinding;
   const storyBibleSuggestionBindingInvalid =
     kind === "apply"
@@ -2207,12 +2208,24 @@ function validateTransactionInput(
           input.writePolicy !== "user_preapproved_run") ||
         !("approvalSource" in input) ||
         (input.approvalSource !== "human_confirmation" &&
-          input.approvalSource !== "user_preapproved_run") ||
+          input.approvalSource !== "user_preapproved_run" &&
+          input.approvalSource !== "project_safe_auto_update") ||
         (input.approvalSource === "user_preapproved_run" &&
           input.writePolicy !== "user_preapproved_run") ||
         !("approvalToken" in input) ||
         input.approvalToken !== expectedApprovalToken ||
-        (input.approvalSource === "user_preapproved_run" && destructiveOperation)
+        ((input.approvalSource === "user_preapproved_run" ||
+          input.approvalSource === "project_safe_auto_update") &&
+          destructiveOperation) ||
+        (input.approvalSource === "project_safe_auto_update" &&
+          (!hasCompleteGroupBinding ||
+            input.storyBibleSuggestionIds === undefined ||
+            input.storyBibleSuggestionIds.length === 0 ||
+            operations.length > 0 ||
+            input.files.length === 0 ||
+            input.files.some(
+              (file) => parseStoryBibleAssetRecord(file.candidateContent) === undefined
+            )))
       : "writePolicy" in input || "approvalSource" in input || "approvalToken" in input;
   if (
     identifiers.some((value) => value.length === 0) ||

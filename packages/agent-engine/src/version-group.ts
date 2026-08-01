@@ -1,7 +1,6 @@
 import type { JsonValue } from "@novel-studio/shared";
 import type { AgentWritePolicy } from "./agent-run-types.js";
 
-
 export type VersionGroupAssetType = "chapter" | "text";
 export type VersionGroupTransactionStatus =
   "failed" | "applied" | "rolled_back" | "partial_failure" | "awaiting_review";
@@ -149,7 +148,8 @@ export interface VersionGroup {
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
   readonly writePolicy?: AgentWritePolicy;
-  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource?:
+    "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
@@ -174,7 +174,8 @@ interface VersionGroupBaseInput {
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
   readonly writePolicy?: AgentWritePolicy;
-  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource?:
+    "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
@@ -247,9 +248,7 @@ function baseGroup(
         ? {}
         : { undoOfVersionGroupIds: input.undoOfVersionGroupIds })
     },
-    ...(input.storyBibleReceipt === undefined
-      ? {}
-      : { storyBibleReceipt: input.storyBibleReceipt })
+    ...(input.storyBibleReceipt === undefined ? {} : { storyBibleReceipt: input.storyBibleReceipt })
   };
 }
 

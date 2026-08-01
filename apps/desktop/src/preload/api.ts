@@ -86,6 +86,7 @@ import type {
   StoryAnalysisHistorySummary,
   StoryAnalysisApplicationPreviewDto,
   StoryAnalysisApplicationResultDto,
+  StoryAnalysisCompletionEvent,
   StoryAnalysisRecordDto,
   StoryAnalysisReviewCommand,
   StoryAnalysisSettings,
@@ -766,6 +767,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           "application:story-analysis:analyze",
           input
         ),
+      onCompletion: (listener: (event: StoryAnalysisCompletionEvent) => void) => {
+        if (ipc.on === undefined) return () => undefined;
+        return ipc.on("application:story-analysis:completion", (payload) => {
+          if (isStoryAnalysisCompletionEvent(payload)) listener(payload);
+        });
+      },
       list: () =>
         invokeTyped<Result<readonly StoryAnalysisHistorySummary[], UnifiedError>>(
           ipc,
@@ -976,6 +983,22 @@ function isAgentRunEvent(value: unknown): value is AgentRunEvent {
     Number.isInteger(event["runRevision"]) &&
     typeof event["type"] === "string" &&
     typeof event["createdAt"] === "string"
+  );
+}
+
+function isStoryAnalysisCompletionEvent(value: unknown): value is StoryAnalysisCompletionEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const event = value as Record<string, unknown>;
+  return (
+    event["schemaVersion"] === "1.0" &&
+    typeof event["projectId"] === "string" &&
+    typeof event["chapterId"] === "string" &&
+    typeof event["workflowRunId"] === "string" &&
+    (event["trigger"] === "manual" || event["trigger"] === "chapter_completed") &&
+    (event["workflowStatus"] === "pending-confirmation" ||
+      event["workflowStatus"] === "applied" ||
+      event["workflowStatus"] === "failed") &&
+    typeof event["storyBibleChanged"] === "boolean"
   );
 }
 

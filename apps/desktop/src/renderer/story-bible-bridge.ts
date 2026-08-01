@@ -90,6 +90,10 @@ export interface StoryBibleBridge {
   saveForeshadowAnalysisChanges(token: number): Promise<ForeshadowAnalysisTransition>;
   closeForeshadowAnalysis(): StoryBibleEditorProps;
   handleExternalUpdate(input: StoryBibleExternalUpdateInput): Promise<StoryBibleEditorProps>;
+  handleStoryAnalysisExternalUpdate(input: {
+    readonly projectId: string;
+    readonly updateId: string;
+  }): Promise<StoryBibleEditorProps>;
   reloadExternalUpdate(): Promise<StoryBibleEditorProps>;
   continueExternalUpdate(): StoryBibleEditorProps;
   requestStatusAction(action: StoryBibleStatusAction): Promise<StoryBibleEditorProps>;
@@ -1056,21 +1060,20 @@ export function createStoryBibleBridge(
       }
       const affectedPaths = input.relativePaths.flatMap(parseStoryBibleAffectedPath);
       if (affectedPaths.length === 0) return editorProps;
-      statusActionGeneration += 1;
-      pendingStatusTransition = undefined;
-      editorState = { ...editorState, statusAction: { status: "idle" } };
-      rememberHandledVersionGroup(input.versionGroupId);
-      const update: PendingStoryBibleExternalUpdate = { ...input, affectedPaths };
-      pendingExternalUpdates = [...pendingExternalUpdates, update];
-      if (editorState.dirty) {
-        validateExternalBaselineBeforeSave = true;
-        editorState = {
-          ...editorState,
-          externalUpdate: externalUpdateState(pendingExternalUpdates, snapshot)
-        };
-        return publishEditor();
-      }
-      return refreshExternalUpdates(pendingExternalUpdates);
+      return queueExternalUpdate({ ...input, affectedPaths });
+    },
+    async handleStoryAnalysisExternalUpdate(input) {
+      if (snapshotBinding?.workspaceId !== input.projectId) return editorProps;
+      return queueExternalUpdate({
+        projectId: input.projectId,
+        reason: "agent-change-set-apply",
+        versionGroupId: `story_analysis_${input.updateId}`,
+        relativePaths: [],
+        // Completion events intentionally expose no changed file paths. Keep the
+        // affected-entry projection empty instead of claiming unrelated entries
+        // changed; a non-dirty editor still refreshes the authoritative snapshot.
+        affectedPaths: []
+      });
     },
     reloadExternalUpdate() {
       return pendingExternalUpdates.length === 0
@@ -1940,7 +1943,7 @@ export function createStoryBibleBridge(
       ) {
         return editorProps;
       }
-      return failExternalRefresh(updates, "故事资料已由 Agent 更新，但重新加载失败；请重试。");
+      return failExternalRefresh(updates, "故事资料已有外部更新，但重新加载失败；请重试。");
     }
     if (generation !== externalRefreshGeneration || snapshotBinding?.workspaceId !== workspaceId) {
       return editorProps;
@@ -1976,6 +1979,26 @@ export function createStoryBibleBridge(
     applyExternalRefreshNavigation(previousState, updates);
     clearPendingExternalUpdate();
     return publishEditor();
+  }
+
+  async function queueExternalUpdate(
+    update: PendingStoryBibleExternalUpdate
+  ): Promise<StoryBibleEditorProps> {
+    if (handledVersionGroupIds.has(update.versionGroupId)) return editorProps;
+    statusActionGeneration += 1;
+    pendingStatusTransition = undefined;
+    editorState = { ...editorState, statusAction: { status: "idle" } };
+    rememberHandledVersionGroup(update.versionGroupId);
+    pendingExternalUpdates = [...pendingExternalUpdates, update];
+    if (editorState.dirty) {
+      validateExternalBaselineBeforeSave = true;
+      editorState = {
+        ...editorState,
+        externalUpdate: externalUpdateState(pendingExternalUpdates, snapshot)
+      };
+      return publishEditor();
+    }
+    return refreshExternalUpdates(pendingExternalUpdates);
   }
 
   function failExternalRefresh(
@@ -2030,7 +2053,7 @@ export function createStoryBibleBridge(
         externalUpdate: { status: "none" },
         feedback: {
           kind: "info",
-          message: "故事资料已同步 Agent 的最新变更。"
+          message: "故事资料已刷新为最新内容。"
         }
       };
       return;
@@ -2057,7 +2080,7 @@ export function createStoryBibleBridge(
       externalUpdate: { status: "none" },
       feedback: {
         kind: "info",
-        message: "故事资料已同步 Agent 的最新变更。"
+        message: "故事资料已刷新为最新内容。"
       }
     };
   }
@@ -2475,7 +2498,7 @@ function externalUpdateState(
   if (latest === undefined) return { status: "none" };
   return {
     status: "available",
-    message: "故事资料已由 Agent 更新。当前草稿未被覆盖。",
+    message: "故事资料已有外部更新。当前草稿未被覆盖。",
     affectedEntryIds: affectedEntryIdsForSnapshot(updates, snapshot),
     versionGroupId: latest.versionGroupId
   };

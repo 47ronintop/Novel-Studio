@@ -44,9 +44,16 @@ export interface HistorySettings extends JsonObject {
 }
 
 export type StoryAnalysisCompletionMode = "off" | "prompt" | "background-review";
+export type StoryBibleMaintenanceMode = "review" | "safe-auto";
 
 export interface StoryAnalysisSettings extends JsonObject {
   completionMode: StoryAnalysisCompletionMode;
+  storyBibleMaintenanceMode: StoryBibleMaintenanceMode;
+}
+
+interface StoredStoryAnalysisSettings extends JsonObject {
+  completionMode: StoryAnalysisCompletionMode;
+  storyBibleMaintenanceMode?: StoryBibleMaintenanceMode;
 }
 
 export interface ModelSettings extends JsonObject {
@@ -59,19 +66,27 @@ export interface ProjectSettings extends JsonObject {
   readonly autosave: AutosaveSettings;
   readonly history: HistorySettings;
   readonly models: ModelSettings;
-  readonly storyAnalysis?: StoryAnalysisSettings;
+  readonly storyAnalysis?: StoredStoryAnalysisSettings;
 }
 
 export const DEFAULT_STORY_ANALYSIS_SETTINGS: StoryAnalysisSettings = Object.freeze({
-  completionMode: "prompt"
+  completionMode: "prompt",
+  storyBibleMaintenanceMode: "review"
 });
 
 export function resolveStoryAnalysisSettings(
   settings: Pick<ProjectSettings, "storyAnalysis">
 ): StoryAnalysisSettings {
   const mode = settings.storyAnalysis?.completionMode;
+  const maintenanceMode = settings.storyAnalysis?.storyBibleMaintenanceMode;
   return mode === "off" || mode === "background-review" || mode === "prompt"
-    ? { completionMode: mode }
+    ? {
+        completionMode: mode,
+        storyBibleMaintenanceMode:
+          maintenanceMode === "safe-auto" || maintenanceMode === "review"
+            ? maintenanceMode
+            : "review"
+      }
     : DEFAULT_STORY_ANALYSIS_SETTINGS;
 }
 
@@ -149,7 +164,10 @@ export function createModelSettingsSession(
       if (!current.ok) return current;
       const saved = await options.settingsPort.writeSettings({
         ...current.value,
-        storyAnalysis: { completionMode: storyAnalysis.completionMode }
+        storyAnalysis: {
+          completionMode: storyAnalysis.completionMode,
+          storyBibleMaintenanceMode: storyAnalysis.storyBibleMaintenanceMode
+        }
       });
       return saved.ok ? ok(resolveStoryAnalysisSettings(saved.value)) : saved;
     },
@@ -274,10 +292,12 @@ function isStoryAnalysisSettings(value: unknown): value is StoryAnalysisSettings
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
-    Object.keys(record).length === 1 &&
+    Object.keys(record).length === 2 &&
     (record["completionMode"] === "off" ||
       record["completionMode"] === "prompt" ||
-      record["completionMode"] === "background-review")
+      record["completionMode"] === "background-review") &&
+    (record["storyBibleMaintenanceMode"] === "review" ||
+      record["storyBibleMaintenanceMode"] === "safe-auto")
   );
 }
 

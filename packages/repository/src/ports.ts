@@ -69,9 +69,11 @@ export interface HistorySettings extends JsonObject {
 }
 
 export type StoryAnalysisCompletionMode = "off" | "prompt" | "background-review";
+export type StoryBibleMaintenanceMode = "review" | "safe-auto";
 
 export interface StoryAnalysisSettings extends JsonObject {
   completionMode: StoryAnalysisCompletionMode;
+  storyBibleMaintenanceMode?: StoryBibleMaintenanceMode;
 }
 
 export interface ModelProfile extends JsonObject {
@@ -340,7 +342,8 @@ export interface AgentWriteTransactionInput {
   readonly revision: number;
   readonly checksum: string;
   readonly writePolicy: "write_before_confirmation" | "user_preapproved_run";
-  readonly approvalSource: "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource:
+    "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly approvalToken: string;
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
@@ -425,7 +428,8 @@ export interface VersionGroupRecord {
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
   readonly writePolicy?: "write_before_confirmation" | "user_preapproved_run";
-  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource?:
+    "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
@@ -499,7 +503,8 @@ export interface AgentTransactionJournal {
   readonly changeSetRevision: number;
   readonly changeSetChecksum: string;
   readonly writePolicy?: "write_before_confirmation" | "user_preapproved_run";
-  readonly approvalSource?: "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource?:
+    "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly approvalToken?: string;
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;

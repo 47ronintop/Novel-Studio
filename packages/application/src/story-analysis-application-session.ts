@@ -15,13 +15,13 @@ import type {
   StoryAnalysisRecordTransition,
   StoryAnalysisSession
 } from "./story-analysis-session.js";
-import type {
-  VersionGroupApplyBatchResult,
-  VersionGroupSession
-} from "./version-group-session.js";
+import type { VersionGroupApplyBatchResult, VersionGroupSession } from "./version-group-session.js";
+import { authorizeStoryAnalysisSafeAutoApproval } from "./story-analysis-safe-auto-authorization.js";
+import { selectSafeStoryAnalysisSuggestionIds } from "./story-analysis-safe-auto.js";
 
 const TRACE_ID = "story-analysis-application";
 const MAX_SELECTED_SUGGESTIONS = 1_000;
+const SAFE_AUTO_APPLICATION = Symbol("story-analysis-safe-auto-application");
 
 export interface StoryAnalysisChangeSetPreparationPort {
   prepareChangeSet(input: {
@@ -43,6 +43,16 @@ export interface StoryAnalysisApplicationResult {
   readonly schemaVersion: "1.0";
   readonly analysis: StoryAnalysisHistoryRecord;
   readonly batch: VersionGroupApplyBatchResult;
+  /** The Version Group is durable, but its suggestion-status projection could not be persisted. */
+  readonly recordSyncWarning?: UnifiedError;
+}
+
+export interface StoryAnalysisSafeAutoApplicationResult {
+  readonly schemaVersion: "1.0";
+  readonly analysis: StoryAnalysisHistoryRecord;
+  readonly selectedSuggestionIds: readonly string[];
+  readonly batch?: VersionGroupApplyBatchResult;
+  readonly recordSyncWarning?: UnifiedError;
 }
 
 export interface StoryAnalysisApplicationPreviewDto {
@@ -56,6 +66,11 @@ export interface StoryAnalysisApplicationResultDto {
   readonly schemaVersion: "1.0";
   readonly analysis: StoryAnalysisRecordDto;
   readonly batch: VersionGroupApplyBatchResult;
+  /** The Story Bible batch committed, but the suggestion-status projection needs recovery. */
+  readonly recordSyncWarning?: {
+    readonly code: string;
+    readonly message: string;
+  };
 }
 
 export interface StoryAnalysisApplicationSession {
@@ -70,13 +85,13 @@ export interface StoryAnalysisApplicationSession {
     readonly revision: number;
     readonly checksum: string;
   }): Promise<Result<StoryAnalysisApplicationResult, UnifiedError>>;
+  autoApplySafeSuggestions(input: {
+    readonly workflowRunId: string;
+  }): Promise<Result<StoryAnalysisSafeAutoApplicationResult, UnifiedError>>;
 }
 
 export interface StoryAnalysisApplicationSessionOptions {
-  readonly analysis: Pick<
-    StoryAnalysisSession,
-    "refreshStaleness" | "transitionRecords"
-  >;
+  readonly analysis: Pick<StoryAnalysisSession, "refreshStaleness" | "transitionRecords">;
   readonly preparation: StoryAnalysisChangeSetPreparationPort;
   readonly changeSets: Pick<ChangeSetSession, "readChangeSet" | "decide">;
   readonly versionGroups: Pick<VersionGroupSession, "applyApprovedBatch">;
@@ -85,7 +100,7 @@ export interface StoryAnalysisApplicationSessionOptions {
 export function createStoryAnalysisApplicationSession(
   options: StoryAnalysisApplicationSessionOptions
 ): StoryAnalysisApplicationSession {
-  return {
+  const session: StoryAnalysisApplicationSession = {
     async prepareApplication(input) {
       const requested = validateSuggestionIds(input.suggestionIds);
       if (!requested.ok) return requested;
@@ -139,6 +154,12 @@ export function createStoryAnalysisApplicationSession(
     },
 
     async applyApplication(input) {
+      const safeAutoApplication =
+        (
+          input as typeof input & {
+            readonly [SAFE_AUTO_APPLICATION]?: true;
+          }
+        )[SAFE_AUTO_APPLICATION] === true;
       const requested = validateSuggestionIds(input.suggestionIds);
       if (!requested.ok) return requested;
       const refreshed = await options.analysis.refreshStaleness(input.workflowRunId);
@@ -156,15 +177,17 @@ export function createStoryAnalysisApplicationSession(
         changeSet.value.runId !== input.workflowRunId ||
         changeSet.value.checksum !== input.checksum
       ) {
-        return err(applicationError(
-          "STORY_ANALYSIS_CHANGE_SET_BINDING_MISMATCH",
-          "The reviewed Change Set no longer matches this Story Analysis application."
-        ));
+        return err(
+          applicationError(
+            "STORY_ANALYSIS_CHANGE_SET_BINDING_MISMATCH",
+            "The reviewed Change Set no longer matches this Story Analysis application."
+          )
+        );
       }
       const groupBinding = validateChangeSetGroups(changeSet.value, selected.value.byGroup);
       if (!groupBinding.ok) return groupBinding;
 
-      const approvalResult = await options.changeSets.decide({
+      const decisionCommand = {
         runId: input.workflowRunId,
         projectId: changeSet.value.projectId,
         commandId: stableId(
@@ -176,24 +199,35 @@ export function createStoryAnalysisApplicationSession(
         revision: input.revision,
         checksum: input.checksum,
         decision: "apply_selected"
-      });
+      } as const;
+      const approvalResult = await options.changeSets.decide(decisionCommand);
       if (!approvalResult.ok) return approvalResult;
       if (!isChangeSetApproval(approvalResult.value)) {
-        return err(applicationError(
-          "STORY_ANALYSIS_CHANGE_SET_APPROVAL_INVALID",
-          "The Change Set did not produce a human approval binding."
-        ));
+        return err(
+          applicationError(
+            "STORY_ANALYSIS_CHANGE_SET_APPROVAL_INVALID",
+            "The Change Set did not produce an applicable approval binding."
+          )
+        );
       }
 
+      const approval = safeAutoApplication
+        ? authorizeStoryAnalysisSafeAutoApproval(
+            Object.freeze({
+              ...approvalResult.value,
+              approvalSource: "project_safe_auto_update" as const
+            })
+          )
+        : approvalResult.value;
       const applyBatchId = stableId(
         "apply",
         `${input.changeSetId}:${input.revision}:${input.checksum}:${
-          approvalResult.value.binding.selectionChecksum ?? ""
+          approval.binding.selectionChecksum ?? ""
         }`
       );
       const batch = await options.versionGroups.applyApprovedBatch({
         changeSet: changeSet.value,
-        approval: approvalResult.value,
+        approval,
         applyBatchId,
         storyBibleSuggestionIdsByGroup: selected.value.byGroup
       });
@@ -203,10 +237,12 @@ export function createStoryAnalysisApplicationSession(
         batch.value.groups.map((group) => [group.consistencyGroupId, group] as const)
       );
       if ([...selected.value.groupIds].some((groupId) => !resultByGroup.has(groupId))) {
-        return err(applicationError(
-          "STORY_ANALYSIS_APPLY_RESULT_INVALID",
-          "The Version Group batch omitted a selected consistency group."
-        ));
+        return err(
+          applicationError(
+            "STORY_ANALYSIS_APPLY_RESULT_INVALID",
+            "The Version Group batch omitted a selected consistency group."
+          )
+        );
       }
       const transitions: {
         readonly recordId: string;
@@ -214,43 +250,103 @@ export function createStoryAnalysisApplicationSession(
         readonly transition: StoryAnalysisRecordTransition;
       }[] = selected.value.suggestions.flatMap((suggestion) => {
         if (suggestion.status === "applied") return [];
-        return [{
-          recordId: suggestion.suggestionId,
-          expectedRevision: suggestion.revision,
-          transition: {
-            status:
-              resultByGroup.get(suggestion.consistencyGroupId)?.status === "applied"
-                ? "applied"
-                : "failed"
+        return [
+          {
+            recordId: suggestion.suggestionId,
+            expectedRevision: suggestion.revision,
+            transition: {
+              status:
+                resultByGroup.get(suggestion.consistencyGroupId)?.status === "applied"
+                  ? "applied"
+                  : "failed"
+            }
           }
-        }];
+        ];
       });
-      const analysis =
-        transitions.length === 0
-          ? refreshed
-          : await options.analysis.transitionRecords({
-              workflowRunId: input.workflowRunId,
-              transitions
-            });
-      if (!analysis.ok) return analysis;
-      return ok({ schemaVersion: "1.0", analysis: analysis.value, batch: batch.value });
+      if (transitions.length === 0) {
+        return ok({ schemaVersion: "1.0", analysis: refreshed.value, batch: batch.value });
+      }
+
+      try {
+        const analysis = await options.analysis.transitionRecords({
+          workflowRunId: input.workflowRunId,
+          transitions
+        });
+        if (analysis.ok) {
+          return ok({ schemaVersion: "1.0", analysis: analysis.value, batch: batch.value });
+        }
+        return ok({
+          schemaVersion: "1.0",
+          analysis: refreshed.value,
+          batch: batch.value,
+          recordSyncWarning: analysis.error
+        });
+      } catch {
+        return ok({
+          schemaVersion: "1.0",
+          analysis: refreshed.value,
+          batch: batch.value,
+          recordSyncWarning: applicationError(
+            "STORY_ANALYSIS_RECORD_SYNC_FAILED",
+            "The Story Bible transaction committed, but suggestion statuses could not be synchronized."
+          )
+        });
+      }
+    },
+
+    async autoApplySafeSuggestions(input) {
+      const refreshed = await options.analysis.refreshStaleness(input.workflowRunId);
+      if (!refreshed.ok) return refreshed;
+      const suggestionIds = selectSafeStoryAnalysisSuggestionIds(refreshed.value);
+      if (suggestionIds.length === 0) {
+        return ok({
+          schemaVersion: "1.0",
+          analysis: refreshed.value,
+          selectedSuggestionIds: []
+        });
+      }
+      const preview = await session.prepareApplication({
+        workflowRunId: input.workflowRunId,
+        suggestionIds
+      });
+      if (!preview.ok) return preview;
+      const applied = await session.applyApplication({
+        workflowRunId: input.workflowRunId,
+        suggestionIds,
+        changeSetId: preview.value.changeSet.changeSetId,
+        revision: preview.value.changeSet.revision,
+        checksum: preview.value.changeSet.checksum,
+        [SAFE_AUTO_APPLICATION]: true
+      } as Parameters<StoryAnalysisApplicationSession["applyApplication"]>[0]);
+      if (!applied.ok) return applied;
+      return ok({
+        schemaVersion: "1.0",
+        analysis: applied.value.analysis,
+        selectedSuggestionIds: suggestionIds,
+        batch: applied.value.batch,
+        ...(applied.value.recordSyncWarning === undefined
+          ? {}
+          : { recordSyncWarning: applied.value.recordSyncWarning })
+      });
     }
   };
+
+  return session;
 }
 
-function validateSuggestionIds(
-  values: readonly string[]
-): Result<readonly string[], UnifiedError> {
+function validateSuggestionIds(values: readonly string[]): Result<readonly string[], UnifiedError> {
   if (
     values.length === 0 ||
     values.length > MAX_SELECTED_SUGGESTIONS ||
     values.some((value) => !/^sug_[A-Za-z0-9_-]{1,128}$/u.test(value)) ||
     new Set(values).size !== values.length
   ) {
-    return err(applicationError(
-      "STORY_ANALYSIS_SUGGESTION_SELECTION_INVALID",
-      "Select one or more unique Story Analysis suggestions."
-    ));
+    return err(
+      applicationError(
+        "STORY_ANALYSIS_SUGGESTION_SELECTION_INVALID",
+        "Select one or more unique Story Analysis suggestions."
+      )
+    );
   }
   return ok([...values]);
 }
@@ -259,21 +355,26 @@ function selectCompleteGroups(
   record: StoryAnalysisHistoryRecord,
   suggestionIds: readonly string[],
   allowedStatuses: ReadonlySet<StoryChangeSuggestion["status"]>
-): Result<{
-  readonly suggestions: readonly StoryChangeSuggestion[];
-  readonly groupIds: ReadonlySet<string>;
-  readonly byGroup: Readonly<Record<string, readonly string[]>>;
-}, UnifiedError> {
+): Result<
+  {
+    readonly suggestions: readonly StoryChangeSuggestion[];
+    readonly groupIds: ReadonlySet<string>;
+    readonly byGroup: Readonly<Record<string, readonly string[]>>;
+  },
+  UnifiedError
+> {
   const suggestions = record.storyAnalysis.records.filter(
     (candidate): candidate is StoryChangeSuggestion => candidate.recordType === "change"
   );
   const byId = new Map(suggestions.map((suggestion) => [suggestion.suggestionId, suggestion]));
   const requested = suggestionIds.map((suggestionId) => byId.get(suggestionId));
   if (requested.some((suggestion) => suggestion === undefined)) {
-    return err(applicationError(
-      "STORY_ANALYSIS_SUGGESTION_NOT_FOUND",
-      "A selected Story Analysis suggestion no longer exists."
-    ));
+    return err(
+      applicationError(
+        "STORY_ANALYSIS_SUGGESTION_NOT_FOUND",
+        "A selected Story Analysis suggestion no longer exists."
+      )
+    );
   }
   const groupIds = new Set(
     requested.map((suggestion) => (suggestion as StoryChangeSuggestion).consistencyGroupId)
@@ -282,10 +383,12 @@ function selectCompleteGroups(
     .filter((suggestion) => groupIds.has(suggestion.consistencyGroupId))
     .sort((left, right) => left.suggestionId.localeCompare(right.suggestionId, "en"));
   if (selected.some((suggestion) => !allowedStatuses.has(suggestion.status))) {
-    return err(applicationError(
-      "STORY_ANALYSIS_SUGGESTION_NOT_APPLICABLE",
-      "A selected consistency group contains a rejected, stale, failed, or otherwise unavailable suggestion."
-    ));
+    return err(
+      applicationError(
+        "STORY_ANALYSIS_SUGGESTION_NOT_APPLICABLE",
+        "A selected consistency group contains a rejected, stale, failed, or otherwise unavailable suggestion."
+      )
+    );
   }
   const byGroup: Record<string, readonly string[]> = {};
   for (const groupId of [...groupIds].sort()) {
@@ -307,10 +410,12 @@ function validateChangeSetGroups(
     groups.selectedGroupIds.length !== expected.length ||
     groups.selectedGroupIds.some((groupId, index) => groupId !== expected[index])
   ) {
-    return err(applicationError(
-      "STORY_ANALYSIS_CHANGE_SET_GROUP_MISMATCH",
-      "The Change Set does not contain exactly the selected Story Analysis consistency groups."
-    ));
+    return err(
+      applicationError(
+        "STORY_ANALYSIS_CHANGE_SET_GROUP_MISMATCH",
+        "The Change Set does not contain exactly the selected Story Analysis consistency groups."
+      )
+    );
   }
   return ok(undefined);
 }

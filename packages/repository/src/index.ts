@@ -106,6 +106,7 @@ export type {
   ProjectType,
   StoryAnalysisCompletionMode,
   StoryAnalysisSettings,
+  StoryBibleMaintenanceMode,
   SnapshotReason,
   SnapshotTextAssetInput,
   StoryAnalysisHistoryRecord,

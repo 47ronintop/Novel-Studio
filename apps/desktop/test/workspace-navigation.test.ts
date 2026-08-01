@@ -71,6 +71,45 @@ describe("workspace navigation", () => {
     expect(state.fileEditor).toBe(previousFile);
   });
 
+  test("keeps the current chapter when the next-chapter reminder is canceled", async () => {
+    const state = createState();
+    const selectChapterAndLoad = vi.fn(async () => ({
+      projectWorkflow: workflow("ch_02"),
+      chapterEditor: chapterEditor("ch_02")
+    }));
+    const beforeNavigateToChapter = vi.fn(async () => false);
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      beforeNavigateToChapter,
+      projectWorkflowBridge: { selectChapterAndLoad }
+    });
+
+    await navigation.navigateToChapter("ch_02");
+
+    expect(beforeNavigateToChapter).toHaveBeenCalledWith("ch_02");
+    expect(selectChapterAndLoad).not.toHaveBeenCalled();
+    expect(state.projectWorkflow?.activeChapterId).toBe("ch_old");
+  });
+
+  test("checks a dirty Story Bible draft before the next-chapter reminder", async () => {
+    const state = createState();
+    const canLeaveStoryBibleDraft = vi.fn(async () => false);
+    const beforeNavigateToChapter = vi.fn(async () => true);
+    const selectChapterAndLoad = vi.fn();
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      canLeaveStoryBibleDraft,
+      beforeNavigateToChapter,
+      projectWorkflowBridge: { selectChapterAndLoad }
+    });
+
+    await navigation.navigateToChapter("ch_02");
+
+    expect(canLeaveStoryBibleDraft).toHaveBeenCalledOnce();
+    expect(beforeNavigateToChapter).not.toHaveBeenCalled();
+    expect(selectChapterAndLoad).not.toHaveBeenCalled();
+  });
+
   test("selects a story entry before committing the creative story surface", () => {
     const log: string[] = [];
     const state = createState({

@@ -33,6 +33,45 @@ describe("useProjectWorkflowActions", () => {
     host = undefined;
   });
 
+  test("does not create a chapter when the maintenance reminder is canceled", async () => {
+    const beforeCreateChapter = vi.fn(async () => false);
+    const createChapter = vi.fn(async () => createWorkflow());
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: { createChapter } as unknown as ProjectWorkflowBridge,
+        settingsBridge: undefined,
+        storyBibleBridge: undefined,
+        studioBridge: undefined,
+        beforeCreateChapter,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleCreateChapter();
+      await Promise.resolve();
+    });
+
+    expect(beforeCreateChapter).toHaveBeenCalledTimes(1);
+    expect(createChapter).not.toHaveBeenCalled();
+  });
+
   test("preserves project-bound story projections while workspace transitions are pending", () => {
     const storyBibleStates: Array<StoryBibleSummaryProps | undefined> = [];
     const storyBibleEditorStates: Array<StoryBibleEditorProps | undefined> = [];

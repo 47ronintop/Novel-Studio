@@ -9,6 +9,10 @@ import {
   type ModelSettingsSession,
   type ProjectWorkspaceSession,
   type ProjectWorkspaceSnapshot,
+  type ProjectSearchSession,
+  type StoryAnalysisApplicationSession,
+  type StoryAnalysisSafeAutoApplicationResult,
+  type StoryAnalysisHistoryRecord,
   type StoryAnalysisSession,
   type StoryAnalysisSettings
 } from "../src/index.js";
@@ -47,7 +51,9 @@ describe("DesktopApplication chapter completion analysis", () => {
       }
     });
     expect(fixture.readSettings).toHaveBeenCalledTimes(1);
-    expect(fixture.createAnalysisSession).toHaveBeenCalledTimes(mode === "background-review" ? 1 : 0);
+    expect(fixture.createAnalysisSession).toHaveBeenCalledTimes(
+      mode === "background-review" ? 1 : 0
+    );
     expect(fixture.analyzeChapter).toHaveBeenCalledTimes(mode === "background-review" ? 1 : 0);
     if (mode === "background-review") {
       expect(fixture.analyzeChapter).toHaveBeenCalledWith({
@@ -82,9 +88,137 @@ describe("DesktopApplication chapter completion analysis", () => {
     expect(fixture.persisted().frontmatter.status).toBe("done");
     expect(fixture.writes).toHaveLength(1);
   });
+
+  test("runs safe maintenance after background analysis without delaying chapter completion", async () => {
+    const record = analysisRecord();
+    const autoApplySafeSuggestions = vi.fn<
+      StoryAnalysisApplicationSession["autoApplySafeSuggestions"]
+    >(async () => ok({ schemaVersion: "1.0", analysis: record, selectedSuggestionIds: [] }));
+    const fixture = createFixture(
+      "background-review",
+      false,
+      "safe-auto",
+      async () => ok(record),
+      () => ({ autoApplySafeSuggestions }) as unknown as StoryAnalysisApplicationSession
+    );
+    await fixture.application.loadActiveChapter();
+
+    await expect(fixture.application.saveActiveChapterStatus("done")).resolves.toMatchObject({
+      ok: true,
+      value: { completionAnalysis: { status: "scheduled" } }
+    });
+    await vi.waitFor(() => expect(autoApplySafeSuggestions).toHaveBeenCalledTimes(1));
+    expect(autoApplySafeSuggestions).toHaveBeenCalledWith({
+      workflowRunId: record.workflowRun.workflowRunId
+    });
+    expect(fixture.readSettings).toHaveBeenCalledTimes(2);
+    expect(fixture.persisted().frontmatter.status).toBe("done");
+  });
+
+  test("returns the latest analysis record after safe maintenance", async () => {
+    const record = analysisRecord();
+    const updatedRecord = analysisRecord("run_completion_analysis_updated");
+    const autoApplySafeSuggestions = vi.fn<
+      StoryAnalysisApplicationSession["autoApplySafeSuggestions"]
+    >(async () => ok({ schemaVersion: "1.0", analysis: updatedRecord, selectedSuggestionIds: [] }));
+    const fixture = createFixture(
+      "prompt",
+      false,
+      "safe-auto",
+      async () => ok(record),
+      () => ({ autoApplySafeSuggestions }) as unknown as StoryAnalysisApplicationSession
+    );
+
+    await expect(
+      fixture.application.analyzeChapterStory({ chapterId: CHAPTER_ID, trigger: "manual" })
+    ).resolves.toEqual(ok(updatedRecord));
+  });
+
+  test("publishes a clone-safe completion event after a successful analysis", async () => {
+    const record = analysisRecord();
+    const fixture = createFixture("prompt", false, "review", async () => ok(record));
+    const received: unknown[] = [];
+    fixture.application.subscribeStoryAnalysisCompletion((event) => received.push(event));
+
+    await fixture.application.analyzeChapterStory({ chapterId: CHAPTER_ID, trigger: "manual" });
+
+    expect(received).toEqual([
+      {
+        schemaVersion: "1.0",
+        projectId: "prj_completion_analysis",
+        chapterId: CHAPTER_ID,
+        workflowRunId: record.workflowRun.workflowRunId,
+        trigger: "manual",
+        workflowStatus: "pending-confirmation",
+        storyBibleChanged: false
+      }
+    ]);
+  });
+
+  test("treats a partial safe-auto batch as a Story Bible change and invalidates its search binding", async () => {
+    const record = analysisRecord();
+    const invalidate = vi.fn(async () => undefined);
+    const autoApplySafeSuggestions = vi.fn<
+      StoryAnalysisApplicationSession["autoApplySafeSuggestions"]
+    >(async () =>
+      ok({
+        schemaVersion: "1.0",
+        analysis: record,
+        selectedSuggestionIds: ["sug_safe"],
+        batch: {
+          groups: [{ consistencyGroupId: "cgrp_safe", status: "partial_failure" }]
+        }
+      } as unknown as StoryAnalysisSafeAutoApplicationResult)
+    );
+    const fixture = createFixture(
+      "prompt",
+      false,
+      "safe-auto",
+      async () => ok(record),
+      () => ({ autoApplySafeSuggestions }) as unknown as StoryAnalysisApplicationSession,
+      () => ({ invalidate }) as unknown as ProjectSearchSession
+    );
+    const received: unknown[] = [];
+    fixture.application.subscribeStoryAnalysisCompletion((event) => received.push(event));
+
+    await fixture.application.analyzeChapterStory({ chapterId: CHAPTER_ID, trigger: "manual" });
+
+    expect(invalidate).toHaveBeenCalledWith("story-bible-save");
+    expect(received).toMatchObject([{ storyBibleChanged: true }]);
+  });
+
+  test("returns the analysis result when safe maintenance cannot be applied", async () => {
+    const record = analysisRecord();
+    const autoApplySafeSuggestions = vi.fn<
+      StoryAnalysisApplicationSession["autoApplySafeSuggestions"]
+    >(async () => {
+      throw new Error("transaction journal unavailable");
+    });
+    const fixture = createFixture(
+      "prompt",
+      false,
+      "safe-auto",
+      async () => ok(record),
+      () => ({ autoApplySafeSuggestions }) as unknown as StoryAnalysisApplicationSession
+    );
+
+    await expect(
+      fixture.application.analyzeChapterStory({ chapterId: CHAPTER_ID, trigger: "manual" })
+    ).resolves.toEqual(ok(record));
+    expect(autoApplySafeSuggestions).toHaveBeenCalledWith({
+      workflowRunId: record.workflowRun.workflowRunId
+    });
+  });
 });
 
-function createFixture(mode: StoryAnalysisSettings["completionMode"], rejectAnalysis = false) {
+function createFixture(
+  mode: StoryAnalysisSettings["completionMode"],
+  rejectAnalysis = false,
+  maintenanceMode: StoryAnalysisSettings["storyBibleMaintenanceMode"] = "review",
+  analyzeOverride?: StoryAnalysisSession["analyzeChapter"],
+  createApplicationSession?: (projectRoot: string) => StoryAnalysisApplicationSession,
+  createProjectSearchSession?: (projectRoot: string) => ProjectSearchSession
+) {
   const writes: ChapterDocument[] = [];
   let persisted = createChapter();
   const chapterEditorSession = createChapterEditorSession({
@@ -101,8 +235,11 @@ function createFixture(mode: StoryAnalysisSettings["completionMode"], rejectAnal
     },
     now: () => NOW
   });
-  const readSettings = vi.fn(async () => ok({ completionMode: mode }));
-  const analyzeChapter = vi.fn<StoryAnalysisSession["analyzeChapter"]>(async () => {
+  const readSettings = vi.fn(async () =>
+    ok({ completionMode: mode, storyBibleMaintenanceMode: maintenanceMode })
+  );
+  const analyzeChapter = vi.fn<StoryAnalysisSession["analyzeChapter"]>(async (input) => {
+    if (analyzeOverride !== undefined) return analyzeOverride(input);
     if (rejectAnalysis) throw new Error("observer unavailable");
     throw new Error("The test does not need a completed analysis record.");
   });
@@ -112,7 +249,11 @@ function createFixture(mode: StoryAnalysisSettings["completionMode"], rejectAnal
     chapterEditorSession,
     projectWorkspaceSession: createProjectWorkspaceSessionStub(chapterEditorSession),
     modelSettingsSession: createModelSettingsSessionStub(readSettings),
-    createStoryAnalysisSession: createAnalysisSession
+    createStoryAnalysisSession: createAnalysisSession,
+    ...(createApplicationSession === undefined
+      ? {}
+      : { createStoryAnalysisApplicationSession: createApplicationSession }),
+    ...(createProjectSearchSession === undefined ? {} : { createProjectSearchSession })
   });
 
   return {
@@ -123,6 +264,12 @@ function createFixture(mode: StoryAnalysisSettings["completionMode"], rejectAnal
     readSettings,
     writes
   };
+}
+
+function analysisRecord(workflowRunId = "run_completion_analysis"): StoryAnalysisHistoryRecord {
+  return {
+    workflowRun: { workflowRunId, status: "pending-confirmation" }
+  } as unknown as StoryAnalysisHistoryRecord;
 }
 
 function createChapter(): ChapterDocument {

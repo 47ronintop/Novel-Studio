@@ -141,6 +141,7 @@ export type ApplicationIpcChannel = (typeof APPLICATION_IPC_CHANNELS)[number];
 export const APPLICATION_IPC_EVENT_CHANNELS = [
   "application:ai:chapter-suggestion-push-event",
   "application:agent-run:event",
+  "application:story-analysis:completion",
   "application:menu:native-command"
 ] as const;
 

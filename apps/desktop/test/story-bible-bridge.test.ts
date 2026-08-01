@@ -736,6 +736,82 @@ describe("Story Bible bridge", () => {
     });
   });
 
+  test("refreshes safely after an automatic Story Analysis write", async () => {
+    const baseApi = createApi([]);
+    const originalHero = snapshot.characters[0];
+    if (originalHero === undefined) throw new Error("Expected a character fixture.");
+    let currentSnapshot: StoryBibleSnapshot = snapshot;
+    const load = vi.fn(async () => ok(currentSnapshot));
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: { ...baseApi.storyBible, load }
+    });
+    await bridge.load("workspace-01");
+    load.mockClear();
+    currentSnapshot = {
+      ...snapshot,
+      characters: [{ ...originalHero, title: "Auto-updated hero" }]
+    };
+
+    const editor = await bridge.handleStoryAnalysisExternalUpdate({
+      projectId: "workspace-01",
+      updateId: "wfrun_story_auto_refresh"
+    });
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(bridge.getSnapshot().characters[0]).toMatchObject({ title: "Auto-updated hero" });
+    expect(editor).toMatchObject({
+      activeKind: "character",
+      viewMode: "list",
+      dirty: false,
+      externalUpdate: { status: "none" }
+    });
+
+    currentSnapshot = {
+      ...snapshot,
+      characters: [{ ...originalHero, title: "Second applied group" }]
+    };
+    await bridge.handleStoryAnalysisExternalUpdate({
+      projectId: "workspace-01",
+      updateId: "apply_second_group"
+    });
+    await bridge.handleStoryAnalysisExternalUpdate({
+      projectId: "workspace-01",
+      updateId: "apply_second_group"
+    });
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(bridge.getSnapshot().characters[0]).toMatchObject({ title: "Second applied group" });
+  });
+
+  test("keeps a dirty draft when an automatic Story Analysis write completes", async () => {
+    const baseApi = createApi([]);
+    const load = vi.fn(async () => ok(snapshot));
+    const bridge = createStoryBibleBridge({
+      ...baseApi,
+      storyBible: { ...baseApi.storyBible, load }
+    });
+    await bridge.load("workspace-01");
+    bridge.selectEntry("chr_hero");
+    bridge.updateDraft("character", { title: "Local hero" });
+    load.mockClear();
+
+    const editor = await bridge.handleStoryAnalysisExternalUpdate({
+      projectId: "workspace-01",
+      updateId: "wfrun_story_dirty"
+    });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(editor).toMatchObject({
+      dirty: true,
+      draft: { id: "chr_hero", title: "Local hero" },
+      externalUpdate: {
+        status: "available",
+        versionGroupId: "story_analysis_wfrun_story_dirty"
+      }
+    });
+  });
+
   test("ignores an older external refresh failure after a newer refresh succeeds", async () => {
     const baseApi = createApi([]);
     let rejectOlderRefresh: ((reason?: unknown) => void) | undefined;

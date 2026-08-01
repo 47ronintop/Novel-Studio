@@ -161,6 +161,10 @@
         "completionMode": {
           "type": "string",
           "enum": ["off", "prompt", "background-review"]
+        },
+        "storyBibleMaintenanceMode": {
+          "type": "string",
+          "enum": ["review", "safe-auto"]
         }
       }
     }

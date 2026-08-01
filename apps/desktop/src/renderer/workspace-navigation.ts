@@ -60,6 +60,7 @@ export interface WorkspaceNavigationDependencies {
     Pick<CreativeProjectFilesBridge, "requestOpenFile" | "clearActiveFile"> | undefined;
   readonly canLeaveCreativeFile?: (() => Promise<boolean>) | undefined;
   readonly canLeaveStoryBibleDraft?: (() => Promise<boolean>) | undefined;
+  readonly beforeNavigateToChapter?: ((chapterId: string) => Promise<boolean>) | undefined;
   readonly setShellState: StateSetter<DesktopShellState>;
   readonly setProjectWorkflow: (next: ProjectWorkflowProps | undefined) => void;
   readonly setChapterEditor: (next: ChapterEditorProps | undefined) => void;
@@ -98,6 +99,8 @@ export function createWorkspaceNavigation(
     createCreativeProject: dependencies.createCreativeProject,
     async navigateToChapter(chapterId) {
       if (!(await canLeaveCreativeFile())) return;
+      if ((await dependencies.canLeaveStoryBibleDraft?.()) === false) return;
+      if ((await dependencies.beforeNavigateToChapter?.(chapterId)) === false) return;
       const bridge = dependencies.projectWorkflowBridge;
       if (bridge === undefined) return;
 

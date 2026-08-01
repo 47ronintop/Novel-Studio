@@ -21,6 +21,7 @@ import type {
   ProjectSearchResultItem,
   ProjectWorkspaceHealth,
   StoryAnalysisCompletionMode,
+  StoryBibleMaintenanceMode,
   StoryBibleAssetType,
   StoryBibleEntityStatus
 } from "@novel-studio/application";
@@ -1101,6 +1102,10 @@ export interface StoryAnalysisApplicationPreviewProps {
 
 export interface StoryAnalysisApplicationResultProps {
   readonly applyBatchId: string;
+  readonly recordSyncWarning?: {
+    readonly code: string;
+    readonly message: string;
+  };
   readonly groups: readonly {
     readonly consistencyGroupId: string;
     readonly status: string;
@@ -1129,6 +1134,7 @@ export interface StoryAnalysisReviewProps {
     | "saving-settings"
     | "error";
   readonly completionMode: StoryAnalysisCompletionMode;
+  readonly maintenanceMode: StoryBibleMaintenanceMode;
   readonly pendingCount: number;
   readonly openIssueCount: number;
   readonly summaries: readonly StoryAnalysisReviewSummaryProps[];
@@ -1155,6 +1161,7 @@ export interface StoryAnalysisReviewProps {
   readonly onDismissIssue: (issueId: string, reason: string) => void;
   readonly onReanalyze: () => void;
   readonly onCompletionModeChange: (mode: StoryAnalysisCompletionMode) => void;
+  readonly onMaintenanceModeChange: (mode: StoryBibleMaintenanceMode) => void;
 }
 
 export interface StoryBibleEditorProps {

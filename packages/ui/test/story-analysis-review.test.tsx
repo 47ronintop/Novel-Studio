@@ -22,6 +22,35 @@ describe("Story Analysis review view", () => {
     expect(html).toContain("验证通过");
     expect(html).toContain("分组结果");
     expect(html).toContain("后台分析");
+    expect(html).toContain("资料写入方式");
+    expect(html).toContain("审查后写入");
+    expect(html).toContain("安全自动更新");
+    expect(html).toContain("进入下一章前若仍有未处理建议，系统会进行一次软提醒。");
+    expect(html).toContain("开启安全自动更新");
+  });
+
+  test("only offers the automatic-update shortcut after a successful manual write", () => {
+    const props = reviewProps();
+    const result = props.result;
+    if (result === undefined) throw new Error("Expected an application result fixture.");
+    const html = renderToStaticMarkup(
+      <StoryAnalysisReviewView
+        chapterOptions={[]}
+        entries={[]}
+        review={{
+          ...props,
+          result: {
+            ...result,
+            groups: result.groups.map((group) => ({
+              ...group,
+              status: "failed" as const
+            }))
+          }
+        }}
+      />
+    );
+
+    expect(html).not.toContain("开启安全自动更新");
   });
 });
 
@@ -36,13 +65,15 @@ function reviewProps(): StoryAnalysisReviewProps {
     domain: "character.location",
     action: "patch" as const,
     targetAssetId: `chr_${"2".repeat(32)}`,
-    operations: [{
-      op: "replace" as const,
-      path: "/summary",
-      beforePresent: true,
-      beforeValue: "旧摘要",
-      afterValue: "新摘要"
-    }],
+    operations: [
+      {
+        op: "replace" as const,
+        path: "/summary",
+        beforePresent: true,
+        beforeValue: "旧摘要",
+        afterValue: "新摘要"
+      }
+    ],
     evidence: [{ start: 12, end: 18, excerptHash: "a".repeat(64) }],
     epistemicStatus: "narrator_asserted",
     confidence: 0.97,
@@ -52,53 +83,62 @@ function reviewProps(): StoryAnalysisReviewProps {
     open: true,
     status: "ready",
     completionMode: "background-review",
+    maintenanceMode: "review",
     pendingCount: 0,
     openIssueCount: 1,
-    summaries: [{
-      workflowRunId: `wfrun_story_${"3".repeat(32)}`,
-      chapterId: "ch_01",
-      status: "completed",
-      updatedAt: "2026-07-31T00:00:00.000Z",
-      pendingSuggestionCount: 0,
-      openIssueCount: 1
-    }],
+    summaries: [
+      {
+        workflowRunId: `wfrun_story_${"3".repeat(32)}`,
+        chapterId: "ch_01",
+        status: "completed",
+        updatedAt: "2026-07-31T00:00:00.000Z",
+        pendingSuggestionCount: 0,
+        openIssueCount: 1
+      }
+    ],
     activeWorkflowRunId: `wfrun_story_${"3".repeat(32)}`,
     activeChapterId: "ch_01",
     selectedSuggestionIds: [suggestion("a").suggestionId, suggestion("b").suggestionId],
     filters: { recordType: "all", status: "all", domain: "all" },
     suggestions: [suggestion("a"), suggestion("b")],
-    issues: [{
-      issueId: `issue_${"4".repeat(32)}`,
-      revision: 1,
-      issueType: "conflict",
-      status: "open",
-      claims: [
-        { value: "北站", evidence: [{ start: 12, end: 18, excerptHash: "a".repeat(64) }] },
-        { value: "南站", evidence: [] }
-      ],
-      affectedRefs: [`chr_${"2".repeat(32)}`]
-    }],
+    issues: [
+      {
+        issueId: `issue_${"4".repeat(32)}`,
+        revision: 1,
+        issueType: "conflict",
+        status: "open",
+        claims: [
+          { value: "北站", evidence: [{ start: 12, end: 18, excerptHash: "a".repeat(64) }] },
+          { value: "南站", evidence: [] }
+        ],
+        affectedRefs: [`chr_${"2".repeat(32)}`]
+      }
+    ],
     preview: {
       changeSetId: `change_set_${"5".repeat(32)}`,
       revision: 1,
       checksum: "b".repeat(64),
-      files: [{
-        relativePath: `characters/chr_${"2".repeat(32)}.json`,
-        assetId: `chr_${"2".repeat(32)}`,
-        consistencyGroupId: groupId,
-        valid: true,
-        hunkCount: 2
-      }],
+      files: [
+        {
+          relativePath: `characters/chr_${"2".repeat(32)}.json`,
+          assetId: `chr_${"2".repeat(32)}`,
+          consistencyGroupId: groupId,
+          valid: true,
+          hunkCount: 2
+        }
+      ],
       operations: []
     },
     result: {
       applyBatchId: `apply_${"6".repeat(32)}`,
-      groups: [{
-        consistencyGroupId: groupId,
-        status: "applied",
-        versionGroupId: `vg_${"7".repeat(32)}`,
-        suggestionIds: [suggestion("a").suggestionId, suggestion("b").suggestionId]
-      }]
+      groups: [
+        {
+          consistencyGroupId: groupId,
+          status: "applied",
+          versionGroupId: `vg_${"7".repeat(32)}`,
+          suggestionIds: [suggestion("a").suggestionId, suggestion("b").suggestionId]
+        }
+      ]
     },
     onOpen: noop,
     onClose: noop,
@@ -113,7 +153,8 @@ function reviewProps(): StoryAnalysisReviewProps {
     onResolveIssue: noop,
     onDismissIssue: noop,
     onReanalyze: noop,
-    onCompletionModeChange: noop
+    onCompletionModeChange: noop,
+    onMaintenanceModeChange: noop
   };
 }
 

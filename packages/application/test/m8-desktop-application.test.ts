@@ -14,7 +14,7 @@ describe("desktop application M8 boundary", () => {
   test("exposes injected model settings and config studio sessions", async () => {
     const modelSettingsSession: ModelSettingsSession = {
       async readStoryAnalysisSettings() {
-        return ok({ completionMode: "prompt" });
+        return ok({ completionMode: "prompt", storyBibleMaintenanceMode: "review" });
       },
       async saveStoryAnalysisSettings(storyAnalysis) {
         return ok(storyAnalysis);
@@ -122,7 +122,7 @@ describe("desktop application M8 boundary", () => {
     };
     const modelSettingsSession: ModelSettingsSession = {
       async readStoryAnalysisSettings() {
-        return ok({ completionMode: "prompt" });
+        return ok({ completionMode: "prompt", storyBibleMaintenanceMode: "review" });
       },
       async saveStoryAnalysisSettings(storyAnalysis) {
         return ok(storyAnalysis);

@@ -265,6 +265,17 @@ export interface ForeshadowAnalysisResultDto {
   readonly createdAt: string;
 }
 
+/** Clone-safe notification published after a Story Analysis run completes successfully. */
+export interface StoryAnalysisCompletionEvent {
+  readonly schemaVersion: "1.0";
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly workflowRunId: string;
+  readonly trigger: "manual" | "chapter_completed";
+  readonly workflowStatus: "pending-confirmation" | "applied" | "failed";
+  readonly storyBibleChanged: boolean;
+}
+
 export interface NovelStudioApi {
   getShellState(): Promise<DesktopShellState>;
   commands: {
@@ -514,6 +525,7 @@ export interface NovelStudioApi {
     analyzeChapter(input: {
       readonly chapterId: string;
     }): Promise<Result<StoryAnalysisRecordDto, UnifiedError>>;
+    onCompletion(listener: (event: StoryAnalysisCompletionEvent) => void): () => void;
     list(): Promise<Result<readonly StoryAnalysisHistorySummary[], UnifiedError>>;
     read(workflowRunId: string): Promise<Result<StoryAnalysisRecordDto, UnifiedError>>;
     transitionRecord(

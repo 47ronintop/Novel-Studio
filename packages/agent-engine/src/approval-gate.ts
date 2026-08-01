@@ -18,7 +18,8 @@ export interface ChangeSetApprovalBinding {
 export interface ChangeSetApproval {
   readonly schemaVersion: "1.0" | "1.1";
   readonly decision: "apply_selected" | "reject_all";
-  readonly approvalSource: "human_confirmation" | "user_preapproved_run";
+  readonly approvalSource:
+    "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly resolvedAt: string;
   readonly binding: ChangeSetApprovalBinding;
 }

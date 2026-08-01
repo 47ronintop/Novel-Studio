@@ -323,7 +323,10 @@ describe("Electron security baseline", () => {
     });
     await api.settings.testModelProfileConnection("model_default");
     await api.settings.readStoryAnalysisSettings();
-    await api.settings.saveStoryAnalysisSettings({ completionMode: "background-review" });
+    await api.settings.saveStoryAnalysisSettings({
+      completionMode: "background-review",
+      storyBibleMaintenanceMode: "review"
+    });
     await api.settings.listAgentUsage({
       range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" }
     });

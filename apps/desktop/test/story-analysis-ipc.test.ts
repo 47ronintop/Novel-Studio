@@ -85,6 +85,82 @@ describe("Story Analysis IPC", () => {
     ]);
   });
 
+  test("forwards only valid clone-safe Story Analysis completion events through preload", () => {
+    let listener: ((payload: unknown) => void) | undefined;
+    const api = createNovelStudioApi({
+      async invoke() {
+        return ok(undefined);
+      },
+      on(channel, callback) {
+        expect(channel).toBe("application:story-analysis:completion");
+        listener = callback;
+        return () => undefined;
+      }
+    });
+    const received: unknown[] = [];
+    api.storyAnalysis.onCompletion((event) => received.push(event));
+
+    listener?.({
+      schemaVersion: "1.0",
+      projectId: "prj",
+      chapterId: "ch",
+      workflowRunId,
+      trigger: "manual",
+      workflowStatus: "pending-confirmation",
+      storyBibleChanged: true
+    });
+    listener?.({
+      schemaVersion: "1.0",
+      projectId: "prj",
+      chapterId: "ch",
+      workflowRunId,
+      trigger: "forged",
+      workflowStatus: "pending-confirmation",
+      storyBibleChanged: true
+    });
+
+    expect(received).toEqual([
+      {
+        schemaVersion: "1.0",
+        projectId: "prj",
+        chapterId: "ch",
+        workflowRunId,
+        trigger: "manual",
+        workflowStatus: "pending-confirmation",
+        storyBibleChanged: true
+      }
+    ]);
+  });
+
+  test("relays application completion events through Main with a cloned payload", () => {
+    let completionListener:
+      | ((event: import("@novel-studio/application").StoryAnalysisCompletionEvent) => void)
+      | undefined;
+    const published: unknown[] = [];
+    createApplicationIpcHandlers(
+      applicationWith({
+        subscribeStoryAnalysisCompletion(listener) {
+          completionListener = listener;
+          return () => undefined;
+        }
+      }),
+      { publishStoryAnalysisCompletionEvent: (event) => published.push(event) }
+    );
+    const event = {
+      schemaVersion: "1.0" as const,
+      projectId: "prj",
+      chapterId: "ch",
+      workflowRunId,
+      trigger: "manual" as const,
+      workflowStatus: "pending-confirmation" as const,
+      storyBibleChanged: true
+    };
+
+    completionListener?.(event);
+    expect(published).toEqual([event]);
+    expect(published[0]).not.toBe(event);
+  });
+
   test("projects prepared and applied Story Analysis batches without internal workflow data", async () => {
     const prepareStoryAnalysisApplication = vi.fn<
       DesktopApplication["prepareStoryAnalysisApplication"]
@@ -120,7 +196,12 @@ describe("Story Analysis IPC", () => {
       ok: true,
       value: {
         analysis: { workflowRunId },
-        batch: { applyBatchId: `apply_${"e".repeat(32)}` }
+        batch: { applyBatchId: `apply_${"e".repeat(32)}` },
+        recordSyncWarning: {
+          code: "STORY_ANALYSIS_RECORD_SYNC_FAILED",
+          message:
+            "The Story Bible transaction committed, but suggestion statuses could not be synchronized."
+        }
       }
     });
     expect(JSON.stringify(preview)).not.toContain('"workflowRun"');
@@ -128,12 +209,10 @@ describe("Story Analysis IPC", () => {
   });
 
   test("rejects malformed Story Analysis application commands before Main calls the service", async () => {
-    const prepareStoryAnalysisApplication = vi.fn<
-      DesktopApplication["prepareStoryAnalysisApplication"]
-    >();
-    const applyStoryAnalysisApplication = vi.fn<
-      DesktopApplication["applyStoryAnalysisApplication"]
-    >();
+    const prepareStoryAnalysisApplication =
+      vi.fn<DesktopApplication["prepareStoryAnalysisApplication"]>();
+    const applyStoryAnalysisApplication =
+      vi.fn<DesktopApplication["applyStoryAnalysisApplication"]>();
     const handlers = createApplicationIpcHandlers(
       applicationWith({ prepareStoryAnalysisApplication, applyStoryAnalysisApplication })
     );
@@ -152,7 +231,10 @@ describe("Story Analysis IPC", () => {
     });
 
     expect(split).toMatchObject({ ok: false, error: { code: "STORY_ANALYSIS_IPC_INPUT_INVALID" } });
-    expect(forged).toMatchObject({ ok: false, error: { code: "STORY_ANALYSIS_IPC_INPUT_INVALID" } });
+    expect(forged).toMatchObject({
+      ok: false,
+      error: { code: "STORY_ANALYSIS_IPC_INPUT_INVALID" }
+    });
     expect(prepareStoryAnalysisApplication).not.toHaveBeenCalled();
     expect(applyStoryAnalysisApplication).not.toHaveBeenCalled();
   });
@@ -161,9 +243,7 @@ describe("Story Analysis IPC", () => {
     const analyzeChapterStory = vi.fn<DesktopApplication["analyzeChapterStory"]>(async () =>
       ok(historyRecord())
     );
-    const handlers = createApplicationIpcHandlers(
-      applicationWith({ analyzeChapterStory })
-    );
+    const handlers = createApplicationIpcHandlers(applicationWith({ analyzeChapterStory }));
 
     const result = await handlers["application:story-analysis:analyze"]({
       chapterId: "ch_opening"
@@ -276,12 +356,12 @@ describe("Story Analysis IPC", () => {
     await expect(handlers["application:story-analysis:list"]()).resolves.toEqual(
       ok([validSummary])
     );
-    await expect(
-      handlers["application:story-analysis:read"](workflowRunId)
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { code: "STORY_ANALYSIS_IPC_RESULT_INVALID" }
-    });
+    await expect(handlers["application:story-analysis:read"](workflowRunId)).resolves.toMatchObject(
+      {
+        ok: false,
+        error: { code: "STORY_ANALYSIS_IPC_RESULT_INVALID" }
+      }
+    );
   });
 
   test("redacts application error details", async () => {
@@ -434,7 +514,16 @@ function applicationResult(): StoryAnalysisApplicationResult {
       changeSetId,
       selectionChecksum: "a".repeat(64),
       groups: [{ consistencyGroupId: "cgrp_location", status: "applied" }]
-    }
+    },
+    recordSyncWarning: createUnifiedError({
+      code: "STORY_ANALYSIS_RECORD_SYNC_FAILED",
+      category: "SystemError",
+      message:
+        "The Story Bible transaction committed, but suggestion statuses could not be synchronized.",
+      recoverability: "user-action",
+      suggestedAction: "Review the Story Bible transaction before retrying.",
+      traceId: "story-analysis-ipc-test"
+    })
   };
 }
 

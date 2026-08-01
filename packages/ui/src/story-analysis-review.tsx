@@ -162,36 +162,75 @@ export function StoryAnalysisReviewView({
       </div>
 
       <section aria-label="章后资料分析设置" className="ns-story-analysis-settings">
-        <div className="ns-story-analysis-settings-label">
-          <Settings2 aria-hidden="true" size={14} />
-          <span>章节完成后</span>
+        <div className="ns-story-analysis-setting-row">
+          <div className="ns-story-analysis-settings-label">
+            <Settings2 aria-hidden="true" size={14} />
+            <span>章节完成后</span>
+          </div>
+          <div
+            aria-label="章节完成后的资料分析方式"
+            className="ns-segmented-control"
+            role="radiogroup"
+          >
+            {(
+              [
+                ["off", "关闭"],
+                ["prompt", "询问"],
+                ["background-review", "后台分析"]
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                aria-checked={review.completionMode === mode}
+                className="ns-segmented-control-option"
+                data-active={review.completionMode === mode}
+                disabled={busy}
+                key={mode}
+                onClick={() => review.onCompletionModeChange(mode)}
+                role="radio"
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div
-          aria-label="章节完成后的资料分析方式"
-          className="ns-segmented-control"
-          role="radiogroup"
-        >
-          {(
-            [
-              ["off", "关闭"],
-              ["prompt", "询问"],
-              ["background-review", "后台分析"]
-            ] as const
-          ).map(([mode, label]) => (
-            <button
-              aria-checked={review.completionMode === mode}
-              className="ns-segmented-control-option"
-              data-active={review.completionMode === mode}
-              disabled={busy}
-              key={mode}
-              onClick={() => review.onCompletionModeChange(mode)}
-              role="radio"
-              type="button"
-            >
-              {label}
-            </button>
-          ))}
+        <div className="ns-story-analysis-setting-row">
+          <div className="ns-story-analysis-settings-label">
+            <ShieldCheck aria-hidden="true" size={14} />
+            <span>资料写入方式</span>
+          </div>
+          <div
+            aria-label="章后资料写入方式"
+            className="ns-segmented-control"
+            data-options="2"
+            role="radiogroup"
+          >
+            {(
+              [
+                ["review", "审查后写入"],
+                ["safe-auto", "安全自动更新"]
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                aria-checked={review.maintenanceMode === mode}
+                className="ns-segmented-control-option"
+                data-active={review.maintenanceMode === mode}
+                disabled={busy}
+                key={mode}
+                onClick={() => review.onMaintenanceModeChange(mode)}
+                role="radio"
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
+        <p className="ns-story-analysis-settings-help">
+          {review.maintenanceMode === "safe-auto"
+            ? "只自动应用高置信度、无冲突且可撤销的安全更新；其余建议仍需审查。"
+            : "当前需要确认后写入。进入下一章前若仍有未处理建议，系统会进行一次软提醒。"}
+        </p>
       </section>
 
       {review.feedback === undefined ? null : (
@@ -357,6 +396,27 @@ export function StoryAnalysisReviewView({
                   </li>
                 ))}
               </ul>
+              {review.result.recordSyncWarning === undefined ? null : (
+                <p role="alert" className="ns-story-analysis-result-warning">
+                  资料已写入，但建议状态同步失败（{review.result.recordSyncWarning.code}）：
+                  {review.result.recordSyncWarning.message}
+                </p>
+              )}
+              {review.maintenanceMode === "review" &&
+              review.result.groups.some((group) => group.status === "applied") ? (
+                <div className="ns-story-analysis-auto-guide">
+                  <span>经常确认同类安全更新？可以为后续章节开启安全自动更新。</span>
+                  <button
+                    className="ns-icon-text-button"
+                    disabled={busy}
+                    onClick={() => review.onMaintenanceModeChange("safe-auto")}
+                    type="button"
+                  >
+                    <ShieldCheck aria-hidden="true" size={14} />
+                    开启安全自动更新
+                  </button>
+                </div>
+              ) : null}
             </section>
           )}
         </div>

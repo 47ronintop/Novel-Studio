@@ -377,6 +377,22 @@ export function App() {
     },
     [chapterBridge]
   );
+  const storyAnalysisWorkspace = useStoryAnalysisWorkspace({
+    api,
+    activeCreativeProjectId,
+    activeCreativeWorkspaceId,
+    activeChapterId: projectWorkflow?.activeChapterId,
+    projectWorkflow,
+    chapterBridge,
+    chapterEditor,
+    projectWorkflowBridge,
+    storyBibleBridge,
+    storyBibleEditor,
+    setChapterEditor,
+    setProjectWorkflow,
+    setStoryBible,
+    setStoryBibleEditor
+  });
   const {
     handleProjectTitleChange,
     handleProjectFolderNameChange,
@@ -419,6 +435,7 @@ export function App() {
     storyBibleBridge,
     studioBridge,
     beforeWorkspaceTransition: guardWorkspaceTransition,
+    beforeCreateChapter: storyAnalysisWorkspace.beforeCreateChapter,
     setChapterEditor,
     clearFileEditor,
     setProjectWorkflow,
@@ -643,6 +660,7 @@ export function App() {
     creativeProjectFilesBridge,
     canLeaveCreativeFile: guardWorkspaceTransition,
     canLeaveStoryBibleDraft: guardStoryBibleDraft,
+    beforeNavigateToChapter: storyAnalysisWorkspace.beforeNavigateToChapter,
     setShellState,
     setProjectWorkflow,
     setChapterEditor,
@@ -807,21 +825,6 @@ export function App() {
     handleStudioRestoreVersion
   } = useStudioActions(studioBridge, setStudio);
 
-  const storyAnalysisWorkspace = useStoryAnalysisWorkspace({
-    api,
-    activeCreativeProjectId,
-    activeCreativeWorkspaceId,
-    activeChapterId: projectWorkflow?.activeChapterId,
-    chapterBridge,
-    chapterEditor,
-    projectWorkflowBridge,
-    storyBibleBridge,
-    storyBibleEditor,
-    setChapterEditor,
-    setProjectWorkflow,
-    setStoryBible,
-    setStoryBibleEditor
-  });
   const interactiveChapterEditor =
     chapterEditor === undefined
       ? undefined

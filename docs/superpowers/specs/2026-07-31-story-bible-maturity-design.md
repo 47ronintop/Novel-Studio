@@ -2,13 +2,13 @@
 
 **日期：** 2026-07-31
 
-**状态：** Proposed
+**状态：** Implemented（2026-08-02 补齐章后资料维护模式）
 
 **前置设计：** `docs/superpowers/specs/2026-07-29-story-bible-focused-redesign-design.md`
 
 **实施基线：** `9fe1d9d`
 
-**范围：** 在 7.29 五类故事资料重设计已经完成的基础上，补齐长篇小说所需的数据合同、Agent 全量发现与安全 CRUD、章节完成后的资料更新建议，以及大项目下的可扩展性。不增加新的一级资料入口，不允许 AI 静默修改作者事实。
+**范围：** 在 7.29 五类故事资料重设计已经完成的基础上，补齐长篇小说所需的数据合同、Agent 全量发现与安全 CRUD、章节完成后的资料更新建议，以及大项目下的可扩展性。不增加新的一级资料入口；AI 不得绕过作者选择的维护模式修改事实，安全自动更新仅应用作者预授权、可验证且可撤销的低风险建议。
 
 ---
 
@@ -20,7 +20,7 @@ Story Bible 应同时满足四个目标：
 
 1. 五类资料能够持续承载完整长篇小说，而不是只保存摘要。
 2. 作者和右侧 Agent 能发现并操作任意资料条目，不受项目规模和上下文目录截断影响。
-3. 完成章节后，系统能主动发现应更新的资料，但任何事实写入都必须经过作者确认。
+3. 完成章节后，系统能主动发现应更新的资料；作者可以逐次审查确认，也可以显式预授权严格受限的安全自动更新。
 4. UI、Agent、Repository、搜索和 Context 使用同一份数据合同，不允许出现“UI 能保存、Agent 能写入，但其他入口无法正确读取”的分叉。
 
 ### 1.2 已确认的一级信息架构
@@ -68,20 +68,22 @@ Story Bible 应同时满足四个目标：
 
 ## 3. 设计原则
 
-### 3.1 五类资料是作者确认事实来源
+### 3.1 五类资料是作者控制的事实来源
 
-- Story Bible 是作者确认过的结构化事实；正文是证据来源，不因“写进正文”就自动成为客观事实。
+- Story Bible 是作者确认或按其安全策略预授权写入的结构化事实；正文是证据来源，不因“写进正文”就自动成为客观事实。
 - 分析必须区分客观叙述、人物对白、人物认知、传闻、模型推断和无法判断。人物说过一句话，只能直接证明“人物说过/相信过”，不能直接证明话中内容为真。
-- AI 从正文提取出的观察和事实变更先进入建议队列，未确认前不得参与正式 Story Bible Context。
+- AI 从正文提取出的观察和事实变更先进入建议队列；只有人工确认或通过安全自动策略并完成事务提交后，才进入正式 Story Bible Context。
 - 发现正文与资料矛盾时生成一致性问题，由作者判断哪一方需要修正；系统不得静默以正文覆盖旧资料，也不得以旧资料否定正文。
 - 大纲中的“计划”与正文中的“实际结果”必须分开保存，禁止 AI 用已写正文覆盖原计划。
 
-### 3.2 自动分析，人工写入
+### 3.2 自动分析，作者控制写入
 
 - 系统可以自动启动只读分析。
 - 模型只能返回结构化候选。
 - Application 必须验证、去重并生成字段差异。
-- 作者确认后才进入 Change Set 和 Repository。
+- 默认由作者确认后进入 Change Set 和 Repository。
+- 作者显式开启安全自动更新后，只有完整一致性组内全部满足高置信度、客观叙述、证据/章节依赖、无开放冲突、非创建、非删除和路径白名单的建议，才能获得一次性内部授权；其余建议继续留在人工审查队列。
+- 安全自动更新仍必须经过同一 Change Set、Version Group、transaction journal、History、Recovery 和 undo 链路，不允许模型直接写文件。
 - 自动分析不得提出物理删除；低置信度建议默认不选中。
 
 ### 3.3 单一验证路径
@@ -115,7 +117,7 @@ Renderer 只能进行即时表单提示，不能成为唯一的业务校验层�
 章节分析产生三层不同数据：
 
 ```text
-正文证据 -> StoryObservation -> StoryFactDelta / review_issue -> 作者确认 -> Story Bible
+正文证据 -> StoryObservation -> StoryFactDelta / review_issue -> 人工确认 / 安全策略预授权 -> Story Bible
 ```
 
 - `StoryObservation` 只描述“文本中出现了什么”，不宣称其为作者事实。
@@ -498,11 +500,18 @@ writing profile 增加结构化 Story Bible 工具：
 
 ### 7.1 触发方式
 
-项目设置提供三档：
+章节完成分析设置提供三档：
 
 1. `off`：关闭自动分析，保留手动分析。
 2. `prompt`：标记章节完成后询问是否分析，默认值。
-3. `background-review`：标记章节完成后自动分析，但结果只进入待审查队列。
+3. `background-review`：标记章节完成后自动分析；分析结果随后按资料维护模式处理。
+
+资料维护模式是与分析触发方式正交的第二个设置：
+
+1. `review`：默认值。建议进入审查队列，作者确认后写入。
+2. `safe-auto`：分析完成后自动尝试应用安全完整组；未通过安全策略或应用失败的建议保留给作者审查。
+
+运行必须在分析结束后重新读取维护模式，使作者在分析期间修改的设置立即生效。关闭自动分析不禁止作者手动分析；手动分析同样遵循当前资料维护模式。
 
 普通 `Ctrl+S` 不触发分析。触发条件是章节状态从非完成变为完成，或作者显式选择“分析本章资料更新”。
 
@@ -766,7 +775,11 @@ open -> resolved
 - transaction journal v1.1 同步保存可选的 `applyBatchId` 和 `consistencyGroupId`，恢复、补偿和重试以 journal 中的组级幂等键为准；旧 journal 只按 `versionGroupId` 兼容读取。
 - 每组先完成全部候选、引用和 CAS 预检。写入中途失败时由现有 journal 执行补偿；补偿成功记为 `rolled_back`，补偿失败沿用 `partial_failure / awaiting_review` 和 recovery review，任何非 `applied` 结果都不能对外宣称成功。
 - `StoryBibleApplyReceipt` 持久化为 Version Group 的受限领域元数据，并可从 Version Group、journal 和 History 重建展示投影；它记录 `changeSetId`、`consistencyGroupId`、before/after revision/checksum、History 版本和供 UI 展示的 inverse patch，但不替代这些权威记录。
-- 搜索索引、Context invalidation 和 Renderer 成功通知只能在对应 Version Group 进入 `applied` 后发生；`rolled_back` 或 recovery review 只发恢复状态，不发布半套事实。
+- 搜索索引、Context 成功发布和 Renderer 成功通知只能在对应 Version Group 进入 `applied` 后发生；`rolled_back` 或 recovery review 只发恢复状态，不把半套事实宣称为成功。`partial_failure` 可能已经留下未能补偿的磁盘写入，因此必须对分析启动时捕获的原项目保守失效 Story Bible 缓存与搜索绑定，并提示恢复检查；这种失效只防止继续使用旧缓存，不代表确认或发布半套事实。
+- 安全自动更新使用独立审计来源 `project_safe_auto_update`，不得伪装成 `human_confirmation` 或复用 Agent 的 `user_preapproved_run`。
+- 公共 approval gate 仍只能生成 `human_confirmation`；Application 仅在安全策略选中完整组后，用不可外部构造的一次性对象授权升级来源，Version Group 消费授权后立即失效。伪造相同字符串必须在事务开始前拒绝。
+- `project_safe_auto_update` 禁止所有文件生命周期 operation，只允许带完整 `applyBatchId + consistencyGroupId + selectionChecksum`、非空 suggestion IDs 和 Story Bible receipt 的 patch 写入。Recovery 必须验证这些字段，undo 行为与人工 Version Group 相同。
+- 安全策略采用 fail-closed：置信度至少 `0.95`、`narrator_asserted`、有正文证据及匹配章节 checksum、目标已是 revision 大于等于 1 的 v1.1 资料、无开放问题、仅 `add/replace` 且命中人物/物品当前状态、伏笔跟踪状态或章纲实际结果白名单；任一组员不满足时整组转人工审查。时间线、状态历史、知识状态、伏笔节点和 deviations 等集合在具备“旧条目全部保留”的单调追加证明前继续人工审查，禁止用整数组 replace 绕过 remove 限制。
 
 ## 8. UI 完善
 
@@ -811,6 +824,14 @@ open -> resolved
 - 章节完成后只显示非阻塞结果，例如“发现 7 条资料更新建议”。
 - 分析失败不影响章节保存和完成状态。
 - 作者可以关闭提示、稍后审查、打开本次 `analysisRun` 详情或重新分析。
+- 审查页同时展示“章节完成后”和“资料写入方式”两个独立选项，并明确安全自动更新只处理高置信、无冲突、可撤销建议。
+- 人工模式成功应用建议后，在结果旁提供“开启安全自动更新”引导；切换设置时保存完整的两个维度，不能互相覆盖。
+- 人工模式下，进入更后章节或新建下一章前，如果上一已完成章节仍有未应用建议、开放问题或未完成/失败分析，显示一次非阻断软提醒。作者可以继续，且同一来源到目标在当前会话不重复提醒；取消则留在当前章。
+- 安全自动模式或提醒检查暂时不可用时不阻断写作；自动应用失败也不影响章节保存，并继续保留可人工处理的分析记录。
+- 后台分析在真正写入 queued run 前先登记 Renderer 本地 scheduled 标记；完成事件到达后再清除，避免用户立刻进入下一章时出现检查空窗。人工触发的完成事件不得误清后台 scheduled 标记。
+- 成功分析统一发布带 `projectId / chapterId / workflowRunId / storyBibleChanged` 的 clone-safe 完成事件。Renderer 只接收当前 project/workspace scope 的事件，刷新全部分析运行概览；Story Bible 无未保存草稿时刷新权威快照，有 dirty 草稿时保留草稿并显示外部更新提示。
+- 软提醒检查同一章节的全部分析运行，不能只看最新一次；较旧运行中的 `pending / accepted / failed` 建议、开放问题和未完成/失败运行仍算待处理。
+- Version Group 已经 durable 提交后，即使建议状态投影同步失败，也返回 batch 和最后持久化的分析记录，并显示“资料已写入、状态同步待恢复”，不得把它降级成普通未写入失败或诱导重复提交。
 
 ## 9. 分层职责
 
@@ -828,6 +849,7 @@ open -> resolved
 - 结构化 patch、软删除和恢复语义。
 - `StoryObservation` 解析、事实认知层级路由、Delta、review issue 和实体消歧。
 - 章节更新建议状态机、去重、合并、精确 stale 检查、一致性组和 Change Set 生成。
+- 解析人工/安全自动维护模式，执行 fail-closed 安全组选择，并为自动来源签发和消费进程内一次性授权。
 - 扩展现有 `VersionGroupSession` 的批量应用：一次验证 group-aware approval，生成不可复用的组级内部授权，再按一致性组调用既有事务；不得重复消费同一个用户 approval token。
 - 搜索和 Context invalidation。
 
@@ -863,7 +885,7 @@ open -> resolved
 
 - 作者保存该资产。
 - 作者确认针对该资产的 Agent Change Set。
-- 作者确认章节更新建议。
+- 作者确认章节更新建议，或已是 v1.1 的目标通过作者预授权的安全自动策略；v1.0 懒升级仍必须人工预览确认。
 
 升级预览必须显示结构变化；如果只是规范化且不改变作者语义，可以与当前字段修改合并为一次保存。
 
@@ -908,7 +930,7 @@ open -> resolved
 - 在现有 run history/usage 基础上增加 `analysisRun`、`StoryObservation`、`StoryFactDelta`、suggestion 和带完整生命周期的 `review_issue` schema。
 - 实现一次 Observer、九类观察、确定性实体解析、事实认知层级路由和按需补充分析。
 - 实现证据范围、去重、冲突、相关依赖和精确 stale 检测。
-- 持久化待审查队列和状态机，但暂不开放自动写入。
+- 持久化待审查队列和状态机；本批次只产出建议，安全自动写入在批次 D 接入既有事务后开放。
 
 完成标准：分析失败不影响章节保存；未确认观察和建议绝不改变 Story Bible；对白或传闻不会被误写成客观事实。
 
@@ -920,6 +942,7 @@ open -> resolved
 - 人物当前状态与状态历史。
 - 大纲 actual outcome/deviations 和场景节拍。
 - 伏笔推进节点与结构化时间编辑。
+- 人工审查 / 安全自动维护模式、开启引导和进入下一章的非阻断软提醒。
 
 完成标准：作者无需手写任何资产 ID 或 JSON；跨人物、物品和时间线的同组更新不会部分落盘。
 
@@ -960,11 +983,14 @@ open -> resolved
 
 - 普通保存不触发模型。
 - 完成章节按项目设置触发或提示分析。
+- 分析触发方式与资料维护方式可以独立设置；旧设置缺少维护字段时默认 `review`。
 - 一个逻辑分析运行覆盖九类观察，只有明确缺口才触发领域补充分析。
 - 每次运行可追溯章节 checksum、实际召回资产 revision/checksum、模型、提示词、提取器、验证结果、用量和失败原因。
 - 实际召回清单与发送 payload 绑定 Context Snapshot checksum，prompt checksum 和 usage record 可跨重启追溯。
 - 五类建议均有正文字符范围、认知层级和字段 diff。
-- 未确认、已拒绝或已过期建议不改变资料。
+- 人工模式下未确认、已拒绝或已过期建议不改变资料；安全自动模式下只有满足完整安全策略的一致性组可以改变资料。
+- 安全自动应用失败不影响章节完成和分析结果；未自动应用的建议仍可人工审查。
+- 安全自动来源不可由公共 approval API 伪造，且创建、删除、关系、核心设定、敏感路径、低置信度、非客观叙述和开放冲突不会自动写入。
 - 重复分析不会生成重复建议。
 - 矛盾、歧义和逾期伏笔进入 `review_issue`，系统不擅自选择事实。
 - `review_issue` 的解决、忽略、stale 和 supersede 均可跨重启恢复，且不会进入 change suggestion 的 accepted/applied 状态。
@@ -973,9 +999,10 @@ open -> resolved
 ### 12.4 一致性与回滚
 
 - 同一一致性组内任一预检失败时不启动写入；写入中途失败时由现有 journal 补偿，只有所有目标成功时 Version Group 才能进入 `applied`。
-- 补偿失败进入现有 `partial_failure / awaiting_review` 和 recovery review，不能误报成功或发布搜索/Context 更新。
+- 补偿失败进入现有 `partial_failure / awaiting_review` 和 recovery review，不能误报成功或发布 Context 成功更新；同时必须保守失效原项目缓存和搜索绑定，避免后续写作继续读取事务前旧快照。
 - 只有独立一致性组可以在同一 apply batch 中部分成功，重试不会重复已 applied 的 Version Group。
 - Version Group 的 Story Bible receipt 投影包含所有目标的 before/after revision/checksum、History 版本和 inverse patch，但事务与撤销仍以既有 journal/undo metadata 为准。
+- `project_safe_auto_update` journal 必须包含完整组绑定、非空建议 ID 和有效 Story Bible receipt；破坏性 operation 或缺失字段的 journal 在写入和恢复读取时均被拒绝。
 - 回滚只触及对应版本组；基线之后又被修改时必须重新审查，不能覆盖新内容。
 - 进程在事务任一阶段中断后，重启沿用现有 transaction recovery，最终进入 `applied`、`rolled_back` 或明确的 recovery review，不存在被当作成功使用的半套事实。
 
@@ -984,6 +1011,8 @@ open -> resolved
 - 作者无需输入 ID。
 - 已删除、缺失和冲突引用有不同视觉状态。
 - 建议队列不增加第六个故事资料一级类目。
+- 作者能在审查页切换“审查后写入 / 安全自动更新”，并能看到自动更新的限制说明和快捷开启引导。
+- 人工模式带未处理资料进入下一章时收到一次软提醒；继续写作不被硬阻断，安全自动模式不显示该人工确认提醒。
 - 作者可以从按需 Context 检查器查看资料为何进入、固定或排除来源，并预览最终打包后的作者项目上下文；消息流不常驻 context/token 大卡片。
 - 固定内容超出预算时有明确阻断，不会静默截断或用摘要替换。
 - 小窗口和 Agent 面板开启时无横向滚动、遮挡或文本截断。
@@ -1003,7 +1032,7 @@ open -> resolved
 
 本项目继续以现有 `packages/repository/src/story-bible-repository.ts`、`packages/agent-engine/src/tool-registry.ts`、`packages/agent-engine/src/context-snapshot.ts`、`packages/agent-engine/src/version-group.ts`、`packages/agent-engine/src/transaction-journal.ts`、`packages/application/src/version-group-session.ts`、Change Set、History、Recovery 和 undo 为实施基线。外部参考不成为运行时依赖，也不引入第二份权威存储、第二套事务、第二套工具协议或第二套 Context 管线。
 
-采用判断遵循三条标准：能否解决当前已确认缺口，能否落入现有架构边界，能否维持作者确认、revision 校验和可逆写入。仅仅因为参考项目存在某项功能，不构成本项目增加该功能的理由。
+采用判断遵循三条标准：能否解决当前已确认缺口，能否落入现有架构边界，能否维持作者授权、revision 校验和可逆写入。仅仅因为参考项目存在某项功能，不构成本项目增加该功能的理由。
 
 ## 14. 最终产品判断
 
@@ -1011,7 +1040,23 @@ open -> resolved
 
 - 数据结构能够长期承载完整长篇小说。
 - Agent 能可靠发现并安全操作所有条目。
-- 章节完成后资料维护由系统主动发现、作者集中确认，不再依赖完全手工维护，也不走无人监管的自动写入。
-- AI 提供自动化效率，但作者始终控制事实写入。
+- 章节完成后资料维护由系统主动发现；作者可以集中确认，也可以显式开启受限、可审计、可撤销的安全自动更新，不再依赖完全手工维护。
+- AI 提供自动化效率，但作者始终通过维护模式和安全边界控制事实写入。
 - 大项目、旧项目和多入口修改使用同一份可验证合同；跨资产事实具有原子性、审计记录和选择性回滚能力。
 - Agent Context 的来源、取舍和实际发送内容对作者可解释、可调整、可复现。
+
+## 15. 2026-08-02 实施验证记录
+
+本轮章后资料维护模式完成后，按风险边界执行了以下验证：
+
+| 验证项                                                                | 结果                                              |
+| --------------------------------------------------------------------- | ------------------------------------------------- |
+| 本次变更文件 Prettier                                                 | 通过                                              |
+| `npm run typecheck`                                                   | 通过                                              |
+| `npm run lint`                                                        | 通过                                              |
+| `npm run build`                                                       | 通过；仅保留 Vite 既有的大 chunk 提示，无构建错误 |
+| Story Analysis / Version Group / transaction / Renderer / UI 聚焦测试 | 19 个文件、292 项通过                             |
+| `npm test` 全仓测试                                                   | 242 个文件、2674 项通过                           |
+| `git diff --check`                                                    | 通过                                              |
+
+验证覆盖安全自动来源伪造、破坏性 operation 和不完整组拒绝、Recovery 收据/写入项一一绑定及 v1.1 Story Bible 候选严格校验、事务故障与恢复、post-commit 状态同步失败、`partial_failure` 缓存失效、项目切换、完成事件 IPC 校验、后台 scheduled 空窗、旧分析运行待审、dirty Story Bible 草稿保护、人工确认引导与软提醒。全仓历史格式债务不在本功能范围内；本次实际修改文件均单独通过格式检查。

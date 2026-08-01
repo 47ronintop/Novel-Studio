@@ -132,6 +132,7 @@ import type {
   StoryAnalysisApplicationResult,
   StoryAnalysisApplicationSession
 } from "./story-analysis-application-session.js";
+import type { VersionGroupApplyBatchResult } from "./version-group-session.js";
 import type {
   StoryBibleExplicitInverseApplyResult,
   StoryBibleExplicitInverseCancelResult,
@@ -145,6 +146,7 @@ import type {
   UserPreferencesSnapshot
 } from "./user-preferences-session.js";
 import type { ContextCandidate } from "@novel-studio/context-engine";
+import type { StoryAnalysisCompletionEvent } from "./novel-studio-api.js";
 
 export type ActivityId = "workspace" | "search" | "storyBible" | "timeline" | "studio" | "settings";
 
@@ -362,6 +364,9 @@ export interface DesktopApplication {
   analyzeChapterStory(
     input: AnalyzeChapterStoryInput
   ): Promise<Result<StoryAnalysisHistoryRecord, UnifiedError>>;
+  subscribeStoryAnalysisCompletion(
+    listener: (event: StoryAnalysisCompletionEvent) => void
+  ): () => void;
   listStoryAnalyses(): Promise<Result<readonly StoryAnalysisHistorySummary[], UnifiedError>>;
   readStoryAnalysis(
     workflowRunId: string
@@ -504,6 +509,12 @@ interface ActiveProjectSearchBinding {
   readonly session: ProjectSearchSession;
 }
 
+interface StoryAnalysisExecutionBinding {
+  readonly projectId: string;
+  readonly projectRoot: string;
+  readonly searchBinding?: ActiveProjectSearchBinding;
+}
+
 const DEFAULT_SHELL_STATE: DesktopShellState = {
   projectTitle: "未打开项目",
   activeActivity: "workspace",
@@ -564,6 +575,7 @@ export function createDesktopApplication(
   const createAiWritingWorkflowSession = options.createAiWritingWorkflowSession;
   let dynamicAiWritingWorkflowSession: AiWritingWorkflowSession | undefined;
   let dynamicAiChapterEditorSession: ChapterEditorSession | undefined;
+  const storyAnalysisCompletionListeners = new Set<(event: StoryAnalysisCompletionEvent) => void>();
   let shellState = createInitialShellState(options);
 
   const refreshProjectSearchBinding = (projectRoot: string | undefined): void => {
@@ -607,6 +619,10 @@ export function createDesktopApplication(
   };
 
   return {
+    subscribeStoryAnalysisCompletion(listener) {
+      storyAnalysisCompletionListeners.add(listener);
+      return () => storyAnalysisCompletionListeners.delete(listener);
+    },
     async shutdown() {
       let firstError: UnifiedError | undefined;
       for (const [activationId, record] of [...activationRecords]) {
@@ -1152,7 +1168,7 @@ export function createDesktopApplication(
         return storyBibleUnavailable();
       }
       const generation = projectScopeGeneration;
-      const result = await createStoryAnalysisSession(projectRoot).analyzeChapter(input);
+      const result = await analyzeChapterWithMaintenance(projectRoot, input, generation);
       if (
         generation !== projectScopeGeneration ||
         activeEngineeringWorkspaceSession !== undefined ||
@@ -1237,14 +1253,26 @@ export function createDesktopApplication(
         return storyBibleUnavailable();
       }
       const generation = projectScopeGeneration;
+      const execution = captureStoryAnalysisExecution(projectRoot);
       const result =
         await createStoryAnalysisApplicationSession(projectRoot).applyApplication(input);
+      if (result.ok && didStoryBibleChange(result.value.batch)) {
+        if (isActiveProjectScope(projectRoot, generation)) {
+          try {
+            storyBibleSession?.clearSnapshot?.();
+          } catch {
+            // The durable batch already committed; the visible cache can retry on its next read.
+          }
+        }
+        await invalidateProjectSearchBinding(execution?.searchBinding, "story-bible-save");
+      }
       if (
         generation !== projectScopeGeneration ||
         activeEngineeringWorkspaceSession !== undefined ||
         activeProjectWorkspaceSession?.getSnapshot()?.projectRoot !== projectRoot
       ) {
-        return storyAnalysisWorkspaceChanged();
+        // Do not hide a durable apply/partial-failure outcome behind a workspace transition.
+        return result.ok ? result : storyAnalysisWorkspaceChanged();
       }
       return result;
     },
@@ -1679,7 +1707,14 @@ export function createDesktopApplication(
   async function invalidateActiveProjectSearch(
     reason: ProjectSearchInvalidationReason
   ): Promise<void> {
-    const session = activeProjectSearchBinding?.session;
+    await invalidateProjectSearchBinding(activeProjectSearchBinding, reason);
+  }
+
+  async function invalidateProjectSearchBinding(
+    binding: ActiveProjectSearchBinding | undefined,
+    reason: ProjectSearchInvalidationReason
+  ): Promise<void> {
+    const session = binding?.session;
     if (session === undefined) {
       return;
     }
@@ -1729,7 +1764,12 @@ export function createDesktopApplication(
 
     try {
       const session = createStoryAnalysisSession(workspace.projectRoot);
-      void session.analyzeChapter({ chapterId, trigger: "chapter_completed" }).then(
+      void analyzeChapterWithMaintenance(
+        workspace.projectRoot,
+        { chapterId, trigger: "chapter_completed" },
+        generation,
+        session
+      ).then(
         () => undefined,
         () => undefined
       );
@@ -1737,6 +1777,131 @@ export function createDesktopApplication(
     } catch {
       return { status: "unavailable", code: "STORY_ANALYSIS_SCHEDULE_FAILED" };
     }
+  }
+
+  /**
+   * Runs Story Analysis and, when it is explicitly enabled at completion time, applies only the
+   * safe subset. Analysis remains useful even if the optional maintenance step cannot run.
+   */
+  async function analyzeChapterWithMaintenance(
+    projectRoot: string,
+    input: AnalyzeChapterStoryInput,
+    generation: number,
+    analysisSession = createStoryAnalysisSession?.(projectRoot)
+  ): Promise<Result<StoryAnalysisHistoryRecord, UnifiedError>> {
+    if (analysisSession === undefined) {
+      return storyBibleUnavailable();
+    }
+    const execution = captureStoryAnalysisExecution(projectRoot);
+    const analyzed = await analysisSession.analyzeChapter(input);
+    if (!analyzed.ok) return analyzed;
+
+    // Read after analysis so a settings change made while the analysis was running takes effect.
+    let settings: Result<StoryAnalysisSettings, UnifiedError>;
+    try {
+      settings =
+        modelSettingsSession === undefined
+          ? ok(DEFAULT_STORY_ANALYSIS_SETTINGS)
+          : await modelSettingsSession.readStoryAnalysisSettings();
+    } catch {
+      publishStoryAnalysisCompletion(execution, input, analyzed.value, false);
+      return analyzed;
+    }
+    if (
+      !settings.ok ||
+      settings.value.storyBibleMaintenanceMode !== "safe-auto" ||
+      createStoryAnalysisApplicationSession === undefined
+    ) {
+      publishStoryAnalysisCompletion(execution, input, analyzed.value, false);
+      return analyzed;
+    }
+
+    try {
+      const applied = await createStoryAnalysisApplicationSession(
+        projectRoot
+      ).autoApplySafeSuggestions({
+        workflowRunId: analyzed.value.workflowRun.workflowRunId
+      });
+      if (!applied.ok) {
+        publishStoryAnalysisCompletion(execution, input, analyzed.value, false);
+        return analyzed;
+      }
+
+      const storyBibleChanged = didStoryBibleChange(applied.value.batch);
+      if (storyBibleChanged) {
+        if (isActiveProjectScope(projectRoot, generation)) {
+          try {
+            storyBibleSession?.clearSnapshot?.();
+          } catch {
+            // The Story Bible write already committed; the cache can be refreshed on the next read.
+          }
+        }
+        await invalidateProjectSearchBinding(execution?.searchBinding, "story-bible-save");
+      }
+      publishStoryAnalysisCompletion(execution, input, applied.value.analysis, storyBibleChanged);
+      return ok(applied.value.analysis);
+    } catch {
+      // A completed chapter and its analysis must not be rolled back by optional maintenance.
+      publishStoryAnalysisCompletion(execution, input, analyzed.value, false);
+      return analyzed;
+    }
+  }
+
+  function captureStoryAnalysisExecution(
+    projectRoot: string
+  ): StoryAnalysisExecutionBinding | undefined {
+    const project = activeProjectWorkspaceSession?.getSnapshot();
+    if (project?.projectRoot !== projectRoot) return undefined;
+    const activeBinding = activeProjectSearchBinding;
+    return {
+      projectId: project.project.projectId,
+      projectRoot,
+      ...(activeBinding?.projectRoot === projectRoot &&
+      activeBinding.projectId === project.project.projectId
+        ? { searchBinding: activeBinding }
+        : {})
+    };
+  }
+
+  function publishStoryAnalysisCompletion(
+    execution: StoryAnalysisExecutionBinding | undefined,
+    input: AnalyzeChapterStoryInput,
+    analysis: StoryAnalysisHistoryRecord,
+    storyBibleChanged: boolean
+  ): void {
+    if (execution === undefined) return;
+    const event: StoryAnalysisCompletionEvent = {
+      schemaVersion: "1.0",
+      projectId: execution.projectId,
+      chapterId: input.chapterId,
+      workflowRunId: analysis.workflowRun.workflowRunId,
+      trigger: input.trigger,
+      workflowStatus: analysis.workflowRun.status,
+      storyBibleChanged
+    };
+    for (const listener of storyAnalysisCompletionListeners) {
+      try {
+        listener(structuredClone(event));
+      } catch {
+        // Notifications are presentation-only and must never change durable analysis results.
+      }
+    }
+  }
+
+  function didStoryBibleChange(batch: VersionGroupApplyBatchResult | undefined): boolean {
+    return (
+      batch?.groups.some(
+        (group) => group.status === "applied" || group.status === "partial_failure"
+      ) === true
+    );
+  }
+
+  function isActiveProjectScope(projectRoot: string, generation: number): boolean {
+    return (
+      generation === projectScopeGeneration &&
+      activeEngineeringWorkspaceSession === undefined &&
+      activeProjectWorkspaceSession?.getSnapshot()?.projectRoot === projectRoot
+    );
   }
 }
 

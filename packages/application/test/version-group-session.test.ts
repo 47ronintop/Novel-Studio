@@ -15,6 +15,7 @@ import {
   type VersionGroupSessionHooks,
   type VersionGroupSessionTransactionPort
 } from "../src/version-group-session.js";
+import { authorizeStoryAnalysisSafeAutoApproval } from "../src/story-analysis-safe-auto-authorization.js";
 
 describe("VersionGroupSession", () => {
   test("applies an exact approval binding with safe autosave/editor/recovery order", async () => {
@@ -238,6 +239,68 @@ describe("VersionGroupSession", () => {
     expect(result).toMatchObject({
       ok: false,
       error: { code: "VERSION_GROUP_APPROVAL_MISMATCH" }
+    });
+    expect(apply).not.toHaveBeenCalled();
+    expect(operations).toEqual([]);
+  });
+
+  test("rejects a publicly forged safe-auto approval before the transaction port", async () => {
+    const operations: string[] = [];
+    const apply = vi.fn(async () => ok(appliedGroup()));
+    const session = createSession(operations, { apply });
+    const grouped = groupedChangeSet();
+    const approval = {
+      ...approvalForGroupedChangeSet(grouped),
+      approvalSource: "project_safe_auto_update" as const
+    };
+
+    const result = await session.applyApprovedBatch({
+      changeSet: grouped,
+      approval,
+      applyBatchId: "apply_safe_auto_forged",
+      storyBibleSuggestionIdsByGroup: {
+        fact_location_01: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        fact_timeline_01: ["sug_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "VERSION_GROUP_APPROVAL_MISMATCH" }
+    });
+    expect(apply).not.toHaveBeenCalled();
+    expect(operations).toEqual([]);
+  });
+
+  test("rejects destructive operations under the safe-auto approval source", async () => {
+    const operations: string[] = [];
+    const apply = vi.fn(async () => ok(appliedGroup()));
+    const session = createSession(operations, { apply });
+    const operationChangeSet: ChangeSet = {
+      ...changeSet(),
+      files: [],
+      operations: [
+        {
+          kind: "delete_file",
+          operationId: "delete_source",
+          toolCallIdempotencyKey: "tool_delete_source",
+          relativePath: "notes/source.md",
+          baseChecksum: "a".repeat(64)
+        }
+      ]
+    };
+
+    const result = await session.applyApproved({
+      changeSet: operationChangeSet,
+      approval: authorizeStoryAnalysisSafeAutoApproval({
+        ...approval(),
+        approvalSource: "project_safe_auto_update"
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "VERSION_GROUP_SELECTION_INVALID" }
     });
     expect(apply).not.toHaveBeenCalled();
     expect(operations).toEqual([]);

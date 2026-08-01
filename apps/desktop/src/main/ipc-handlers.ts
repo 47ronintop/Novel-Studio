@@ -16,6 +16,7 @@ import type {
   ClearAgentUsageCommand,
   AnswerAgentUserInputCommand,
   ApplicationIpcChannel,
+  StoryAnalysisCompletionEvent,
   CompactContextCommand,
   CreativeProjectFileLifecycleCommand,
   CreativeProjectFileSession,
@@ -140,6 +141,7 @@ export interface ApplicationIpcHandlerOptions {
   readonly agentRuntimeManager?: DesktopAgentRuntimeManager;
   readonly workspaceContextPolicyStore?: WorkspaceContextPolicyStore;
   readonly publishAgentRunEvent?: (event: AgentRunEvent) => void;
+  readonly publishStoryAnalysisCompletionEvent?: (event: StoryAnalysisCompletionEvent) => void;
   readonly agentWriteSaveCoordinator?: AgentWriteSaveCoordinator;
   readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
   readonly agentMcpSettingsSession?: McpSettingsSession;
@@ -272,7 +274,15 @@ export function createApplicationIpcHandlers(
       // AgentRunSession owns contract failure handling; never forward a non-cloneable payload.
     }
   };
+  const publishStoryAnalysisCompletionEvent = (event: StoryAnalysisCompletionEvent): void => {
+    try {
+      options.publishStoryAnalysisCompletionEvent?.(structuredClone(event));
+    } catch {
+      // Completion publication is best-effort and must never affect the durable analysis result.
+    }
+  };
   options.agentRunSession?.subscribe(publishAgentRunEvent);
+  application.subscribeStoryAnalysisCompletion?.(publishStoryAnalysisCompletionEvent);
   options.agentRuntimeManager?.subscribeAgentRunEvents(publishAgentRunEvent);
   const activeAgentRuntime = () =>
     options.agentRuntimeManager?.active?.()?.runtime ?? options.agentRuntimeManager?.current?.();
@@ -2750,12 +2760,16 @@ function toChapterStatusForIpc(value: unknown): Exclude<ChapterStatus, "deleted"
 }
 
 function toStoryAnalysisSettingsForIpc(value: unknown): StoryAnalysisSettings | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["completionMode"])) return undefined;
+  if (!isRecord(value) || !hasOnlyKeys(value, ["completionMode", "storyBibleMaintenanceMode"])) {
+    return undefined;
+  }
   const completionMode = value["completionMode"];
-  return completionMode === "off" ||
+  const storyBibleMaintenanceMode = value["storyBibleMaintenanceMode"];
+  return (completionMode === "off" ||
     completionMode === "prompt" ||
-    completionMode === "background-review"
-    ? { completionMode }
+    completionMode === "background-review") &&
+    (storyBibleMaintenanceMode === "review" || storyBibleMaintenanceMode === "safe-auto")
+    ? { completionMode, storyBibleMaintenanceMode }
     : undefined;
 }
 
@@ -2960,9 +2974,17 @@ async function storyAnalysisApplicationResultIpcResult(
     if (!result.ok) return storyAnalysisApplicationError(result.error);
     const analysis = toStoryAnalysisRecordDto(result.value.analysis);
     const batch = toBoundedStoryAnalysisApplyBatch(result.value.batch);
-    return analysis === undefined || batch === undefined
+    const recordSyncWarning = toStoryAnalysisRecordSyncWarning(result.value.recordSyncWarning);
+    return analysis === undefined ||
+      batch === undefined ||
+      (result.value.recordSyncWarning !== undefined && recordSyncWarning === undefined)
       ? storyAnalysisIpcResultInvalid()
-      : ok({ schemaVersion: "1.0", analysis, batch });
+      : ok({
+          schemaVersion: "1.0",
+          analysis,
+          batch,
+          ...(recordSyncWarning === undefined ? {} : { recordSyncWarning })
+        });
   } catch {
     return storyAnalysisApplicationError(undefined);
   }
@@ -3040,6 +3062,25 @@ function toBoundedStoryAnalysisApplyBatch(
     return undefined;
   }
   return value as unknown as StoryAnalysisApplicationResultDto["batch"];
+}
+
+function toStoryAnalysisRecordSyncWarning(
+  value: unknown
+): StoryAnalysisApplicationResultDto["recordSyncWarning"] | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return undefined;
+  const code = value["code"];
+  const message = value["message"];
+  if (
+    typeof code !== "string" ||
+    !/^[A-Z][A-Z0-9_]{2,127}$/u.test(code) ||
+    typeof message !== "string" ||
+    message.length === 0 ||
+    message.length > 1_000
+  ) {
+    return undefined;
+  }
+  return { code, message };
 }
 
 function isBoundedStoryAnalysisJson(value: JsonValue): boolean {

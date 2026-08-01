@@ -108,6 +108,45 @@ describe("ProjectSettingsRepository", () => {
     expect(JSON.stringify(saved.error.redactedDetail)).not.toContain("sk-plaintext");
     expect(await readFile(join(projectRoot, "settings.json"), "utf8")).toBe(before);
   });
+
+  test("persists safe Story Bible maintenance mode and rejects unknown modes", async () => {
+    const projectRoot = await createSettingsProject();
+    const repository = new ProjectSettingsRepository({
+      projectRoot,
+      traceId: "trace_settings_story_bible_maintenance"
+    });
+    const loaded = await repository.readSettings();
+    expect(isOk(loaded)).toBe(true);
+    if (!loaded.ok) return;
+
+    const saved = await repository.writeSettings({
+      ...loaded.value,
+      storyAnalysis: {
+        completionMode: "background-review",
+        storyBibleMaintenanceMode: "safe-auto"
+      }
+    });
+    expect(saved).toMatchObject({
+      ok: true,
+      value: {
+        storyAnalysis: {
+          completionMode: "background-review",
+          storyBibleMaintenanceMode: "safe-auto"
+        }
+      }
+    });
+    const beforeInvalidWrite = await readFile(join(projectRoot, "settings.json"), "utf8");
+
+    const invalid = await repository.writeSettings({
+      ...loaded.value,
+      storyAnalysis: {
+        completionMode: "background-review",
+        storyBibleMaintenanceMode: "automatic"
+      }
+    } as never);
+    expect(invalid).toMatchObject({ ok: false, error: { code: "SETTINGS_FILE_INVALID" } });
+    expect(await readFile(join(projectRoot, "settings.json"), "utf8")).toBe(beforeInvalidWrite);
+  });
 });
 
 async function createSettingsProject(): Promise<string> {

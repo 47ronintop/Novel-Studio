@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import {
   createDesktopApplication,
@@ -7,6 +7,8 @@ import {
   type ProjectSearchIndex,
   type ProjectWorkspaceSession,
   type ProjectWorkspaceSnapshot,
+  type StoryAnalysisApplicationResult,
+  type StoryAnalysisApplicationSession,
   type StoryBibleAsset,
   type StoryBibleSession
 } from "../src/index.js";
@@ -269,6 +271,63 @@ describe("DesktopApplication project search", () => {
 
     expect(invalidationReasons).toEqual(["agent-change-set-apply", "agent-run-undo"]);
   });
+
+  test.each(["applied", "partial_failure"] as const)(
+    "keeps a durable %s Story Analysis result bound to the project where apply started",
+    async (status) => {
+      const firstRoot = "D:/Novel/M20";
+      const secondRoot = "D:/Novel/M21";
+      const invalidations = new Map<string, string[]>();
+      const clearSnapshot = vi.fn();
+      const pendingApply =
+        deferred<Awaited<ReturnType<StoryAnalysisApplicationSession["applyApplication"]>>>();
+      const applyApplication = vi.fn<StoryAnalysisApplicationSession["applyApplication"]>(
+        () => pendingApply.promise
+      );
+      const application = createDesktopApplication({
+        projectWorkspaceSession: createProjectWorkspaceSessionStub(firstRoot),
+        storyBibleSession: { clearSnapshot } as unknown as StoryBibleSession,
+        createStoryAnalysisApplicationSession: () =>
+          ({ applyApplication }) as unknown as StoryAnalysisApplicationSession,
+        createProjectSearchSession: (projectRoot) => ({
+          getState: () => "clean" as const,
+          async invalidate(reason) {
+            const reasons = invalidations.get(projectRoot) ?? [];
+            reasons.push(reason);
+            invalidations.set(projectRoot, reasons);
+            return ok(undefined);
+          },
+          async rebuildIndex() {
+            return ok(emptyIndex);
+          },
+          async search(input) {
+            return ok(emptySearchResults(input.query));
+          }
+        })
+      });
+
+      const applying = application.applyStoryAnalysisApplication({
+        workflowRunId: `wfrun_story_${"a".repeat(32)}`,
+        suggestionIds: [`sug_${"b".repeat(32)}`],
+        changeSetId: "changes_story_analysis",
+        revision: 1,
+        checksum: "c".repeat(64)
+      });
+      expect(applyApplication).toHaveBeenCalledOnce();
+
+      await expect(application.openProject(secondRoot)).resolves.toMatchObject({ ok: true });
+      clearSnapshot.mockClear();
+      pendingApply.resolve(ok(storyAnalysisApplicationResult(status)));
+
+      await expect(applying).resolves.toMatchObject({
+        ok: true,
+        value: { batch: { groups: [{ status }] } }
+      });
+      expect(invalidations.get(firstRoot)).toEqual(["story-bible-save"]);
+      expect(invalidations.get(secondRoot)).toBeUndefined();
+      expect(clearSnapshot).not.toHaveBeenCalled();
+    }
+  );
 });
 
 function createProjectWorkspaceSessionStub(initialProjectRoot: string): ProjectWorkspaceSession {
@@ -398,4 +457,33 @@ function testError(code: string) {
     suggestedAction: "Retry.",
     traceId: "desktop-project-search-test"
   });
+}
+
+function storyAnalysisApplicationResult(
+  status: "applied" | "partial_failure"
+): StoryAnalysisApplicationResult {
+  return {
+    schemaVersion: "1.0",
+    analysis: {
+      workflowRun: { workflowRunId: `wfrun_story_${"a".repeat(32)}` }
+    } as StoryAnalysisApplicationResult["analysis"],
+    batch: {
+      schemaVersion: "1.0",
+      applyBatchId: "apply_story_analysis",
+      changeSetId: "changes_story_analysis",
+      selectionChecksum: "d".repeat(64),
+      groups: [{ consistencyGroupId: "cgrp_story_analysis", status }]
+    }
+  };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
 }

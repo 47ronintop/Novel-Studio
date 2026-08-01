@@ -11,7 +11,14 @@ import type {
   StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction
+} from "react";
 
 import type { ChapterEditorBridge } from "./chapter-editor-bridge.js";
 import type { ProjectWorkflowBridge } from "./project-workflow-bridge.js";
@@ -23,6 +30,7 @@ export interface StoryAnalysisWorkspaceOptions {
   readonly activeCreativeProjectId: string | undefined;
   readonly activeCreativeWorkspaceId: string | undefined;
   readonly activeChapterId: string | undefined;
+  readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly chapterBridge: ChapterEditorBridge | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly projectWorkflowBridge: ProjectWorkflowBridge | undefined;
@@ -37,6 +45,21 @@ export interface StoryAnalysisWorkspaceOptions {
 export interface StoryAnalysisWorkspace {
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
   readonly onChapterStatusChange: (status: ChapterStatus) => void;
+  readonly beforeNavigateToChapter: (chapterId: string) => Promise<boolean>;
+  readonly beforeCreateChapter: () => Promise<boolean>;
+}
+
+/**
+ * A renderer-local identity for asynchronous work.
+ *
+ * Project/workspace activation updates can render before React cleans up the
+ * previous effect. Keeping a monotonically increasing revision lets every
+ * continuation fail closed instead of publishing data from the former scope.
+ */
+interface StoryAnalysisScope {
+  readonly projectId: string | undefined;
+  readonly workspaceId: string | undefined;
+  readonly revision: number;
 }
 
 export function useStoryAnalysisWorkspace(
@@ -47,6 +70,7 @@ export function useStoryAnalysisWorkspace(
     activeCreativeProjectId,
     activeCreativeWorkspaceId,
     activeChapterId,
+    projectWorkflow,
     chapterBridge,
     chapterEditor,
     projectWorkflowBridge,
@@ -68,9 +92,30 @@ export function useStoryAnalysisWorkspace(
         )
   );
   const [review, setReview] = useState(() => bridge?.getProps());
+  const bypassedTransitions = useRef(new Set<string>());
+  const scheduledAnalysisChapters = useRef(new Set<string>());
+  const scopeRef = useRef<StoryAnalysisScope>({
+    projectId: activeCreativeProjectId,
+    workspaceId: activeCreativeWorkspaceId,
+    revision: 0
+  });
+  const previousScope = scopeRef.current;
+  if (
+    previousScope.projectId !== activeCreativeProjectId ||
+    previousScope.workspaceId !== activeCreativeWorkspaceId
+  ) {
+    scopeRef.current = {
+      projectId: activeCreativeProjectId,
+      workspaceId: activeCreativeWorkspaceId,
+      revision: previousScope.revision + 1
+    };
+    bypassedTransitions.current.clear();
+    scheduledAnalysisChapters.current.clear();
+  }
 
   useEffect(() => {
     if (bridge === undefined) return;
+    const scope = scopeRef.current;
     if (activeCreativeProjectId === undefined) {
       setReview(bridge.clear());
       return;
@@ -80,19 +125,22 @@ export function useStoryAnalysisWorkspace(
     const pending = bridge.loadOverview();
     setReview(bridge.getProps());
     void pending.then((next) => {
-      if (active) setReview(next);
+      if (active && scopeRef.current === scope) setReview(next);
     });
     return () => {
       active = false;
     };
-  }, [activeCreativeProjectId, bridge]);
+  }, [activeCreativeProjectId, activeCreativeWorkspaceId, bridge]);
 
   const runAction = useCallback(
     (action: (target: StoryAnalysisBridge) => Promise<StoryAnalysisReviewProps>) => {
       if (bridge === undefined) return;
+      const scope = scopeRef.current;
       const pending = action(bridge);
-      setReview(bridge.getProps());
-      void pending.then(setReview);
+      if (scopeRef.current === scope) setReview(bridge.getProps());
+      void pending.then((next) => {
+        if (scopeRef.current === scope) setReview(next);
+      });
     },
     [bridge]
   );
@@ -105,25 +153,36 @@ export function useStoryAnalysisWorkspace(
   );
   const applyPrepared = useCallback(() => {
     if (bridge === undefined) return;
+    const scope = scopeRef.current;
     const pending = bridge.applyPrepared();
-    setReview(bridge.getProps());
+    if (scopeRef.current === scope) setReview(bridge.getProps());
     void pending.then(async (next) => {
+      if (scopeRef.current !== scope) return;
       setReview(next);
       if (
         next.result === undefined ||
         storyBibleBridge === undefined ||
-        activeCreativeWorkspaceId === undefined
+        scope.workspaceId === undefined ||
+        storyBibleBridge.getSnapshotBinding(scope.workspaceId) === undefined ||
+        !next.result.groups.some(
+          (group) => group.status === "applied" || group.status === "partial_failure"
+        )
       ) {
         return;
       }
-      const summary = await storyBibleBridge.load(activeCreativeWorkspaceId);
-      setStoryBible(summary);
-      setStoryBibleEditor(storyBibleBridge.getEditorProps());
+      const editor = await storyBibleBridge.handleStoryAnalysisExternalUpdate({
+        projectId: scope.workspaceId,
+        updateId: next.result.applyBatchId
+      });
+      if (scopeRef.current !== scope) return;
+      setStoryBible(storyBibleBridge.getProps());
+      setStoryBibleEditor(editor);
     });
-  }, [activeCreativeWorkspaceId, bridge, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
+  }, [bridge, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
   const analyzeCompletedChapter = useCallback(
     (chapterId: string) => {
       if (bridge === undefined) return;
+      const scope = scopeRef.current;
       setChapterEditor((current) =>
         current?.chapter.frontmatter.id !== chapterId
           ? current
@@ -136,9 +195,10 @@ export function useStoryAnalysisWorkspace(
             }
       );
       const pending = bridge.analyze(chapterId);
-      setReview(bridge.getProps());
+      if (scopeRef.current === scope) setReview(bridge.getProps());
       void pending.then(
         (next) => {
+          if (scopeRef.current !== scope) return;
           setReview(next);
           setChapterEditor((current) =>
             current?.chapter.frontmatter.id !== chapterId
@@ -159,6 +219,7 @@ export function useStoryAnalysisWorkspace(
           );
         },
         (error: unknown) => {
+          if (scopeRef.current !== scope) return;
           setChapterEditor((current) =>
             current?.chapter.frontmatter.id !== chapterId
               ? current
@@ -178,7 +239,15 @@ export function useStoryAnalysisWorkspace(
   const onChapterStatusChange = useCallback(
     (status: ChapterStatus) => {
       if (chapterBridge === undefined) return;
+      const scope = scopeRef.current;
       const chapterId = chapterEditor?.chapter.frontmatter.id;
+      // Mark this before the status save starts. A very fast background analysis
+      // can publish its completion event before saveWithStatus resolves; the
+      // event clears this marker, and the later "scheduled" disposition must
+      // not re-add it.
+      if (status === "done" && chapterId !== undefined) {
+        scheduledAnalysisChapters.current.add(chapterId);
+      }
       setChapterEditor((current) => {
         if (current === undefined) return current;
         const next = { ...current };
@@ -187,6 +256,14 @@ export function useStoryAnalysisWorkspace(
       });
       void chapterBridge.saveWithStatus(status).then(
         async ({ editor, completionAnalysis }) => {
+          if (scopeRef.current !== scope) return;
+          if (
+            status === "done" &&
+            chapterId !== undefined &&
+            completionAnalysis.status !== "scheduled"
+          ) {
+            scheduledAnalysisChapters.current.delete(chapterId);
+          }
           const completionFeedback = chapterCompletionFeedback(
             completionAnalysis,
             analyzeCompletedChapter
@@ -205,12 +282,16 @@ export function useStoryAnalysisWorkspace(
             activeCreativeProjectId !== undefined &&
             chapterId === editor.chapter.frontmatter.id
           ) {
-            setProjectWorkflow(
-              await projectWorkflowBridge.loadActiveProject(activeCreativeProjectId)
-            );
+            const workflow = await projectWorkflowBridge.loadActiveProject(activeCreativeProjectId);
+            if (scopeRef.current !== scope) return;
+            setProjectWorkflow(workflow);
           }
         },
         (error: unknown) => {
+          if (scopeRef.current !== scope) return;
+          if (status === "done" && chapterId !== undefined) {
+            scheduledAnalysisChapters.current.delete(chapterId);
+          }
           setChapterEditor((current) =>
             current === undefined || current.chapter.frontmatter.id !== chapterId
               ? current
@@ -237,6 +318,146 @@ export function useStoryAnalysisWorkspace(
       setProjectWorkflow
     ]
   );
+
+  const confirmOutstandingReview = useCallback(
+    async (sourceChapterId: string, targetKey: string): Promise<boolean> => {
+      if (bridge === undefined || bypassedTransitions.current.has(targetKey)) return true;
+      const scope = scopeRef.current;
+      try {
+        if (
+          !(await bridge.hasOutstandingReviewForChapter(sourceChapterId, {
+            analysisScheduled: scheduledAnalysisChapters.current.has(sourceChapterId)
+          }))
+        ) {
+          return true;
+        }
+      } catch {
+        // The reminder must never block writing when its read-only check is unavailable.
+        return true;
+      }
+      if (scopeRef.current !== scope) return true;
+      const proceed = window.confirm(
+        "上一章还有资料更新建议未确认写入。继续进入下一章时，AI 可能使用旧资料。是否仍然继续？取消可先到故事资料的“更新建议”中审查。"
+      );
+      if (proceed) bypassedTransitions.current.add(targetKey);
+      return proceed;
+    },
+    [bridge]
+  );
+
+  useEffect(() => {
+    if (api === undefined || bridge === undefined || activeCreativeProjectId === undefined) return;
+    const scope = scopeRef.current;
+    let active = true;
+    const unsubscribe = api.storyAnalysis.onCompletion((event) => {
+      if (!active || scopeRef.current !== scope || event.projectId !== scope.projectId) {
+        return;
+      }
+      if (event.trigger === "chapter_completed") {
+        scheduledAnalysisChapters.current.delete(event.chapterId);
+      }
+      const pending = bridge.loadOverview();
+      setReview(bridge.getProps());
+      void pending.then(async (next) => {
+        if (!active || scopeRef.current !== scope) return;
+        setReview(next);
+        const summary = next.summaries.find(
+          (candidate) => candidate.workflowRunId === event.workflowRunId
+        );
+        setChapterEditor((current) =>
+          current?.chapter.frontmatter.id !== event.chapterId
+            ? current
+            : {
+                ...current,
+                completionFeedback:
+                  event.workflowStatus === "failed" || next.status === "error"
+                    ? {
+                        kind: "error",
+                        message: "资料分析已结束，但结果需要检查；章节已正常保存。"
+                      }
+                    : event.storyBibleChanged
+                      ? {
+                          kind: "info",
+                          message: "资料分析已完成，故事资料有后台变更，请查看资料与恢复状态。"
+                        }
+                      : (summary?.pendingSuggestionCount ?? 0) + (summary?.openIssueCount ?? 0) > 0
+                        ? {
+                            kind: "info",
+                            message: `资料分析已完成，发现 ${(summary?.pendingSuggestionCount ?? 0) + (summary?.openIssueCount ?? 0)} 条待审查更新。`
+                          }
+                        : {
+                            kind: "info",
+                            message: "资料分析已完成，未发现待处理的资料更新。"
+                          }
+              }
+        );
+        if (
+          !event.storyBibleChanged ||
+          storyBibleBridge === undefined ||
+          scope.workspaceId === undefined ||
+          storyBibleBridge.getSnapshotBinding(scope.workspaceId) === undefined
+        ) {
+          return;
+        }
+        const editor = await storyBibleBridge.handleStoryAnalysisExternalUpdate({
+          projectId: scope.workspaceId,
+          updateId: event.workflowRunId
+        });
+        if (!active || scopeRef.current !== scope) return;
+        setStoryBible(storyBibleBridge.getProps());
+        setStoryBibleEditor(editor);
+      });
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [
+    activeCreativeProjectId,
+    activeCreativeWorkspaceId,
+    api,
+    bridge,
+    setChapterEditor,
+    setStoryBible,
+    setStoryBibleEditor,
+    storyBibleBridge
+  ]);
+
+  const beforeNavigateToChapter = useCallback(
+    async (targetChapterId: string): Promise<boolean> => {
+      if (projectWorkflow === undefined || projectWorkflow.activeChapterId === undefined)
+        return true;
+      const chapters = [...projectWorkflow.chapters].sort(
+        (left, right) => left.order - right.order || left.id.localeCompare(right.id, "en")
+      );
+      const current = chapters.find((chapter) => chapter.id === projectWorkflow.activeChapterId);
+      const targetIndex = chapters.findIndex((chapter) => chapter.id === targetChapterId);
+      const target = targetIndex < 0 ? undefined : chapters[targetIndex];
+      if (
+        current === undefined ||
+        target === undefined ||
+        targetIndex <= 0 ||
+        target.order <= current.order
+      ) {
+        return true;
+      }
+      const previous = [...chapters.slice(0, targetIndex)]
+        .reverse()
+        .find((chapter) => chapter.status === "done");
+      if (previous === undefined || previous.status !== "done") return true;
+      return confirmOutstandingReview(previous.id, `${previous.id}->${targetChapterId}`);
+    },
+    [confirmOutstandingReview, projectWorkflow]
+  );
+
+  const beforeCreateChapter = useCallback(async (): Promise<boolean> => {
+    if (projectWorkflow === undefined) return true;
+    const last = [...projectWorkflow.chapters]
+      .sort((left, right) => right.order - left.order || right.id.localeCompare(left.id, "en"))
+      .find((chapter) => chapter.status === "done");
+    if (last === undefined || last.status !== "done") return true;
+    return confirmOutstandingReview(last.id, `${last.id}->new`);
+  }, [confirmOutstandingReview, projectWorkflow]);
 
   const interactiveStoryBibleEditor =
     storyBibleEditor === undefined || review === undefined
@@ -266,13 +487,18 @@ export function useStoryAnalysisWorkspace(
                   review.activeChapterId ?? activeChapterId ?? chapterEditor?.chapter.frontmatter.id
                 )
               ),
-            onCompletionModeChange: (mode) => runAction((target) => target.saveCompletionMode(mode))
+            onCompletionModeChange: (mode) =>
+              runAction((target) => target.saveCompletionMode(mode)),
+            onMaintenanceModeChange: (mode) =>
+              runAction((target) => target.saveMaintenanceMode(mode))
           } satisfies StoryAnalysisReviewProps
         };
 
   return {
     storyBibleEditor: interactiveStoryBibleEditor,
-    onChapterStatusChange
+    onChapterStatusChange,
+    beforeNavigateToChapter,
+    beforeCreateChapter
   };
 }
 

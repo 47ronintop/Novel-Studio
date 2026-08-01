@@ -443,6 +443,13 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           window.webContents.send("application:agent-run:event", event);
         }
       }
+    },
+    publishStoryAnalysisCompletionEvent: (event) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send("application:story-analysis:completion", event);
+        }
+      }
     }
   });
 

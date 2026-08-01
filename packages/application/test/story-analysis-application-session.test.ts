@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import type { ChangeSet, ChangeSetApproval } from "@novel-studio/agent-engine";
 import type { StoryChangeSuggestion } from "@novel-studio/schemas";
-import { ok } from "@novel-studio/shared";
+import { createUnifiedError, err, ok } from "@novel-studio/shared";
 
 import {
   createStoryAnalysisApplicationSession,
@@ -141,6 +141,168 @@ describe("Story Analysis application session", () => {
       })
     );
   });
+
+  test("leaves review-only suggestions untouched when no safe automatic group is eligible", async () => {
+    const analysis = memoryAnalysis([suggestion(firstSuggestionId, "cgrp_location", "pending")]);
+    const prepareChangeSet = vi.fn();
+    const applyApprovedBatch = vi.fn();
+    const session = createStoryAnalysisApplicationSession({
+      analysis,
+      preparation: { prepareChangeSet },
+      changeSets: unusedChangeSets(),
+      versionGroups: { applyApprovedBatch }
+    });
+
+    const result = await session.autoApplySafeSuggestions({ workflowRunId });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { selectedSuggestionIds: [] }
+    });
+    expect(prepareChangeSet).not.toHaveBeenCalled();
+    expect(applyApprovedBatch).not.toHaveBeenCalled();
+  });
+
+  test("applies an eligible complete group through the trusted safe-auto approval", async () => {
+    const safeSuggestion = automaticSuggestion(firstSuggestionId, "cgrp_location");
+    const analysis = memoryAnalysis([safeSuggestion]);
+    const currentChangeSet = changeSet(["cgrp_location"]);
+    const prepareChangeSet = vi.fn(async () => ok(currentChangeSet));
+    const applyApprovedBatch = vi.fn(async (input) =>
+      ok({
+        schemaVersion: "1.0" as const,
+        applyBatchId: input.applyBatchId,
+        changeSetId: currentChangeSet.changeSetId,
+        selectionChecksum: "e".repeat(64),
+        groups: [{ consistencyGroupId: "cgrp_location", status: "applied" as const }]
+      })
+    );
+    const session = createStoryAnalysisApplicationSession({
+      analysis,
+      preparation: { prepareChangeSet },
+      changeSets: {
+        readChangeSet: async () => ok(currentChangeSet),
+        decide: async () => ok(approvalFor(currentChangeSet))
+      },
+      versionGroups: { applyApprovedBatch }
+    });
+
+    const result = await session.autoApplySafeSuggestions({ workflowRunId });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        selectedSuggestionIds: [firstSuggestionId],
+        analysis: {
+          storyAnalysis: {
+            records: [
+              expect.objectContaining({ suggestionId: firstSuggestionId, status: "applied" })
+            ]
+          }
+        }
+      }
+    });
+    expect(prepareChangeSet).toHaveBeenCalledOnce();
+    expect(applyApprovedBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approval: expect.objectContaining({ approvalSource: "project_safe_auto_update" }),
+        storyBibleSuggestionIdsByGroup: { cgrp_location: [firstSuggestionId] }
+      })
+    );
+  });
+
+  test.each(["result error", "throw"] as const)(
+    "returns an applied durable batch when post-commit record synchronization ends with %s",
+    async (failureMode) => {
+      const safeSuggestion = automaticSuggestion(firstSuggestionId, "cgrp_location");
+      const analysis = analysisWithPostCommitSyncFailure([safeSuggestion], failureMode);
+      const currentChangeSet = changeSet(["cgrp_location"]);
+      const durableBatch = {
+        schemaVersion: "1.0" as const,
+        applyBatchId: "apply_durable",
+        changeSetId: currentChangeSet.changeSetId,
+        selectionChecksum: "e".repeat(64),
+        groups: [{ consistencyGroupId: "cgrp_location", status: "applied" as const }]
+      };
+      const session = createStoryAnalysisApplicationSession({
+        analysis: analysis.port,
+        preparation: { prepareChangeSet: async () => ok(currentChangeSet) },
+        changeSets: {
+          readChangeSet: async () => ok(currentChangeSet),
+          decide: async () => ok(approvalFor(currentChangeSet))
+        },
+        versionGroups: { applyApprovedBatch: async () => ok(durableBatch) }
+      });
+
+      const result = await session.autoApplySafeSuggestions({ workflowRunId });
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          batch: durableBatch,
+          selectedSuggestionIds: [firstSuggestionId],
+          recordSyncWarning: {
+            code:
+              failureMode === "result error"
+                ? "STORY_ANALYSIS_RECORD_STORE_UNAVAILABLE"
+                : "STORY_ANALYSIS_RECORD_SYNC_FAILED"
+          },
+          analysis: {
+            storyAnalysis: {
+              records: [
+                expect.objectContaining({ suggestionId: firstSuggestionId, status: "accepted" })
+              ]
+            }
+          }
+        }
+      });
+      expect(analysis.transitionRecords).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  test("returns a partial-failure batch and persists failed suggestion status", async () => {
+    const analysis = memoryAnalysis([suggestion(firstSuggestionId, "cgrp_location", "accepted")]);
+    const currentChangeSet = changeSet(["cgrp_location"]);
+    const durableBatch = {
+      schemaVersion: "1.0" as const,
+      applyBatchId: "apply_partial",
+      changeSetId: currentChangeSet.changeSetId,
+      selectionChecksum: "e".repeat(64),
+      groups: [{ consistencyGroupId: "cgrp_location", status: "partial_failure" as const }]
+    };
+    const session = createStoryAnalysisApplicationSession({
+      analysis,
+      preparation: { prepareChangeSet: vi.fn() },
+      changeSets: {
+        readChangeSet: async () => ok(currentChangeSet),
+        decide: async () => ok(approvalFor(currentChangeSet))
+      },
+      versionGroups: { applyApprovedBatch: async () => ok(durableBatch) }
+    });
+
+    const result = await session.applyApplication({
+      workflowRunId,
+      suggestionIds: [firstSuggestionId],
+      changeSetId: currentChangeSet.changeSetId,
+      revision: currentChangeSet.revision,
+      checksum: currentChangeSet.checksum
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        batch: durableBatch,
+        analysis: {
+          storyAnalysis: {
+            records: [
+              expect.objectContaining({ suggestionId: firstSuggestionId, status: "failed" })
+            ]
+          }
+        }
+      }
+    });
+    expect(result.ok && result.value.recordSyncWarning).toBeUndefined();
+  });
 });
 
 function memoryAnalysis(
@@ -167,6 +329,57 @@ function memoryAnalysis(
       );
       return ok(current);
     }
+  };
+}
+
+function analysisWithPostCommitSyncFailure(
+  initial: readonly StoryChangeSuggestion[],
+  failureMode: "result error" | "throw"
+): {
+  readonly port: Pick<StoryAnalysisSession, "refreshStaleness" | "transitionRecords">;
+  readonly transitionRecords: ReturnType<typeof vi.fn>;
+} {
+  let current = historyRecord(initial);
+  let transitionCount = 0;
+  const transitionRecords = vi.fn<StoryAnalysisSession["transitionRecords"]>(async (input) => {
+    transitionCount += 1;
+    if (transitionCount === 2) {
+      if (failureMode === "throw") throw new Error("record store unavailable");
+      return err(
+        createUnifiedError({
+          code: "STORY_ANALYSIS_RECORD_STORE_UNAVAILABLE",
+          category: "StorageError",
+          message: "The record store is unavailable.",
+          recoverability: "retryable",
+          suggestedAction: "Retry record synchronization.",
+          traceId: "story-analysis-application-test"
+        })
+      );
+    }
+    const transitions = new Map(input.transitions.map((item) => [item.recordId, item]));
+    current = historyRecord(
+      current.storyAnalysis.records.map((record) => {
+        if (record.recordType !== "change") return record;
+        const command = transitions.get(record.suggestionId);
+        return command === undefined
+          ? record
+          : {
+              ...record,
+              status: suggestionStatus(command.transition),
+              revision: record.revision + 1
+            };
+      }) as StoryChangeSuggestion[]
+    );
+    return ok(current);
+  });
+  return {
+    port: {
+      async refreshStaleness() {
+        return ok(current);
+      },
+      transitionRecords
+    },
+    transitionRecords
   };
 }
 
@@ -204,6 +417,33 @@ function suggestion(
   };
 }
 
+function automaticSuggestion(
+  suggestionId: string,
+  consistencyGroupId: string
+): StoryChangeSuggestion {
+  return {
+    ...suggestion(suggestionId, consistencyGroupId, "pending"),
+    observationIds: [`obs_${"a".repeat(32)}`],
+    dependencies: [
+      {
+        kind: "chapter",
+        chapterId: "ch_01",
+        checksum: "1".repeat(64)
+      }
+    ],
+    operations: [
+      {
+        op: "replace",
+        path: "/details/currentState/locationId",
+        beforeValueChecksum: "2".repeat(64),
+        value: "loc_harbor"
+      }
+    ],
+    evidence: [{ start: 0, end: 4, excerptHash: "3".repeat(64) }],
+    confidence: 0.99
+  };
+}
+
 function historyRecord(records: readonly StoryChangeSuggestion[]): StoryAnalysisHistoryRecord {
   return {
     workflowRun: {
@@ -215,6 +455,7 @@ function historyRecord(records: readonly StoryChangeSuggestion[]): StoryAnalysis
       schemaVersion: "1.1",
       analysisRun: {
         analysisRunId: `run_${"a".repeat(32)}`,
+        status: "completed",
         contextSnapshot: { contextSnapshotId: `ctx_${"a".repeat(32)}` }
       },
       records

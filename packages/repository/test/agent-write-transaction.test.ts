@@ -148,6 +148,178 @@ describe("AgentWriteTransaction", () => {
     expect(await readdir(outsideRoot)).toEqual([]);
   });
 
+  test("rejects a safe-auto journal without its Story Bible suggestion receipt", async () => {
+    const projectRoot = await createProject({});
+    const selectionChecksum = "e".repeat(64);
+    const journal: AgentTransactionJournal = {
+      ...appliedJournal({
+        transactionId: "tx_safe_auto_without_receipt",
+        versionGroupId: "vg_safe_auto_without_receipt",
+        runSequence: 1,
+        beforeContent: "before",
+        candidateContent: "after",
+        beforeVersionId: "ver_before"
+      }),
+      schemaVersion: "1.1",
+      approvalSource: "project_safe_auto_update",
+      applyBatchId: "apply_safe_auto_without_receipt",
+      consistencyGroupId: "fact_safe_auto_without_receipt",
+      selectionChecksum,
+      approvalToken: deriveChangeSetGroupApprovalToken({
+        changeSetId: "changes_1",
+        revision: 1,
+        checksum: "c".repeat(64),
+        applyBatchId: "apply_safe_auto_without_receipt",
+        consistencyGroupId: "fact_safe_auto_without_receipt",
+        selectionChecksum
+      })
+    };
+
+    await expect(
+      new RecoveryRepository({ projectRoot }).writeAgentTransactionJournal(journal)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+    });
+  });
+
+  test("rejects a safe-auto recovery journal with an extra non-Story-Bible write", async () => {
+    const projectRoot = await createProject({});
+    const journal = safeAutoJournal();
+    const firstEntry = journal.entries[0];
+    if (firstEntry === undefined) throw new Error("Expected a safe-auto journal entry.");
+    const extraContent = "unrelated content";
+    const tampered: AgentTransactionJournal = {
+      ...journal,
+      entries: [
+        ...journal.entries,
+        {
+          ...firstEntry,
+          writeId: "write_safe_auto_extra",
+          relativePath: "notes/extra.md",
+          beforeChecksum: checksum("before"),
+          candidateChecksum: checksum(extraContent),
+          beforeContent: "before",
+          candidateContent: extraContent,
+          beforeVersionId: "ver_safe_auto_extra"
+        }
+      ]
+    };
+
+    await expect(
+      new RecoveryRepository({ projectRoot }).writeAgentTransactionJournal(tampered)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+    });
+  });
+
+  test("rejects a safe-auto recovery journal with a non-Story-Bible v1.1 candidate", async () => {
+    const projectRoot = await createProject({});
+    const journal = safeAutoJournal();
+    const receipt = journal.storyBibleReceipt;
+    const entry = journal.entries[0];
+    const asset = receipt?.assets[0];
+    if (receipt === undefined || entry === undefined || asset === undefined) {
+      throw new Error("Expected a complete safe-auto receipt.");
+    }
+    const candidateContent = JSON.stringify({
+      schemaVersion: "1.1",
+      id: asset.assetId,
+      type: "unknown_story_bible_type",
+      revision: asset.afterRevision,
+      title: "Not a Story Bible asset"
+    });
+    const candidateChecksum = checksum(candidateContent);
+    const tampered: AgentTransactionJournal = {
+      ...journal,
+      entries: [{ ...entry, candidateContent, candidateChecksum }],
+      storyBibleReceipt: {
+        ...receipt,
+        assets: [{ ...asset, afterChecksum: candidateChecksum }]
+      }
+    };
+
+    await expect(
+      new RecoveryRepository({ projectRoot }).writeAgentTransactionJournal(tampered)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+    });
+  });
+
+  test("rejects a safe-auto recovery journal with an incomplete Story Bible candidate", async () => {
+    const projectRoot = await createProject({});
+    const journal = safeAutoJournal();
+    const receipt = journal.storyBibleReceipt;
+    const entry = journal.entries[0];
+    const asset = receipt?.assets[0];
+    if (receipt === undefined || entry === undefined || asset === undefined) {
+      throw new Error("Expected a complete safe-auto receipt.");
+    }
+    const candidateContent = JSON.stringify({
+      schemaVersion: "1.1",
+      id: asset.assetId,
+      type: "character",
+      revision: asset.afterRevision,
+      title: "Missing persisted fields"
+    });
+    const candidateChecksum = checksum(candidateContent);
+    const tampered: AgentTransactionJournal = {
+      ...journal,
+      entries: [{ ...entry, candidateContent, candidateChecksum }],
+      storyBibleReceipt: {
+        ...receipt,
+        assets: [{ ...asset, afterChecksum: candidateChecksum }]
+      }
+    };
+
+    await expect(
+      new RecoveryRepository({ projectRoot }).writeAgentTransactionJournal(tampered)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+    });
+  });
+
+  test("rejects a safe-auto recovery journal with a lifecycle operation", async () => {
+    const projectRoot = await createProject({});
+    const journal = safeAutoJournal();
+    const content = JSON.stringify({
+      schemaVersion: "1.1",
+      id: "chr_safe_auto_created",
+      type: "character",
+      revision: 1,
+      title: "Created outside the selected patch group"
+    });
+    const relativePath = "characters/created.json";
+    const tampered: AgentTransactionJournal = {
+      ...journal,
+      operations: [
+        {
+          operationId: "create_safe_auto_asset",
+          operation: {
+            kind: "create_file",
+            operationId: "create_safe_auto_asset",
+            toolCallIdempotencyKey: "tool_create_safe_auto_asset",
+            relativePath,
+            content
+          },
+          before: [{ kind: "missing", relativePath }],
+          after: [{ kind: "file", relativePath, content, checksum: checksum(content) }],
+          status: "pending"
+        }
+      ]
+    };
+
+    await expect(
+      new RecoveryRepository({ projectRoot }).writeAgentTransactionJournal(tampered)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+    });
+  });
+
   test("rejects the internal project lock path as an Agent write target", async () => {
     const lockContent = '{"schemaVersion":"1.0","ownerId":"window_owner"}\n';
     const relativePath = ".novel-studio/project-lock.json";
@@ -504,20 +676,9 @@ describe("AgentWriteTransaction", () => {
   });
 
   test("projects Story Bible revisions, History identity, suggestions, and inverse patch", async () => {
-    const before = JSON.stringify({
-      schemaVersion: "1.1",
-      id: "char_hero",
-      type: "character",
-      revision: 1,
-      title: "Hero"
-    });
-    const after = JSON.stringify({
-      schemaVersion: "1.1",
-      id: "char_hero",
-      type: "character",
-      revision: 2,
-      title: "Changed Hero"
-    });
+    const assetId = `chr_${"b".repeat(32)}`;
+    const before = persistedCharacterContent(assetId, 1, "Hero");
+    const after = persistedCharacterContent(assetId, 2, "Changed Hero");
     const projectRoot = await createProject({ "characters/hero.json": before });
     const selectionChecksum = "e".repeat(64);
     const input = createInput([fileChange("characters/hero.json", before, after, "text")], {
@@ -525,6 +686,7 @@ describe("AgentWriteTransaction", () => {
       consistencyGroupId: "fact_character_receipt",
       selectionChecksum,
       storyBibleSuggestionIds: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      approvalSource: "project_safe_auto_update",
       approvalToken: deriveChangeSetGroupApprovalToken({
         changeSetId: "changes_01",
         revision: 1,
@@ -535,11 +697,13 @@ describe("AgentWriteTransaction", () => {
       })
     });
 
-    const applied = await createTransaction(projectRoot).apply(input);
+    const transaction = createTransaction(projectRoot);
+    const applied = await transaction.apply(input);
 
     expect(applied).toMatchObject({
       ok: true,
       value: {
+        approvalSource: "project_safe_auto_update",
         storyBibleReceipt: {
           schemaVersion: "1.0",
           changeSetId: "changes_01",
@@ -547,7 +711,7 @@ describe("AgentWriteTransaction", () => {
           suggestionIds: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
           assets: [
             {
-              assetId: "char_hero",
+              assetId,
               relativePath: "characters/hero.json",
               beforeRevision: 1,
               afterRevision: 2,
@@ -564,6 +728,24 @@ describe("AgentWriteTransaction", () => {
       }
     });
     expect(Object.isFrozen(applied.ok && applied.value.storyBibleReceipt)).toBe(true);
+    const journals = await new RecoveryRepository({ projectRoot }).listAgentTransactionJournals();
+    expect(journals).toMatchObject({
+      ok: true,
+      value: [
+        expect.objectContaining({
+          approvalSource: "project_safe_auto_update",
+          storyBibleReceipt: expect.objectContaining({
+            suggestionIds: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+          })
+        })
+      ]
+    });
+    if (!applied.ok) throw new Error(applied.error.message);
+    const undone = await transaction.undoVersionGroup({
+      versionGroupId: applied.value.versionGroupId
+    });
+    expect(undone.ok && undone.value.undoStatus).toBe("completed");
+    expect(await readFile(join(projectRoot, "characters/hero.json"), "utf8")).toBe(before);
   });
 
   test("persists the History identity for a Story Bible create receipt", async () => {
@@ -2935,6 +3117,94 @@ function appliedJournal(input: {
       }
     ]
   };
+}
+
+function safeAutoJournal(): AgentTransactionJournal {
+  const assetId = `chr_${"a".repeat(32)}`;
+  const beforeContent = persistedCharacterContent(assetId, 1, "Hero");
+  const candidateContent = persistedCharacterContent(assetId, 2, "Updated Hero");
+  const applyBatchId = "apply_safe_auto_recovery";
+  const consistencyGroupId = "fact_safe_auto_recovery";
+  const selectionChecksum = "e".repeat(64);
+  const journal = appliedJournal({
+    transactionId: "tx_safe_auto_recovery",
+    versionGroupId: "vg_safe_auto_recovery",
+    runSequence: 1,
+    beforeContent,
+    candidateContent,
+    beforeVersionId: "ver_safe_auto_before"
+  });
+  const entry = journal.entries[0];
+  if (entry === undefined) throw new Error("Expected a safe-auto journal entry.");
+  return {
+    ...journal,
+    schemaVersion: "1.1",
+    approvalSource: "project_safe_auto_update",
+    applyBatchId,
+    consistencyGroupId,
+    selectionChecksum,
+    approvalToken: deriveChangeSetGroupApprovalToken({
+      changeSetId: journal.changeSetId,
+      revision: journal.changeSetRevision,
+      checksum: journal.changeSetChecksum,
+      applyBatchId,
+      consistencyGroupId,
+      selectionChecksum
+    }),
+    storyBibleReceipt: {
+      schemaVersion: "1.0",
+      changeSetId: journal.changeSetId,
+      consistencyGroupId,
+      suggestionIds: ["sug_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      assets: [
+        {
+          assetId,
+          relativePath: entry.relativePath,
+          beforeRevision: 1,
+          afterRevision: 2,
+          beforeChecksum: entry.beforeChecksum,
+          afterChecksum: entry.candidateChecksum,
+          historyVersionId: entry.beforeVersionId,
+          inversePatch: []
+        }
+      ]
+    }
+  };
+}
+
+function persistedCharacterContent(id: string, revision: number, title: string): string {
+  return JSON.stringify({
+    schemaVersion: "1.1",
+    id,
+    type: "character",
+    title,
+    status: "active",
+    summary: "",
+    aliases: [],
+    relations: [],
+    details: {
+      currentState: {
+        locationId: null,
+        physical: "",
+        emotional: "",
+        heldItemIds: [],
+        asOfChapterId: null,
+        asOfEventId: null
+      },
+      knowledgeStates: [],
+      stateHistory: []
+    },
+    extensions: {},
+    createdAt: "2026-08-02T00:00:00.000Z",
+    updatedAt: "2026-08-02T00:00:00.000Z",
+    revision,
+    relatedEntityIds: [],
+    passthrough: {
+      sourceSchemaVersion: "1.0",
+      rootFields: {},
+      detailFieldsByPointer: {}
+    }
+  });
 }
 
 function recordingHistory(operations: string[]): AgentWriteHistoryPort {

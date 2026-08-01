@@ -30,6 +30,7 @@ export interface ProjectWorkflowActionInputs {
   readonly storyBibleBridge: StoryBibleBridge | undefined;
   readonly studioBridge: StudioBridge | undefined;
   readonly beforeWorkspaceTransition?: (() => Promise<boolean>) | undefined;
+  readonly beforeCreateChapter?: (() => Promise<boolean>) | undefined;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
   readonly clearFileEditor?: (() => void) | undefined;
   readonly setFileEditor?: Dispatch<SetStateAction<PlainFileEditorProps | undefined>> | undefined;
@@ -53,6 +54,7 @@ export function useProjectWorkflowActions({
   storyBibleBridge,
   studioBridge,
   beforeWorkspaceTransition,
+  beforeCreateChapter,
   setChapterEditor,
   clearFileEditor,
   setFileEditor,
@@ -202,10 +204,6 @@ export function useProjectWorkflowActions({
 
     void runWorkspaceTransition(() => projectWorkflowBridge.createExampleProject(), "creating");
   }, [projectWorkflowBridge, runWorkspaceTransition]);
-
-  const handleCreateChapter = useCallback(() => {
-    void projectWorkflowBridge?.createChapter().then(refreshProjectWorkflow);
-  }, [projectWorkflowBridge, refreshProjectWorkflow]);
 
   const handleRenameChapter = useCallback(
     (chapterId: string, title: string) => {
@@ -479,6 +477,22 @@ export function useProjectWorkflowActions({
         : { chapterIds: projectWorkflow.chapters.map((chapter) => chapter.id) }
     );
   }, [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
+
+  const handleCreateChapter = useCallback(() => {
+    void (async () => {
+      if (beforeWorkspaceTransition !== undefined && !(await beforeWorkspaceTransition())) return;
+      if (!(await guardStoryBibleDraft())) return;
+      if (beforeCreateChapter !== undefined && !(await beforeCreateChapter())) return;
+      const next = await projectWorkflowBridge?.createChapter();
+      if (next !== undefined) await refreshProjectWorkflow(next);
+    })();
+  }, [
+    beforeCreateChapter,
+    beforeWorkspaceTransition,
+    guardStoryBibleDraft,
+    projectWorkflowBridge,
+    refreshProjectWorkflow
+  ]);
 
   return {
     refreshProjectWorkflow,
