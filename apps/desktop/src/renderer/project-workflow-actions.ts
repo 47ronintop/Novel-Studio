@@ -159,9 +159,28 @@ export function useProjectWorkflowActions({
     [setProjectWorkflow]
   );
 
+  const guardStoryBibleDraft = useCallback(() => {
+    const analysis = storyBibleBridge?.getEditorProps().foreshadowAnalysis;
+    if (analysis?.status === "review" && analysis.review.step === "applying") {
+      return Promise.resolve(false);
+    }
+    return guardDirtyStoryBibleDraft(
+      storyBibleBridge,
+      (bridge, editor) => {
+        setStoryBibleEditor(editor);
+        setStoryBible(bridge.getProps());
+      },
+      undefined,
+      projectWorkflow === undefined
+        ? undefined
+        : { chapterIds: projectWorkflow.chapters.map((chapter) => chapter.id) }
+    );
+  }, [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
+
   const runWorkspaceTransition = useCallback(
     async (operation: () => Promise<ProjectWorkflowProps>, status: "opening" | "creating") => {
       if (beforeWorkspaceTransition !== undefined && !(await beforeWorkspaceTransition())) return;
+      if (!(await guardStoryBibleDraft())) return;
 
       const previous = projectWorkflowBridge?.getProps();
       if (previous === undefined) return;
@@ -174,6 +193,7 @@ export function useProjectWorkflowActions({
     },
     [
       beforeWorkspaceTransition,
+      guardStoryBibleDraft,
       projectWorkflowBridge,
       refreshWorkspaceTransition,
       restoreWorkspaceTransition,
@@ -459,24 +479,6 @@ export function useProjectWorkflowActions({
     setStoryBibleEditor,
     storyBibleBridge
   ]);
-
-  const guardStoryBibleDraft = useCallback(() => {
-    const analysis = storyBibleBridge?.getEditorProps().foreshadowAnalysis;
-    if (analysis?.status === "review" && analysis.review.step === "applying") {
-      return Promise.resolve(false);
-    }
-    return guardDirtyStoryBibleDraft(
-      storyBibleBridge,
-      (bridge, editor) => {
-        setStoryBibleEditor(editor);
-        setStoryBible(bridge.getProps());
-      },
-      undefined,
-      projectWorkflow === undefined
-        ? undefined
-        : { chapterIds: projectWorkflow.chapters.map((chapter) => chapter.id) }
-    );
-  }, [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
 
   const handleCreateChapter = useCallback(() => {
     void (async () => {

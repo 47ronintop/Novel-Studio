@@ -45,13 +45,13 @@ Story Bible 应同时满足四个目标：
 
 - 不建设自由画布、关系图谱编辑器或世界地图编辑器。
 - 不在每次普通保存时启动模型分析。
-- 不允许 Agent 物理删除 Story Bible 文件。
+- 不允许 Agent 把资料“删除”实现为物理删除；仅在作者确认 v1.0 懒升级后，允许同组事务在规范文件已安全创建的前提下移除已被替代的旧路径。
 - 不把 AI 建议直接视为作者事实。
 - 不要求打开旧项目时一次性迁移所有资料。
 
-## 2. 当前缺口
+## 2. 实施前缺口（已关闭）
 
-当前实现已经具备五类 UI、结构化表单、Repository、搜索、Context、Agent Change Set、撤销和伏笔 AI 识别，但仍有以下成熟度缺口：
+以下 12 项是实施基线 `9fe1d9d` 当时的成熟度缺口，用于保留设计决策的追溯依据；它们已由第 11 节批次 A–E 关闭，不是当前待办：
 
 1. 人物、世界观、大纲和时间线的 `details` 只验证为任意 JSON 对象。
 2. UI 保存路径存在业务校验，但 Agent 只经过通用 story asset schema，可能写入业务结构无效的数据。
@@ -192,13 +192,13 @@ foreshadow         -> story-foreshadow.schema.json
 timeline.events    -> story-timeline.schema.json
 ```
 
-每种类型共享同一份核心字段定义，并派生三个用途明确的验证入口：
+每种类型共享同一份核心字段定义，并提供三个用途明确的验证入口。其中兼容读取是 Repository 适配器边界，另外两个是严格 schema 模式：
 
-- `readCompatible`：只用于读取旧资产，允许捕获未知字段并移动到只读 `passthrough`。
+- `readCompatible`：Repository 只读兼容适配器；复用 v1.1 已知字段合同识别旧资产，把未知字段捕获到只读 `passthrough`，不属于可写 schema 模式。
 - `writeStrict`：用于所有外部候选，验证类型、枚举、ID、字段组合、引用和扩展命名空间，拒绝 `passthrough` 与任何未声明字段。
 - `persistedStrict`：仅供 Repository 在注入已有 `passthrough` 后做最终落盘验证，不作为 IPC、Agent 工具或 Renderer 表单输入 schema。
 
-三个入口必须由 schema 组合生成，不能维护三份会漂移的手写字段表。兼容职责只存在于读取适配器、系统托管字段和懒升级流程中，不能通过放宽候选 schema 实现。
+三个入口必须共享同一组核心字段与类型分派，不能维护三份会漂移的手写字段表。兼容职责只存在于读取适配器、系统托管字段和懒升级流程中，不能通过放宽候选 schema 实现。
 
 ### 4.3 ID 与路径约束
 
@@ -889,6 +889,8 @@ open -> resolved
 
 升级预览必须显示结构变化；如果只是规范化且不改变作者语义，可以与当前字段修改合并为一次保存。
 
+Agent 和章后建议的候选准备必须只读，不得在提案阶段移动或删除旧文件。非规范路径的升级在人工确认后建模为同一一致性组：先创建最终 v1.1 规范文件，再删除依赖该创建操作的旧路径；组内任一步失败均按 journal 补偿。旧资产的 status/delete/restore 不在迁移提案中复用提案期授权，必须先通过普通 patch 完成升级后再执行专用状态命令。手工保存同样先完成旧路径 checksum CAS 与 History 快照，再写最终规范文件并移除旧路径；History 或写入失败时旧路径保持不变。
+
 ### 10.3 选择性版本组与回滚
 
 - 不在每章完成后复制一份完整 Story Bible。`analysisRun` 只保存章节 checksum、实际召回资产的 revision/checksum manifest 和 Context Snapshot 引用。
@@ -902,7 +904,7 @@ open -> resolved
 
 ## 11. 实施批次
 
-### 批次 A：数据完整性基础
+### 批次 A：数据完整性基础（已完成，2026-08-02）
 
 - 增加 v1.1 联合类型和十个严格写入 schema。
 - 增加 `world.item` 和 `world.lore`。
@@ -913,7 +915,7 @@ open -> resolved
 
 完成标准：UI、Agent 和 Repository 对同一候选返回一致验证结果；旧未知字段无损保留，新未知字段无法写入。
 
-### 批次 B：Agent 全量发现、CRUD 与 Context
+### 批次 B：Agent 全量发现、CRUD 与 Context（已完成，2026-08-02）
 
 - 增加 schema 描述、稳定分页、完整读取和引用影响查询。
 - 修正 writing profile 搜索路由。
@@ -924,7 +926,7 @@ open -> resolved
 
 完成标准：300 章、500 个资料条目的项目中，Agent 可以通过名称发现并修改任意目标；预览内容与实际打包的作者项目上下文 checksum 一致。
 
-### 批次 C：Observer 与建议引擎
+### 批次 C：Observer 与建议引擎（已完成，2026-08-02）
 
 - 增加章节完成触发和项目设置。
 - 在现有 run history/usage 基础上增加 `analysisRun`、`StoryObservation`、`StoryFactDelta`、suggestion 和带完整生命周期的 `review_issue` schema。
@@ -934,7 +936,7 @@ open -> resolved
 
 完成标准：分析失败不影响章节保存；未确认观察和建议绝不改变 Story Bible；对白或传闻不会被误写成客观事实。
 
-### 批次 D：事务应用与作者工作流
+### 批次 D：事务应用与作者工作流（已完成，2026-08-02）
 
 - 扩展现有 Change Set、group-aware approval、Version Group 和 transaction journal 的可选 v1.1 组元数据，使每个一致性组复用既有事务、recovery 与 undo；增加非权威 `StoryBibleApplyReceipt` 投影和 inverse patch 展示。
 - 关系与引用选择器。
@@ -946,7 +948,7 @@ open -> resolved
 
 完成标准：作者无需手写任何资产 ID 或 JSON；跨人物、物品和时间线的同组更新不会部分落盘。
 
-### 批次 E：兼容、性能和完整门禁
+### 批次 E：兼容、性能和完整门禁（已完成，2026-08-02）
 
 - v1.0/v1.1 混合项目测试。
 - 300 章、500 资料规模测试。
@@ -1047,16 +1049,28 @@ open -> resolved
 
 ## 15. 2026-08-02 实施验证记录
 
-本轮章后资料维护模式完成后，按风险边界执行了以下验证：
+本方案全部批次及最终收口完成后，按风险边界执行了以下验证：
 
-| 验证项                                                                | 结果                                              |
-| --------------------------------------------------------------------- | ------------------------------------------------- |
-| 本次变更文件 Prettier                                                 | 通过                                              |
-| `npm run typecheck`                                                   | 通过                                              |
-| `npm run lint`                                                        | 通过                                              |
-| `npm run build`                                                       | 通过；仅保留 Vite 既有的大 chunk 提示，无构建错误 |
-| Story Analysis / Version Group / transaction / Renderer / UI 聚焦测试 | 19 个文件、292 项通过                             |
-| `npm test` 全仓测试                                                   | 242 个文件、2674 项通过                           |
-| `git diff --check`                                                    | 通过                                              |
+| 验证项                                                          | 结果                                              |
+| --------------------------------------------------------------- | ------------------------------------------------- |
+| 本次变更文件 Prettier                                           | 通过                                              |
+| `npm run typecheck`                                             | 通过                                              |
+| `npm run lint`                                                  | 通过                                              |
+| `npm run build`                                                 | 通过；仅保留 Vite 既有的大 chunk 提示，无构建错误 |
+| 最终 Story Bible / transaction / Renderer 聚焦测试              | 17 个文件、390 项通过                             |
+| Electron E2E：`agent-write.e2e.ts`、`story-bible-visual.e2e.ts` | 7/7 通过                                          |
+| `npm test` 全仓测试                                             | 242 个文件、2694 项通过                           |
+| `git diff --check`                                              | 通过                                              |
 
-验证覆盖安全自动来源伪造、破坏性 operation 和不完整组拒绝、Recovery 收据/写入项一一绑定及 v1.1 Story Bible 候选严格校验、事务故障与恢复、post-commit 状态同步失败、`partial_failure` 缓存失效、项目切换、完成事件 IPC 校验、后台 scheduled 空窗、旧分析运行待审、dirty Story Bible 草稿保护、人工确认引导与软提醒。全仓历史格式债务不在本功能范围内；本次实际修改文件均单独通过格式检查。
+验证覆盖安全自动来源伪造、破坏性 operation 和不完整组拒绝、Recovery 收据/写入项一一绑定及 v1.1 Story Bible 候选严格校验、事务故障与恢复、post-commit 状态同步失败、`partial_failure` 缓存失效、完成事件 IPC 校验、后台 scheduled 空窗、旧分析运行待审、人工确认引导与软提醒。
+
+最终收口另覆盖以下边界：
+
+- 打开、创建、示例创建、关闭和切换项目，以及创建/进入章节前，都会先保护 dirty Story Bible 草稿；保存失败、作者保留草稿或显式逆向预览拒绝取消时不会启动切换或清空投影。
+- Agent 与 Story Analysis 对 v1.0 非规范路径只做只读候选准备；create→delete 完整 DAG 经一次校验、一个 Change Set revision 和一次持久化原子提案，半批次、语义冲突、未授权预审批拼接及持久化失败均 fail-closed；磁盘在确认前不变，确认后的同组事务由 History、receipt、Recovery、补偿和 undo 保留升级前原文字节。
+- 手工保存非规范 v1.0 资料会先完成旧路径 CAS 与 History，再写最终 v1.1 规范文件并删除旧路径；History 失败时两条路径均不变化。
+- Recovery 会拒绝伪造的迁移依赖、consistency group、asset ID、checksum、History 绑定及将迁移伪装成普通 create 的收据；普通 create 与安全自动生命周期禁令保持原行为。
+- `get_story_bible_references` 使用权威章节目录，章节目录读取失败会显式传播，不会返回缺少章节影响的成功结果。
+- Electron E2E 继续证明五类资料自然语言 CRUD、三主题×三视口和键盘工作流。
+
+全仓历史格式债务不在本功能范围内；本次实际修改文件均单独通过格式检查。

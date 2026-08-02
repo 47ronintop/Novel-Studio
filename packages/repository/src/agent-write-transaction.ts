@@ -16,7 +16,7 @@ import {
   type StoryBibleApplyReceiptAsset,
   type StoryBibleInversePatchOperation
 } from "@novel-studio/agent-engine";
-import { isStoryBibleV11AssetType } from "@novel-studio/schemas";
+import { isStoryBibleV11AssetType, validateStoryBibleV11Asset } from "@novel-studio/schemas";
 
 import { storageError, validationError } from "./errors.js";
 import { withStoryBibleProjectWriteLock } from "./story-bible-write-coordinator.js";
@@ -2753,6 +2753,41 @@ function createStoryBibleApplyReceipt(input: {
     if (operation.kind !== "create_file") continue;
     const after = parseStoryBibleAssetRecord(operation.content);
     if (after === undefined) continue;
+    const legacyDelete = input.operations.find(
+      (candidate) =>
+        candidate.operation.kind === "delete_file" &&
+        (candidate.operation.dependsOn ?? []).includes(operation.operationId)
+    );
+    const legacyBefore = legacyDelete?.before.find(
+      (snapshot): snapshot is Extract<AgentOperationPathSnapshot, { readonly kind: "file" }> =>
+        snapshot.kind === "file"
+    );
+    const legacyValue =
+      legacyBefore === undefined ? undefined : parseJsonValue(legacyBefore.content);
+    if (
+      legacyDelete !== undefined &&
+      legacyDelete.operation.kind === "delete_file" &&
+      legacyBefore !== undefined &&
+      isJsonObject(legacyValue) &&
+      legacyValue["id"] === after.id
+    ) {
+      assets.push({
+        assetId: after.id,
+        relativePath: operation.relativePath,
+        beforeRevision: parseRevision(legacyValue),
+        afterRevision: after.revision,
+        beforeChecksum: legacyBefore.checksum,
+        afterChecksum: checksum(operation.content),
+        historyVersionId: legacyDelete.beforeVersionId ?? null,
+        inversePatch: inverseStoryBiblePatch(legacyValue, after.value),
+        legacyMigration: {
+          sourceRelativePath: legacyDelete.operation.relativePath,
+          createOperationId: operation.operationId,
+          deleteOperationId: legacyDelete.operation.operationId
+        }
+      });
+      continue;
+    }
     assets.push({
       assetId: after.id,
       relativePath: operation.relativePath,
@@ -2793,6 +2828,15 @@ function parseStoryBibleAssetRecord(
     !/^[A-Za-z0-9_-]{1,128}$/u.test(id) ||
     !Number.isSafeInteger(revision) ||
     Number(revision) < 1
+  ) {
+    return undefined;
+  }
+  const passthrough = parsed["passthrough"];
+  const allowLegacyId = isJsonObject(passthrough) && passthrough["sourceSchemaVersion"] === "1.0";
+  if (
+    !validateStoryBibleV11Asset(parsed, "persistedStrict", {
+      ...(allowLegacyId ? { allowLegacyId: true } : {})
+    }).valid
   ) {
     return undefined;
   }
@@ -2899,6 +2943,9 @@ function freezeStoryBibleReceipt(receipt: StoryBibleApplyReceipt): StoryBibleApp
       receipt.assets.map((asset) =>
         Object.freeze({
           ...asset,
+          ...(asset.legacyMigration === undefined
+            ? {}
+            : { legacyMigration: Object.freeze({ ...asset.legacyMigration }) }),
           inversePatch: Object.freeze(
             asset.inversePatch.map((operation) => Object.freeze({ ...operation }))
           )

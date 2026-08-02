@@ -130,6 +130,9 @@ function freezeJournal(journal: TransactionJournal): TransactionJournal {
               journal.storyBibleReceipt.assets.map((asset) =>
                 Object.freeze({
                   ...asset,
+                  ...(asset.legacyMigration === undefined
+                    ? {}
+                    : { legacyMigration: Object.freeze({ ...asset.legacyMigration }) }),
                   inversePatch: Object.freeze(
                     asset.inversePatch.map((operation) => Object.freeze({ ...operation }))
                   )

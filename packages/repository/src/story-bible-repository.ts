@@ -673,10 +673,13 @@ export class StoryBibleFileRepository implements StoryBibleRepositoryPort {
     input: SaveStoryBibleCandidateInput,
     statusTransition?: SaveStoryBibleStatusTransitionInput["statusTransition"]
   ): Promise<Result<StoryBibleV11Asset, UnifiedError>> {
-    const prepared = await this.prepareStoryAssetCandidate({
-      ...input,
-      deferProjectRelationPairValidation: false
-    });
+    const prepared = await this.prepareStoryAssetCandidateInternal(
+      {
+        ...input,
+        deferProjectRelationPairValidation: false
+      },
+      true
+    );
     if (!prepared.ok) return prepared;
     const allowedStatusTransition = await this.validateStoryBibleStatusTransition(
       prepared.value.current,
@@ -808,17 +811,6 @@ export class StoryBibleFileRepository implements StoryBibleRepositoryPort {
     input: SaveStoryBibleCandidateInput,
     deferLegacyPathMigration: boolean
   ): Promise<Result<PreparedStoryBibleWrite, UnifiedError>> {
-    if (deferLegacyPathMigration && input.baseChecksum === undefined) {
-      return err(
-        storyBibleCandidateValidationError(this.traceId, [
-          candidateIssue(
-            "/baseChecksum",
-            "required",
-            "is required for a read-only Story Bible candidate preparation"
-          )
-        ])
-      );
-    }
     if (!isStoryBibleWriteCandidate(input.candidate)) {
       const unknown = isJsonObject(input.candidate)
         ? Object.keys(input.candidate).find(
@@ -837,6 +829,21 @@ export class StoryBibleFileRepository implements StoryBibleRepositoryPort {
     }
     const current = await this.readCompatibleStoryAsset(input.candidate.id);
     if (!current.ok) return current;
+    if (
+      deferLegacyPathMigration &&
+      current.value.persistedSchemaVersion === "1.0" &&
+      input.baseChecksum === undefined
+    ) {
+      return err(
+        storyBibleCandidateValidationError(this.traceId, [
+          candidateIssue(
+            "/baseChecksum",
+            "required",
+            "is required for a read-only Story Bible candidate preparation"
+          )
+        ])
+      );
+    }
     const allowedExtensionNamespaces = writableExtensionNamespaces(
       this.registeredExtensionNamespaces,
       current.value.asset.extensions,

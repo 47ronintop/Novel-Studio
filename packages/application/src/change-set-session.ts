@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import {
   appendChangeSetProposal,
-  appendChangeSetOperation,
+  appendChangeSetOperations,
   checksumChangeSetText,
   createChangeSetRevision,
-  createOperationsChangeSetRevision,
+  createOperationsChangeSetRevisionBatch,
   decideChangeSetApproval,
   selectChangeSetRevision,
   validateAgentRelativePath,
@@ -122,6 +122,18 @@ export interface ProposeOperationInput {
   readonly operation: ChangeSetOperation;
 }
 
+export interface ProposeOperationBatchInput {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly operations: readonly {
+    readonly toolCallId: string;
+    readonly operation: ChangeSetOperation;
+  }[];
+}
+
 export interface ChangeSetSession {
   proposeChapterWrite(input: ProposeChapterWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
   proposeFileWrite(input: ProposeFileWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
@@ -130,6 +142,10 @@ export interface ChangeSetSession {
   ): Promise<Result<ChangeSet, UnifiedError>>;
   /** Task B.3 — stages a lifecycle operation (create/move/delete/mkdir) into the active Change Set. */
   proposeOperation(input: ProposeOperationInput): Promise<Result<ChangeSet, UnifiedError>>;
+  /** Stages a complete lifecycle-operation group in one validated, persisted revision. */
+  proposeOperationBatch(
+    input: ProposeOperationBatchInput
+  ): Promise<Result<ChangeSet, UnifiedError>>;
   selectRevision(
     input: SelectChangeSetSessionRevisionInput
   ): Promise<Result<ChangeSet, UnifiedError>>;
@@ -310,6 +326,160 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     );
   }
 
+  async function proposeOperationBatch(
+    input: ProposeOperationBatchInput,
+    authorizationInput: object
+  ): Promise<Result<ChangeSet, UnifiedError>> {
+    if (input.operations.length === 0) {
+      return failure(
+        "CHANGE_SET_OPERATION_INVALID",
+        "An operation batch must contain at least one operation.",
+        "Stage the complete operation group and retry."
+      );
+    }
+    const toolCallIds = new Set<string>();
+    for (const item of input.operations) {
+      if (
+        toolCallIds.has(item.toolCallId) ||
+        item.toolCallId !== item.operation.toolCallIdempotencyKey
+      ) {
+        return failure(
+          "CHANGE_SET_OPERATION_INVALID",
+          "Operation batch idempotency keys must be unique and match their tool call IDs.",
+          "Regenerate the complete operation group and retry."
+        );
+      }
+      toolCallIds.add(item.toolCallId);
+    }
+
+    const checkpointKey = checkpointBindingKey(input);
+    const activeId = activeChangeSetByCheckpoint.get(checkpointKey);
+    try {
+      let existing = activeId === undefined ? undefined : latestRevision(activeId);
+      if (existing === undefined && options.port.readLatestChangeSet !== undefined) {
+        const restored = await options.port.readLatestChangeSet({
+          runId: input.runId,
+          projectId: input.projectId,
+          checkpointId: input.checkpointId
+        });
+        if (!restored.ok) return restored;
+        existing = restored.value;
+        if (existing !== undefined) {
+          rememberRevision(existing);
+          activeChangeSetByCheckpoint.set(checkpointKey, existing.changeSetId);
+        }
+      }
+      if (
+        existing !== undefined &&
+        (existing.runId !== input.runId ||
+          existing.projectId !== input.projectId ||
+          existing.checkpointId !== input.checkpointId ||
+          existing.contextSnapshotId !== input.contextSnapshotId)
+      ) {
+        return failure(
+          "CHANGE_SET_CONTEXT_MISMATCH",
+          "The active Change Set is bound to a different checkpoint or context snapshot.",
+          "Refresh context and create a new checkpoint proposal."
+        );
+      }
+
+      const existingByToolCallId = new Map(
+        (existing?.operations ?? []).map((operation) => [
+          operation.toolCallIdempotencyKey,
+          operation
+        ])
+      );
+      const duplicateItems = input.operations.filter((item) =>
+        existingByToolCallId.has(item.toolCallId)
+      );
+      if (duplicateItems.length > 0) {
+        if (duplicateItems.length !== input.operations.length) {
+          return failure(
+            "CHANGE_SET_OPERATION_BATCH_INCOMPLETE",
+            "The active Change Set contains only part of this operation batch.",
+            "Discard the incomplete Change Set and regenerate the complete operation group."
+          );
+        }
+        const collision = input.operations.find(
+          (item) =>
+            !sameOperationSemantics(
+              existingByToolCallId.get(item.toolCallId) as ChangeSetOperation,
+              item.operation
+            )
+        );
+        if (collision !== undefined) {
+          return failure(
+            "CHANGE_SET_OPERATION_INVALID",
+            "An operation idempotency key is already bound to a different operation.",
+            "Regenerate the operation group with fresh stable IDs."
+          );
+        }
+        return { ok: true, value: existing as ChangeSet };
+      }
+
+      for (const item of input.operations) {
+        if (item.operation.kind !== "create_file") continue;
+        const validation = await options.port.validateCandidate({
+          runId: input.runId,
+          projectId: input.projectId,
+          checkpointId: input.checkpointId,
+          relativePath: item.operation.relativePath,
+          assetType: "text",
+          candidateContent: item.operation.content
+        });
+        if (!validation.ok) return validation;
+        const invalidCheck = [validation.value.schema, validation.value.asset].find(
+          (check) => check?.status === "invalid"
+        );
+        if (invalidCheck !== undefined) {
+          return failure(
+            "CHANGE_SET_OPERATION_INVALID",
+            invalidCheck.message ?? "The proposed file content failed project validation.",
+            "Fix the proposed file content and retry."
+          );
+        }
+      }
+
+      const operations = input.operations.map((item) => item.operation);
+      const writePolicy =
+        operations.some(isDestructiveOperation) || input.writePolicy !== "user_preapproved_run"
+          ? "write_before_confirmation"
+          : consumeAgentRunProposalAuthorization(authorizationInput)
+            ? "user_preapproved_run"
+            : "write_before_confirmation";
+      if (
+        existing !== undefined &&
+        (existing.writePolicy ?? "write_before_confirmation") !== writePolicy
+      ) {
+        return failure(
+          "CHANGE_SET_CONTEXT_MISMATCH",
+          "The active Change Set is bound to a different write policy.",
+          "Create a new checkpoint before staging operations under another write policy."
+        );
+      }
+      const revision =
+        existing === undefined
+          ? createOperationsChangeSetRevisionBatch({
+              changeSetId: createChangeSetId(),
+              runId: input.runId,
+              projectId: input.projectId,
+              checkpointId: input.checkpointId,
+              contextSnapshotId: input.contextSnapshotId,
+              writePolicy,
+              operations,
+              createdAt: now()
+            })
+          : appendChangeSetOperations(existing, { operations, createdAt: now() });
+      const persisted = await options.port.persistChangeSet(revision);
+      if (!persisted.ok) return persisted;
+      rememberRevision(revision);
+      activeChangeSetByCheckpoint.set(checkpointKey, revision.changeSetId);
+      return { ok: true, value: revision };
+    } catch (error) {
+      return err(asUnifiedError(error));
+    }
+  }
+
   return {
     async proposeChapterWrite(input) {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.chapterId)) {
@@ -393,88 +563,14 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     },
 
     async proposeOperation(input) {
-      const checkpointKey = checkpointBindingKey(input);
-      const activeId = activeChangeSetByCheckpoint.get(checkpointKey);
-      try {
-        let existing = activeId === undefined ? undefined : latestRevision(activeId);
-        if (existing === undefined && options.port.readLatestChangeSet !== undefined) {
-          const restored = await options.port.readLatestChangeSet({
-            runId: input.runId,
-            projectId: input.projectId,
-            checkpointId: input.checkpointId
-          });
-          if (!restored.ok) return restored;
-          existing = restored.value;
-          if (existing !== undefined) {
-            rememberRevision(existing);
-            activeChangeSetByCheckpoint.set(checkpointKey, existing.changeSetId);
-          }
-        }
-        const duplicateOp = existing?.operations?.find(
-          (candidate) => candidate.toolCallIdempotencyKey === input.toolCallId
-        );
-        if (duplicateOp !== undefined) return { ok: true, value: existing as ChangeSet };
-        if (
-          existing !== undefined &&
-          (existing.runId !== input.runId ||
-            existing.projectId !== input.projectId ||
-            existing.checkpointId !== input.checkpointId ||
-            existing.contextSnapshotId !== input.contextSnapshotId)
-        ) {
-          return failure(
-            "CHANGE_SET_CONTEXT_MISMATCH",
-            "The active Change Set is bound to a different checkpoint or context snapshot.",
-            "Refresh context and create a new checkpoint proposal."
-          );
-        }
-        if (input.operation.kind === "create_file") {
-          const validation = await options.port.validateCandidate({
-            runId: input.runId,
-            projectId: input.projectId,
-            checkpointId: input.checkpointId,
-            relativePath: input.operation.relativePath,
-            assetType: "text",
-            candidateContent: input.operation.content
-          });
-          if (!validation.ok) return validation;
-          const invalidCheck = [validation.value.schema, validation.value.asset].find(
-            (check) => check?.status === "invalid"
-          );
-          if (invalidCheck !== undefined) {
-            return failure(
-              "CHANGE_SET_OPERATION_INVALID",
-              invalidCheck.message ?? "The proposed file content failed project validation.",
-              "Fix the proposed file content and retry."
-            );
-          }
-        }
-        const writePolicy =
-          isDestructiveOperation(input.operation) || input.writePolicy !== "user_preapproved_run"
-            ? "write_before_confirmation"
-            : consumeAgentRunProposalAuthorization(input)
-              ? "user_preapproved_run"
-              : "write_before_confirmation";
-        const revision =
-          existing === undefined
-            ? createOperationsChangeSetRevision({
-                changeSetId: createChangeSetId(),
-                runId: input.runId,
-                projectId: input.projectId,
-                checkpointId: input.checkpointId,
-                contextSnapshotId: input.contextSnapshotId,
-                writePolicy,
-                operation: input.operation,
-                createdAt: now()
-              })
-            : appendChangeSetOperation(existing, { operation: input.operation, createdAt: now() });
-        const persisted = await options.port.persistChangeSet(revision);
-        if (!persisted.ok) return persisted;
-        rememberRevision(revision);
-        activeChangeSetByCheckpoint.set(checkpointKey, revision.changeSetId);
-        return { ok: true, value: revision };
-      } catch (error) {
-        return err(asUnifiedError(error));
-      }
+      return proposeOperationBatch(
+        { ...input, operations: [{ toolCallId: input.toolCallId, operation: input.operation }] },
+        input
+      );
+    },
+
+    async proposeOperationBatch(input) {
+      return proposeOperationBatch(input, input);
     },
 
     async selectRevision(input) {
@@ -637,6 +733,56 @@ function isDestructiveOperation(operation: ChangeSetOperation): boolean {
     operation.kind === "move_file" ||
     operation.kind === "delete_file" ||
     operation.kind === "create_directory"
+  );
+}
+
+function sameOperationSemantics(left: ChangeSetOperation, right: ChangeSetOperation): boolean {
+  if (
+    left.kind !== right.kind ||
+    left.operationId !== right.operationId ||
+    left.toolCallIdempotencyKey !== right.toolCallIdempotencyKey ||
+    left.consistencyGroupId !== right.consistencyGroupId ||
+    (left.selected ?? true) !== (right.selected ?? true) ||
+    !sameStringSet(left.dependsOn, right.dependsOn)
+  ) {
+    return false;
+  }
+  switch (left.kind) {
+    case "modify":
+      return right.kind === "modify" && left.relativePath === right.relativePath;
+    case "create_file":
+      return (
+        right.kind === "create_file" &&
+        left.relativePath === right.relativePath &&
+        left.content === right.content
+      );
+    case "move_file":
+      return (
+        right.kind === "move_file" &&
+        left.sourcePath === right.sourcePath &&
+        left.targetPath === right.targetPath &&
+        left.sourceChecksum === right.sourceChecksum
+      );
+    case "delete_file":
+      return (
+        right.kind === "delete_file" &&
+        left.relativePath === right.relativePath &&
+        left.baseChecksum === right.baseChecksum
+      );
+    case "create_directory":
+      return right.kind === "create_directory" && left.relativePath === right.relativePath;
+  }
+}
+
+function sameStringSet(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined
+): boolean {
+  const sortedLeft = [...(left ?? [])].sort();
+  const sortedRight = [...(right ?? [])].sort();
+  return (
+    sortedLeft.length === sortedRight.length &&
+    sortedLeft.every((value, index) => value === sortedRight[index])
   );
 }
 

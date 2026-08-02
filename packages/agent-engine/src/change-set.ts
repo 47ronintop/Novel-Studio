@@ -445,11 +445,7 @@ export function inspectChangeSetConsistencyGroups(
     }
   }
   for (const operation of changeSet.operations ?? []) {
-    addConsistencyGroupState(
-      states,
-      operation.consistencyGroupId,
-      operation.selected !== false
-    );
+    addConsistencyGroupState(states, operation.consistencyGroupId, operation.selected !== false);
   }
   const allGroupIds = [...states.keys()].sort(compareIdentifiers);
   const splitGroupIds = allGroupIds.filter((groupId) => (states.get(groupId)?.size ?? 0) > 1);
@@ -574,8 +570,7 @@ async function finalizeChangeSet(
   const approvalToken = checksumChangeSetText(`${input.changeSetId}:${input.revision}:${checksum}`);
   return deepFreeze({
     schemaVersion: files.some(
-      (file) =>
-        file.consistencyGroupId !== undefined || file.storyBibleStatusProof !== undefined
+      (file) => file.consistencyGroupId !== undefined || file.storyBibleStatusProof !== undefined
     )
       ? "1.1"
       : "1.0",
@@ -944,7 +939,31 @@ export function createOperationsChangeSetRevision(input: {
   readonly operation: ChangeSetOperation;
   readonly createdAt: string;
 }): ChangeSet {
-  const operations = [normalizeChangeSetOperation(input.operation)];
+  return createOperationsChangeSetRevisionBatch({
+    ...input,
+    operations: [input.operation]
+  });
+}
+
+/** Build the first revision of an operations-only Change Set from one atomic operation batch. */
+export function createOperationsChangeSetRevisionBatch(input: {
+  readonly changeSetId: string;
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly operations: readonly ChangeSetOperation[];
+  readonly createdAt: string;
+}): ChangeSet {
+  const operations = input.operations.map(normalizeChangeSetOperation);
+  if (operations.length === 0) {
+    throw changeSetError(
+      "CHANGE_SET_OPERATION_INVALID",
+      "An operation batch must contain at least one operation.",
+      "Stage the complete operation group and retry."
+    );
+  }
   assertOperationsPreflight(operations);
   return finalizeOperationsChangeSet({
     changeSetId: input.changeSetId,
@@ -968,9 +987,27 @@ export function appendChangeSetOperation(
   current: ChangeSet,
   input: { readonly operation: ChangeSetOperation; readonly createdAt: string }
 ): ChangeSet {
+  return appendChangeSetOperations(current, {
+    operations: [input.operation],
+    createdAt: input.createdAt
+  });
+}
+
+/** Append one atomic lifecycle-operation batch onto an existing Change Set revision. */
+export function appendChangeSetOperations(
+  current: ChangeSet,
+  input: { readonly operations: readonly ChangeSetOperation[]; readonly createdAt: string }
+): ChangeSet {
+  if (input.operations.length === 0) {
+    throw changeSetError(
+      "CHANGE_SET_OPERATION_INVALID",
+      "An operation batch must contain at least one operation.",
+      "Stage the complete operation group and retry."
+    );
+  }
   const operations = [
     ...(current.operations ?? []).map(normalizeChangeSetOperation),
-    normalizeChangeSetOperation(input.operation)
+    ...input.operations.map(normalizeChangeSetOperation)
   ];
   assertOperationsPreflight(operations);
   return finalizeOperationsChangeSet({
@@ -1477,19 +1514,13 @@ function assertConsistencyGroupsAreIndivisible(
   const states = new Map<string, Set<boolean>>();
   for (const file of files) {
     const selections =
-      file.hunks.length === 0
-        ? [file.selected === true]
-        : file.hunks.map((hunk) => hunk.selected);
+      file.hunks.length === 0 ? [file.selected === true] : file.hunks.map((hunk) => hunk.selected);
     for (const selected of selections) {
       addConsistencyGroupState(states, file.consistencyGroupId, selected);
     }
   }
   for (const operation of operations) {
-    addConsistencyGroupState(
-      states,
-      operation.consistencyGroupId,
-      operation.selected !== false
-    );
+    addConsistencyGroupState(states, operation.consistencyGroupId, operation.selected !== false);
   }
   const splitGroupId = [...states.entries()].find(([, selections]) => selections.size > 1)?.[0];
   if (splitGroupId !== undefined) {

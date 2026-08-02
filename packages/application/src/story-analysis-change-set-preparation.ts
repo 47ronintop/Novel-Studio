@@ -36,9 +36,12 @@ export interface StoryAnalysisChangeSetPreparationOptions {
   readonly chapterCatalog?: Pick<ChapterCatalogRepositoryPort, "listChapters">;
   readonly changeSets: Pick<
     ChangeSetSession,
-    "proposeOperation" | "proposeStoryBibleWrite" | "readLatestChangeSet"
+    "proposeOperation" | "proposeOperationBatch" | "proposeStoryBibleWrite" | "readLatestChangeSet"
   >;
-  readonly fileOperations: Pick<AgentFileOperationSession, "proposeStoryBibleWrite">;
+  readonly fileOperations: Pick<
+    AgentFileOperationSession,
+    "proposeStoryBibleWrite" | "proposeFileCreate" | "proposeFileDelete"
+  >;
 }
 
 export function createStoryAnalysisChangeSetPreparationPort(
@@ -78,7 +81,12 @@ export function createStoryAnalysisChangeSetPreparationPort(
         checkpointId: binding.checkpointId
       });
       if (!existing.ok) return existing;
-      if (existing.value !== undefined) return ok(existing.value);
+      if (existing.value !== undefined) {
+        const existingMigrationError = validateExistingMigrationPairs(existing.value);
+        return existingMigrationError === undefined
+          ? ok(existing.value)
+          : err(existingMigrationError);
+      }
 
       const proposedAssetIds = suggestions.flatMap((suggestion) =>
         suggestion.action === "create" && suggestion.proposedAssetId !== null
@@ -161,21 +169,61 @@ export function createStoryAnalysisChangeSetPreparationPort(
           options.repository
         );
         if (!prepared.ok) return prepared;
-        const proposed = await options.changeSets.proposeStoryBibleWrite({
-          ...binding,
-          assetId: prepared.value.asset.id,
-          range: {
-            unit: "character",
-            start: 0,
-            end: prepared.value.baseContent.length
-          },
-          baseHash: prepared.value.baseChecksum,
-          replacement: prepared.value.content,
-          consistencyGroupId: group.consistencyGroupId,
-          repositoryPrepared: true
-        });
-        if (!proposed.ok) return proposed;
-        latest = proposed.value;
+        if (
+          prepared.value.currentRelativePath !== undefined &&
+          prepared.value.currentRelativePath !== prepared.value.relativePath
+        ) {
+          const migrationToolCallId = stableId(
+            "tool",
+            `${binding.runId}:${group.consistencyGroupId}:${prepared.value.asset.id}:${prepared.value.currentRelativePath}`
+          );
+          const create = options.fileOperations.proposeFileCreate({
+            toolCallId: `${migrationToolCallId}_create`,
+            relativePath: prepared.value.relativePath,
+            content: prepared.value.content,
+            consistencyGroupId: group.consistencyGroupId
+          });
+          if (!create.ok) return create;
+          const remove = options.fileOperations.proposeFileDelete({
+            toolCallId: `${migrationToolCallId}_delete`,
+            relativePath: prepared.value.currentRelativePath,
+            baseChecksum: prepared.value.baseChecksum,
+            dependsOn: [create.value.operationId],
+            consistencyGroupId: group.consistencyGroupId
+          });
+          if (!remove.ok) return remove;
+          const proposedMigration = await options.changeSets.proposeOperationBatch({
+            ...binding,
+            operations: [
+              {
+                toolCallId: `${migrationToolCallId}_create`,
+                operation: create.value.operation
+              },
+              {
+                toolCallId: `${migrationToolCallId}_delete`,
+                operation: remove.value.operation
+              }
+            ]
+          });
+          if (!proposedMigration.ok) return proposedMigration;
+          latest = proposedMigration.value;
+        } else {
+          const proposed = await options.changeSets.proposeStoryBibleWrite({
+            ...binding,
+            assetId: prepared.value.asset.id,
+            range: {
+              unit: "character",
+              start: 0,
+              end: prepared.value.baseContent.length
+            },
+            baseHash: prepared.value.baseChecksum,
+            replacement: prepared.value.content,
+            consistencyGroupId: group.consistencyGroupId,
+            repositoryPrepared: true
+          });
+          if (!proposed.ok) return proposed;
+          latest = proposed.value;
+        }
       }
 
       return latest === undefined
@@ -188,6 +236,33 @@ export function createStoryAnalysisChangeSetPreparationPort(
         : ok(latest);
     }
   };
+}
+
+function validateExistingMigrationPairs(changeSet: ChangeSet): UnifiedError | undefined {
+  const operationsByToolCallId = new Map(
+    (changeSet.operations ?? []).map((operation) => [operation.toolCallIdempotencyKey, operation])
+  );
+  const migrationKeys = [...operationsByToolCallId.keys()].filter(
+    (toolCallId) => toolCallId.startsWith("tool_") && /_(?:create|delete)$/.test(toolCallId)
+  );
+  for (const toolCallId of migrationKeys) {
+    const baseToolCallId = toolCallId.replace(/_(?:create|delete)$/, "");
+    const create = operationsByToolCallId.get(`${baseToolCallId}_create`);
+    const remove = operationsByToolCallId.get(`${baseToolCallId}_delete`);
+    if (
+      create?.kind !== "create_file" ||
+      remove?.kind !== "delete_file" ||
+      create.consistencyGroupId === undefined ||
+      create.consistencyGroupId !== remove.consistencyGroupId ||
+      !(remove.dependsOn ?? []).includes(create.operationId)
+    ) {
+      return preparationError(
+        "STORY_ANALYSIS_CHANGE_SET_INCOMPLETE",
+        "The existing Story Analysis Change Set contains an incomplete legacy migration."
+      );
+    }
+  }
+  return undefined;
 }
 
 async function prepareCreateSuggestion(
@@ -309,7 +384,7 @@ async function preparePatchGroup(
   if (candidate === undefined) {
     return err(preparationError("STORY_ANALYSIS_PATCH_INVALID", "Patch group has no operations."));
   }
-  return repository.prepareStoryAssetCandidate({
+  return repository.prepareStoryAssetCandidateReadOnly({
     candidate,
     baseRevision: read.value.revision,
     baseChecksum: read.value.checksum,

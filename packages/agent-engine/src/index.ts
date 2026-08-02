@@ -276,7 +276,9 @@ export {
   createDirectoryOperation,
   preflightChangeSetOperations,
   createOperationsChangeSetRevision,
-  appendChangeSetOperation
+  createOperationsChangeSetRevisionBatch,
+  appendChangeSetOperation,
+  appendChangeSetOperations
 } from "./change-set.js";
 export type {
   AppendChangeSetProposalInput,
@@ -334,6 +336,7 @@ export type {
   VersionGroupWriteStatus,
   StoryBibleApplyReceipt,
   StoryBibleApplyReceiptAsset,
+  StoryBibleLegacyMigrationReceipt,
   StoryBibleInversePatchOperation
 } from "./version-group.js";
 export {

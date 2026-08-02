@@ -1529,6 +1529,11 @@ describe("desktop Agent Run runtime", () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-story-bible-read-"));
     roots.push(projectRoot);
     const repository = new StoryBibleFileRepository({ projectRoot });
+    const chapterId = "ch_story_bible_reference";
+    const chapters = new ChapterFileRepository({ projectRoot });
+    await expect(
+      chapters.createChapter({ chapterId, title: "Reference chapter", body: "" })
+    ).resolves.toMatchObject({ ok: true });
     const assetId = "chr_legacy_character_read";
     expect(
       await repository.saveStoryAsset({
@@ -1547,6 +1552,14 @@ describe("desktop Agent Run runtime", () => {
     let round = 0;
     let toolPayload = "";
     let visibleTools: string[] = [];
+    const referenceInputs: (readonly string[] | undefined)[] = [];
+    const getReferences = StoryBibleFileRepository.prototype.getStoryBibleReferences;
+    const referenceSpy = vi
+      .spyOn(StoryBibleFileRepository.prototype, "getStoryBibleReferences")
+      .mockImplementation(async function (referenceAssetId, knownChapterIds) {
+        referenceInputs.push(knownChapterIds);
+        return getReferences.call(this, referenceAssetId, knownChapterIds);
+      });
     const session = createDesktopRuntime({
       workspaceKind: "creativeProject",
       projectId: "project-01",
@@ -1606,6 +1619,69 @@ describe("desktop Agent Run runtime", () => {
     expect(toolPayload).toContain(assetId);
     expect(toolPayload).toContain('"present":true');
     expect(toolPayload).not.toContain("legacy-secret-value");
+    expect(referenceInputs).toContainEqual([chapterId]);
+    referenceSpy.mockRestore();
+  });
+
+  test("propagates chapter catalog failures from Story Bible reference queries", async () => {
+    const projectRoot = await mkdtemp(
+      join(tmpdir(), "novel-studio-desktop-story-bible-ref-error-")
+    );
+    roots.push(projectRoot);
+    const listChapters = vi
+      .spyOn(ChapterFileRepository.prototype, "listChapters")
+      .mockResolvedValue(
+        err({
+          schemaVersion: "1.0",
+          errorId: "err_story_bible_reference_chapters",
+          code: "CHAPTER_CATALOG_UNAVAILABLE",
+          category: "StorageError",
+          message: "Chapter catalog is unavailable.",
+          recoverability: "retryable",
+          suggestedAction: "Retry.",
+          traceId: "desktop-agent-run-runtime-test"
+        })
+      );
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      createRunId: () => "run-desktop-story-bible-ref-error",
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          yield round === 1
+            ? runtimeToolCall("references-fail", "get_story_bible_references", {
+                assetId: "chr_unavailable"
+              })
+            : runtimeToolCall("finish-references-fail", "finish", { summary: "Finished." });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    await session.startAgentRun(executionCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-story-bible-ref-error")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "completed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "references-fail",
+                code: "CHAPTER_CATALOG_UNAVAILABLE"
+              })
+            })
+          ])
+        }
+      });
+    });
+    listChapters.mockRestore();
   });
 
   test("applies a structured Story Bible patch only after Change Set approval", async () => {
@@ -1716,6 +1792,141 @@ describe("desktop Agent Run runtime", () => {
         asset: { summary: "已经进入旧港调查失踪案。", revision: 2 }
       }
     });
+  });
+
+  test("migrates a legacy Story Bible patch only through an approved Change Set and restores it on undo", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-story-bible-legacy-"));
+    roots.push(projectRoot);
+    const assetId = "loc_legacy_port";
+    const legacyPath = join(projectRoot, "world", "locations", "legacy-port.json");
+    const canonicalPath = join(projectRoot, "world", `${assetId}.json`);
+    await mkdir(join(projectRoot, "world", "locations"), { recursive: true });
+    const legacyContent = `${JSON.stringify(
+      {
+        schemaVersion: "1.0",
+        id: assetId,
+        type: "world.location",
+        title: "旧港",
+        status: "active",
+        summary: "尚未修订。",
+        details: { constraints: [] },
+        createdAt: "2026-07-31T00:00:00.000Z",
+        updatedAt: "2026-07-31T00:00:00.000Z"
+      },
+      null,
+      2
+    )}\n`;
+    await writeFile(legacyPath, legacyContent, "utf8");
+    const repository = new StoryBibleFileRepository({ projectRoot });
+    const before = await repository.readCompatibleStoryAsset(assetId);
+    if (!before.ok) throw new Error(before.error.message);
+    const lockOwnerId = "desktop-story-bible-legacy-test";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    let round = 0;
+    const session = createDesktopRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      projectLockOwnerId: lockOwnerId,
+      createRunId: () => "run-desktop-story-bible-legacy",
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("patch-legacy-location", "patch_story_bible", {
+              assetId,
+              baseRevision: before.value.revision,
+              baseChecksum: before.value.checksum,
+              operations: [{ op: "replace", path: "/summary", value: "已经修订。" }]
+            });
+          } else {
+            yield runtimeToolCall("finish-legacy-location", "finish", { summary: "Patched." });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    }) as unknown as {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      undoRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+
+    await session.startAgentRun(executionCommand());
+    let changeSet: Record<string, unknown> | undefined;
+    let awaitingRevision = 0;
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun("run-desktop-story-bible-legacy");
+      expect(read).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_write_approval" },
+          changeSet: {
+            operations: [
+              expect.objectContaining({
+                kind: "create_file",
+                relativePath: `world/${assetId}.json`
+              }),
+              expect.objectContaining({
+                kind: "delete_file",
+                relativePath: "world/locations/legacy-port.json",
+                dependsOn: [expect.any(String)]
+              })
+            ]
+          }
+        }
+      });
+      const value = read as {
+        value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
+      };
+      awaitingRevision = value.value.snapshot.runRevision;
+      changeSet = value.value.changeSet;
+    });
+    expect(await readFile(legacyPath, "utf8")).toBe(legacyContent);
+    await expect(readFile(canonicalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    if (changeSet === undefined) throw new Error("Expected legacy migration Change Set.");
+    await session.decideChangeSet({
+      runId: "run-desktop-story-bible-legacy",
+      projectId: "project-01",
+      commandId: "apply-story-bible-legacy",
+      expectedRunRevision: awaitingRevision,
+      changeSetId: changeSet["changeSetId"],
+      revision: changeSet["revision"],
+      checksum: changeSet["checksum"],
+      decision: "apply_selected"
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run-desktop-story-bible-legacy")).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    await expect(readFile(legacyPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(canonicalPath, "utf8")).toContain("已经修订。");
+    const journals = await new RecoveryRepository({ projectRoot }).listAgentTransactionJournals();
+    expect(journals.ok).toBe(true);
+    if (!journals.ok) throw new Error(journals.error.message);
+    expect(journals.value[0]?.storyBibleReceipt?.assets[0]).toMatchObject({
+      assetId,
+      beforeRevision: 0,
+      beforeChecksum: before.value.checksum
+    });
+    const completed = (await session.readAgentRun("run-desktop-story-bible-legacy")) as {
+      value: { snapshot: { runRevision: number } };
+    };
+    await expect(
+      session.undoRun({
+        projectId: "project-01",
+        runId: "run-desktop-story-bible-legacy",
+        commandId: "undo-story-bible-legacy",
+        expectedRunRevision: completed.value.snapshot.runRevision
+      })
+    ).resolves.toMatchObject({ ok: true, value: { status: "completed" } });
+    expect(await readFile(legacyPath, "utf8")).toBe(legacyContent);
+    await expect(readFile(canonicalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test.each([

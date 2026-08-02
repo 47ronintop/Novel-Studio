@@ -692,6 +692,8 @@ export type {
   CreateChangeSetSessionOptions,
   ProposeChapterWriteInput,
   ProposeFileWriteInput,
+  ProposeOperationBatchInput,
+  ProposeOperationInput,
   SelectChangeSetSessionRevisionInput
 } from "./change-set-session.js";
 export type {

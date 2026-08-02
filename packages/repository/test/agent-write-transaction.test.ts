@@ -751,13 +751,12 @@ describe("AgentWriteTransaction", () => {
   test("persists the History identity for a Story Bible create receipt", async () => {
     const projectRoot = await createProject({});
     await mkdir(join(projectRoot, "characters"));
-    const content = JSON.stringify({
-      schemaVersion: "1.1",
-      id: `chr_${"c".repeat(32)}`,
-      type: "character",
-      revision: 1,
-      title: "Created character"
-    });
+    const content = persistedCharacterContent(
+      `chr_${"c".repeat(32)}`,
+      1,
+      "Created character",
+      false
+    );
     const selectionChecksum = "e".repeat(64);
     const input = createInput([], {
       applyBatchId: "apply_batch_create_receipt",
@@ -813,6 +812,221 @@ describe("AgentWriteTransaction", () => {
     expect(journals.value[0]?.storyBibleReceipt?.assets[0]?.historyVersionId).toEqual(
       expect.any(String)
     );
+  });
+
+  test("round-trips a legacy Story Bible migration receipt and rejects forged pair bindings", async () => {
+    const assetId = `chr_${"d".repeat(32)}`;
+    const legacyPath = "characters/legacy/hero.json";
+    const canonicalPath = `characters/${assetId}.json`;
+    const legacyContent = `${JSON.stringify({
+      schemaVersion: "1.0",
+      id: assetId,
+      type: "character",
+      title: "Legacy Hero"
+    })}\n`;
+    const candidateContent = persistedCharacterContent(assetId, 1, "Migrated Hero");
+    const projectRoot = await createProject({ [legacyPath]: legacyContent });
+    const applyBatchId = "apply_batch_legacy_receipt";
+    const consistencyGroupId = "fact_legacy_receipt";
+    const selectionChecksum = "e".repeat(64);
+    const createOperationId = "create_legacy_character";
+    const deleteOperationId = "delete_legacy_character";
+    const input = createInput([], {
+      applyBatchId,
+      consistencyGroupId,
+      selectionChecksum,
+      approvalToken: deriveChangeSetGroupApprovalToken({
+        changeSetId: "changes_01",
+        revision: 1,
+        checksum: "c".repeat(64),
+        applyBatchId,
+        consistencyGroupId,
+        selectionChecksum
+      }),
+      operations: [
+        {
+          kind: "create_file",
+          operationId: createOperationId,
+          toolCallIdempotencyKey: "tool_create_legacy_character",
+          relativePath: canonicalPath,
+          content: candidateContent,
+          consistencyGroupId
+        },
+        {
+          kind: "delete_file",
+          operationId: deleteOperationId,
+          toolCallIdempotencyKey: "tool_delete_legacy_character",
+          relativePath: legacyPath,
+          baseChecksum: checksum(legacyContent),
+          dependsOn: [createOperationId],
+          consistencyGroupId
+        }
+      ]
+    });
+
+    const transaction = createTransaction(projectRoot);
+    const applied = await transaction.apply(input);
+    expect(applied).toMatchObject({
+      ok: true,
+      value: {
+        storyBibleReceipt: {
+          assets: [
+            {
+              assetId,
+              relativePath: canonicalPath,
+              beforeRevision: 0,
+              beforeChecksum: checksum(legacyContent),
+              historyVersionId: expect.any(String),
+              legacyMigration: {
+                sourceRelativePath: legacyPath,
+                createOperationId,
+                deleteOperationId
+              }
+            }
+          ]
+        }
+      }
+    });
+    const recovery = new RecoveryRepository({ projectRoot });
+    const listed = await recovery.listAgentTransactionJournals();
+    if (!listed.ok || listed.value[0] === undefined) {
+      throw new Error("Expected a valid legacy migration journal.");
+    }
+    const journal = listed.value[0];
+    const journalOperations = journal.operations;
+    const journalMutationOrder = journal.mutationOrder;
+    const createEntry = journalOperations?.find(
+      (entry) => entry.operation.operationId === createOperationId
+    );
+    const receipt = journal.storyBibleReceipt;
+    const receiptAsset = receipt?.assets[0];
+    if (
+      journalOperations === undefined ||
+      journalMutationOrder === undefined ||
+      createEntry === undefined ||
+      receipt === undefined ||
+      receiptAsset === undefined
+    ) {
+      throw new Error("Expected a complete legacy migration receipt.");
+    }
+    const ordinaryLikeAsset = structuredClone(receiptAsset);
+    Reflect.deleteProperty(ordinaryLikeAsset, "legacyMigration");
+
+    const forgedJournals: readonly AgentTransactionJournal[] = [
+      {
+        ...journal,
+        operations: journalOperations.map((entry) =>
+          entry.operation.operationId === deleteOperationId &&
+          entry.operation.kind === "delete_file"
+            ? { ...entry, operation: { ...entry.operation, dependsOn: [] } }
+            : entry
+        )
+      },
+      {
+        ...journal,
+        operations: journalOperations.map((entry) =>
+          entry.operation.operationId === deleteOperationId &&
+          entry.operation.kind === "delete_file"
+            ? {
+                ...entry,
+                operation: {
+                  ...entry.operation,
+                  dependsOn: [createOperationId, "operation_unknown_dependency"]
+                }
+              }
+            : entry
+        )
+      },
+      {
+        ...journal,
+        operations: journalOperations.map((entry) =>
+          entry.operation.operationId === createOperationId &&
+          entry.operation.kind === "create_file"
+            ? {
+                ...entry,
+                operation: { ...entry.operation, consistencyGroupId: "fact_forged_group" }
+              }
+            : entry
+        )
+      },
+      {
+        ...journal,
+        storyBibleReceipt: {
+          ...receipt,
+          assets: [{ ...receiptAsset, assetId: `chr_${"f".repeat(32)}` }]
+        }
+      },
+      {
+        ...journal,
+        storyBibleReceipt: {
+          ...receipt,
+          assets: [{ ...receiptAsset, historyVersionId: "ver_forged_history" }]
+        }
+      },
+      {
+        ...journal,
+        operations: journalOperations.map((entry) =>
+          entry.operation.operationId === deleteOperationId
+            ? { ...entry, beforeVersionId: "ver_forged_history" }
+            : entry
+        ),
+        storyBibleReceipt: {
+          ...receipt,
+          assets: [{ ...receiptAsset, historyVersionId: "ver_forged_history" }]
+        }
+      },
+      {
+        ...journal,
+        storyBibleReceipt: {
+          ...receipt,
+          assets: [
+            {
+              ...receiptAsset,
+              beforeChecksum: null,
+              beforeRevision: null,
+              historyVersionId: createEntry.beforeVersionId ?? null,
+              inversePatch: [{ op: "remove", path: "" }]
+            }
+          ]
+        }
+      },
+      {
+        ...journal,
+        operations: journalOperations.filter(
+          (entry) => entry.operation.operationId !== deleteOperationId
+        ),
+        mutationOrder: journalMutationOrder.filter(
+          (mutation) => !(mutation.kind === "operation" && mutation.id === deleteOperationId)
+        ),
+        storyBibleReceipt: {
+          ...receipt,
+          assets: [
+            {
+              ...ordinaryLikeAsset,
+              beforeChecksum: null,
+              beforeRevision: null,
+              historyVersionId: createEntry.beforeVersionId ?? null,
+              inversePatch: [{ op: "remove", path: "" }]
+            }
+          ]
+        }
+      }
+    ];
+    for (const forged of forgedJournals) {
+      await expect(recovery.writeAgentTransactionJournal(forged)).resolves.toMatchObject({
+        ok: false,
+        error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+      });
+    }
+
+    if (!applied.ok) throw new Error(applied.error.message);
+    await expect(
+      transaction.undoVersionGroup({ versionGroupId: applied.value.versionGroupId })
+    ).resolves.toMatchObject({ ok: true, value: { undoStatus: "completed" } });
+    expect(await readFile(join(projectRoot, legacyPath), "utf8")).toBe(legacyContent);
+    await expect(readFile(join(projectRoot, canonicalPath), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
   });
 
   test("rejects different content that reuses a grouped apply idempotency key", async () => {
@@ -3172,7 +3386,12 @@ function safeAutoJournal(): AgentTransactionJournal {
   };
 }
 
-function persistedCharacterContent(id: string, revision: number, title: string): string {
+function persistedCharacterContent(
+  id: string,
+  revision: number,
+  title: string,
+  legacyPassthrough = true
+): string {
   return JSON.stringify({
     schemaVersion: "1.1",
     id,
@@ -3199,11 +3418,15 @@ function persistedCharacterContent(id: string, revision: number, title: string):
     updatedAt: "2026-08-02T00:00:00.000Z",
     revision,
     relatedEntityIds: [],
-    passthrough: {
-      sourceSchemaVersion: "1.0",
-      rootFields: {},
-      detailFieldsByPointer: {}
-    }
+    ...(legacyPassthrough
+      ? {
+          passthrough: {
+            sourceSchemaVersion: "1.0",
+            rootFields: {},
+            detailFieldsByPointer: {}
+          }
+        }
+      : {})
   });
 }
 

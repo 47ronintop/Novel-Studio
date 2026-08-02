@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, test, vi } from "vitest";
 
-import type { ChangeSet } from "@novel-studio/agent-engine";
-import type { Result, UnifiedError } from "@novel-studio/shared";
+import { createOperationsChangeSetRevision, type ChangeSet } from "@novel-studio/agent-engine";
+import { createUnifiedError, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import {
   createChangeSetSession,
@@ -299,6 +299,193 @@ describe("Change Set application session", () => {
     });
     expect(validateCandidate).toHaveBeenCalledTimes(2);
     expect(persisted).toHaveLength(1);
+  });
+
+  test("persists an operation batch as one revision and treats the complete retry as idempotent", async () => {
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+      createChangeSetId: () => "change-set-atomic-migration",
+      now: () => "2026-08-02T00:00:00.000Z"
+    });
+    const input = migrationBatchInput();
+
+    const first = await session.proposeOperationBatch(input);
+    const duplicate = await session.proposeOperationBatch(input);
+
+    expect(expectOk(first)).toMatchObject({
+      revision: 1,
+      writePolicy: "write_before_confirmation",
+      operations: [
+        { kind: "create_file", operationId: "op-migrate-create" },
+        {
+          kind: "delete_file",
+          operationId: "op-migrate-delete",
+          dependsOn: ["op-migrate-create"]
+        }
+      ]
+    });
+    expect(duplicate).toEqual(first);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.operations).toHaveLength(2);
+  });
+
+  test("rejects a retry that reuses batch IDs with different operation semantics", async () => {
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+      createChangeSetId: () => "change-set-batch-collision",
+      now: () => "2026-08-02T00:00:00.000Z"
+    });
+    const original = migrationBatchInput();
+    expect(await session.proposeOperationBatch(original)).toMatchObject({ ok: true });
+    const changed = {
+      ...original,
+      operations: original.operations.map((item, index) =>
+        index === 0
+          ? {
+              ...item,
+              operation: {
+                ...item.operation,
+                relativePath: "story/characters/different.json",
+                content: '{"schemaVersion":"1.1","changed":true}\n'
+              }
+            }
+          : item
+      )
+    };
+
+    expect(await session.proposeOperationBatch(changed)).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_OPERATION_INVALID" }
+    });
+    expect(persisted).toHaveLength(1);
+  });
+
+  test("does not persist or remember a partial batch when its complete DAG or persistence fails", async () => {
+    const persistedAttempts: ChangeSet[] = [];
+    let rejectPersistence = true;
+    const port = targetPort({ chapter: () => "unused", file: () => "unused", persisted: [] });
+    const persistChangeSet = vi.fn(async (changeSet: ChangeSet) => {
+      persistedAttempts.push(changeSet);
+      return rejectPersistence
+        ? {
+            ok: false as const,
+            error: createUnifiedError({
+              code: "TEST_PERSIST_FAILED",
+              category: "StorageError",
+              message: "Persistence failed.",
+              recoverability: "retryable",
+              suggestedAction: "Retry.",
+              traceId: "change-set-session-test"
+            })
+          }
+        : { ok: true as const, value: changeSet };
+    });
+    const session = createChangeSetSession({
+      port: { ...port, persistChangeSet },
+      createChangeSetId: () => "change-set-atomic-retry",
+      now: () => "2026-08-02T00:00:00.000Z"
+    });
+    const invalidDag = migrationBatchInput({ deleteDependsOn: ["missing-create"] });
+
+    expect(await session.proposeOperationBatch(invalidDag)).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_OPERATION_INVALID" }
+    });
+    expect(persistChangeSet).not.toHaveBeenCalled();
+
+    const first = await session.proposeOperationBatch(migrationBatchInput());
+    expect(first).toMatchObject({ ok: false, error: { code: "TEST_PERSIST_FAILED" } });
+    expect(persistedAttempts).toHaveLength(1);
+    expect(persistedAttempts[0]?.operations).toHaveLength(2);
+
+    rejectPersistence = false;
+    const retried = await session.proposeOperationBatch(migrationBatchInput());
+    expect(expectOk(retried)).toMatchObject({ revision: 1, operations: [{}, {}] });
+    expect(persistedAttempts).toHaveLength(2);
+    expect(persistedAttempts.every((changeSet) => changeSet.operations?.length === 2)).toBe(true);
+  });
+
+  test("fails closed when a restored Change Set contains only part of an operation batch", async () => {
+    const firstOperation = migrationBatchInput().operations[0];
+    if (firstOperation === undefined) throw new Error("Expected a migration create operation.");
+    const partial = createOperationsChangeSetRevision({
+      changeSetId: "change-set-partial-migration",
+      ...proposalBinding(),
+      writePolicy: "write_before_confirmation",
+      operation: firstOperation.operation,
+      createdAt: "2026-08-02T00:00:00.000Z"
+    });
+    const persistChangeSet = vi.fn(async (changeSet: ChangeSet) => ({
+      ok: true as const,
+      value: changeSet
+    }));
+    const session = createChangeSetSession({
+      port: {
+        ...targetPort({ chapter: () => "unused", file: () => "unused", persisted: [] }),
+        persistChangeSet,
+        async readLatestChangeSet() {
+          return { ok: true as const, value: partial };
+        }
+      }
+    });
+
+    expect(await session.proposeOperationBatch(migrationBatchInput())).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_OPERATION_BATCH_INCOMPLETE" }
+    });
+    expect(persistChangeSet).not.toHaveBeenCalled();
+  });
+
+  test("does not append an unauthorized batch to a preapproved Change Set", async () => {
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+      createChangeSetId: () => "change-set-preapproved-batch",
+      now: () => "2026-08-02T00:00:00.000Z"
+    });
+    const firstInput = authorizeAgentRunProposal({
+      ...proposalBinding(),
+      writePolicy: "user_preapproved_run" as const,
+      toolCallId: "tool-preapproved-create",
+      operation: {
+        kind: "create_file" as const,
+        operationId: "op-preapproved-create",
+        relativePath: "notes/preapproved.md",
+        content: "preapproved",
+        toolCallIdempotencyKey: "tool-preapproved-create"
+      }
+    });
+    expect(expectOk(await session.proposeOperation(firstInput))).toMatchObject({
+      writePolicy: "user_preapproved_run"
+    });
+
+    const rejected = await session.proposeOperationBatch({
+      ...proposalBinding(),
+      operations: [
+        {
+          toolCallId: "tool-unapproved-create",
+          operation: {
+            kind: "create_file",
+            operationId: "op-unapproved-create",
+            relativePath: "notes/unapproved.md",
+            content: "unapproved",
+            toolCallIdempotencyKey: "tool-unapproved-create"
+          }
+        }
+      ]
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_CONTEXT_MISMATCH" }
+    });
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({
+      writePolicy: "user_preapproved_run",
+      operations: [{ operationId: "op-preapproved-create" }]
+    });
   });
 
   test.each([
@@ -618,6 +805,37 @@ function proposalBinding() {
     projectId: "project-01",
     checkpointId: "checkpoint-01",
     contextSnapshotId: "context-01"
+  };
+}
+
+function migrationBatchInput(options: { readonly deleteDependsOn?: readonly string[] } = {}) {
+  return {
+    ...proposalBinding(),
+    operations: [
+      {
+        toolCallId: "tool-migrate-create",
+        operation: {
+          kind: "create_file" as const,
+          operationId: "op-migrate-create",
+          relativePath: "story/characters/hero.json",
+          content: '{"schemaVersion":"1.1"}\n',
+          toolCallIdempotencyKey: "tool-migrate-create",
+          consistencyGroupId: "migration-group"
+        }
+      },
+      {
+        toolCallId: "tool-migrate-delete",
+        operation: {
+          kind: "delete_file" as const,
+          operationId: "op-migrate-delete",
+          relativePath: "characters/hero.json",
+          baseChecksum: "a".repeat(64),
+          toolCallIdempotencyKey: "tool-migrate-delete",
+          dependsOn: options.deleteDependsOn ?? ["op-migrate-create"],
+          consistencyGroupId: "migration-group"
+        }
+      }
+    ]
   };
 }
 

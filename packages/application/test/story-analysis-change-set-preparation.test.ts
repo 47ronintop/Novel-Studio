@@ -2,7 +2,13 @@ import { describe, expect, test, vi } from "vitest";
 
 import type { ChangeSet } from "@novel-studio/agent-engine";
 import type { StoryChangeSuggestion } from "@novel-studio/schemas";
-import { ok, type ChapterSummary, type JsonObject } from "@novel-studio/shared";
+import {
+  ok,
+  type ChapterSummary,
+  type JsonObject,
+  type Result,
+  type UnifiedError
+} from "@novel-studio/shared";
 
 import { createAgentFileOperationSession } from "../src/agent-file-operation-session.js";
 import { createStoryAnalysisChangeSetPreparationPort } from "../src/story-analysis-change-set-preparation.js";
@@ -52,8 +58,8 @@ describe("Story Analysis Change Set preparation", () => {
     const result = await preparation.prepareChangeSet(applicationInput(suggestions));
 
     expect(result).toMatchObject({ ok: true, value: { status: "awaiting_approval" } });
-    expect(repository.prepareStoryAssetCandidate).toHaveBeenCalledTimes(1);
-    expect(repository.prepareStoryAssetCandidate.mock.calls[0]?.[0]).toMatchObject({
+    expect(repository.prepareStoryAssetCandidateReadOnly).toHaveBeenCalledTimes(1);
+    expect(repository.prepareStoryAssetCandidateReadOnly.mock.calls[0]?.[0]).toMatchObject({
       candidate: {
         id: CHARACTER_ID,
         summary: "新的摘要",
@@ -69,6 +75,100 @@ describe("Story Analysis Change Set preparation", () => {
       consistencyGroupId: GROUP_ID,
       repositoryPrepared: true
     });
+  });
+
+  test("stages a legacy-path migration through one atomic operation batch", async () => {
+    const asset = characterAsset();
+    const repository = repositoryHarness(asset, {
+      currentRelativePath: `characters/legacy/${CHARACTER_ID}.json`
+    });
+    const changeSets = changeSetHarness(GROUP_ID);
+    const preparation = createStoryAnalysisChangeSetPreparationPort({
+      projectId: "project-01",
+      repository: repository.port,
+      changeSets: changeSets.port,
+      fileOperations: createAgentFileOperationSession()
+    });
+
+    const result = await preparation.prepareChangeSet(
+      applicationInput([
+        patchSuggestion({
+          suggestionId: `sug_${"c".repeat(32)}`,
+          path: "/summary",
+          before: asset.summary,
+          value: "迁移后的摘要"
+        })
+      ])
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    expect(changeSets.proposeOperation).not.toHaveBeenCalled();
+    expect(changeSets.proposeOperationBatch).toHaveBeenCalledTimes(1);
+    const batch = changeSets.proposeOperationBatch.mock.calls[0]?.[0] as {
+      readonly operations: readonly {
+        readonly toolCallId: string;
+        readonly operation: {
+          readonly kind: string;
+          readonly operationId: string;
+          readonly dependsOn?: readonly string[];
+        };
+      }[];
+    };
+    expect(batch.operations.map((item) => item.operation.kind)).toEqual([
+      "create_file",
+      "delete_file"
+    ]);
+    expect(batch.operations[1]?.operation.dependsOn).toEqual([
+      batch.operations[0]?.operation.operationId
+    ]);
+  });
+
+  test("rejects an existing Story Analysis Change Set with only half a legacy migration", async () => {
+    const asset = characterAsset();
+    const repository = repositoryHarness(asset);
+    const changeSets = changeSetHarness(GROUP_ID);
+    changeSets.readLatestChangeSet.mockResolvedValueOnce(
+      ok({
+        ...changeSet(GROUP_ID),
+        files: [],
+        operationsSchemaVersion: "1.1" as const,
+        operations: [
+          {
+            kind: "create_file" as const,
+            operationId: "op-incomplete-create",
+            relativePath: `characters/${CHARACTER_ID}.json`,
+            content: "{}\n",
+            toolCallIdempotencyKey: "tool_incomplete_create",
+            consistencyGroupId: GROUP_ID,
+            selected: true
+          }
+        ]
+      })
+    );
+    const preparation = createStoryAnalysisChangeSetPreparationPort({
+      projectId: "project-01",
+      repository: repository.port,
+      changeSets: changeSets.port,
+      fileOperations: createAgentFileOperationSession()
+    });
+
+    const result = await preparation.prepareChangeSet(
+      applicationInput([
+        patchSuggestion({
+          suggestionId: `sug_${"d".repeat(32)}`,
+          path: "/summary",
+          before: asset.summary,
+          value: "不应继续"
+        })
+      ])
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "STORY_ANALYSIS_CHANGE_SET_INCOMPLETE" }
+    });
+    expect(repository.readCompatibleStoryAsset).not.toHaveBeenCalled();
+    expect(changeSets.proposeOperationBatch).not.toHaveBeenCalled();
   });
 
   test("preserves a create suggestion reserved asset ID through repository and file staging", async () => {
@@ -88,7 +188,7 @@ describe("Story Analysis Change Set preparation", () => {
         throw new Error("not used");
       }),
       prepareCreateStoryAsset,
-      prepareStoryAssetCandidate: vi.fn(async () => {
+      prepareStoryAssetCandidateReadOnly: vi.fn(async () => {
         throw new Error("not used");
       })
     } satisfies StoryBibleAgentToolRepositoryPort;
@@ -137,19 +237,12 @@ describe("Story Analysis Change Set preparation", () => {
       [character.id, character],
       [timeline.id, timeline]
     ]);
-    const prepareStoryAssetCandidate = vi.fn(
-      async (input: {
-        readonly candidate: JsonObject;
-        readonly baseRevision: number;
-        readonly baseChecksum?: string;
-        readonly additionalKnownAssetIds?: readonly string[];
-        readonly additionalKnownReferenceTargets?: readonly {
-          readonly targetId: string;
-          readonly targetType: "timeline.event";
-        }[];
-        readonly knownChapterIds?: readonly string[];
-        readonly deferProjectRelationPairValidation?: boolean;
-      }) => {
+    const prepareStoryAssetCandidateReadOnly = vi.fn(
+      async (
+        input: Parameters<
+          StoryBibleAgentToolRepositoryPort["prepareStoryAssetCandidateReadOnly"]
+        >[0]
+      ) => {
         const asset = assets.get(String(input.candidate["id"]));
         if (asset === undefined) throw new Error("unexpected candidate");
         const preparedAsset = {
@@ -180,7 +273,7 @@ describe("Story Analysis Change Set preparation", () => {
       prepareCreateStoryAsset: vi.fn(async () => {
         throw new Error("not used");
       }),
-      prepareStoryAssetCandidate
+      prepareStoryAssetCandidateReadOnly
     } satisfies StoryBibleAgentToolRepositoryPort;
     const changeSets = changeSetHarness(GROUP_ID);
     const listChapters = vi.fn(async () =>
@@ -259,8 +352,8 @@ describe("Story Analysis Change Set preparation", () => {
     );
 
     expect(result).toMatchObject({ ok: true });
-    expect(prepareStoryAssetCandidate).toHaveBeenCalledTimes(2);
-    for (const [input] of prepareStoryAssetCandidate.mock.calls) {
+    expect(prepareStoryAssetCandidateReadOnly).toHaveBeenCalledTimes(2);
+    for (const [input] of prepareStoryAssetCandidateReadOnly.mock.calls) {
       expect(input.additionalKnownReferenceTargets).toEqual([
         { targetId: TIMELINE_EVENT_ID, targetType: "timeline.event" }
       ]);
@@ -330,13 +423,16 @@ describe("Story Analysis Change Set preparation", () => {
       ok: false,
       error: { code: "STORY_ANALYSIS_PATCH_BASE_CONFLICT" }
     });
-    expect(repository.prepareStoryAssetCandidate).not.toHaveBeenCalled();
+    expect(repository.prepareStoryAssetCandidateReadOnly).not.toHaveBeenCalled();
     expect(changeSets.proposeStoryBibleWrite).not.toHaveBeenCalled();
   });
 });
 
-function repositoryHarness(asset: StoryBibleAgentToolAsset) {
-  const prepareStoryAssetCandidate = vi.fn(
+function repositoryHarness(
+  asset: StoryBibleAgentToolAsset,
+  options: { readonly currentRelativePath?: string } = {}
+) {
+  const prepareStoryAssetCandidateReadOnly = vi.fn(
     async (input: {
       readonly candidate: JsonObject;
       readonly baseRevision: number;
@@ -352,6 +448,9 @@ function repositoryHarness(asset: StoryBibleAgentToolAsset) {
         asset: preparedAsset,
         current: { asset, checksum: BASE_CHECKSUM, revision: asset.revision },
         relativePath: `characters/${asset.id}.json`,
+        ...(options.currentRelativePath === undefined
+          ? {}
+          : { currentRelativePath: options.currentRelativePath }),
         content: serialize(preparedAsset),
         baseContent: serialize(asset),
         baseRevision: asset.revision,
@@ -371,9 +470,9 @@ function repositoryHarness(asset: StoryBibleAgentToolAsset) {
     prepareCreateStoryAsset: vi.fn(async () => {
       throw new Error("not used");
     }),
-    prepareStoryAssetCandidate
+    prepareStoryAssetCandidateReadOnly
   } satisfies StoryBibleAgentToolRepositoryPort;
-  return { port, readCompatibleStoryAsset, prepareStoryAssetCandidate };
+  return { port, readCompatibleStoryAsset, prepareStoryAssetCandidateReadOnly };
 }
 
 function changeSetHarness(consistencyGroupId: string) {
@@ -382,17 +481,24 @@ function changeSetHarness(consistencyGroupId: string) {
     void input;
     return ok(value);
   });
+  const proposeOperationBatch = vi.fn(async (input: unknown) => {
+    void input;
+    return ok(value);
+  });
   const proposeStoryBibleWrite = vi.fn(async (input: unknown) => {
     void input;
     return ok(value);
   });
-  const readLatestChangeSet = vi.fn(async (input: unknown) => {
-    void input;
-    return ok(undefined);
-  });
+  const readLatestChangeSet = vi.fn(
+    async (input: unknown): Promise<Result<ChangeSet | undefined, UnifiedError>> => {
+      void input;
+      return ok(undefined);
+    }
+  );
   return {
-    port: { proposeOperation, proposeStoryBibleWrite, readLatestChangeSet },
+    port: { proposeOperation, proposeOperationBatch, proposeStoryBibleWrite, readLatestChangeSet },
     proposeOperation,
+    proposeOperationBatch,
     proposeStoryBibleWrite,
     readLatestChangeSet
   };

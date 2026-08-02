@@ -3449,10 +3449,14 @@ function createDesktopStoryBibleToolExecutor(
         storyBible.prepareCreateStoryAsset(
           input as Parameters<StoryBibleFileRepository["prepareCreateStoryAsset"]>[0]
         ),
-      prepareStoryAssetCandidate: (input) =>
-        storyBible.prepareStoryAssetCandidate(
-          input as Parameters<StoryBibleFileRepository["prepareStoryAssetCandidate"]>[0]
-        ),
+      async prepareStoryAssetCandidateReadOnly(input) {
+        const prepared = await storyBible.prepareStoryAssetCandidateReadOnly(
+          input as Parameters<StoryBibleFileRepository["prepareStoryAssetCandidateReadOnly"]>[0]
+        );
+        return prepared.ok
+          ? ok({ ...prepared.value, currentRelativePath: prepared.value.current.relativePath })
+          : prepared;
+      },
       async getStoryBibleReferences(assetId, knownChapterIds) {
         const references = await storyBible.getStoryBibleReferences(assetId, knownChapterIds);
         return references.ok ? ok(asJsonObject(references.value)) : references;
@@ -3722,7 +3726,13 @@ function createDesktopReadToolExecutor(
         }
         const assetId = readRequiredId(input.arguments, "assetId");
         if (assetId === undefined) return invalidToolArguments(input.name);
-        const references = await storyBible.getStoryBibleReferences(assetId);
+        const chapters =
+          chapterRepository === undefined ? ok(undefined) : await chapterRepository.listChapters();
+        if (!chapters.ok) return chapters;
+        const references = await storyBible.getStoryBibleReferences(
+          assetId,
+          chapters.value?.map((chapter) => chapter.id)
+        );
         return references.ok
           ? ok({
               summary: `已读取 Story Bible 资产 ${assetId} 的引用影响`,

@@ -371,6 +371,7 @@ export interface AgentFileOperationSessionPort {
     readonly relativePath: string;
     readonly content: string;
     readonly dependsOn?: readonly string[];
+    readonly consistencyGroupId?: string;
   }): Result<{ readonly operation: unknown; readonly operationId: string }, UnifiedError>;
   proposeFileMove(input: {
     readonly toolCallId: string;
@@ -384,6 +385,7 @@ export interface AgentFileOperationSessionPort {
     readonly relativePath: string;
     readonly baseChecksum: string;
     readonly dependsOn?: readonly string[];
+    readonly consistencyGroupId?: string;
   }): Result<{ readonly operation: unknown; readonly operationId: string }, UnifiedError>;
   proposeDirectoryCreate(input: {
     readonly toolCallId: string;
@@ -4409,33 +4411,111 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             ? "terminal"
             : "continue";
         }
-        const proposalInput = {
-          runId,
-          projectId: snapshot.projectId,
-          checkpointId,
-          contextSnapshotId,
-          writePolicy: snapshot.writePolicy,
-          assetId: prepared.value.assetId,
-          range: {
-            unit: "character" as const,
-            start: 0,
-            end: prepared.value.baseContent.length
-          },
-          baseHash: prepared.value.baseChecksum,
-          replacement: prepared.value.content,
-          repositoryPrepared: true,
-          ...(prepared.value.storyBibleStatusProof === undefined
-            ? {}
-            : { storyBibleStatusProof: prepared.value.storyBibleStatusProof }),
-          ...(prepared.value.consistencyGroupId === undefined
-            ? {}
-            : { consistencyGroupId: prepared.value.consistencyGroupId })
-        };
-        const authorized = authorizeProposalIfPreapproved(proposalInput);
-        try {
-          proposed = await options.changeSetSession.proposeStoryBibleWrite(proposalInput);
-        } finally {
-          if (authorized) revokeAgentRunProposalAuthorization(proposalInput);
+        if (prepared.value.currentRelativePath !== undefined) {
+          if (options.fileOperationSession === undefined) {
+            return (await toolFailure(
+              runtime,
+              runId,
+              call,
+              "AGENT_CHANGE_SET_UNAVAILABLE",
+              "Story Bible legacy migration is unavailable for this project."
+            ))
+              ? "terminal"
+              : "continue";
+          }
+          const migrationToolCallId = `tool_migrate_${sha256(
+            `${runId}:${call.toolCallId}:${prepared.value.assetId}:${prepared.value.currentRelativePath}`
+          ).slice(0, 32)}`;
+          const migrationConsistencyGroupId =
+            prepared.value.consistencyGroupId ??
+            `cgrp_${sha256(`${migrationToolCallId}:group`).slice(0, 32)}`;
+          const migrationBinding = {
+            runId,
+            projectId: snapshot.projectId,
+            checkpointId,
+            contextSnapshotId,
+            writePolicy: "write_before_confirmation" as const,
+            consistencyGroupId: migrationConsistencyGroupId
+          };
+          const create = options.fileOperationSession.proposeFileCreate({
+            toolCallId: `${migrationToolCallId}_create`,
+            relativePath: prepared.value.relativePath,
+            content: prepared.value.content,
+            consistencyGroupId: migrationConsistencyGroupId
+          });
+          if (!create.ok) {
+            return (await toolFailure(
+              runtime,
+              runId,
+              call,
+              create.error.code,
+              create.error.message,
+              create.error
+            ))
+              ? "terminal"
+              : "continue";
+          }
+          const remove = options.fileOperationSession.proposeFileDelete({
+            toolCallId: `${migrationToolCallId}_delete`,
+            relativePath: prepared.value.currentRelativePath,
+            baseChecksum: prepared.value.baseChecksum,
+            dependsOn: [create.value.operationId],
+            consistencyGroupId: migrationConsistencyGroupId
+          });
+          if (!remove.ok) {
+            return (await toolFailure(
+              runtime,
+              runId,
+              call,
+              remove.error.code,
+              remove.error.message,
+              remove.error
+            ))
+              ? "terminal"
+              : "continue";
+          }
+          proposed = await options.changeSetSession.proposeOperationBatch({
+            ...migrationBinding,
+            operations: [
+              {
+                toolCallId: `${migrationToolCallId}_create`,
+                operation: create.value.operation as ChangeSetOperation
+              },
+              {
+                toolCallId: `${migrationToolCallId}_delete`,
+                operation: remove.value.operation as ChangeSetOperation
+              }
+            ]
+          });
+        } else {
+          const proposalInput = {
+            runId,
+            projectId: snapshot.projectId,
+            checkpointId,
+            contextSnapshotId,
+            writePolicy: snapshot.writePolicy,
+            assetId: prepared.value.assetId,
+            range: {
+              unit: "character" as const,
+              start: 0,
+              end: prepared.value.baseContent.length
+            },
+            baseHash: prepared.value.baseChecksum,
+            replacement: prepared.value.content,
+            repositoryPrepared: true,
+            ...(prepared.value.storyBibleStatusProof === undefined
+              ? {}
+              : { storyBibleStatusProof: prepared.value.storyBibleStatusProof }),
+            ...(prepared.value.consistencyGroupId === undefined
+              ? {}
+              : { consistencyGroupId: prepared.value.consistencyGroupId })
+          };
+          const authorized = authorizeProposalIfPreapproved(proposalInput);
+          try {
+            proposed = await options.changeSetSession.proposeStoryBibleWrite(proposalInput);
+          } finally {
+            if (authorized) revokeAgentRunProposalAuthorization(proposalInput);
+          }
         }
       }
       if (!proposed.ok) {

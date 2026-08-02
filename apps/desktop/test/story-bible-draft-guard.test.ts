@@ -72,6 +72,20 @@ describe("Story Bible draft guard", () => {
     expect(bridge.cancelDraft).toHaveBeenCalledOnce();
   });
 
+  test("blocks navigation when the bridge refuses to discard the dirty draft", async () => {
+    const retained = editor(true, "idle");
+    const bridge = createBridge({ current: editor(true, "idle"), canceled: retained });
+    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const updates: StoryBibleEditorProps[] = [];
+
+    await expect(
+      guardDirtyStoryBibleDraft(bridge, (_bridge, next) => updates.push(next), confirm)
+    ).resolves.toBe(false);
+
+    expect(updates).toEqual([retained]);
+    expect(bridge.cancelDraft).toHaveBeenCalledOnce();
+  });
+
   test("cancels navigation when save and discard are both declined", async () => {
     const bridge = createBridge({ current: editor(true, "idle") });
     const update = vi.fn();

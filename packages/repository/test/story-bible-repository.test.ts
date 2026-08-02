@@ -400,6 +400,87 @@ describe("StoryBibleFileRepository", () => {
     });
   });
 
+  test("snapshots a noncanonical legacy path before replacing it with the final v1.1 asset", async () => {
+    const projectRoot = await createTempProject();
+    const legacyDirectory = join(projectRoot, "world", "locations");
+    const legacyPath = join(legacyDirectory, "legacy-harbor-record.json");
+    const canonicalPath = join(projectRoot, "world", "loc_legacy_harbor.json");
+    const legacyContent = `${JSON.stringify(
+      { ...worldAsset(), id: "loc_legacy_harbor", title: "Legacy Harbor" },
+      null,
+      2
+    )}\n`;
+    await mkdir(legacyDirectory, { recursive: true });
+    await writeFile(legacyPath, legacyContent, "utf8");
+    let snapshottedPath: string | undefined;
+    const repository = new StoryBibleFileRepository({
+      projectRoot,
+      beforeStoryAssetCandidateWrite: async (prepared) => {
+        snapshottedPath = prepared.current.relativePath;
+        await expect(readFile(legacyPath, "utf8")).resolves.toBe(legacyContent);
+        await expect(readFile(canonicalPath, "utf8")).rejects.toThrow();
+        return ok(undefined);
+      }
+    });
+    const compatible = await repository.readCompatibleStoryAsset("loc_legacy_harbor");
+    if (!compatible.ok) throw new Error(compatible.error.message);
+
+    const saved = await repository.saveStoryAssetCandidate({
+      candidate: candidateFrom(compatible.value.asset, { title: "Migrated Harbor" }),
+      baseRevision: compatible.value.revision,
+      baseChecksum: compatible.value.checksum
+    });
+
+    expect(saved).toMatchObject({
+      ok: true,
+      value: { id: "loc_legacy_harbor", schemaVersion: "1.1", revision: 1 }
+    });
+    expect(snapshottedPath).toBe("world/locations/legacy-harbor-record.json");
+    await expect(readFile(legacyPath, "utf8")).rejects.toThrow();
+    await expect(readFile(canonicalPath, "utf8")).resolves.toContain('"schemaVersion": "1.1"');
+  });
+
+  test("keeps a noncanonical legacy file in place when its History snapshot fails", async () => {
+    const projectRoot = await createTempProject();
+    const legacyDirectory = join(projectRoot, "world", "locations");
+    const legacyPath = join(legacyDirectory, "legacy-fort-record.json");
+    const canonicalPath = join(projectRoot, "world", "loc_legacy_fort.json");
+    const legacyContent = `${JSON.stringify(
+      { ...worldAsset(), id: "loc_legacy_fort", title: "Legacy Fort" },
+      null,
+      2
+    )}\n`;
+    await mkdir(legacyDirectory, { recursive: true });
+    await writeFile(legacyPath, legacyContent, "utf8");
+    const repository = new StoryBibleFileRepository({
+      projectRoot,
+      beforeStoryAssetCandidateWrite: async () =>
+        err(
+          storageError({
+            code: "STORY_BIBLE_HISTORY_FAILED",
+            message: "The Story Bible history snapshot failed.",
+            suggestedAction: "Retry the save.",
+            traceId: "trace_story_bible_noncanonical_history_failure"
+          })
+        )
+    });
+    const compatible = await repository.readCompatibleStoryAsset("loc_legacy_fort");
+    if (!compatible.ok) throw new Error(compatible.error.message);
+
+    const saved = await repository.saveStoryAssetCandidate({
+      candidate: candidateFrom(compatible.value.asset, { title: "Not Migrated" }),
+      baseRevision: compatible.value.revision,
+      baseChecksum: compatible.value.checksum
+    });
+
+    expect(saved).toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_HISTORY_FAILED" }
+    });
+    await expect(readFile(legacyPath, "utf8")).resolves.toBe(legacyContent);
+    await expect(readFile(canonicalPath, "utf8")).rejects.toThrow();
+  });
+
   test("rejects recursively stored v1.1 world assets", async () => {
     const projectRoot = await createTempProject();
     const assetId = "loc_11111111111111111111111111111111";

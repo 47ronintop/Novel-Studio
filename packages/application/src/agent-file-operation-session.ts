@@ -163,6 +163,7 @@ export interface ProposeFileCreateInput {
   readonly relativePath: string;
   readonly content: string;
   readonly dependsOn?: readonly string[];
+  readonly consistencyGroupId?: string;
 }
 
 export interface ProposeFileMoveInput {
@@ -178,6 +179,7 @@ export interface ProposeFileDeleteInput {
   readonly relativePath: string;
   readonly baseChecksum: string;
   readonly dependsOn?: readonly string[];
+  readonly consistencyGroupId?: string;
 }
 
 export interface ProposeDirectoryCreateInput {
@@ -295,7 +297,12 @@ export function createAgentFileOperationSession(
         relativePath: input.relativePath,
         content: input.content,
         toolCallIdempotencyKey: input.toolCallId,
-        ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
+        ...(input.dependsOn === undefined
+          ? {}
+          : { dependsOn: Object.freeze([...input.dependsOn]) }),
+        ...(input.consistencyGroupId === undefined
+          ? {}
+          : { consistencyGroupId: input.consistencyGroupId })
       }));
     },
 
@@ -328,7 +335,12 @@ export function createAgentFileOperationSession(
         relativePath: input.relativePath,
         baseChecksum: input.baseChecksum,
         toolCallIdempotencyKey: input.toolCallId,
-        ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
+        ...(input.dependsOn === undefined
+          ? {}
+          : { dependsOn: Object.freeze([...input.dependsOn]) }),
+        ...(input.consistencyGroupId === undefined
+          ? {}
+          : { consistencyGroupId: input.consistencyGroupId })
       }));
     },
 

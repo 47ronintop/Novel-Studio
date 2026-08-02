@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { HistoryRepository } from "@novel-studio/repository";
@@ -96,6 +96,64 @@ describe("Story Bible manual edit desktop composition", () => {
         versionId: versions.value[0].versionId
       });
       expect(snapshot).toMatchObject({ ok: true, value: { body: legacyContent } });
+    } finally {
+      await application.shutdown();
+    }
+  });
+
+  test("records the original path before manually migrating a noncanonical legacy asset", async () => {
+    const { projectRoot, characterPath, canonicalCharacterPath, legacyContent } =
+      await createLegacyProject({ noncanonical: true });
+    const application = createProjectDesktopApplication({
+      projectRoot,
+      chapterId,
+      projectTitle: "Legacy Story Bible Project",
+      projectLockOwnerId: "story-bible-manual-path-history-test",
+      now: () => now
+    });
+
+    try {
+      await expect(application.openProject(projectRoot)).resolves.toMatchObject({ ok: true });
+      const bridge = createStoryBibleBridge(apiFor(application));
+      await bridge.load("prj_minimal_chapter");
+      await bridge.selectEntryForEditing(characterId);
+      bridge.updateDraft("character", { title: "Migrated keeper" });
+
+      await expect(bridge.saveDraft()).resolves.toMatchObject({
+        dirty: false,
+        status: "saved",
+        draft: { id: characterId, title: "Migrated keeper" }
+      });
+
+      await expect(readFile(characterPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(JSON.parse(await readFile(canonicalCharacterPath, "utf8"))).toMatchObject({
+        schemaVersion: "1.1",
+        id: characterId,
+        revision: 1
+      });
+      const history = new HistoryRepository({ projectRoot });
+      const versions = await history.listTextAssetSnapshotRecords({
+        assetType: "text",
+        assetId: characterId
+      });
+      expect(versions).toMatchObject({
+        ok: true,
+        value: [
+          {
+            reason: "manual-save",
+            createdBy: "user",
+            targetRelativePath: "characters/legacy/legacy-character.json"
+          }
+        ]
+      });
+      if (!versions.ok || versions.value[0] === undefined) return;
+      await expect(
+        history.readTextAssetSnapshot({
+          assetType: "text",
+          assetId: characterId,
+          versionId: versions.value[0].versionId
+        })
+      ).resolves.toMatchObject({ ok: true, value: { body: legacyContent } });
     } finally {
       await application.shutdown();
     }
@@ -265,9 +323,10 @@ function apiFor(application: ReturnType<typeof createProjectDesktopApplication>)
   });
 }
 
-async function createLegacyProject(): Promise<{
+async function createLegacyProject(options: { readonly noncanonical?: boolean } = {}): Promise<{
   readonly projectRoot: string;
   readonly characterPath: string;
+  readonly canonicalCharacterPath: string;
   readonly legacyAsset: Record<string, unknown>;
   readonly legacyContent: string;
 }> {
@@ -303,8 +362,12 @@ async function createLegacyProject(): Promise<{
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z"
   };
-  const characterPath = join(projectRoot, "characters", `${characterId}.json`);
+  const canonicalCharacterPath = join(projectRoot, "characters", `${characterId}.json`);
+  const characterPath = options.noncanonical
+    ? join(projectRoot, "characters", "legacy", "legacy-character.json")
+    : canonicalCharacterPath;
   const legacyContent = `${JSON.stringify(legacyAsset, null, 2)}\n`;
+  await mkdir(dirname(characterPath), { recursive: true });
   await writeFile(characterPath, legacyContent, "utf8");
-  return { projectRoot, characterPath, legacyAsset, legacyContent };
+  return { projectRoot, characterPath, canonicalCharacterPath, legacyAsset, legacyContent };
 }

@@ -10,6 +10,7 @@ import {
   type ProjectPathGuard
 } from "./atomic-write.js";
 import { storageError, validationError } from "./errors.js";
+import { HistoryRepository } from "./history-repository.js";
 import { isSafeProjectRelativePath } from "./no-follow-file-operations.js";
 import type {
   AgentOperationPathSnapshot,
@@ -159,7 +160,10 @@ export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRec
   public async writeAgentTransactionJournal(
     journal: AgentTransactionJournal
   ): Promise<Result<AgentTransactionJournal, UnifiedError>> {
-    if (!isAgentTransactionJournal(journal)) {
+    if (
+      !isAgentTransactionJournal(journal) ||
+      !(await this.hasValidStoryBibleMigrationHistory(journal))
+    ) {
       return err(
         validationError({
           code: "AGENT_TRANSACTION_JOURNAL_INVALID",
@@ -196,7 +200,11 @@ export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRec
       if (!pathValidation.ok) return pathValidation;
       const parsed = JSON.parse(await readFile(journalPath, "utf8")) as unknown;
       const normalized = normalizeAgentTransactionJournal(parsed);
-      if (!isAgentTransactionJournal(normalized) || normalized.transactionId !== transactionId) {
+      if (
+        !isAgentTransactionJournal(normalized) ||
+        normalized.transactionId !== transactionId ||
+        !(await this.hasValidStoryBibleMigrationHistory(normalized))
+      ) {
         return err(
           validationError({
             code: "AGENT_TRANSACTION_JOURNAL_INVALID",
@@ -347,6 +355,34 @@ export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRec
 
   private agentTransactionJournalPath(transactionId: string): string {
     return join(this.options.projectRoot, "history", "agent-transactions", `${transactionId}.json`);
+  }
+
+  private async hasValidStoryBibleMigrationHistory(
+    journal: AgentTransactionJournal
+  ): Promise<boolean> {
+    for (const asset of journal.storyBibleReceipt?.assets ?? []) {
+      const migration = asset.legacyMigration;
+      if (migration === undefined) continue;
+      if (asset.historyVersionId === null) return false;
+      const deleteEntry = journal.operations?.find(
+        (entry) => entry.operationId === migration.deleteOperationId
+      );
+      const before = deleteEntry?.before.find(
+        (snapshot): snapshot is Extract<AgentOperationPathSnapshot, { readonly kind: "file" }> =>
+          snapshot.kind === "file" && snapshot.relativePath === migration.sourceRelativePath
+      );
+      if (before === undefined) return false;
+      const snapshot = await new HistoryRepository({
+        projectRoot: this.options.projectRoot,
+        traceId: this.traceId
+      }).readTextAssetSnapshot({
+        assetType: "text",
+        assetId: migration.sourceRelativePath,
+        versionId: asset.historyVersionId
+      });
+      if (!snapshot.ok || snapshot.value.content !== before.content) return false;
+    }
+    return true;
   }
 
   private rollbackReviewPath(runId: string): string {
@@ -677,6 +713,7 @@ function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): bo
       !/^[a-f0-9]{64}$/.test(asset.afterChecksum) ||
       (asset.historyVersionId !== null &&
         (typeof asset.historyVersionId !== "string" || asset.historyVersionId.length === 0)) ||
+      !isValidLegacyMigrationReceipt(asset.legacyMigration) ||
       !Array.isArray(asset.inversePatch) ||
       asset.inversePatch.length > 512 ||
       !asset.inversePatch.every(isStoryBibleInversePatchOperation);
@@ -699,20 +736,82 @@ function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): bo
       }
       continue;
     }
-    const operation = (journal.operations ?? []).find(
-      (candidate) =>
-        candidate.operation.kind === "create_file" &&
-        candidate.operation.relativePath === asset.relativePath
+    const migration = asset.legacyMigration;
+    const operations = journal.operations ?? [];
+    const operation = operations.find((candidate) =>
+      migration === undefined
+        ? candidate.operation.kind === "create_file" &&
+          candidate.operation.relativePath === asset.relativePath
+        : candidate.operationId === migration.createOperationId
     );
     const createOperation =
       operation?.operation.kind === "create_file" ? operation.operation : undefined;
-    const invalidCreateReceipt =
-      operation === undefined ||
-      createOperation === undefined ||
-      asset.beforeChecksum !== null ||
-      asset.historyVersionId !== (operation.beforeVersionId ?? null) ||
-      asset.afterChecksum !== checksum(createOperation.content) ||
-      !matchesStoryBibleContent(createOperation.content, asset.assetId, asset.afterRevision);
+    const legacyDeletes = operations.filter(
+      (candidate) =>
+        candidate.operation.kind === "delete_file" &&
+        (candidate.operation.dependsOn ?? []).includes(operation?.operationId ?? "")
+    );
+    const legacyDelete =
+      migration === undefined
+        ? legacyDeletes[0]
+        : operations.find((candidate) => candidate.operationId === migration.deleteOperationId);
+    const deleteOperation =
+      legacyDelete?.operation.kind === "delete_file" ? legacyDelete.operation : undefined;
+    const legacyBefore = legacyDelete?.before.find(
+      (snapshot): snapshot is Extract<AgentOperationPathSnapshot, { readonly kind: "file" }> =>
+        snapshot.kind === "file"
+    );
+    const validLegacyMigration =
+      operation !== undefined &&
+      createOperation !== undefined &&
+      migration !== undefined &&
+      legacyDeletes.length === 1 &&
+      legacyDelete !== undefined &&
+      deleteOperation !== undefined &&
+      legacyBefore !== undefined &&
+      operation.operationId === migration.createOperationId &&
+      createOperation.operationId === migration.createOperationId &&
+      createOperation.relativePath === asset.relativePath &&
+      legacyDelete.operationId === migration.deleteOperationId &&
+      deleteOperation.operationId === migration.deleteOperationId &&
+      deleteOperation.relativePath === migration.sourceRelativePath &&
+      migration.sourceRelativePath !== asset.relativePath &&
+      deleteOperation.dependsOn?.length === 1 &&
+      deleteOperation.dependsOn[0] === migration.createOperationId &&
+      createOperation.consistencyGroupId === journal.consistencyGroupId &&
+      deleteOperation.consistencyGroupId === journal.consistencyGroupId &&
+      asset.beforeRevision === 0 &&
+      asset.afterRevision === 1 &&
+      asset.beforeChecksum === deleteOperation.baseChecksum &&
+      asset.beforeChecksum === legacyBefore.checksum &&
+      asset.historyVersionId === (legacyDelete.beforeVersionId ?? null) &&
+      asset.afterChecksum === checksum(createOperation.content) &&
+      matchesValidPersistedStoryBibleContent(
+        createOperation.content,
+        asset.assetId,
+        asset.afterRevision,
+        true
+      ) &&
+      hasLegacyStoryBiblePassthrough(createOperation.content) &&
+      matchesStoryBibleAssetId(legacyBefore.content, asset.assetId) &&
+      matchesLegacyStoryBibleContent(legacyBefore.content) &&
+      matchesStoryBibleBeforeRevision(legacyBefore.content, asset.beforeRevision);
+    const validOrdinaryCreate =
+      operation !== undefined &&
+      createOperation !== undefined &&
+      migration === undefined &&
+      legacyDeletes.length === 0 &&
+      asset.beforeChecksum === null &&
+      asset.historyVersionId === (operation.beforeVersionId ?? null) &&
+      asset.afterChecksum === checksum(createOperation.content) &&
+      !hasLegacyStoryBiblePassthrough(createOperation.content) &&
+      matchesValidPersistedStoryBibleContent(
+        createOperation.content,
+        asset.assetId,
+        asset.afterRevision,
+        false
+      );
+    const invalidCreateReceipt = !validLegacyMigration && !validOrdinaryCreate;
     if (invalidCreateReceipt) {
       return false;
     }
@@ -775,6 +874,22 @@ function isStoryBibleInversePatchOperation(value: unknown): boolean {
   return operation.op === "remove" || isJsonValue(operation.value);
 }
 
+function isValidLegacyMigrationReceipt(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const migration = value as Record<string, unknown>;
+  return (
+    Object.keys(migration).length === 3 &&
+    typeof migration["sourceRelativePath"] === "string" &&
+    isSafeJournalPath(migration["sourceRelativePath"]) &&
+    typeof migration["createOperationId"] === "string" &&
+    /^[A-Za-z0-9_-]{1,128}$/u.test(migration["createOperationId"]) &&
+    typeof migration["deleteOperationId"] === "string" &&
+    /^[A-Za-z0-9_-]{1,128}$/u.test(migration["deleteOperationId"]) &&
+    migration["createOperationId"] !== migration["deleteOperationId"]
+  );
+}
+
 function matchesStoryBibleContent(content: string, assetId: string, revision: number): boolean {
   try {
     const value = JSON.parse(content) as Record<string, unknown>;
@@ -792,15 +907,42 @@ function matchesStoryBibleContent(content: string, assetId: string, revision: nu
 function matchesValidPersistedStoryBibleContent(
   content: string,
   assetId: string,
-  revision: number
+  revision: number,
+  allowLegacyId = hasLegacyStoryBiblePassthrough(content)
 ): boolean {
   try {
     const value = JSON.parse(content) as Record<string, unknown>;
     return (
-      validateStoryBibleV11Asset(value, "persistedStrict").valid &&
+      validateStoryBibleV11Asset(value, "persistedStrict", {
+        ...(allowLegacyId ? { allowLegacyId: true } : {})
+      }).valid &&
       value["id"] === assetId &&
       value["revision"] === revision
     );
+  } catch {
+    return false;
+  }
+}
+
+function hasLegacyStoryBiblePassthrough(content: string): boolean {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    const passthrough = value["passthrough"];
+    return (
+      typeof passthrough === "object" &&
+      passthrough !== null &&
+      !Array.isArray(passthrough) &&
+      (passthrough as Record<string, unknown>)["sourceSchemaVersion"] === "1.0"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function matchesLegacyStoryBibleContent(content: string): boolean {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    return value["schemaVersion"] === "1.0" && value["revision"] === undefined;
   } catch {
     return false;
   }
@@ -814,6 +956,15 @@ function matchesStoryBibleBeforeRevision(content: string, revision: number | nul
     return current === undefined
       ? revision === 0
       : Number.isSafeInteger(current) && Number(current) === revision;
+  } catch {
+    return false;
+  }
+}
+
+function matchesStoryBibleAssetId(content: string, assetId: string): boolean {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    return value["id"] === assetId;
   } catch {
     return false;
   }
@@ -948,6 +1099,7 @@ function isAgentTransactionJournalOperationEntry(value: unknown): boolean {
     typeof entry.operationId === "string" &&
     entry.operationId.length > 0 &&
     isJournalOperation(entry.operation) &&
+    entry.operation.operationId === entry.operationId &&
     Array.isArray(entry.before) &&
     entry.before.every(isOperationPathSnapshot) &&
     Array.isArray(entry.after) &&

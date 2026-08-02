@@ -31,6 +31,7 @@ describe("useProjectWorkflowActions", () => {
     host?.remove();
     root = undefined;
     host = undefined;
+    vi.restoreAllMocks();
   });
 
   test("does not create a chapter when the maintenance reminder is canceled", async () => {
@@ -177,6 +178,316 @@ describe("useProjectWorkflowActions", () => {
     expect(createProject).not.toHaveBeenCalled();
     expect(createExampleProject).not.toHaveBeenCalled();
     expect(workflowStates).toEqual([]);
+  });
+
+  test("saves a dirty Story Bible after the file guard before opening a project", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const saving = { ...createStoryBibleEditor("Saving"), dirty: true, status: "saving" as const };
+    const saved = { ...createStoryBibleEditor("Saved"), dirty: false };
+    let currentEditor: StoryBibleEditorProps = {
+      ...createStoryBibleEditor("Unsaved"),
+      dirty: true
+    };
+    const beforeWorkspaceTransition = vi.fn(async () => true);
+    const openProject = vi.fn(async () => currentWorkflow);
+    const storyBibleBridge = {
+      getEditorProps: vi.fn(() => currentEditor),
+      beginSave: vi.fn(() => saving),
+      saveDraft: vi.fn(async () => {
+        currentEditor = saved;
+        return saved;
+      }),
+      getProps: vi.fn(() => ({ assets: [] })),
+      clear: vi.fn(),
+      load: vi.fn(async () => ({ assets: [] }))
+    } as unknown as StoryBibleBridge;
+    const bridge = {
+      getProps: vi.fn(() => currentWorkflow),
+      openProject
+    } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: bridge,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        beforeWorkspaceTransition,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(beforeWorkspaceTransition).toHaveBeenCalledOnce();
+    expect(storyBibleBridge.saveDraft).toHaveBeenCalledOnce();
+    expect(openProject).toHaveBeenCalledOnce();
+    expect(beforeWorkspaceTransition.mock.invocationCallOrder[0]).toBeLessThan(
+      storyBibleBridge.saveDraft.mock.invocationCallOrder[0]
+    );
+    expect(storyBibleBridge.saveDraft.mock.invocationCallOrder[0]).toBeLessThan(
+      openProject.mock.invocationCallOrder[0]
+    );
+  });
+
+  test("allows a project transition after explicitly discarding a dirty Story Bible draft", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const discarded = createStoryBibleEditor("Discarded");
+    const openProject = vi.fn(async () => currentWorkflow);
+    const storyBibleBridge = {
+      getEditorProps: vi.fn(() => ({ ...createStoryBibleEditor("Unsaved"), dirty: true })),
+      cancelDraft: vi.fn(() => discarded),
+      getProps: vi.fn(() => ({ assets: [] })),
+      clear: vi.fn(),
+      load: vi.fn(async () => ({ assets: [] }))
+    } as unknown as StoryBibleBridge;
+    const bridge = {
+      getProps: vi.fn(() => currentWorkflow),
+      openProject
+    } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+    vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: bridge,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(storyBibleBridge.cancelDraft).toHaveBeenCalledOnce();
+    expect(openProject).toHaveBeenCalledOnce();
+  });
+
+  test("does not switch projects when the Story Bible bridge refuses to discard a dirty draft", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const retained = { ...createStoryBibleEditor("Unsaved"), dirty: true };
+    const openProject = vi.fn(async () => currentWorkflow);
+    const storyBibleBridge = {
+      getEditorProps: vi.fn(() => retained),
+      cancelDraft: vi.fn(() => retained),
+      getProps: vi.fn(() => ({ assets: [] })),
+      clear: vi.fn(),
+      load: vi.fn(async () => ({ assets: [] }))
+    } as unknown as StoryBibleBridge;
+    const bridge = {
+      getProps: vi.fn(() => currentWorkflow),
+      openProject
+    } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+    vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: bridge,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(storyBibleBridge.cancelDraft).toHaveBeenCalledOnce();
+    expect(openProject).not.toHaveBeenCalled();
+    expect(storyBibleBridge.clear).not.toHaveBeenCalled();
+  });
+
+  test("does not start a project transition or clear the draft when Story Bible saving fails", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const saving = { ...createStoryBibleEditor("Saving"), dirty: true, status: "saving" as const };
+    const failed = { ...createStoryBibleEditor("Unsaved"), dirty: true, status: "error" as const };
+    let currentEditor: StoryBibleEditorProps = {
+      ...createStoryBibleEditor("Unsaved"),
+      dirty: true
+    };
+    const openProject = vi.fn(async () => currentWorkflow);
+    const storyBibleBridge = {
+      getEditorProps: vi.fn(() => currentEditor),
+      beginSave: vi.fn(() => saving),
+      saveDraft: vi.fn(async () => {
+        currentEditor = failed;
+        return failed;
+      }),
+      getProps: vi.fn(() => ({ assets: [] })),
+      clear: vi.fn()
+    } as unknown as StoryBibleBridge;
+    const bridge = {
+      getProps: vi.fn(() => currentWorkflow),
+      openProject
+    } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: bridge,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(bridge.getProps).not.toHaveBeenCalled();
+    expect(openProject).not.toHaveBeenCalled();
+    expect(storyBibleBridge.clear).not.toHaveBeenCalled();
+    expect(storyBibleBridge.getEditorProps()).toBe(failed);
+  });
+
+  test("does not start any project transition when a dirty Story Bible draft is kept", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const openProject = vi.fn(async () => currentWorkflow);
+    const createProject = vi.fn(async () => currentWorkflow);
+    const createExampleProject = vi.fn(async () => currentWorkflow);
+    const storyBibleBridge = {
+      getEditorProps: vi.fn(() => ({ ...createStoryBibleEditor("Unsaved"), dirty: true })),
+      getProps: vi.fn(() => ({ assets: [] })),
+      clear: vi.fn()
+    } as unknown as StoryBibleBridge;
+    const bridge = {
+      getProps: vi.fn(() => currentWorkflow),
+      openProject,
+      createProject,
+      createExampleProject
+    } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: bridge,
+        settingsBridge: undefined,
+        storyBibleBridge,
+        studioBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined,
+        setStudio: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      actions?.handleCreateProject();
+      actions?.handleCreateExampleProject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(bridge.getProps).not.toHaveBeenCalled();
+    expect(openProject).not.toHaveBeenCalled();
+    expect(createProject).not.toHaveBeenCalled();
+    expect(createExampleProject).not.toHaveBeenCalled();
+    expect(storyBibleBridge.clear).not.toHaveBeenCalled();
   });
 
   test("clears project-bound story projections only after successful activation", async () => {

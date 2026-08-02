@@ -30,8 +30,9 @@ export async function guardDirtyStoryBibleDraft(
   }
 
   if (confirm("是否放弃当前故事资料的未保存修改？")) {
-    update(bridge, bridge.cancelDraft());
-    return true;
+    const canceled = bridge.cancelDraft();
+    update(bridge, canceled);
+    return !canceled.dirty;
   }
 
   return false;

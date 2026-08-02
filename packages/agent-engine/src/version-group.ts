@@ -34,6 +34,12 @@ export type StoryBibleInversePatchOperation =
   | { readonly op: "add" | "replace"; readonly path: string; readonly value: JsonValue }
   | { readonly op: "remove"; readonly path: string };
 
+export interface StoryBibleLegacyMigrationReceipt {
+  readonly sourceRelativePath: string;
+  readonly createOperationId: string;
+  readonly deleteOperationId: string;
+}
+
 export interface StoryBibleApplyReceiptAsset {
   readonly assetId: string;
   readonly relativePath: string;
@@ -43,6 +49,7 @@ export interface StoryBibleApplyReceiptAsset {
   readonly afterChecksum: string;
   readonly historyVersionId: string | null;
   readonly inversePatch: readonly StoryBibleInversePatchOperation[];
+  readonly legacyMigration?: StoryBibleLegacyMigrationReceipt;
 }
 
 /** Non-authoritative metadata projected from the transaction journal and History. */
@@ -310,6 +317,9 @@ function freezeVersionGroup(group: VersionGroup): VersionGroup {
             group.storyBibleReceipt.assets.map((asset) =>
               Object.freeze({
                 ...asset,
+                ...(asset.legacyMigration === undefined
+                  ? {}
+                  : { legacyMigration: Object.freeze({ ...asset.legacyMigration }) }),
                 inversePatch: Object.freeze(
                   asset.inversePatch.map((operation) => Object.freeze({ ...operation }))
                 )

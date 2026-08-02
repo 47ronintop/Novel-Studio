@@ -19,9 +19,9 @@ describe("Story Bible Agent tool session", () => {
     const candidateInputs: unknown[] = [];
     const repository: StoryBibleAgentToolRepositoryPort = {
       ...baseRepository,
-      async prepareStoryAssetCandidate(input) {
+      async prepareStoryAssetCandidateReadOnly(input) {
         candidateInputs.push(input);
-        return baseRepository.prepareStoryAssetCandidate(input);
+        return baseRepository.prepareStoryAssetCandidateReadOnly(input);
       }
     };
     const session = createStoryBibleAgentToolSession({ repository });
@@ -101,9 +101,9 @@ describe("Story Bible Agent tool session", () => {
         createInputs.push(input);
         return baseRepository.prepareCreateStoryAsset(input);
       },
-      async prepareStoryAssetCandidate(input) {
+      async prepareStoryAssetCandidateReadOnly(input) {
         candidateInputs.push(input);
-        return baseRepository.prepareStoryAssetCandidate(input);
+        return baseRepository.prepareStoryAssetCandidateReadOnly(input);
       },
       async getStoryBibleReferences(assetId, knownChapterIds) {
         referenceInputs.push({ assetId, knownChapterIds });
@@ -169,6 +169,31 @@ describe("Story Bible Agent tool session", () => {
         knownChapterIds: ["ch_02", "ch_01"]
       });
     }
+  });
+
+  test("rejects legacy status changes until a regular patch migrates the asset", async () => {
+    const asset = characterAsset();
+    const baseRepository = repositoryFor(asset);
+    const repository: StoryBibleAgentToolRepositoryPort = {
+      ...baseRepository,
+      async prepareStoryAssetCandidateReadOnly(input) {
+        const prepared = await baseRepository.prepareStoryAssetCandidateReadOnly(input);
+        return prepared.ok
+          ? ok({ ...prepared.value, currentRelativePath: "characters/legacy/character.json" })
+          : prepared;
+      }
+    };
+    const session = createStoryBibleAgentToolSession({ repository });
+
+    await expect(
+      session.prepare({
+        toolName: "set_story_bible_status",
+        arguments: { assetId: asset.id, baseRevision: asset.revision, status: "archived" }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_LEGACY_STATUS_MIGRATION_UNSUPPORTED" }
+    });
   });
 
   test("rejects an invalid consistency group before preparing a write", async () => {
@@ -257,8 +282,7 @@ describe("Story Bible Agent tool session", () => {
     const repository = repositoryFor(asset);
     const session = createStoryBibleAgentToolSession({
       repository,
-      resolveRestoreAuthorization: async () =>
-        ok({ status: "draft", historyAuthorizationChecksum })
+      resolveRestoreAuthorization: async () => ok({ status: "draft", historyAuthorizationChecksum })
     });
 
     const prepared = await session.prepare({
@@ -337,7 +361,7 @@ function repositoryFor(
         content: `${JSON.stringify(created, null, 2)}\n`
       });
     },
-    async prepareStoryAssetCandidate(input) {
+    async prepareStoryAssetCandidateReadOnly(input) {
       const candidate = input.candidate;
       const prepared = {
         ...candidate,

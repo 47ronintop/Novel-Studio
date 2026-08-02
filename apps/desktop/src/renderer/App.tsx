@@ -162,11 +162,9 @@ export function App() {
     guardCreativeFile,
     guardWorkspaceFileEditors
   } = fileEditorRuntime;
-  const guardWorkspaceTransition = useCallback(async () => {
-    const analysis = storyBibleBridge?.getEditorProps().foreshadowAnalysis;
-    if (analysis?.status === "review" && analysis.review.step === "applying") return false;
+  const guardWorkspaceFileTransition = useCallback(async () => {
     return guardWorkspaceFileEditors();
-  }, [guardWorkspaceFileEditors, storyBibleBridge]);
+  }, [guardWorkspaceFileEditors]);
   const [pendingMainReview, setPendingMainReview] = useState<
     PendingAgentConversationMainReview | undefined
   >();
@@ -434,7 +432,7 @@ export function App() {
     settingsBridge,
     storyBibleBridge,
     studioBridge,
-    beforeWorkspaceTransition: guardWorkspaceTransition,
+    beforeWorkspaceTransition: guardWorkspaceFileTransition,
     beforeCreateChapter: storyAnalysisWorkspace.beforeCreateChapter,
     setChapterEditor,
     clearFileEditor,
@@ -445,6 +443,10 @@ export function App() {
     setStoryBibleEditor,
     setStudio
   });
+  const guardWorkspaceTransition = useCallback(async () => {
+    if (!(await guardWorkspaceFileTransition())) return false;
+    return guardStoryBibleDraft();
+  }, [guardStoryBibleDraft, guardWorkspaceFileTransition]);
   const guardAgentStart = useCallback(async () => {
     if (activeCreativeFileRef !== null && !(await guardCreativeFile())) return false;
     return guardStoryBibleDraft();
@@ -658,7 +660,7 @@ export function App() {
     plainFileBridge,
     creativePlainFileBridge: creativePlainFileBridgeRef.current,
     creativeProjectFilesBridge,
-    canLeaveCreativeFile: guardWorkspaceTransition,
+    canLeaveCreativeFile: guardWorkspaceFileTransition,
     canLeaveStoryBibleDraft: guardStoryBibleDraft,
     beforeNavigateToChapter: storyAnalysisWorkspace.beforeNavigateToChapter,
     setShellState,

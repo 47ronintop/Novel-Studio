@@ -45,6 +45,8 @@ export interface StoryBiblePreparedAgentProposal {
   readonly assetId: string;
   readonly assetType: StoryBibleV11AssetType;
   readonly relativePath: string;
+  /** Present when an existing legacy asset must be migrated during Change Set application. */
+  readonly currentRelativePath?: string;
   readonly content: string;
   readonly baseContent?: string;
   readonly baseChecksum?: string;
@@ -78,6 +80,7 @@ interface StoryBiblePreparedCreateResult {
 interface StoryBiblePreparedWriteResult {
   readonly asset: StoryBibleAgentToolAsset;
   readonly current: StoryBibleCompatibleToolRead;
+  readonly currentRelativePath?: string;
   readonly relativePath: string;
   readonly content: string;
   readonly baseContent: string;
@@ -105,10 +108,10 @@ export interface StoryBibleAgentToolRepositoryPort {
     /** Application-owned proof that project-level inverse-pair checks run on the complete group. */
     readonly deferProjectRelationPairValidation?: boolean;
   }): Promise<Result<StoryBiblePreparedCreateResult, UnifiedError>>;
-  prepareStoryAssetCandidate(input: {
+  prepareStoryAssetCandidateReadOnly(input: {
     readonly candidate: JsonObject;
     readonly baseRevision: number;
-    readonly baseChecksum?: string;
+    readonly baseChecksum: string;
     readonly additionalKnownAssetIds?: readonly string[];
     /** Main-derived targets materialized by another candidate in the same atomic consistency group. */
     readonly additionalKnownReferenceTargets?: readonly StoryBibleTemporaryReferenceTarget[];
@@ -460,7 +463,7 @@ export function createStoryBibleAgentToolSession(
     if (!patched.ok) return patched;
     const knownChapterIds = await readKnownChapterIds();
     if (!knownChapterIds.ok) return knownChapterIds;
-    const prepared = await options.repository.prepareStoryAssetCandidate({
+    const prepared = await options.repository.prepareStoryAssetCandidateReadOnly({
       candidate: patched.value.candidate,
       baseRevision: patched.value.latestBaseRevision,
       baseChecksum: read.value.checksum,
@@ -470,6 +473,19 @@ export function createStoryBibleAgentToolSession(
       ...(knownChapterIds.value === undefined ? {} : { knownChapterIds: knownChapterIds.value })
     });
     if (!prepared.ok) return prepared;
+    if (
+      prepared.value.currentRelativePath !== undefined &&
+      prepared.value.currentRelativePath !== prepared.value.relativePath &&
+      (input.action === "status" || input.action === "restore")
+    ) {
+      return err(
+        toolError(
+          traceId,
+          "STORY_BIBLE_LEGACY_STATUS_MIGRATION_UNSUPPORTED",
+          "Upgrade the legacy Story Bible asset with a regular patch before changing its status."
+        )
+      );
+    }
     const fieldDiffs = buildFieldDiffs(
       read.value.asset,
       prepared.value.asset,
@@ -483,6 +499,10 @@ export function createStoryBibleAgentToolSession(
       assetId: prepared.value.asset.id,
       assetType: prepared.value.asset.type,
       relativePath: prepared.value.relativePath,
+      ...(prepared.value.currentRelativePath === undefined ||
+      prepared.value.currentRelativePath === prepared.value.relativePath
+        ? {}
+        : { currentRelativePath: prepared.value.currentRelativePath }),
       content: prepared.value.content,
       baseContent: prepared.value.baseContent,
       baseChecksum: prepared.value.baseChecksum,

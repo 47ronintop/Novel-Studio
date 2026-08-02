@@ -121,7 +121,7 @@ export interface StoryBibleExplicitInverseSessionOptions {
   readonly repository: StoryBibleExplicitInverseRepositoryPort;
   readonly changeSets: Pick<
     ChangeSetSession,
-    "proposeStoryBibleWrite" | "proposeOperation" | "readChangeSet" | "decide"
+    "proposeStoryBibleWrite" | "proposeOperationBatch" | "readChangeSet" | "decide"
   >;
   readonly versionGroups: Pick<VersionGroupSession, "applyApprovedBatch">;
   readonly chapterCatalog?: Pick<ChapterCatalogRepositoryPort, "listChapters">;
@@ -220,18 +220,18 @@ export function createStoryBibleExplicitInverseSession(
       for (const candidate of prepared) {
         const migration = migrationsByAssetId.get(candidate.asset.id);
         if (migration !== undefined) {
-          for (const operation of [migration.createOperation, migration.deleteOperation]) {
-            const proposed = await options.changeSets.proposeOperation({
-              runId,
-              projectId: options.projectId,
-              checkpointId,
-              contextSnapshotId,
+          const proposed = await options.changeSets.proposeOperationBatch({
+            runId,
+            projectId: options.projectId,
+            checkpointId,
+            contextSnapshotId,
+            operations: [migration.createOperation, migration.deleteOperation].map((operation) => ({
               toolCallId: operation.toolCallIdempotencyKey,
               operation
-            });
-            if (!proposed.ok) return proposed;
-            changeSet = proposed.value;
-          }
+            }))
+          });
+          if (!proposed.ok) return proposed;
+          changeSet = proposed.value;
           continue;
         }
         const proposed = await options.changeSets.proposeStoryBibleWrite({

@@ -588,10 +588,14 @@ export function createProjectDesktopApplication(
             storyBible.prepareCreateStoryAsset(
               input as Parameters<StoryBibleFileRepository["prepareCreateStoryAsset"]>[0]
             ),
-          prepareStoryAssetCandidate: (input) =>
-            storyBible.prepareStoryAssetCandidate(
-              input as Parameters<StoryBibleFileRepository["prepareStoryAssetCandidate"]>[0]
-            )
+          async prepareStoryAssetCandidateReadOnly(input) {
+            const prepared = await storyBible.prepareStoryAssetCandidateReadOnly(
+              input as Parameters<StoryBibleFileRepository["prepareStoryAssetCandidateReadOnly"]>[0]
+            );
+            return prepared.ok
+              ? ok({ ...prepared.value, currentRelativePath: prepared.value.current.relativePath })
+              : prepared;
+          }
         },
         changeSets,
         fileOperations
@@ -686,7 +690,7 @@ export function createProjectDesktopApplication(
           content: prepared.baseContent,
           candidateContent: prepared.content,
           createdBy: "user",
-          relativePath: prepared.relativePath
+          relativePath: prepared.current.relativePath
         });
         return snapshot.ok ? ok(undefined) : snapshot;
       }
