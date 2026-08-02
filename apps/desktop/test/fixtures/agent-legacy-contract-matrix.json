@@ -1,0 +1,475 @@
+{
+  "schemaVersion": "1.0",
+  "baselineCommit": "5c234d4",
+  "frozenForBatch": "0",
+  "contracts": [
+    {
+      "id": "system_guidance",
+      "currentVersions": ["2.1"],
+      "targetVersion": "3.0",
+      "writerPaths": ["packages/application/src/agent-guidance-registry.ts"],
+      "readerPaths": [
+        "packages/application/src/agent-guidance-registry.ts",
+        "packages/application/src/agent-prompt-materializer.ts"
+      ],
+      "sourceAnchors": [
+        "HISTORICAL_AGENT_SYSTEM_GUIDANCE_VERSION",
+        "verifyHistoricalAgentGuidance"
+      ],
+      "tests": [
+        {
+          "path": "packages/application/test/agent-guidance-registry.test.ts",
+          "title": "freezes the four 2.1 profile renderings byte-for-byte from the implementation baseline"
+        }
+      ],
+      "readerDisposition": "replay_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.1"
+    },
+    {
+      "id": "prompt_artifact",
+      "currentVersions": ["1.0", "1.1"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/application/src/agent-prompt-materializer.ts"],
+      "readerPaths": ["packages/application/src/agent-prompt-materializer.ts"],
+      "sourceAnchors": [
+        "createAgentPromptMaterializationArtifact",
+        "parseAgentPromptMaterializationArtifact"
+      ],
+      "tests": [
+        {
+          "path": "packages/application/test/agent-prompt-materializer.test.ts",
+          "title": "replays only a registered historical guidance renderer"
+        },
+        {
+          "path": "packages/application/test/agent-prompt-materializer.test.ts",
+          "title": "fails closed for unknown or tampered artifact versions"
+        }
+      ],
+      "readerDisposition": "replay_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.1"
+    },
+    {
+      "id": "agent_run_tool_catalog",
+      "currentVersions": ["1.0"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/agent-run-tool-catalog.ts"],
+      "readerPaths": ["packages/agent-engine/src/agent-run-tool-catalog.ts"],
+      "sourceAnchors": ["createAgentRunToolCatalogSnapshot", "validateAgentRunToolCatalogSnapshot"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/agent-run-tool-catalog.test.ts",
+          "title": "rejects descriptor, descriptor revision, and provider mapping tampering"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.1"
+    },
+    {
+      "id": "message_order",
+      "currentVersions": ["1.0"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/application/src/agent-prompt-materializer.ts"],
+      "readerPaths": ["packages/application/src/agent-prompt-materializer.ts"],
+      "sourceAnchors": ["materializeAgentPrompt", "stablePrefixMessages"],
+      "tests": [
+        {
+          "path": "packages/application/test/agent-prompt-materializer.test.ts",
+          "title": "places stable project data before the request and current file in the dynamic suffix"
+        }
+      ],
+      "readerDisposition": "replay_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "2.1"
+    },
+    {
+      "id": "provider_visible_untrusted_envelope",
+      "currentVersions": ["legacy:untrusted_project_data", "legacy:untrusted_remote_data"],
+      "targetVersion": "2.0",
+      "writerPaths": [
+        "packages/application/src/agent-search-tool-session.ts",
+        "packages/application/src/agent-network-tool-session.ts"
+      ],
+      "readerPaths": ["packages/application/src/agent-run-session.ts"],
+      "sourceAnchors": ["untrusted_project_data", "untrusted_remote_data"],
+      "tests": [
+        {
+          "path": "packages/application/test/agent-search-tool-session.test.ts",
+          "title": "wraps searchText and returns untrusted_project_data envelope"
+        },
+        {
+          "path": "packages/application/test/agent-network-tool-session.test.ts",
+          "title": "returns untrusted_remote_data envelope on success"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "2.1"
+    },
+    {
+      "id": "legacy_context_runtime_facts",
+      "currentVersions": ["1.0"],
+      "targetVersion": "not_applicable",
+      "writerPaths": ["packages/application/src/agent-context-profile.ts"],
+      "readerPaths": ["packages/application/src/agent-context-profile.ts"],
+      "sourceAnchors": ["AgentContextRuntimeFacts", "createStandaloneRuntimeFacts"],
+      "tests": [
+        {
+          "path": "packages/application/test/agent-context-profile.test.ts",
+          "title": "freezes standalone runtime facts without a project identity or tools"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.1"
+    },
+    {
+      "id": "provider_visible_runtime_facts",
+      "currentVersions": [],
+      "targetVersion": "1.0",
+      "writerPaths": [],
+      "readerPaths": [],
+      "sourceAnchors": [],
+      "tests": [],
+      "readerDisposition": "missing_new_contract",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.1"
+    },
+    {
+      "id": "writing_task_intent",
+      "currentVersions": [],
+      "targetVersion": "1.0",
+      "writerPaths": [],
+      "readerPaths": [],
+      "sourceAnchors": [],
+      "tests": [],
+      "readerDisposition": "missing_new_contract",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.1"
+    },
+    {
+      "id": "writing_generation_guidance",
+      "currentVersions": ["legacy:permanent_style_pack"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/application/src/agent-guidance-registry.ts"],
+      "readerPaths": ["packages/application/src/agent-guidance-registry.ts"],
+      "sourceAnchors": ["permanent_writing_style_pack"],
+      "tests": [
+        {
+          "path": "packages/application/test/agent-guidance-registry.test.ts",
+          "title": "records known 2.1 defects only as replay compatibility"
+        }
+      ],
+      "readerDisposition": "replay_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "5.2"
+    },
+    {
+      "id": "provider_semantic_version_set",
+      "currentVersions": [],
+      "targetVersion": "1.0",
+      "writerPaths": [],
+      "readerPaths": [],
+      "sourceAnchors": [],
+      "tests": [],
+      "readerDisposition": "missing_new_contract",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.1"
+    },
+    {
+      "id": "context_snapshot",
+      "currentVersions": ["1.0", "1.1", "1.2", "1.3", "1.4"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/context-snapshot.ts"],
+      "readerPaths": ["packages/agent-engine/src/context-snapshot.ts"],
+      "sourceAnchors": ["createAgentContextSnapshot", "normalizeAgentContextSnapshot"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/stage5-event-contract.test.ts",
+          "title": "createAgentContextSnapshot authors a v1.4 snapshot"
+        },
+        {
+          "path": "packages/agent-engine/test/context-snapshot.test.ts",
+          "title": "freezes resolved source preference scope and backfills older v1.4 snapshots"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "2.1"
+    },
+    {
+      "id": "packed_agent_context_manifest",
+      "currentVersions": ["1.0", "1.1", "1.2"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/packed-agent-context.ts"],
+      "readerPaths": ["packages/agent-engine/src/packed-agent-context.ts"],
+      "sourceAnchors": [
+        "createPackedAgentContextManifest",
+        "rebuildPackedAgentContextFromManifest"
+      ],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/packed-agent-context.test.ts",
+          "title": "reports old manifests as explicitly unavailable"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "2.1"
+    },
+    {
+      "id": "canonical_round_manifest",
+      "currentVersions": [],
+      "targetVersion": "2.0",
+      "writerPaths": [],
+      "readerPaths": [],
+      "sourceAnchors": [],
+      "tests": [],
+      "readerDisposition": "missing_new_contract",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "2.1"
+    },
+    {
+      "id": "permission_summary",
+      "currentVersions": ["1.0", "1.1"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/permission-summary.ts"],
+      "readerPaths": ["packages/agent-engine/src/permission-summary.ts"],
+      "sourceAnchors": ["generatePermissionSummary", "normalizePermissionSummaryV10"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/permission-summary.test.ts",
+          "title": "treats readable v1.0 records as deny-all for post-v1.0 capabilities"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.2"
+    },
+    {
+      "id": "approval_rule_and_decision_proof",
+      "currentVersions": [],
+      "targetVersion": "1.0",
+      "writerPaths": [],
+      "readerPaths": [],
+      "sourceAnchors": [],
+      "tests": [],
+      "readerDisposition": "missing_new_contract",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.2"
+    },
+    {
+      "id": "change_set",
+      "currentVersions": ["1.0", "1.1"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/change-set.ts"],
+      "readerPaths": ["packages/repository/src/agent-run-repository.ts"],
+      "sourceAnchors": ["createChangeSetRevision", "approvalToken"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/change-set.test.ts",
+          "title": "records lifecycle operation metadata in a v1.1 Change Set and binds it into approval"
+        },
+        {
+          "path": "packages/repository/test/agent-run-repository.test.ts",
+          "title": "persists immutable Change Set revisions and restores the latest checkpoint revision"
+        }
+      ],
+      "readerDisposition": "view_or_reject_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.2b"
+    },
+    {
+      "id": "approval_binding",
+      "currentVersions": ["legacy:deterministic_approval_token"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/approval-gate.ts"],
+      "readerPaths": ["packages/repository/src/recovery-repository.ts"],
+      "sourceAnchors": ["deriveChangeSetGroupApprovalToken", "hasValidApprovalBinding"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/approval-gate.test.ts",
+          "title": "approves only a human-confirmed exact revision and checksum binding"
+        }
+      ],
+      "readerDisposition": "view_or_reject_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.2b"
+    },
+    {
+      "id": "authorization_ledger",
+      "currentVersions": [],
+      "targetVersion": "2.0",
+      "writerPaths": [],
+      "readerPaths": [],
+      "sourceAnchors": [],
+      "tests": [],
+      "readerDisposition": "missing_new_contract",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.2b"
+    },
+    {
+      "id": "run_snapshot_and_event",
+      "currentVersions": ["1.0", "1.1", "1.2", "1.3"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/agent-run-coordinator.ts"],
+      "readerPaths": [
+        "packages/agent-engine/src/agent-run-types.ts",
+        "packages/repository/src/agent-run-repository.ts"
+      ],
+      "sourceAnchors": ["normalizeAgentRunSnapshot", "normalizeAgentRunEvent"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/stage5-event-contract.test.ts",
+          "title": "normalizes legacy events to the scope-aware v1.3 view"
+        },
+        {
+          "path": "packages/repository/test/agent-run-repository.test.ts",
+          "title": "reads v1.0 and v1.1 snapshots but rejects an unsupported schema version"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.4"
+    },
+    {
+      "id": "run_draft",
+      "currentVersions": ["1.0", "1.1"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/agent-run-draft.ts"],
+      "readerPaths": ["packages/agent-engine/src/agent-run-draft.ts"],
+      "sourceAnchors": ["createAgentRunDraft", "normalizeAgentRunDraft"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/agent-run-draft.test.ts",
+          "title": "normalizes a legacy engineering draft without retaining projectId"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.5"
+    },
+    {
+      "id": "plan_artifact",
+      "currentVersions": ["1.0"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/plan-artifact.ts"],
+      "readerPaths": ["packages/repository/src/agent-run-repository.ts"],
+      "sourceAnchors": ["createPlanArtifactRevision", "readPlanArtifact"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/plan-artifact.test.ts",
+          "title": "freezes revisions and blocks execution until blocking questions are resolved"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.5"
+    },
+    {
+      "id": "plan_execution",
+      "currentVersions": ["1.0"],
+      "targetVersion": "2.0",
+      "writerPaths": ["packages/agent-engine/src/plan-execution.ts"],
+      "readerPaths": ["packages/repository/src/agent-run-repository.ts"],
+      "sourceAnchors": ["createPlanExecutionRecord", "readPlanExecution"],
+      "tests": [
+        {
+          "path": "packages/agent-engine/test/plan-execution.test.ts",
+          "title": "creates immutable revision 1 from stable plan step ids and treats handoff choices as facts"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "1.5"
+    },
+    {
+      "id": "engineering_transaction_journal",
+      "currentVersions": ["legacy_shared_namespace:1.0", "legacy_shared_namespace:1.1"],
+      "targetVersion": "2.0",
+      "writerPaths": [
+        "packages/agent-engine/src/transaction-journal.ts",
+        "packages/repository/src/agent-write-transaction.ts"
+      ],
+      "readerPaths": ["packages/repository/src/recovery-repository.ts"],
+      "sourceAnchors": ["createTransactionJournal", "readAgentTransactionJournal"],
+      "tests": [
+        {
+          "path": "packages/repository/test/agent-write-transaction.test.ts",
+          "title": "normalizes a missing legacy write policy to manual during recovery"
+        },
+        {
+          "path": "packages/repository/test/agent-write-transaction.test.ts",
+          "title": "round-trips a v1.1 grouped journal through the filesystem repository"
+        }
+      ],
+      "readerDisposition": "legacy_recovery_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "7.2"
+    },
+    {
+      "id": "prompt_cache_identity",
+      "currentVersions": ["artifact:1.0", "adapter:c5@1.0"],
+      "targetVersion": "bound_to_provider_semantic_version_set_1.0",
+      "writerPaths": ["packages/application/src/agent-prompt-cache.ts"],
+      "readerPaths": ["packages/application/src/agent-prompt-cache.ts"],
+      "sourceAnchors": [
+        "AGENT_PROMPT_CACHE_ARTIFACT_VERSION",
+        "parseAgentPromptCacheIdentityArtifact"
+      ],
+      "tests": [
+        {
+          "path": "packages/application/test/agent-prompt-cache.test.ts",
+          "title": "fails closed for unknown versions and tampering"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "2.1"
+    },
+    {
+      "id": "context_budget_identity",
+      "currentVersions": ["snapshot:1.0", "snapshot:1.1", "contract:1.0"],
+      "targetVersion": "bound_to_provider_semantic_version_set_1.0",
+      "writerPaths": [
+        "packages/agent-engine/src/context-budget.ts",
+        "packages/application/src/agent-context-budget.ts"
+      ],
+      "readerPaths": ["packages/application/src/agent-context-budget.ts"],
+      "sourceAnchors": ["ContextBudgetSnapshotV11", "readResolvedContextBudgetUsageLimits"],
+      "tests": [
+        {
+          "path": "packages/application/test/agent-context-budget.test.ts",
+          "title": "reuses only an intact proof-bearing persisted budget"
+        }
+      ],
+      "readerDisposition": "read_only",
+      "grantsNewPermissions": false,
+      "futureOwnerTask": "2.1"
+    }
+  ],
+  "legacyPendingChangeSet": {
+    "record": {
+      "schemaVersion": "1.0",
+      "changeSetId": "changes_legacy_pending_01",
+      "revision": 1,
+      "runId": "run_legacy_pending_01",
+      "projectId": "project_legacy_01",
+      "checkpointId": "checkpoint_legacy_01",
+      "contextSnapshotId": "context_legacy_01",
+      "status": "awaiting_approval",
+      "checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "approvalToken": "94d6b1e371b453ab93d3aaef0f5a904fa2f586fcc7d19803dd5da3aa53ee98a9",
+      "createdAt": "2026-07-13T00:01:00.000Z",
+      "files": []
+    },
+    "migrationExpectation": {
+      "disposition": "view_or_reject_only",
+      "v2ApplyAllowed": false,
+      "rebuildRequiredForExecution": true,
+      "ownerTask": "1.2b"
+    }
+  }
+}

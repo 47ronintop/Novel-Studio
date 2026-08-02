@@ -1,3 +1,9 @@
+const engineeringFileAccessArtifacts = [
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node",
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json",
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s"
+];
+
 module.exports = {
   appId: "studio.novel.local",
   productName: "Novel Studio",
@@ -13,8 +19,11 @@ module.exports = {
     "!packages/*/dist/test{,/**}",
     "packages/schemas/schema/**",
     "package.json",
-    "package-lock.json"
+    "package-lock.json",
+    ...engineeringFileAccessArtifacts
   ],
+  asarUnpack: [...engineeringFileAccessArtifacts],
+  extraResources: [],
   extraMetadata: {
     main: "apps/desktop/dist/main/index.js"
   },

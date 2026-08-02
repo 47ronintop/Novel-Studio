@@ -69,6 +69,33 @@ export type {
 export { validateAgentRelativePath } from "./path-guard.js";
 export type { AgentRelativePath } from "./path-guard.js";
 export {
+  ENGINEERING_FILE_CONTRACT_VERSION,
+  ENGINEERING_FILE_NATIVE_ADAPTER_ID,
+  ENGINEERING_FILE_NEGATIVE_CONTROLS,
+  ENGINEERING_FILE_POSITIVE_PROTECTIONS,
+  ENGINEERING_FILE_PROBE_CONTRACT_VERSION,
+  ENGINEERING_FILE_PROBE_MAX_LIFETIME_MS,
+  ENGINEERING_FILE_QUALIFICATION_VERSION,
+  ENGINEERING_FILE_SUPPORTED_TARGETS,
+  createUnavailableEngineeringFileQualificationAttestation,
+  engineeringFileProbeReportChecksum,
+  engineeringFileQualificationAttestationChecksum,
+  validateEngineeringFileProbeReport,
+  validateEngineeringFileQualificationAttestation
+} from "./engineering-file-contracts.js";
+export type {
+  EngineeringFileMutationReceiptV1,
+  EngineeringFileProbeReportV1,
+  EngineeringFileProbeValidationResult,
+  EngineeringFileQualificationAttestationV1,
+  EngineeringFileQualificationCapability,
+  EngineeringFileQualificationFailureReason,
+  EngineeringFileSupportedTarget,
+  EngineeringRawByteBlobV1,
+  EngineeringRecoveryRootBindingV1,
+  EngineeringWorkspaceRootBindingV1
+} from "./engineering-file-contracts.js";
+export {
   AGENT_FORBIDDEN_CAPABILITIES,
   findPermissionSummaryDrift,
   generatePermissionSummary,

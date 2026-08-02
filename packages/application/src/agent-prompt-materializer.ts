@@ -24,6 +24,10 @@ import {
   type AgentContextProfile,
   type AgentContextProfileId
 } from "./agent-context-profile.js";
+import {
+  parseHistoricalAgentGuidanceRefId,
+  verifyHistoricalAgentGuidance
+} from "./agent-guidance-registry.js";
 import { AGENT_SYSTEM_GUIDANCE_VERSION } from "./agent-system-prompt.js";
 import { createAgentContextSourceMaterializationArtifact } from "./workspace-project-context.js";
 
@@ -527,6 +531,25 @@ export function createAgentPromptMaterializationArtifact(
   input: CreateAgentPromptMaterializationArtifactInput
 ): AgentPromptMaterializationArtifact {
   assertPersistableContextSources(input.contextSources ?? []);
+  const systemGuidanceRefId =
+    input.systemGuidanceRefId ??
+    `system_guidance:${input.profile.profileId}@${AGENT_SYSTEM_GUIDANCE_VERSION}`;
+  let guidanceTemplateChecksum: string;
+  try {
+    const guidanceRef = parseHistoricalAgentGuidanceRefId(systemGuidanceRefId);
+    if (guidanceRef.profileId !== input.profile.profileId) {
+      throw new Error("AGENT_GUIDANCE_REGISTRY_AUTHORITY_INVALID");
+    }
+    guidanceTemplateChecksum = verifyHistoricalAgentGuidance({
+      registryKey: guidanceRef.registryKey,
+      profileId: guidanceRef.profileId,
+      version: guidanceRef.version,
+      templateChecksum: checksum(input.systemPrompt),
+      materializedGuidance: input.systemPrompt
+    }).templateChecksum;
+  } catch {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
   const materialization = materializeAgentPrompt(input);
   const packedContextManifestChecksum =
     input.packedContext === undefined
@@ -547,10 +570,8 @@ export function createAgentPromptMaterializationArtifact(
     profile: structuredClone(input.profile),
     toolCatalogRevision: input.toolCatalogRevision,
     userRequest: input.userRequest,
-    systemGuidanceRefId:
-      input.systemGuidanceRefId ??
-      `system_guidance:${input.profile.profileId}@${AGENT_SYSTEM_GUIDANCE_VERSION}`,
-    guidanceTemplateChecksum: checksum(input.systemPrompt),
+    systemGuidanceRefId,
+    guidanceTemplateChecksum,
     contextSources: structuredClone(input.contextSources ?? []),
     conversationSummaryMessages: structuredClone(input.conversationSummaryMessages ?? []),
     ...(packedContextManifestChecksum === undefined ? {} : { packedContextManifestChecksum })
@@ -633,13 +654,11 @@ export function parseAgentPromptMaterializationArtifact(
     systemGuidanceRefId,
     ...(packedContextManifestChecksum === undefined ? {} : { packedContextManifestChecksum })
   });
-  const expectedGuidanceRefPrefix = `system_guidance:${profile.profileId}@`;
   const persistedChecksumMatches =
     persistedSchemaVersion === "1.1"
       ? value["checksum"] === recreated.checksum
       : value["checksum"] === legacyArtifactChecksum(recreated);
   if (
-    !isGuidanceRefForProfile(systemGuidanceRefId, expectedGuidanceRefPrefix) ||
     value["profileId"] !== recreated.profileId ||
     value["profileVersion"] !== recreated.profileVersion ||
     guidanceTemplateChecksum !== recreated.guidanceTemplateChecksum ||
@@ -803,10 +822,6 @@ function isToolPolicy(value: unknown): value is AgentContextProfile["toolPolicy"
 
 function profileVersionValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= 128 ? value : undefined;
-}
-
-function isGuidanceRefForProfile(value: string, prefix: string): boolean {
-  return value.startsWith(prefix) && value.length > prefix.length;
 }
 
 function parseContextSources(value: unknown): readonly AgentContextSourceInput[] | undefined {

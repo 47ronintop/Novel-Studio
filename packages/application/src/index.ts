@@ -491,6 +491,22 @@ export {
 } from "./agent-system-prompt.js";
 export type { AgentConventionsArtifactReference } from "./agent-system-prompt.js";
 export {
+  HISTORICAL_AGENT_GUIDANCE_RENDERER_VERSION,
+  HISTORICAL_AGENT_SYSTEM_GUIDANCE_VERSION,
+  getHistoricalAgentGuidanceRegistration,
+  listHistoricalAgentGuidanceRegistrations,
+  materializeHistoricalAgentGuidance,
+  parseHistoricalAgentGuidanceRefId,
+  verifyHistoricalAgentGuidance
+} from "./agent-guidance-registry.js";
+export type {
+  HistoricalAgentGuidanceDeviationCode,
+  HistoricalAgentGuidanceRegistryKey,
+  HistoricalAgentGuidanceVersion,
+  RegisteredHistoricalAgentGuidance,
+  VerifyHistoricalAgentGuidanceInput
+} from "./agent-guidance-registry.js";
+export {
   AGENT_CONTEXT_PROFILE_VERSION,
   createStandaloneRuntimeFacts,
   resolveAgentContextProfile,

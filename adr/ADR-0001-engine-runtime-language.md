@@ -64,3 +64,9 @@ Python 只允许出现在 plugin、外部工具或离线辅助脚本边界，不
 - JSON Schema 是跨边界 canonical contract。
 - Python 插件或外部工具必须被视为不可信输入源，输出必须校验。
 - 任何改变 Core Engine 运行时语言的决定必须新增 ADR。
+
+## 关联决定
+
+- [ADR-0003](./ADR-0003-engineering-file-access-adapter.md) 在 TypeScript Strict Core 下方允许一个
+  仅由 Electron Main 使用的受限 native Repository adapter；它不改变本 ADR 的 Core Engine
+  运行时语言决定。

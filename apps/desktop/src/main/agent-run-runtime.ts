@@ -487,14 +487,23 @@ function requestedCapabilitySnapshot(
         "Desktop Agent capability snapshot workspace kind does not match the runtime."
       );
     }
-    return freezeAgentToolCapabilitySnapshot(explicit);
+    return freezeAgentToolCapabilitySnapshot({
+      ...explicit,
+      // Batch 0 has no qualified engineering native host. A test/pre-qualified legacy snapshot
+      // cannot turn the old lifecycle umbrella back into engineering authority.
+      fileLifecycleEnabled:
+        options.workspaceKind === "engineeringWorkspace" ? false : explicit.fileLifecycleEnabled
+    });
   }
 
   const flags = options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS;
   return freezeAgentToolCapabilitySnapshot({
     workspaceKind: options.workspaceKind,
     searchEnabled: flags.phaseA_searchEnabled,
-    fileLifecycleEnabled: flags.phaseB_fileLifecycleEnabled,
+    // The Phase B lifecycle flag remains a creative-project compatibility gate. Engineering must
+    // wait for the operation-specific qualified backend introduced after Batch 0.
+    fileLifecycleEnabled:
+      options.workspaceKind === "engineeringWorkspace" ? false : flags.phaseB_fileLifecycleEnabled,
     storyBibleStructuredToolsEnabled: options.workspaceKind === "creativeProject",
     controlledExecutionEnabled: false,
     gitReadEnabled: false,
@@ -525,8 +534,10 @@ function buildRuntimeCapabilitySnapshot(input: {
     fileLifecycleEnabled:
       input.requested.fileLifecycleEnabled &&
       input.fileOperationSession !== undefined &&
-      (input.lifecycleOperations !== undefined ||
-        input.trustedCreativeMutations?.mutate !== undefined) &&
+      (input.requested.workspaceKind === "engineeringWorkspace"
+        ? input.lifecycleOperations !== undefined
+        : input.lifecycleOperations !== undefined ||
+          input.trustedCreativeMutations?.mutate !== undefined) &&
       input.hasVersionGroupExecutor,
     storyBibleStructuredToolsEnabled:
       input.requested.storyBibleStructuredToolsEnabled === true &&
@@ -763,11 +774,15 @@ function createDesktopAgentRuntimeServices(
   const writeMutationTrust: AgentWriteMutationTrust =
     versionGroupServices === undefined
       ? "unavailable"
-      : options.lifecycleOperations !== undefined
-        ? "hardened_native"
-        : trustedCreativeMutations !== undefined
-          ? "standard_trusted_creative"
-          : "unavailable";
+      : options.workspaceKind === "engineeringWorkspace"
+        ? requestedCapabilities.fileLifecycleEnabled && options.lifecycleOperations !== undefined
+          ? "hardened_native"
+          : "unavailable"
+        : options.lifecycleOperations !== undefined
+          ? "hardened_native"
+          : trustedCreativeMutations !== undefined
+            ? "standard_trusted_creative"
+            : "unavailable";
 
   const capabilitySnapshot = buildRuntimeCapabilitySnapshot({
     requested: requestedCapabilities,

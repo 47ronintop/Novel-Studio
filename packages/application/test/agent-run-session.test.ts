@@ -1402,6 +1402,7 @@ describe("AgentRunSession", () => {
       });
     });
     expect(initialSystemPrompt).not.toBe("");
+    expect(initialSystemPrompt).toBe(applicationExports.buildAgentSystemPrompt("writing"));
     expect(initialCachePrefixChecksum).toMatch(/^[a-f0-9]{64}$/u);
 
     const beforeCompaction = (await firstSession.readAgentRun(runId)) as {
@@ -1485,6 +1486,7 @@ describe("AgentRunSession", () => {
     });
 
     expect(resumedSystemPrompt).toBe(initialSystemPrompt);
+    expect(resumedSystemPrompt).toBe(applicationExports.buildAgentSystemPrompt("writing"));
     expect(JSON.stringify(resumedMessages)).toContain(retainedConvention);
     expect(JSON.stringify(resumedMessages)).not.toContain(evictedBody);
   });

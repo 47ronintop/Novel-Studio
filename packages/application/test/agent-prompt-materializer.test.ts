@@ -4,10 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonObject } from "@novel-studio/shared";
 import type { AgentRunEvent } from "@novel-studio/agent-engine";
 
-import {
-  resolveAgentContextProfile,
-  type AgentContextProfile
-} from "../src/agent-context-profile.js";
+import { resolveAgentContextProfile } from "../src/agent-context-profile.js";
 import {
   createAgentPromptMaterializationArtifact,
   materializeAgentPrompt,
@@ -21,6 +18,7 @@ import {
   createWorkspaceOutlineSource,
   type WorkspaceOutlineDependencyManifest
 } from "../src/workspace-project-context.js";
+import { buildAgentSystemPrompt } from "../src/agent-system-prompt.js";
 
 const profile = resolveAgentContextProfile(
   { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_1" },
@@ -57,7 +55,7 @@ describe("Agent prompt materializer", () => {
   it("places stable project data before the request and current file in the dynamic suffix", () => {
     const output = materializeAgentPrompt({
       profile,
-      systemPrompt: "trusted app prompt",
+      systemPrompt: buildAgentSystemPrompt(profile),
       toolCatalogRevision: "catalog_1",
       userRequest: "Edit the notes",
       conversationSummaryMessages: [{ role: "user", content: "summary" }],
@@ -160,7 +158,7 @@ describe("Agent prompt materializer", () => {
     });
     const prompt = materializeAgentPrompt({
       profile,
-      systemPrompt: "trusted app prompt",
+      systemPrompt: buildAgentSystemPrompt(profile),
       toolCatalogRevision: "catalog_1",
       userRequest: "Edit the notes",
       contextSources,
@@ -369,7 +367,7 @@ describe("Agent prompt materializer", () => {
       runId: "run_1",
       contextSnapshotId: "context_1",
       profile,
-      systemPrompt: "trusted app prompt",
+      systemPrompt: buildAgentSystemPrompt(profile),
       toolCatalogRevision: "catalog_1",
       userRequest: "Edit the notes",
       contextSources: [
@@ -428,7 +426,7 @@ describe("Agent prompt materializer", () => {
       runId: "run_1",
       contextSnapshotId: "context_1",
       profile,
-      systemPrompt: "trusted app prompt",
+      systemPrompt: buildAgentSystemPrompt(profile),
       toolCatalogRevision: "catalog_1",
       userRequest: "Edit the notes",
       contextSources,
@@ -444,26 +442,32 @@ describe("Agent prompt materializer", () => {
     ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
   });
 
-  it("replays a frozen artifact after profile and guidance versions advance", () => {
-    const historicalProfile = {
-      ...profile,
-      profileVersion: "99.0"
-    } as unknown as AgentContextProfile;
+  it("replays only a registered historical guidance renderer", () => {
     const artifact = createAgentPromptMaterializationArtifact({
       runId: "run_1",
       contextSnapshotId: "context_1",
-      profile: historicalProfile,
-      systemPrompt: "Historical app-authored guidance",
+      profile,
+      systemPrompt: buildAgentSystemPrompt(profile),
       toolCatalogRevision: "catalog_1",
-      userRequest: "Edit the notes",
-      systemGuidanceRefId: "system_guidance:creative_general@99.0"
+      userRequest: "Edit the notes"
     });
 
-    expect(artifact.profileVersion).toBe("99.0");
+    expect(artifact.systemGuidanceRefId).toBe("system_guidance:creative_general@2.1");
     expect(artifact.guidanceTemplateChecksum).toMatch(/^[0-9a-f]{64}$/);
     expect(
       parseAgentPromptMaterializationArtifact(structuredClone(artifact) as unknown as JsonObject)
     ).toEqual(artifact);
+    expect(() =>
+      createAgentPromptMaterializationArtifact({
+        runId: "run_unknown_guidance",
+        contextSnapshotId: "context_unknown_guidance",
+        profile,
+        systemPrompt: "Historical app-authored guidance",
+        toolCatalogRevision: "catalog_1",
+        userRequest: "Edit the notes",
+        systemGuidanceRefId: "system_guidance:creative_general@99.0"
+      })
+    ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
   });
 
   it("fails closed for unknown or tampered artifact versions", () => {
@@ -471,7 +475,7 @@ describe("Agent prompt materializer", () => {
       runId: "run_1",
       contextSnapshotId: "context_1",
       profile,
-      systemPrompt: "trusted app prompt",
+      systemPrompt: buildAgentSystemPrompt(profile),
       toolCatalogRevision: "catalog_1",
       userRequest: "Edit the notes"
     });
@@ -492,6 +496,17 @@ describe("Agent prompt materializer", () => {
         ...artifact,
         guidanceTemplateChecksum: "0".repeat(64)
       } as unknown as JsonObject)
+    ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    expect(() =>
+      createAgentPromptMaterializationArtifact({
+        runId: "run_forged_authority",
+        contextSnapshotId: "context_forged_authority",
+        profile,
+        systemPrompt: `${buildAgentSystemPrompt(profile)}\nforged authority`,
+        toolCatalogRevision: "catalog_1",
+        userRequest: "Edit the notes",
+        systemGuidanceRefId: "system_guidance:creative_general@2.1"
+      })
     ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
   });
 });

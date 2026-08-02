@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "1.0",
+  "guidanceVersion": "2.1",
+  "rendererVersion": "historical-2.1",
+  "disposition": "replay_only",
+  "baselineCommit": "5c234d4",
+  "fixtures": [
+    {
+      "profileId": "standalone",
+      "file": "standalone.txt",
+      "sha256": "4f999a071fba4025beae3bea3f0fb7d53c10af5772e4db550450e0a2326ac119",
+      "utf8Bytes": 740,
+      "knownDeviationCodes": ["profile_only_capability_claims"]
+    },
+    {
+      "profileId": "writing",
+      "file": "writing.txt",
+      "sha256": "112b459fcbec869e6a1a7769fc8cf9cbad61f86320245d61554e08e9784e4eef",
+      "utf8Bytes": 1947,
+      "knownDeviationCodes": [
+        "profile_only_capability_claims",
+        "embedded_foreshadow_v1_contract",
+        "paid_off_actual_payoff_required",
+        "permanent_writing_style_pack"
+      ]
+    },
+    {
+      "profileId": "creative_general",
+      "file": "creative_general.txt",
+      "sha256": "441e45af681aecf6a6b148ecbe936b596b21ee813577533137f57d56e81cd945",
+      "utf8Bytes": 761,
+      "knownDeviationCodes": ["profile_only_capability_claims"]
+    },
+    {
+      "profileId": "engineering",
+      "file": "engineering.txt",
+      "sha256": "f62d4353e660cda68bedf064fae90125fa4098434722bd94855659f694c5e27d",
+      "utf8Bytes": 746,
+      "knownDeviationCodes": ["profile_only_capability_claims"]
+    }
+  ],
+  "knownDeviations": [
+    {
+      "code": "profile_only_capability_claims",
+      "profiles": ["standalone", "writing", "creative_general", "engineering"],
+      "classification": "historical_replay_only",
+      "notANewRunContract": true
+    },
+    {
+      "code": "embedded_foreshadow_v1_contract",
+      "profiles": ["writing"],
+      "classification": "historical_replay_only",
+      "notANewRunContract": true
+    },
+    {
+      "code": "paid_off_actual_payoff_required",
+      "profiles": ["writing"],
+      "classification": "historical_replay_only",
+      "notANewRunContract": true
+    },
+    {
+      "code": "permanent_writing_style_pack",
+      "profiles": ["writing"],
+      "classification": "historical_replay_only",
+      "notANewRunContract": true
+    }
+  ],
+  "futureAssertions": [
+    {
+      "ownerTask": "1.1",
+      "assertion": "new_runs_select_registered_guidance_3.0"
+    },
+    {
+      "ownerTask": "1.6",
+      "assertion": "guidance_3.0_omits_foreshadow_v1_and_uses_paid_off_v1.1_warning_semantics"
+    }
+  ]
+}

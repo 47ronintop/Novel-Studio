@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 describe("engineering Agent runtime", () => {
-  test("applies a general_file Change Set to content while keeping all Agent state app-local", async () => {
+  test("keeps engineering read-only when Phase B and a legacy test lifecycle port are injected", async () => {
     const contentRoot = await createRoot("content");
     const stateRoot = await createRoot("state");
     await mkdir(join(contentRoot, "src"), { recursive: true });
@@ -32,7 +32,7 @@ describe("engineering Agent runtime", () => {
     const lockOwnerId = "engineering-agent-runtime-test";
     const lock = new ProjectLockFileRepository({ projectRoot: stateRoot, ownerId: lockOwnerId });
     expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
-    let round = 0;
+    const observedTools: string[][] = [];
     const runtime = createDesktopAgentRuntime({
       workspaceKind: "engineeringWorkspace",
       projectId: "ws_engineering",
@@ -46,18 +46,9 @@ describe("engineering Agent runtime", () => {
         revision: "engineering-edit-text-test"
       }),
       modelDriver: {
-        async *streamRound() {
-          round += 1;
-          if (round === 1) {
-            yield toolCall("proposal-engineering", "edit_text", {
-              ref: "file:src/index.ts",
-              baseHash: sha256("before\n"),
-              range: { unit: "character", start: 0, end: 7 },
-              replacement: "after\n"
-            });
-          } else {
-            yield toolCall("finish-engineering", "finish", { summary: "Applied." });
-          }
+        async *streamRound(input) {
+          observedTools.push(input.tools.map((tool) => tool.name));
+          yield toolCall("finish-engineering", "finish", { summary: "Read-only." });
           yield { type: "round_completed" as const, finishReason: "tool_calls" };
         }
       }
@@ -84,46 +75,25 @@ describe("engineering Agent runtime", () => {
         }
       }
     });
-    let awaitingRevision = 0;
-    let changeSet: Record<string, unknown> | undefined;
     await vi.waitFor(async () => {
       const read = await runtime.agentRunSession.readAgentRun("run-engineering-write");
       expect(read).toMatchObject({
         ok: true,
-        value: { snapshot: { status: "awaiting_write_approval" } }
-      });
-      if (!read.ok) return;
-      awaitingRevision = read.value.snapshot.runRevision;
-      changeSet = read.value.changeSet as unknown as Record<string, unknown>;
-    });
-    if (changeSet === undefined) throw new Error("Expected a staged engineering Change Set.");
-
-    const decision = await runtime.agentRunSession.decideChangeSet({
-      runId: "run-engineering-write",
-      projectId: "ws_engineering",
-      commandId: "apply-engineering-write",
-      expectedRunRevision: awaitingRevision,
-      changeSetId: String(changeSet["changeSetId"]),
-      revision: Number(changeSet["revision"]),
-      checksum: String(changeSet["checksum"]),
-      decision: "apply_selected"
-    });
-    if (!decision.ok) throw new Error(JSON.stringify(decision.error));
-    await vi.waitFor(async () => {
-      expect(await runtime.agentRunSession.readAgentRun("run-engineering-write")).toMatchObject({
-        ok: true,
         value: { snapshot: { status: "completed" } }
       });
     });
-
-    expect(await readFile(join(contentRoot, "src", "index.ts"), "utf8")).toBe("after\n");
+    expect(observedTools).toHaveLength(1);
+    expect(observedTools[0]).not.toContain("edit_text");
+    expect(observedTools[0]).not.toContain("create_resource");
+    expect(observedTools[0]).not.toContain("manage_path");
+    expect(await readFile(join(contentRoot, "src", "index.ts"), "utf8")).toBe("before\n");
     await expect(pathExists(join(contentRoot, ".novel-studio"))).resolves.toBe(false);
     await expect(pathExists(join(contentRoot, "history"))).resolves.toBe(false);
     await expect(pathExists(join(stateRoot, ".novel-studio", "project-lock.json"))).resolves.toBe(
       true
     );
     await expect(pathExists(join(stateRoot, "history", "agent-runs"))).resolves.toBe(true);
-    await expect(pathExists(join(stateRoot, "history", "agent-transactions"))).resolves.toBe(true);
+    await expect(pathExists(join(stateRoot, "history", "agent-transactions"))).resolves.toBe(false);
   });
 
   test("rejects a writing draft before resolving model facts or executing the model", async () => {

@@ -47,6 +47,7 @@ describe("desktop Agent Run runtime", () => {
       workspaceKind: "creativeProject" as const,
       withProjectLock: true,
       withNativeLifecycle: false,
+      withExplicitLifecycleCapability: false,
       expected: "standard_trusted_creative"
     },
     {
@@ -54,6 +55,7 @@ describe("desktop Agent Run runtime", () => {
       workspaceKind: "creativeProject" as const,
       withProjectLock: false,
       withNativeLifecycle: false,
+      withExplicitLifecycleCapability: false,
       expected: "unavailable"
     },
     {
@@ -61,6 +63,15 @@ describe("desktop Agent Run runtime", () => {
       workspaceKind: "engineeringWorkspace" as const,
       withProjectLock: true,
       withNativeLifecycle: false,
+      withExplicitLifecycleCapability: false,
+      expected: "unavailable"
+    },
+    {
+      label: "engineering runtime with an unqualified legacy lifecycle port",
+      workspaceKind: "engineeringWorkspace" as const,
+      withProjectLock: true,
+      withNativeLifecycle: true,
+      withExplicitLifecycleCapability: true,
       expected: "unavailable"
     },
     {
@@ -68,6 +79,7 @@ describe("desktop Agent Run runtime", () => {
       workspaceKind: "creativeProject" as const,
       withProjectLock: true,
       withNativeLifecycle: true,
+      withExplicitLifecycleCapability: false,
       expected: "hardened_native"
     }
   ])("records the write backend trust for $label", async (testCase) => {
@@ -81,6 +93,22 @@ describe("desktop Agent Run runtime", () => {
       ...(testCase.withProjectLock ? { projectLockOwnerId: "write-trust-owner" } : {}),
       ...(testCase.withNativeLifecycle
         ? { lifecycleOperations: createTestingReplaceLifecyclePort(projectRoot) }
+        : {}),
+      ...(testCase.withExplicitLifecycleCapability
+        ? {
+            capabilitySnapshot: {
+              workspaceKind: testCase.workspaceKind,
+              searchEnabled: false,
+              fileLifecycleEnabled: true,
+              storyBibleStructuredToolsEnabled: false,
+              controlledExecutionEnabled: false,
+              gitReadEnabled: false,
+              networkReadEnabled: false,
+              pluginToolsEnabled: false,
+              mcpToolsEnabled: false,
+              featureFlagRevision: "unqualified-explicit-engineering-lifecycle"
+            }
+          }
         : {})
     });
 

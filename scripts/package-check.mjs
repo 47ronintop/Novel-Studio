@@ -6,12 +6,18 @@ import { join } from "node:path";
 const require = createRequire(import.meta.url);
 const root = process.cwd();
 const failures = [];
+const engineeringFileAccessArtifacts = [
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node",
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json",
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s"
+];
 
 await checkPackageScripts();
 await checkPackagingEnvironment();
 await checkBuildArtifacts();
 await checkBuildManifest();
 await checkElectronBuilderConfig();
+await checkEngineeringFileAccessPackagingContract();
 await checkAgentAutonomyPrerequisites();
 await checkAgentConversationPrerequisites();
 await checkAgentStage5Prerequisites();
@@ -195,7 +201,8 @@ async function checkElectronBuilderConfig() {
     "!packages/*/dist/test{,/**}",
     "packages/schemas/schema/**",
     "package.json",
-    "package-lock.json"
+    "package-lock.json",
+    ...engineeringFileAccessArtifacts
   ]);
   if (
     Array.isArray(config.files) &&
@@ -234,6 +241,74 @@ async function checkElectronBuilderConfig() {
   }
   if (config.nsis?.allowToChangeInstallationDirectory !== true) {
     failures.push("NSIS installer must allow changing installation directory.");
+  }
+}
+
+async function checkEngineeringFileAccessPackagingContract() {
+  const config = require("../apps/desktop/electron-builder.config.cjs");
+  const configuredFiles = Array.isArray(config.files) ? config.files : [];
+  const configuredAsarUnpack = Array.isArray(config.asarUnpack) ? config.asarUnpack : [];
+
+  for (const artifact of engineeringFileAccessArtifacts) {
+    if (configuredFiles.filter((entry) => entry === artifact).length !== 1) {
+      failures.push(`Engineering native package allowlist must contain exactly once: ${artifact}`);
+    }
+  }
+  if (
+    configuredAsarUnpack.length !== engineeringFileAccessArtifacts.length ||
+    engineeringFileAccessArtifacts.some(
+      (artifact) => configuredAsarUnpack.filter((entry) => entry === artifact).length !== 1
+    )
+  ) {
+    failures.push(
+      "Engineering native asarUnpack must contain only the exact addon, manifest, and detached signature paths."
+    );
+  }
+  if (Array.isArray(config.extraResources) && config.extraResources.length !== 0) {
+    failures.push("Engineering native artifacts must not use a broad extraResources copy rule.");
+  }
+
+  const nativePackageEntries = [...configuredFiles, ...configuredAsarUnpack].filter(
+    (entry) => typeof entry === "string" && entry.startsWith("native/")
+  );
+  if (nativePackageEntries.some((entry) => !engineeringFileAccessArtifacts.includes(entry))) {
+    failures.push("Native package entries must stay inside the ADR-0003 exact allowlist.");
+  }
+
+  const serializedNativeConfig = JSON.stringify({
+    files: configuredFiles,
+    asarUnpack: configuredAsarUnpack,
+    extraResources: config.extraResources ?? []
+  }).toLowerCase();
+  for (const canceledBoundary of [
+    "agent-task",
+    "appcontainer",
+    "git-runtime",
+    "plugin-host",
+    "local-mcp",
+    "stdio-mcp",
+    "agent-file-operations-host"
+  ]) {
+    if (serializedNativeConfig.includes(canceledBoundary)) {
+      failures.push(
+        `Canceled executable boundary must not return through native packaging: ${canceledBoundary}.`
+      );
+    }
+  }
+
+  const candidatePresence = await Promise.all(
+    engineeringFileAccessArtifacts.map((artifact) => fileExists(join(root, artifact)))
+  );
+  const candidateCount = candidatePresence.filter(Boolean).length;
+  if (candidateCount > 0 && candidateCount < engineeringFileAccessArtifacts.length) {
+    failures.push(
+      "Engineering native candidate is partial; addon, canonical manifest, and detached signature must appear together."
+    );
+  }
+  if (candidateCount === engineeringFileAccessArtifacts.length) {
+    failures.push(
+      "Engineering native candidate exists, but Batch 0 has no packaged positive/negative probe authority."
+    );
   }
 }
 

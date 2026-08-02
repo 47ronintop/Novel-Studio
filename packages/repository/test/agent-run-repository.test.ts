@@ -693,6 +693,39 @@ describe("AgentRunFileRepository", () => {
         )
       )
     ).toEqual(revisionOne);
+
+    const legacyMatrix = JSON.parse(
+      await readFile(
+        join(
+          process.cwd(),
+          "apps",
+          "desktop",
+          "test",
+          "fixtures",
+          "agent-legacy-contract-matrix.json"
+        ),
+        "utf8"
+      )
+    ) as {
+      legacyPendingChangeSet: {
+        record: Record<string, unknown>;
+        migrationExpectation: Record<string, unknown>;
+      };
+    };
+    const legacyPending = legacyMatrix.legacyPendingChangeSet.record;
+    expect(await repository["writeChangeSet"]?.(legacyPending)).toMatchObject({ ok: true });
+    expect(
+      await repository["readChangeSet"]?.(
+        String(legacyPending["changeSetId"]),
+        Number(legacyPending["revision"])
+      )
+    ).toEqual({ ok: true, value: legacyPending });
+    expect(legacyMatrix.legacyPendingChangeSet.migrationExpectation).toMatchObject({
+      disposition: "view_or_reject_only",
+      v2ApplyAllowed: false,
+      rebuildRequiredForExecution: true,
+      ownerTask: "1.2b"
+    });
   });
 });
 

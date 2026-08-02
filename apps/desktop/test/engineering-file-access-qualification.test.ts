@@ -1,0 +1,192 @@
+import { describe, expect, test, vi } from "vitest";
+
+import {
+  ENGINEERING_FILE_NATIVE_ADAPTER_ID,
+  ENGINEERING_FILE_QUALIFICATION_VERSION,
+  engineeringFileQualificationAttestationChecksum,
+  validateEngineeringFileQualificationAttestation,
+  type EngineeringFileQualificationAttestationV1
+} from "@novel-studio/agent-engine";
+
+import {
+  ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT,
+  createEngineeringFileAccessQualificationService,
+  hasMainOwnedEngineeringFileQualification,
+  isMainOwnedEngineeringFileQualificationAttestation,
+  mainOwnedEngineeringFileQualificationRevision,
+  type EngineeringFileCandidateArtifactState
+} from "../../../apps/desktop/src/main/engineering-file-access-qualification.js";
+
+const checkedAt = "2026-08-02T00:30:00.000Z";
+
+describe("Main-owned engineering file access qualification", () => {
+  test("freezes the exact future Windows x64 source, package, and probe paths", () => {
+    expect(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT).toEqual({
+      schemaVersion: "1.0",
+      adapterId: "novel_studio_engineering_file_access",
+      supportedTarget: "win32-x64",
+      implementationLanguage: "cpp20_node_api_repository_adapter",
+      sourceRoot: "native/engineering-file-access-win32",
+      buildDefinition: "native/engineering-file-access-win32/CMakeLists.txt",
+      nativeSource: "native/engineering-file-access-win32/src/engineering_file_access.cc",
+      buildScript: "scripts/build-engineering-file-access-win32.mjs",
+      signScript: "scripts/sign-engineering-file-access-win32.mjs",
+      probeScript: "scripts/probe-engineering-file-access-package.mjs",
+      packageProbeTest: "apps/desktop/test/engineering-file-access-package.e2e.ts",
+      candidateArtifact:
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node",
+      candidateManifest:
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json",
+      candidateManifestSignature:
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s",
+      packagedArtifact:
+        "resources/app.asar.unpacked/native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node",
+      packagedManifest:
+        "resources/app.asar.unpacked/native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json",
+      packagedManifestSignature:
+        "resources/app.asar.unpacked/native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s",
+      electronBuilderFiles: [
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node",
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json",
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s"
+      ],
+      electronBuilderAsarUnpack: [
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node",
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json",
+        "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s"
+      ]
+    });
+    expect(Object.isFrozen(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT)).toBe(true);
+  });
+
+  test.each([
+    ["missing", false, "host_missing"],
+    ["partial", true, "host_partial"],
+    ["present", true, "candidate_unqualified"],
+    ["unknown", false, "evidence_unknown"]
+  ] as const)(
+    "normalizes candidate state %s to one cached unavailable attestation",
+    async (state, candidateArtifactPresent, reason) => {
+      const inspect = vi.fn(async (): Promise<EngineeringFileCandidateArtifactState> => state);
+      const now = vi.fn(() => checkedAt);
+      const service = createEngineeringFileAccessQualificationService({
+        packageKind: "production",
+        platform: "win32",
+        arch: "x64",
+        now,
+        candidateInspector: { inspect }
+      });
+
+      expect(Object.keys(service)).toEqual(["readAttestation"]);
+      const first = await service.readAttestation();
+      const second = await service.readAttestation();
+
+      expect(second).toBe(first);
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(now).toHaveBeenCalledTimes(1);
+      expect(first).toMatchObject({
+        status: "unavailable",
+        productionQualified: false,
+        candidateArtifactPresent,
+        capabilities: {
+          root: "unavailable",
+          access: "unavailable",
+          mutation: "unavailable",
+          recovery: "unavailable"
+        }
+      });
+      expect(first.failureReasons).toContain(reason);
+      expect(first.failureReasons).toContain("adapter_not_implemented_batch_0");
+      expect(isMainOwnedEngineeringFileQualificationAttestation(first)).toBe(true);
+      expect(hasMainOwnedEngineeringFileQualification(first, "access")).toBe(false);
+      expect(mainOwnedEngineeringFileQualificationRevision(first)).toBe(first.attestationChecksum);
+    }
+  );
+
+  test("fails closed on unsupported targets and never asks a candidate inspector", async () => {
+    const inspect = vi.fn(async (): Promise<EngineeringFileCandidateArtifactState> => "present");
+    const service = createEngineeringFileAccessQualificationService({
+      packageKind: "production",
+      platform: "linux",
+      arch: "x64",
+      now: () => checkedAt,
+      candidateInspector: { inspect }
+    });
+
+    const attestation = await service.readAttestation();
+    expect(inspect).not.toHaveBeenCalled();
+    expect(attestation).toMatchObject({
+      target: "linux-x64",
+      status: "unavailable",
+      candidateArtifactPresent: false
+    });
+    expect(attestation.failureReasons).toContain("unsupported_platform");
+  });
+
+  test("fails closed when candidate inspection throws", async () => {
+    const service = createEngineeringFileAccessQualificationService({
+      packageKind: "development",
+      platform: "win32",
+      arch: "x64",
+      now: () => checkedAt,
+      candidateInspector: {
+        inspect: vi.fn(async () => {
+          throw new Error("unreadable");
+        })
+      }
+    });
+
+    const attestation = await service.readAttestation();
+    expect(attestation.packageKind).toBe("development");
+    expect(attestation.status).toBe("unavailable");
+    expect(attestation.failureReasons).toContain("probe_error");
+  });
+
+  test("rejects a structurally valid self-checksummed or serialized available attestation", async () => {
+    const synthetic = syntheticAvailableAttestation();
+    expect(validateEngineeringFileQualificationAttestation(synthetic)).toBe(true);
+    expect(isMainOwnedEngineeringFileQualificationAttestation(synthetic)).toBe(false);
+    expect(hasMainOwnedEngineeringFileQualification(synthetic, "mutation")).toBe(false);
+    expect(mainOwnedEngineeringFileQualificationRevision(synthetic)).toBe("unavailable");
+
+    const service = createEngineeringFileAccessQualificationService({
+      packageKind: "production",
+      platform: "win32",
+      arch: "x64",
+      now: () => checkedAt,
+      candidateInspector: { inspect: async () => "missing" }
+    });
+    const mainOwned = await service.readAttestation();
+    const serializedCopy = JSON.parse(JSON.stringify(mainOwned)) as unknown;
+    expect(validateEngineeringFileQualificationAttestation(serializedCopy)).toBe(true);
+    expect(isMainOwnedEngineeringFileQualificationAttestation(serializedCopy)).toBe(false);
+  });
+});
+
+function syntheticAvailableAttestation(): EngineeringFileQualificationAttestationV1 {
+  const unsigned = {
+    schemaVersion: ENGINEERING_FILE_QUALIFICATION_VERSION,
+    authority: "desktop_main_engineering_file_access_qualification" as const,
+    adapterId: ENGINEERING_FILE_NATIVE_ADAPTER_ID,
+    target: "win32-x64",
+    packageKind: "production" as const,
+    status: "available" as const,
+    productionQualified: true,
+    candidateArtifactPresent: true,
+    capabilities: {
+      root: "available" as const,
+      access: "available" as const,
+      mutation: "available" as const,
+      recovery: "available" as const
+    },
+    artifactSha256: "a".repeat(64),
+    artifactManifestSha256: "b".repeat(64),
+    probeReportChecksum: "c".repeat(64),
+    failureReasons: [] as const,
+    checkedAt
+  };
+  return {
+    ...unsigned,
+    attestationChecksum: engineeringFileQualificationAttestationChecksum(unsigned)
+  };
+}
