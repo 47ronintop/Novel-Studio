@@ -4,7 +4,11 @@
 
 **状态：** Proposed
 
-**实施基线：** `a440207`
+**当前实施评估基线：** `5c234d4`
+
+**原始设计事实基线：** `a440207`
+
+**前次已提交设计审查版本：** `9453448`
 
 **前置设计与当前决定：**
 
@@ -227,7 +231,8 @@ type ProviderSafeApprovalReasonCode =
 interface MainOnlyApprovalDecisionProofV1 {
   readonly schemaVersion: "1.0";
   readonly proofId: string;
-  readonly approvalRuleSetVersion: "1.0";
+  readonly approvalRuleSetVersion: string;
+  readonly approvalRuleSetChecksum: string;
   readonly operation: ProviderVisibleWriteOperation;
   readonly effectRuleId?: ProviderVisibleConditionalApprovalRuleId;
   readonly decision: ApprovalDecision;
@@ -292,7 +297,8 @@ interface ProviderVisibleAgentRuntimeFacts {
   readonly workspaceFileOperations: readonly ProviderVisibleWorkspaceFileOperation[];
   readonly writeApprovalPolicy:
     "not_applicable" | "confirm_each_change_set" | "limited_run_preapproval";
-  readonly approvalRuleSetVersion: "1.0";
+  readonly approvalRuleSetVersion: string;
+  readonly approvalRuleSetChecksum: string;
   readonly approvalRules: readonly ProviderVisibleApprovalRule[];
   readonly networkRead: boolean;
   readonly externalTools: "none" | "remote_mcp";
@@ -300,7 +306,19 @@ interface ProviderVisibleAgentRuntimeFacts {
 }
 ```
 
-`approvalRules` 必须对本轮每个已公开 mutation operation 恰好给出一条规则。`always_human` 表示任何该类提案都必须人工确认；`conditional_auto_review` 只表示在 `limited_run_preapproval` 下可以由对应的 app-authored、版本化 `effectRuleId` 继续判定，绝不表示该 operation 的所有调用都会自动通过。catalog-time Provider facts 和 proposal 前的 Permission Summary 只绑定 `approvalRuleSetVersion + approvalRules`，不能引用尚不存在的 proposal proof。
+app-owned execution policy 与 Provider-visible 摘要不是两套可独立选择的策略。唯一投影如下，必须由一个穷尽映射函数生成并做交叉不变量测试：
+
+| 当前状态                                            | Run 结果           | `writeCapability` | `writeApprovalPolicy`     |
+| --------------------------------------------------- | ------------------ | ----------------- | ------------------------- |
+| planning，不论 `executionWritePolicyDraft`          | 创建只读 Run       | `none`            | `not_applicable`          |
+| execution，但最终目录没有 mutation tool             | 创建只读 Run       | `none`            | `not_applicable`          |
+| execution + `write_before_confirmation`             | 创建 execution Run | `propose`         | `confirm_each_change_set` |
+| execution + 已显式确认的 `user_preapproved_run`     | 创建 execution Run | `propose`         | `limited_run_preapproval` |
+| execution + 未确认或已失效的 `user_preapproved_run` | start fail closed  | 不物化            | 不物化                    |
+
+`executionWritePolicyDraft` 只属于 Plan UI/handoff，没有 Provider-visible 映射；`writeApprovalPolicy` 也不能反向恢复、扩大或替代 Main-owned `executionWritePolicy`。
+
+Approval Rule/Proof 的 Schema 版本固定从 `1.0` 起步，但 `approvalRuleSetVersion` 是不可变规则集实例的内容版本，不是可原地改写的 Schema 常量；同一 version 必须始终解析为同一 canonical `approvalRules`、引用的 effect-rule definition checksum 与 `approvalRuleSetChecksum`。`effectRuleId` 本身也是不可变 registry key；operation mapping、review mode、判定代码、阈值或证据语义变化必须使用新 effect-rule ID（如适用）和新 rule-set version，并使旧 Run `capability_changed`。旧 Run hydrate 只能恢复其冻结实例，不能按当前 registry 重建。`writeCapability=none` 时 version 与 checksum 都规范化为字面 `not_applicable` 且 `approvalRules=[]`，不得伪造空 registry 实例；有 mutation 时 `approvalRules` 必须对本轮每个已公开 operation 恰好给出一条规则。`always_human` 表示任何该类提案都必须人工确认；`conditional_auto_review` 只表示在 `limited_run_preapproval` 下可以由对应的 app-authored、版本化 `effectRuleId` 继续判定，绝不表示该 operation 的所有调用都会自动通过。catalog-time Provider facts 和 proposal 前的 Permission Summary 只绑定 `approvalRuleSetVersion + approvalRuleSetChecksum + approvalRules`，不能引用尚不存在的 proposal proof。
 
 路径分类、dirty/stale、create-only、大小/数量、引用影响和状态边界等动态事实由 Main 在 proposal 冻结后写成严格的 `MainOnlyApprovalDecisionProofV1`；未知、缺证或混合 consistency group 一律取最严格结果。registry 交叉不变量要求 `always_human` proof 省略 `effectRuleId`，`conditional_auto_review` proof 必须携带当前 rule 的精确 ID；evidence 字段不适用时只能使用合同中的 `not_applicable`，不能省略后猜默认值。proof 使用版本化 canonical JSON（JCS/RFC 8785）UTF-8 字节计算 SHA-256，`proofChecksum` 不包含自身；数组先按合同规定的稳定顺序规范化，重复或未知 reason/evidence 值直接拒绝。Main 原子持久化 proof record 后，Change Set、proposal event、审批 UI 和 approval binding 只引用同一 `ApprovalDecisionProofRefV1`；apply 前重新计算绑定事实，任何变化都使 proof stale。Provider/tool result 只能收到 `ProviderVisibleApprovalDecisionSummaryV1`，不得收到 `proofId`、workspace/root/policy identity 或原始 risk evidence；公开的 `proofChecksum` 只用于显示一致性，不是 apply capability。
 
@@ -713,42 +731,90 @@ interface MaterializedAgentGuidanceProof {
   readonly guidanceRendererVersion: string;
   readonly templateChecksum: string;
   readonly runtimeFactsChecksum: string;
+  readonly writingGenerationGuidanceVersion: "not_applicable" | "2.0";
+  readonly providerSemanticVersionSetChecksum: string;
   readonly normalizedInputChecksum: string;
   readonly materializedGuidanceChecksum: string;
 }
 ```
 
-`templateChecksum` 对 registry 中不可变模板/AST 字节计算，不对 JS function 本身计算；`materializedGuidanceChecksum` 标识历史 renderer 把模板与冻结 runtime facts、operation/profile 和 task intent 结合后实际发送的完整正文。两者不能复用一个字段。Prompt Artifact 必须保存 canonical `ProviderVisibleAgentRuntimeFacts`、task intent、上述 proof 和实际正文。
+`templateChecksum` 对 registry 中不可变模板/AST 字节计算，不对 JS function 本身计算；`materializedGuidanceChecksum` 标识历史 renderer 把模板与冻结 runtime facts、operation/profile 和 task intent 结合后实际发送的完整正文。两者不能复用一个字段。Prompt Artifact 必须保存 canonical `ProviderVisibleAgentRuntimeFacts`、task intent、`writingGenerationGuidanceVersion: "not_applicable" | "2.0"`、上述 proof 和实际正文；proof checksum 覆盖该字面 fragment version 与 provider semantic version-set checksum。该版本是独立的 app-owned fragment registry key：P0 只建立 slot/validator，尚未注册时一律规范化为 `not_applicable`；P2 文风资格任务首次注册不可变 `2.0` 后，只有 writing 且冻结 task intent 的 `bodyGeneration=true` 时才可选择它。hydrate 不按当前规则重新选择，也不能原地修改已注册的 2.0 正文。
 
-事实来源固定为：capability 字段从冻结 Effective Capability State 与 Provider 投影后的工具目录派生；scope/profile/operation 从 Run Snapshot 派生；`activeResourceKind` 从最终 packed context 派生。hydrate 使用 artifact 中冻结且重新通过 Schema、来源和交叉不变量校验的输入调用对应历史 renderer，不用当前 workspace policy 重释旧 Run。至少验证：writing/engineering 的 operation 数组只能列出最终 Provider 目录真实存在且调用时具备 backend guard 的子集；`approvalRuleSetVersion` 必须是 registry 中已注册版本；`writeCapability=none` 时两个 operation 数组均为空、`writeApprovalPolicy=not_applicable` 且 `approvalRules=[]`；有 mutation 时每个 operation 恰好对应一条注册规则，规则不得引用未公开 operation；catalog/runtime facts 不能携带 proposal proof。`confirm_each_change_set` 表示每个冻结 Change Set 都等待用户决定；`limited_run_preapproval` 也只有 `conditional_auto_review` 且 proposal proof 满足对应 `effectRuleId` 的整组才可自动审阅，`always_human`、未知/缺证或任一成员不合格都会让整组等待人工确认；`networkRead=true`/`externalTools=remote_mcp` 时最终 Provider 目录存在对应工具；active resource 与 packed source 一致。planning 的当前运行事实始终是 `writeCapability=none`、`writeApprovalPolicy=not_applicable`；UI 中为未来 Act 选择的策略草稿不进入 planning Provider payload。冻结后能力发生任何变化时按 3.1 进入 `capability_changed`，不能继续发送旧事实或在同一 Run 内原地重物化权限。
+事实来源固定为：capability 字段从冻结 Effective Capability State 与 Provider 投影后的工具目录派生；scope/profile/operation 从 Run Snapshot 派生；`activeResourceKind` 从最终 packed context 派生。hydrate 使用 artifact 中冻结且重新通过 Schema、来源和交叉不变量校验的输入调用对应历史 renderer，不用当前 workspace policy 重释旧 Run。至少验证：writing/engineering 的 operation 数组只能列出最终 Provider 目录真实存在且调用时具备 backend guard 的子集；有 mutation 时 `approvalRuleSetVersion + approvalRuleSetChecksum` 必须精确匹配 registry 中不可变实例；`writeCapability=none` 时两个 operation 数组均为空、`writeApprovalPolicy=not_applicable`、rule-set version/checksum 均为 `not_applicable` 且 `approvalRules=[]`；有 mutation 时每个 operation 恰好对应一条注册规则，规则不得引用未公开 operation；catalog/runtime facts 不能携带 proposal proof。`confirm_each_change_set` 表示每个冻结 Change Set 都等待用户决定；`limited_run_preapproval` 也只有 `conditional_auto_review` 且 proposal proof 满足对应 `effectRuleId` 的整组才可自动审阅，`always_human`、未知/缺证或任一成员不合格都会让整组等待人工确认；`networkRead=true`/`externalTools=remote_mcp` 时最终 Provider 目录存在对应工具；active resource 与 packed source 一致。planning 的当前运行事实始终是 `writeCapability=none`、`writeApprovalPolicy=not_applicable`；UI 中为未来 Act 选择的策略草稿不进入 planning Provider payload。冻结后能力发生任何变化时按 3.1 进入 `capability_changed`，不能继续发送旧事实或在同一 Run 内原地重物化权限。
 
 恢复规则：
 
 - 已知历史版本使用应用注册的模板逐字重建并验证；
 - artifact 中保存的正文只能与 registry 结果比较，不能成为新的 system authority；
 - 未知版本、profile/version 不匹配或篡改后即使重算普通 SHA，也必须 fail closed；
-- 新版本不能重写旧 Run；旧 Run 继续使用其受支持的冻结版本；
+- 新版本不能重写旧 Run；2.1 旧 Run 只允许 hydrate/view/export/确定性历史回放，不允许新的 Provider round 或 proposal；继续对话/执行必须显式 handoff 为新的 3.0 Run；
 - 淘汰历史版本前必须提供显式归档/导出策略，不能静默用新提示恢复旧 Run。
 
 这里的普通 checksum 用于确定性身份、损坏检测和跨阶段一致性；app-bundled registry 与重新物化用于阻止任意持久化正文成为 system authority。该方案不声称抵抗“替换已安装应用二进制”或“协同改写全部未签名本地记录”的攻击者；若该攻击者进入威胁模型，必须另加设备密钥 HMAC/签名与操作系统代码签名验证。无论如何，运行时权限必须从当前策略和有效工具目录重新派生，不能信任 prompt artifact 授权。
 
+历史 `2.1` registry 必须同时记录以下已知偏差，但不能因此改动 fixture 的任何字节：
+
+- renderer 实际只按 `profileId` 分支，不表达 operation、capability 或最终工具目录；
+- writing 正文内嵌过期 foreshadow v1.0 完整 JSON/ID 合同；
+- writing 把 `paid-off` 的 `actualPayoffChapterId` 写成必填，与当前 Story Bible v1.1 的“可选字段 + 固定 warning code”语义冲突；
+- writing 对所有任务永久注入完整默认文风包，不能区分正文生成与分析/资料操作。
+
+这些内容只是旧 Run 的 replay compatibility，不是当前 Story Bible、文风或权限合同，也不能作为新 Run 的验收依据。成对测试必须证明 `profile@2.1` hydrate 逐字一致，同时证明新 Run 只能选择 `3.0`、3.0 不含上述过期 Schema，且 `paid-off` 采用 v1.1 warning 语义。
+
 ### 7.2 版本升级
 
-建议版本：
+以下矩阵是合同源头；“v2”不得只作为计划中的泛称。新 writer 必须写目标字面版本，旧 reader 只能恢复旧行为和旧权限：
 
-- `AGENT_SYSTEM_GUIDANCE_VERSION`: `2.1 -> 3.0`；
-- prompt/message order artifact 增加 `messageOrderVersion: "2.0"`；
-- Provider-visible untrusted envelope family: `2.0`；
-- Provider-visible runtime facts: `1.0`；
-- writing task intent: `1.0`；
-- writing generation guidance: `2.0`；
-- Context Snapshot 保留现有版本并增加可选 authority/provenance 字段，若修改 required 字段则显式升级。
+| 合同                                       | 基线              | 新写入版本 | 兼容与拒绝规则                                                                      |
+| ------------------------------------------ | ----------------- | ---------- | ----------------------------------------------------------------------------------- |
+| System Guidance                            | `2.1`             | `3.0`      | 2.1 仅 hydrate/view/export/历史回放；新 Provider round 或 proposal 必须 handoff 3.0 |
+| Prompt Artifact                            | `1.1`             | `2.0`      | 旧 artifact 只走 1.1 reader；正文不能自举为 authority                               |
+| Agent Run Tool Catalog                     | `1.0`             | `2.0`      | facade 名称族可保留 `v2`，但旧 catalog 不得用新 registry 重建或获得新工具           |
+| Message Order                              | `1.0`             | `2.0`      | 新 Run 当前请求为初轮最后一条真实 user 指令；旧顺序不原地升级                       |
+| Provider-visible Untrusted Envelope        | legacy families   | `2.0`      | 严格 kind/role/version parser；unknown 或交叉不变量失败即拒绝                       |
+| Provider-visible Runtime Facts             | 无                | `1.0`      | 只从冻结 Effective Capability State 和最终目录派生                                  |
+| Writing Task Intent                        | 无                | `1.0`      | hydrate 不重新分类                                                                  |
+| Writing Generation Guidance                | 旧永久文风包      | `2.0`      | 仅正文生成/改写任务注入                                                             |
+| Provider Semantic Version Set              | 无                | `1.0`      | strict canonical set/checksum；缺项、额外字段或同 version 不同内容拒绝              |
+| Context Snapshot                           | `1.4`             | `2.0`      | authority/provenance/sharing 等 required 合同不兼容；1.4 只读恢复                   |
+| Packed Agent Context Manifest              | `1.2`             | `2.0`      | 新 manifest 固定 canonical source/order/sharing/round identity                      |
+| Canonical Round Manifest                   | 无                | `2.0`      | 与消息协议 2.0 同步；unknown kind/version、额外字段或 source reorder 拒绝           |
+| Permission Summary                         | `1.1`             | `2.0`      | 单一能力真值、逐 operation approval rules；旧 summary 不补写新权限                  |
+| Approval Rule Schema / Decision Proof      | 无                | `1.0`      | rule-set 实例另有不可变 version/checksum；未知实例、proof 或 effect rule 拒绝       |
+| Change Set                                 | `1.0` / `1.1`     | `2.0`      | 新 mutation 只写 2.0；旧确定性 token 只能查看/拒绝，不能 apply                      |
+| Approval Binding / Authorization Ledger    | 确定性 token      | `2.0`      | 不可预测 Main-only capability；旧 token 不迁移                                      |
+| Run Snapshot / Event                       | `1.3`             | `2.0`      | 1.0–1.3 只按旧 reader 恢复；不得由 normalize 获得新状态、工具或授权                 |
+| Run Draft / Plan Artifact / Plan Execution | `1.1 / 1.0 / 1.0` | `2.0`      | 旧记录只恢复为请求逐项批准且 acknowledged=false；不得合成有限预授权                 |
+| Engineering Transaction Journal            | legacy namespace  | `2.0`      | 使用独立 engineering WAL/schema namespace；legacy reader 不迁移后继续 apply         |
 
-任一版本变化必须进入 prompt cache、budget proof、Context Snapshot、canonical round manifest 与 Provider-native semantic checksum。
+```ts
+interface ProviderSemanticVersionSetV1 {
+  readonly schemaVersion: "1.0";
+  readonly systemGuidanceVersion: "3.0";
+  readonly promptArtifactSchemaVersion: "2.0";
+  readonly toolCatalogSchemaVersion: "2.0";
+  readonly messageOrderVersion: "2.0";
+  readonly untrustedEnvelopeSchemaVersion: "2.0";
+  readonly runtimeFactsSchemaVersion: "1.0";
+  readonly writingTaskIntentSchemaVersion: "not_applicable" | "1.0";
+  readonly writingGenerationGuidanceVersion: "not_applicable" | "2.0";
+  readonly contextSnapshotSchemaVersion: "2.0";
+  readonly packedContextManifestSchemaVersion: "2.0";
+  readonly canonicalRoundManifestSchemaVersion: "2.0";
+  readonly permissionSummarySchemaVersion: "2.0";
+  readonly approvalRuleSchemaVersion: "1.0";
+  readonly approvalRuleSetVersion: string;
+  readonly approvalRuleSetChecksum: string;
+}
+```
+
+对 Provider 可见语义有影响的合同必须组成 canonical `ProviderSemanticVersionSetV1`：至少包含 System Guidance、Prompt Artifact、Agent Run Tool Catalog、Message Order、Untrusted Envelope、Runtime Facts、Writing Task Intent（或 `not_applicable`）、Writing Generation Guidance（或 `not_applicable`）、Context Snapshot、Packed Context Manifest、Canonical Round Manifest、Permission Summary、Approval Rule Schema，以及本轮不可变 `approvalRuleSetVersion + approvalRuleSetChecksum`。该集合使用严格字段、稳定顺序和 canonical checksum，并共同进入 Prompt Artifact、materialized guidance proof、budget proof、Context Snapshot、packed/canonical round manifest、首次 preview、prompt cache identity 与 Provider-native semantic proof；正文碰巧相同也不能跨不同集合复用。Change Set、Approval Binding/Ledger、Run Snapshot/Event、Plan Execution handoff 和 Engineering Journal 属于本地执行/恢复合同，不进入 Provider payload 或 prompt cache；它们必须在各自持久化记录中绑定适用的 provider version-set checksum 和自身字面 schema version，旧记录不得借 normalize 取得新权限。planning draft 只保存未来策略草稿；进入 Act 时重新物化 execution version set，不能把 planning checksum 当成 execution authorization。
 
 ## 8. 工具目录与外部工具
 
-### 8.1 目标 v2 工具集
+### 8.1 Guidance 3.0 的目标工具目录
+
+当前代码中的 `facadeVersion=v2` 是紧凑名称族，不等于本节的新 catalog schema 版本。Guidance 3.0 Run 必须持久化 `Agent Run Tool Catalog 2.0` 和精确 descriptor checksum；历史 catalog 1.0（无论 facade 是 v1 还是 v2）只按其冻结 descriptor/legacy reader 恢复，不能用当前 registry 重新生成后获得新工具。
 
 | Profile / 模式             | 工具目标                                                                                                                                                                                                                                                             |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -756,9 +822,26 @@ interface MaterializedAgentGuidanceProof {
 | writing planning           | 专用 `list_chapters`、chapter read/search、Story Bible describe/list/read/references、`finish_plan`、`request_user_input`                                                                                                                                            |
 | writing execution          | planning 的完整查询集合（不含 `finish_plan`）+ `edit_text(chapter:)` + `create_resource(kind=chapter)` + `rename_chapter` + `reorder_chapter` + `set_chapter_status` + `restore_chapter` + Story Bible create/patch/status/restore + `finish` + `request_user_input` |
 | creative_general planning  | list/read/search、`finish_plan`、`request_user_input`                                                                                                                                                                                                                |
-| creative_general execution | list/read/search/edit + `finish` + `request_user_input`；生命周期 action 仅在对应 backend 分别资格化后开放                                                                                                                                                           |
+| creative_general execution | list/read/search + `edit_text(file:)` + `finish` + `request_user_input`；`create_resource(kind=file)`、`propose_file_move`、`propose_file_delete` 仅在对应 backend 分别资格化后开放                                                                                  |
 | engineering planning       | list/read/search、`finish_plan`、`request_user_input`                                                                                                                                                                                                                |
 | engineering execution      | planning 的 read/search 集合（不含 `finish_plan`）+ 已资格化的 `propose_file_write`、`propose_file_create`、`propose_file_move`、`propose_file_delete`、可选 `propose_directory_create` + `finish` + `request_user_input`                                            |
+
+Provider 工具名、canonical operation 与 legacy 名称按下表收敛；同一新目录不得同时出现同义的新旧名称：
+
+| 领域动作             | Guidance 3.0 Provider 工具                                                                 | canonical operation                         | legacy 处理                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------- |
+| 章节查询             | `list_chapters`                                                                            | read-only                                   | `list_project_entries` 不能冒充完整章节目录                                     |
+| 章节正文替换         | `edit_text(chapter:)`                                                                      | `chapter_replace`                           | `propose_chapter_write` 仅供历史 catalog 1.0（facade v1）/内部 command dispatch |
+| 章节创建             | `create_resource(kind=chapter)`                                                            | `chapter_create`                            | `propose_chapter_create` 仅供历史 catalog/内部 command dispatch                 |
+| 章节改名/排序/状态   | `rename_chapter` / `reorder_chapter` / `set_chapter_status`                                | 对应 `chapter_*`                            | 新工具；不映射为 `manage_path`                                                  |
+| 章节恢复             | `restore_chapter`                                                                          | `chapter_restore`                           | 新工具；不能用普通文件 restore 或 status 猜测                                   |
+| Story Bible 创建     | `create_story_bible`                                                                       | `story_bible_create`                        | `propose_story_bible_write` 与 `create_resource(kind=story_bible)` 不进新目录   |
+| Story Bible 修改     | `patch_story_bible` / `set_story_bible_status` / `restore_story_bible`                     | 对应结构化 operation                        | 不降级成正文替换或路径管理                                                      |
+| 创作普通文件替换     | `edit_text(file:)`                                                                         | `replace_file`                              | `propose_file_write` 仅供历史 catalog/内部 command dispatch                     |
+| 创作普通文件生命周期 | `create_resource(kind=file)` / `propose_file_move` / `propose_file_delete`                 | `create_file` / `move_file` / `delete_file` | 未逐项资格化时完全不出现；不公开 `manage_path`                                  |
+| 工程文件 mutation    | `propose_file_write` / `propose_file_create` / `propose_file_move` / `propose_file_delete` | 对应 workspace operation                    | 不复用 creative backend、`edit_text`、`create_resource` 或 `manage_path`        |
+
+legacy Provider 名称可以留在内部 dispatch adapter，仅用于认证历史 tool event、确定性重放或必要恢复；它们必须先验证历史 catalog/version，再转换成同一个领域 command，不能接受新的 Provider tool call 或生成新 proposal。新 Guidance 3.0 Run 不得公开 `propose_chapter_write`、`propose_story_bible_write` 或宽泛 `manage_path`，也不得通过 alias 让一个 proposal 绕过当前 profile schema、operation capability 或审批规则。
 
 网络和远程 MCP 是可选附加能力，不作为核心 Agent 完整的必要条件；一旦启用，必须完成其安全资格、用户控制和 E2E 证据。planning 最多追加由本地 manifest 证明为 `external_read` 的工具及其独立数据外发审批，任何 remote action/destructive/unknown-effect 工具都不得进入 Plan；`/permissions` 或“替我审批”也不能改变这一点。
 
@@ -927,13 +1010,15 @@ Main 使用大小写与 Unicode 感知、deny 优先的穷尽路径分类，并�
 - `请求批准` / `write_before_confirmation`：每个冻结 Change Set 进入 `awaiting_write_approval`；用户审阅当前 revision、diff、operation、目标路径和恢复影响后选择应用或拒绝；
 - `替我审批` / `user_preapproved_run`：只为当前 execution Run 的合格 operation 提供有限自动审阅，不增加工具、不扩大 workspace/path/sharing policy，Run 终止后重置。planning 当前运行始终只读；其中选择的只是未来 Act 策略草稿，不是有效授权。
 
-目标合同中，“替我审批”最多让 `replace_file` 进入 `ordinary_clean_file_replace_v1`、让 `create_file` 进入 `ordinary_create_only_v1` 的条件判定；只有 clean/stable、`pathClass=ordinary`、大小/数量合格且 proposal proof 完整时才得到 `auto_review_eligible`。同一 operation 若目标为 `policy_managed` 或获精确 grant 的 `ignored_generated`，实际 requirement 仍是 `human_confirmation`。`move_file`、`delete_file`、`create_directory` 和任何路径 grant 变更始终人工；`hard_denied` 不是“需要更多批准”，而是在两种策略下都拒绝且不生成 Change Set。一个 Change Set/consistency group 只要含一项人工、未知或不合格成员，整组都不得自动审阅。首次工程 CRUD 发布时所有 mutation 先保持人工确认；只有 replace/create 的独立 auto-approval 资格测试、误批安全语料和安装包 E2E 完成后，才逐项注册条件规则。外部网络/MCP action 继续使用独立 tool approval，不能被写入预授权覆盖。
+目标合同中，“替我审批”最多让 `replace_file` 进入 `ordinary_clean_file_replace_v1`、让 `create_file` 进入 `ordinary_create_only_v1` 的条件判定；只有 clean/stable、`pathClass=ordinary`、大小/数量合格且 proposal proof 完整时才得到 `auto_review_eligible`。同一 operation 若目标为 `policy_managed` 或获精确 grant 的 `ignored_generated`，实际 requirement 仍是 `human_confirmation`。`move_file`、`delete_file`、`create_directory` 和任何路径 grant 变更始终人工；`hard_denied` 不是“需要更多批准”，而是在两种策略下都拒绝且不生成 Change Set。一个 Change Set/consistency group 只要含一项人工、未知或不合格成员，整组都不得自动审阅。首次工程 CRUD 发布时所有 mutation 先保持人工确认；只有 replace/create 的独立 auto-approval 资格测试、误批安全语料和安装包 E2E 完成后，才注册新的不可变 rule-set version，把通过资格的 operation 逐项映射到条件规则。旧 rule set 不原地修改，既有 Run 进入 `capability_changed`。外部网络/MCP action 继续使用独立 tool approval，不能被写入预授权覆盖。
 
-升级 approval binding v2。现有确定性 `ChangeSet.approvalToken` 只能改名/降级为 Renderer 可见的 `displayBindingChecksum`，用于证明预览内容一致，绝不能继续充当 apply 授权。Main 在用户确认或已资格化的本地 auto-review 成功后另行签发不可预测的 opaque capability，或对完整 binding 使用 app-owned MAC；binding 至少覆盖 workspace/content root identity 与 kind、delete 时的 recovery root identity/grant revision/side-effect preview、runId、Change Set ID/revision/checksum、选中 operation/hunk 集合及顺序、source/target refs、base/absence/candidate byte hash、encoding/BOM/EOL、`approvalRuleSetVersion`、effect rule 与 `ApprovalDecisionProofRefV1`、mutation policy/capability revision、过期时间和 nonce。
+升级 approval binding v2。现有确定性 `ChangeSet.approvalToken` 只能改名/降级为 Renderer 可见的 `displayBindingChecksum`，用于证明预览内容一致，绝不能继续充当 apply 授权。Main 在用户确认或已资格化的本地 auto-review 成功后另行签发不可预测的 opaque capability，或对完整 binding 使用 app-owned MAC；binding 至少覆盖 workspace/content root identity 与 kind、delete 时的 recovery root identity/grant revision/side-effect preview、runId、Change Set ID/revision/checksum、选中 operation/hunk 集合及顺序、source/target refs、base/absence/candidate byte hash、encoding/BOM/EOL、`approvalRuleSetVersion + approvalRuleSetChecksum`、effect rule 与 `ApprovalDecisionProofRefV1`、mutation policy/capability revision、过期时间和 nonce。delete 时 `recoveryRootBindingId + recoveryGrantRevision + recoverySideEffectChecksum` 必须同时存在并进入 capability/MAC；非 delete 必须按 strict union 省略或写合同定义的 `not_applicable`，不得夹带第二根授权。任一字段变化都要求重新预览和审批。
 
 授权 ledger 使用 durable `issued -> reserved(transactionId) -> consumed | revoked` 状态机：只有未过期 issued 记录可为一个 transaction 原子 reserve；reserved 记录只允许同一 transaction prepare/resume/query，过期不打断已开始的恢复；commit、确定性 rollback 或用户拒绝后消费/撤销。崩溃在 reserve 与 WAL 之间时启动恢复必须对账并撤销孤立 reservation，不能改盘；prepared WAL 必须引用同一 reserved authorization。capability 只存在 Main 的授权 ledger 与 transaction journal，不进入 Provider payload、工具参数/结果、Renderer 可编辑状态、遥测或恢复摘要。任何正文、路径、operation、顺序、选择、root、base、candidate、effect proof、policy 或 capability 变化都要求重新预览和审批；跨 Run/workspace/revision/operation replay 一律拒绝。
 
 Renderer 只提交绑定当前预览的 approve/reject 决定，不能回传 diff 或 capability。发布威胁模型必须明确审批 UI 是否属于 trusted computing base：若普通 Renderer 被视为可受不可信内容影响，就必须使用 Main-owned/隔离的可信确认表面；泛用 IPC 方法本身不能证明“人类看过并确认”。nonce/MAC 保护的是精确绑定、状态篡改和 replay，不应被表述为能够抵抗已攻陷的 Main、应用二进制、操作系统或受信审批 UI。
+
+这是 P0 阻塞决定，不是 Batch 7 的普通实现细节。decision owner 为 Desktop Main/security architecture owner，必须在 Plan/Act IPC 冻结和任何 production `limited_run_preapproval` 开启之前，通过 `ADR-0004-agent-approval-ui-trust-boundary.md` 明确 Renderer 是否进入 TCB、人工确认与一次性 Act 预授权各自使用的可信表面、可验证 human-intent evidence 及测试边界。ADR 未 Accepted 时默认 Renderer 不受信，`limited_run_preapproval` 保持关闭；mutation 只有在已有独立资格的受信人工确认表面时才能保持“请求批准”，否则对应写能力也关闭为只读。若结论为 Renderer 不属于 TCB，则人工确认和 `user_preapproved_run` 的 Act 边界确认都必须使用 Main-owned/隔离表面，不能以后续 nonce/MAC 补救不可信点击。
 
 ### 10.6 事务、可恢复删除与故障状态
 
@@ -943,7 +1028,7 @@ Renderer 只提交绑定当前预览的 approve/reject 决定，不能回传 dif
 2. 在模型不可写的 app-owned state 中 durable 持久化不可变 prepared record 与单调 progress log：operation graph、approval binding、完整 before/after manifest、replace/delete 等内容变更所需的认证 content-addressed before-image blob及必要 metadata、candidate blob、预分配 staging/recovery object ID、确定性顺序与逆操作。journal、blob、文件和目录完成平台等价 durable flush 后才从 `prepared` 进入 `applying`；V2 native port 不得在 mutation 后才随机生成无法从 WAL 定位的对象；
 3. 单文件步骤使用原生 handle-based same-directory staging/atomic replace/rename。每一步固定遵守“实际文件与受影响目录 durable flush -> 验证 `MutationReceipt` 和 after bytes/identity -> progress WAL durable flush”的顺序；receipt 丢失时按 WAL 预分配 object ID 对账，不能猜路径；
 4. 全部步骤完成后，在 commit marker 前重新验证完整 after manifest，而不是只相信每步当时的 readback。早期步骤被外部进程改动时，只补偿仍精确匹配本事务 after-state 的对象；任一对象为 neither/unknown 时进入 recovery review。全部仍匹配后才写 durable commit marker。索引器、Renderer 和 Provider 只在 commit 后收到“已写入”事件；本合同承诺的是“应用内提交可见性 + durable compensation/recovery”，不宣称文件系统提供真正的多文件原子写；
-5. delete 的执行语义是移动到同卷、app-owned、模型不可见且不可写的 quarantine，不直接 unlink。Main 必须在公开 delete 前建立独立 `VolumeLocalRecoveryBinding`：`stateRoot` 与 content root 同卷时，可以绑定 stateRoot 下已由应用授权的保留 namespace；跨卷时只能绑定由安装程序预配置的 app-owned per-volume storage，或用户通过 OS 目录授权明确选择的同卷 recovery root。recovery root 必须与 content root identity-disjoint，且互不为祖先/后代；用户选择 content tree 内位置时拒绝。不得仅因 content root 父目录可写就静默创建兄弟 namespace，也不得让普通 workspace/sharing/写入审批充当第二根授权。binding 冻结 `recoveryRootBindingId + volume/device identity + directory identity + authority/grant revision + ownership marker + ACL/mode qualification`，由独立 directory handle 持有，并与 content root binding、transaction、operation 和预分配 recovery object 一起进入 V2 port、WAL、approval side-effect preview 与 receipt；实际路径只在受信 UI 以用户可识别的存储标签展示，不进入 Provider/ref/index。预先存在但 marker/identity 不匹配、是 reparse/symlink、grant 被撤销、目录不可用或文件系统不支持原子同卷 rename/directory durability时，delete capability 不公开。全局 WAL 与 volume-local object manifest 通过双 root binding 和 transaction/operation/recovery object ID durable 双向绑定，启动时扫描并对账孤儿；
+5. delete 的执行语义是移动到与 content root 同卷、app-owned、模型不可见且不可写的 quarantine，不直接 unlink。Main 必须在公开 delete 前建立独立 `VolumeLocalRecoveryBinding`：app `stateRoot` 与 content root 同卷时，可以绑定 stateRoot 下已由应用授权的保留 namespace；两者不在同一卷时，recovery root 仍必须与 content root 同卷，只能使用安装程序在该 content volume 预配置的 app-owned per-volume storage，或由用户通过独立 OS 目录授权在该 content volume 显式选择的位置。“跨卷”只描述 recovery root 相对 app `stateRoot` 的位置，绝不允许 recovery root/quarantine 与 content root 跨卷。recovery root 必须与 content root identity-disjoint，且互不为祖先/后代；用户选择 content tree 内位置时拒绝。不得仅因 content root 父目录可写就静默创建兄弟 namespace，也不得让普通 workspace/sharing/写入审批充当第二根授权。binding 冻结 `recoveryRootBindingId + volume/device identity + directory identity + authority/grant revision + ownership marker + ACL/mode qualification`，由独立 directory handle 持有，并与 content root binding、transaction、operation 和预分配 recovery object 一起进入 V2 port、WAL、approval side-effect preview 与 receipt；实际路径只在受信 UI 以用户可识别的存储标签展示，不进入 Provider/ref/index。预先存在但 marker/identity 不匹配、是 reparse/symlink、grant 被撤销、目录不可用或文件系统不支持原子同卷 rename/directory durability时，delete capability 不公开。全局 WAL 与 volume-local object manifest 通过双 root binding 和 transaction/operation/recovery object ID durable 双向绑定，启动时扫描并对账孤儿；
 6. recovery record 绑定原路径、原 bytes/hash、identity/metadata、transaction/version group、opaque quarantine object ID 和保留策略。restore 只在原路径仍符合策略且不存在时执行；路径占用、内容冲突或策略变化时生成新的恢复预览，绝不覆盖当前文件。quarantine object 在未完成 recovery、可用 undo/version group 或 UI 声明的恢复窗口内必须 pin；UI 显示期限和占用，保留策略不得提前 purge。永久 purge 只能由独立用户操作或到期的本地策略通过 durable 记录触发，不是 Agent 工具；
 7. 中途失败按固定逆序补偿；补偿前若当前对象不等于本事务写入的 after-state，禁止覆盖外部新改动，进入 `recovery_required/awaiting_recovery_review`。损坏、缺失、receipt 不匹配或认证失败的 journal/blob/quarantine record 一律 fail closed；
 8. 应用启动或 workspace 首次绑定时，在允许该 root 的任何 mutation 之前扫描未完成 WAL；门禁阻止 Agent、普通编辑器 save/autosave、项目 lifecycle 以及普通 undo/restore，不只是阻止重新公开 Agent 工具，只有 Main-owned recovery resolution 可以在 gate 内按已认证 journal 执行补偿或完成恢复；read-only UI 可以带恢复横幅打开。无 commit marker 时使用固定决策表：当前全为 before-state -> 标记已回退；已完成步骤精确为 after、未完成步骤为 before -> 只对 after 成员逆序补偿；任一为 neither/unknown、root unavailable 或 policy/identity 改变 -> 零写入并进入 `awaiting_recovery_review`。不能让模型决定，也不能笼统承诺“一定恢复到 before”。recovery resolution 成功后同步 editor/tree、解除 gate、恢复 autosave；正常 apply 成功后保留 version-group undo。已提交事务的 undo 使用当前 hash 生成新的 inverse Change Set 并重新审批，不能盲目回放旧快照。
@@ -1019,7 +1104,9 @@ Main 只根据当前用户请求、显式选区和 app-owned composer action 计
 
 ### 11.3 质量语料
 
-建立不少于 200 条人工标注中文小说样例，包含正例、合理反例、对白、引用、事实纠正、非情绪“压下去”、单次套语和重复聚集。提醒型规则以 precision 优先；precision ≥ 90% 只按用户可见的 medium/high 结果计算，固定负例在该集合中零误报。范围测试覆盖 emoji、组合字符、代理对、CRLF 和多行文本。
+建立不少于 200 条人工标注中文小说样例，包含正例、合理反例、对白、引用、事实纠正、非情绪“压下去”、单次套语和重复聚集。语料只能来自合成、明确许可或可再分发内容，禁止使用用户项目正文。产品/editorial quality owner 维护版本化 annotation rubric；每条样例由两名独立人工标注者按 rule、span、confidence 和 rationale 标注，分歧由指定 quality owner 在不知道模型/规则输出的情况下裁决。corpus manifest 冻结 rubric/corpus/rule version、样例 checksum、gold labels、development/qualification split 和固定 negative set；qualification split 不参与调参。
+
+提醒型规则以 precision 优先；precision ≥ 90% 只按 qualification split 上用户可见的 medium/high 结果计算，预测 rule/span 与 gold label 的匹配规则固定在 rubric 中，固定负例在该集合中零误报。quality owner 对 corpus checksum、指标输出和资格结论签署 release evidence；换语料、标签、规则或匹配算法都必须生成新版本并重新资格化。范围测试覆盖 emoji、组合字符、代理对、CRLF 和多行文本。
 
 ## 12. UI 与用户心智
 
@@ -1149,13 +1236,15 @@ provider:
   OpenAI-compatible | OpenAI | Anthropic | Gemini
 ```
 
+上面的四项是 Provider 选择/目标 case，不是四份 serializer 实现。当前生产实现固定为三类 adapter：generic OpenAI-compatible 与官方 OpenAI 配置都路由到 `openai-compatible-provider.ts`，但必须作为两个配置 case 分别覆盖；Anthropic 使用 `anthropic-provider.ts`；Gemini 使用 `gemini-provider.ts`。官方 OpenAI 只要仍走当前 Chat Completions-compatible adapter，就遵守该 adapter 的单一 authority 序列化；未来若新增 Responses `instructions` 等独立原生入口，必须先增加新的显式 adapter policy、版本和测试，不能把它算作现有第四个实现。
+
 完整笛卡尔矩阵只对合法组合运行：standalone 仅允许 conversation，workspace profile 仅允许 planning/execution；其余组合单独断言 profile resolver/start preflight fail closed。
 
 必须断言：
 
 - planning 包含只读和 `finish_plan` 语义；
 - planning 可选外部工具只能是本地 manifest 证明的 `external_read`；remote action/destructive/unknown-effect 在任何审批策略下都不出现；
-- Plan Composer 可见“执行阶段审批策略”和“当前计划只读”，但无论选择什么都不改变 planning tools/runtime facts；手动切换 Act 与批准 Plan 都在边界重新展示 operation/策略，只有显式确认后才形成 execution authorization；
+- Plan Composer 可见“执行阶段审批策略”和“当前计划只读”，但无论选择什么都不改变 planning tools/runtime facts；手动切换 Act 与批准 Plan 都在边界重新展示 operation/策略，`write_before_confirmation` handoff 只创建逐 Change Set 请求批准的 execution Run，只有 `user_preapproved_run` 经可信显式确认后才形成 acknowledgement；
 - Plan revision、workspace/root/capability/policy 变化使旧确认失效，新 Run 重置为“请求批准”，不得复用过期 `user_preapproved_run`；
 - execution 无写工具时明确只读；
 - execution 有写工具时表达提案、审批和应用；
@@ -1199,7 +1288,7 @@ provider:
 - 新提示不包含 `foreshadow v1.0`、ID 正则、时间戳或过期枚举；
 - 创建顺序为 `describe_story_bible_type -> create_story_bible`；patch/status/restore 分别遵循 5.1 的读取、类型、引用影响和 revision 顺序；
 - 模型只提交用户可写字段，应用生成系统字段；
-- Provider-visible v2 目录中恰好一个工具能够创建 Story Bible，`create_resource(kind=story_bible)` 在 schema 校验阶段被拒绝；
+- Provider-visible catalog 2.0（保留 v2 facade 名称族）中恰好一个工具能够创建 Story Bible，`create_resource(kind=story_bible)` 在 schema 校验阶段被拒绝；
 - `paid-off` 规则与 v1.1 Schema、UI 和一致性问题一致，缺少 `actualPayoffChapterId` 只产生指定 warning code；
 - stale revision、引用影响和状态/恢复冲突不会盲目重试；
 - 状态矩阵明确区分 archive 与 deleted boundary：archived 用普通 status transition 离开，restore 只接受 deleted；outline/timeline singleton 删除在 schema/session 层均拒绝；
@@ -1234,7 +1323,7 @@ provider:
 ### 14.6 工程行为测试
 
 - “规划修复 bug”只能搜索、读取并提交计划，不能称“已修复”；
-- 工程 backend 未资格化时收到“直接改掉”，明确报告无写入能力；资格化后只公开实际 operation 子集；
+- 工程 backend 未资格化时，用户请求“直接改掉”时明确报告无写入能力；资格化后只公开实际 operation 子集；
 - 没有验证工具时写“未运行”，不能称“测试通过”；
 - sharing active=automatic 或本 Run 显式授权时，当前已保存工程文件成为活动资源；active=off 时不读取、不发送；
 - 只有被选择分享的 dirty 工程文件阻止启动；未分享的 dirty ref 不阻止；
@@ -1247,7 +1336,7 @@ provider:
 - `请求批准` 下每个允许提案的 CRUD Change Set 都等待人工决定；`替我审批` 对同一 replace/create 分别验证 ordinary 合格、policy-managed、获 grant ignored-generated、条件缺证和混合组，只有完整 ordinary proof 可自动审阅；hard-denied 在两种策略下都拒绝且不生成 Change Set；
 - “替我审批”不新增工具、路径或 sharing grant，planning 不预授权，新 Run 自动重置；公开 `displayBindingChecksum` 不能 apply。Main capability 的篡改、selection/order/base/candidate/effect proof/policy/capability 改变以及跨 Run/workspace/revision/operation replay 全部拒绝；
 - 授权 ledger 覆盖 issued 后崩溃、reserve 前/后、WAL 前、native mutation 前和 commit 后 replay；孤立 reservation 零写入撤销，reserved 只允许同 transaction 恢复，过期不打断已开始 recovery；
-- delete 只原子移动到 `VolumeLocalRecoveryBinding` 的同卷 app-owned quarantine；覆盖 contentRoot/stateRoot 同卷、跨卷但存在 installer/OS/user recovery-root authority、跨卷无第二根授权、授权撤销、recovery root 与 content root 相同或存在祖先/后代关系，以及保留 namespace 被普通目录/reparse 预占、marker/identity/ACL 不匹配、双 root receipt、global WAL 与 volume manifest 双写各崩溃点、孤儿扫描、容量/retention 和 restore 冲突。绝不因父目录可写而静默创建根外 namespace；quarantine 不可用时 delete 不公开，名称/对象不进入 list/search/ref/Provider，永久 purge 不存在于 Provider 工具目录；
+- delete 只原子移动到与 contentRoot 同卷的 `VolumeLocalRecoveryBinding` app-owned quarantine；覆盖 contentRoot/stateRoot 同卷、两者跨卷但 content volume 存在 installer/OS/user recovery-root authority、两者跨卷且没有该第二根授权、错误选择与 contentRoot 跨卷的 recovery root、授权撤销、recovery root 与 content root 相同或存在祖先/后代关系，以及保留 namespace 被普通目录/reparse 预占、marker/identity/ACL 不匹配、双 root receipt、global WAL 与 volume manifest 双写各崩溃点、孤儿扫描、容量/retention 和 restore 冲突。绝不因父目录可写而静默创建根外 namespace；quarantine 不可用时 delete 不公开，名称/对象不进入 list/search/ref/Provider，永久 purge 不存在于 Provider 工具目录；
 - proposal 后外部修改、dirty buffer、destination race、ignore/policy 改变均须零写入或安全补偿，不自动 rebase；save coordinator 以 root binding 键控，覆盖跨 workspace 同名路径、延迟 dirty event、Renderer crash/unknown state 与 apply 中途变 dirty；
 - 同一 toolCallId 改变 proposal 参数返回 idempotency conflict；move/delete/create 的审阅期 base/absence 证据由 Main 重读签发，不能信任模型提交的 hash；
 - V2 mutation port 覆盖 raw-byte BOM/EOL、伪造/mismatch receipt、crash-after-native-rename-before-receipt-persist 和 recovery-object replay；旧 string/void adapter 永远不能取得 engineering 资格；
@@ -1271,18 +1360,21 @@ provider:
 
 ### P0：安全与合同修复
 
+在冻结 Plan/Act IPC 或开启任何 `limited_run_preapproval` 前，先由 Desktop Main/security architecture owner 接受 ADR-0004；未决时保持预授权关闭，Renderer 不默认进入审批 TCB。
+
 1. 先落 guidance registry 并逐字冻结现有 `2.1`；所有正文变化一次性发布为注册的 `3.0`，绝不原地修改 `2.1`。
 2. 在 3.0 中完成 `AUTHORITY + RUNTIME + OPERATION + PROFILE + COMPLETION` builder，删除过期 foreshadow v1.0 合同、统一 Story Bible 创建入口，并让 engineering 按真实 `workspaceFileOperations` 在只读/部分 CRUD/完整 CRUD 间准确分支。
 3. 禁止恢复、摘要和项目数据生成 authority；限制 artifact parser 的 envelope/role allowlist；各 Provider adapter 对第二个 authority fail closed。
 4. Provider envelope 移除本地审计 metadata，guidance 从 registry 重建，未知或篡改版本 fail closed。
 5. 若远程 MCP 保持启用，完成 descriptor 递归净化与 Provider projection；不合格工具不进入目录。未完成时直接禁用 MCP 工具，不阻塞其他核心能力。
 6. Permission Summary 消除 allowed/forbidden 矛盾；Provider schema 按 profile 收窄，删除 writing 中误暴露的普通 `file:` lifecycle 分支和 `create_resource(kind=story_bible)` 双入口；把当前 `operationMode` 与未来 `executionWritePolicyDraft` 分层，Plan 中可见执行策略但保持只读，Act 边界重新确认。
-7. 把 chapter replace/create/rename/reorder/status/restore、Story Bible structured operation 与普通文件 replace/create/move/delete/mkdir 分成逐 operation 资格，并建立 catalog-time `approvalRuleSetVersion + approvalRules`、proposal-time `MainOnlyApprovalDecisionProofV1` 与脱敏 Provider summary；没有 backend 与发布证据的 action 不进入 v2 schema/catalog，不能继续由宽泛 `fileLifecycleEnabled/manage_path` 暴露；领域 status/delete/restore 不能因不是物理文件操作而绕过 `always_human`，同一 operation 的条件差异不能再由工具名布尔值代替。
-8. 引入结构化 `finish(completed|blocked)` 与 evidence 校验；待审批保持独立状态。
+7. 把 chapter replace/create/rename/reorder/status/restore、Story Bible structured operation 与普通文件 replace/create/move/delete/mkdir 分成逐 operation 资格，并建立 catalog-time `approvalRuleSetVersion + approvalRuleSetChecksum + approvalRules`、proposal-time `MainOnlyApprovalDecisionProofV1` 与脱敏 Provider summary；没有 backend 与发布证据的 action 不进入 catalog 2.0 schema，不能继续由宽泛 `fileLifecycleEnabled/manage_path` 暴露；领域 status/delete/restore 不能因不是物理文件操作而绕过 `always_human`，同一 operation 的条件差异不能再由工具名布尔值代替。
+8. 在任何新增 writing、creative 或 engineering mutation 可 apply 前，共享升级 Change Set 2.0、Approval Binding 2.0 与 durable Authorization Ledger 2.0；三个 profile 消费同一 Main-only capability/reservation 合同，旧确定性 token 只能查看/拒绝且不得回退应用。
+9. 引入结构化 `finish(completed|blocked)` 与 evidence 校验；待审批保持独立状态。
 
 P0 完成前不应继续通过增加提示词声称 Agent 能力已经完整。
 
-P0 exit criteria：旧 2.1 逐字恢复、新 3.0 快照、单一 native authority、篡改/孤立恢复、metadata 泄露、恶意 MCP schema、profile schema、lifecycle 隐藏、条件审批 rule/proof、Permission Summary 和 finish 状态的目标测试全部通过。不能把这些安全测试延后到 P3。
+P0 exit criteria：旧 2.1 逐字恢复、新 3.0 快照、单一 native authority、篡改/孤立恢复、metadata 泄露、恶意 MCP schema、profile schema、lifecycle 隐藏、条件审批 rule/proof、Permission Summary、共享 Change Set/binding/ledger 的旧 token/重放/崩溃门禁、ADR-0004 信任边界和 finish 状态的目标测试全部通过。不能把这些安全测试延后到 P3。
 
 ### P1：消息协议 2.0 与上下文工程
 
@@ -1297,14 +1389,14 @@ P0 exit criteria：旧 2.1 逐字恢复、新 3.0 快照、单一 native authori
 
 1. 完成 writing 的任务范围、事实优先级、Story Bible 单一合同和章节领域 CRUD：新增真实 `list_chapters`，修正 chapter create/next order，建立 order/卷归属唯一真值、`ChapterStatusTransitionProof`/metadata history，并接通 rename/reorder/status/delete/restore、章节与 Story Bible dirty handshake、Change Set、审批、恢复及 editor/tree 同步。
 2. 完成 creative_general 可信文本 replacement 的生产 E2E；对 create/move/delete 分别裁决是否具备发布资格。
-3. 完成打包可用的 native engineering access port 与 mutation V2 backend，接通 effect-specific CRUD tools、raw-byte manifest/receipt、Change Set、结构化审批 rule/proof、既有“请求批准/替我审批”、approval binding v2、version group、同卷可恢复删除、全 workspace recovery gate、rollback/undo 和 recovery review。
+3. 完成打包可用的 native engineering access port 与 mutation V2 backend，接通 effect-specific CRUD tools、raw-byte manifest/receipt、Change Set、结构化审批 rule/proof、既有“请求批准/替我审批”、P0 共享 approval binding v2、version group、同卷可恢复删除、全 workspace recovery gate、rollback/undo 和 recovery review。
 4. 工程已保存当前文件按 sharing grant 进入上下文，并完成所有触及路径按 root binding 的 dirty/unknown-editor guard、base/stale 校验与 editor/tree 同步。
 5. 修正工作台命名，展示真实 profile、逐操作 CRUD、当前 Plan 只读状态、未来 Act 审批策略、首次发送预览和后续发送账本。
 6. 网络/MCP 若继续启用，补齐安全资格与打包 E2E；否则在发布能力表中保持明确禁用。
 
 ### P3：质量与发布门禁
 
-1. 文风规则 2.0、差异感知和人工标注语料。
+1. 文风规则 2.0 与差异感知在 P2 用户闭环批次实现；P3 使用冻结人工标注语料完成独立资格、回归和发布证据，不在门禁阶段首次实现规则。
 2. 四 profile 行为评测与 Provider 序列化矩阵。
 3. 扩展安全注入、隐私、篡改、恢复、缓存和超预算的跨 Provider E2E；P0 安全门禁继续保持阻塞。
 4. 更新 `stage5-agent-tool-evidence.json`，每项只在生产接线、安全资格、用户控制和 E2E 同时存在时标为 Complete。
@@ -1316,11 +1408,11 @@ P0 exit criteria：旧 2.1 逐字恢复、新 3.0 快照、单一 native authori
 同时满足以下条件才能标记：
 
 1. 每个 canonical request 只有一个已注册的 app-authored authority；每个 Provider 只有一个对应原生 system 入口且无重复/拼接。
-2. 提示、Permission Summary、UI 和 tools 对能力的表达完全一致；Plan/Act 与审批策略分层可见，Plan 选择不能产生写授权，Act 只在显式边界确认后启用本 Run 策略。
+2. 提示、Permission Summary、UI 和 tools 对能力的表达完全一致；Plan/Act 与审批策略分层可见，Plan 选择不能产生写授权，Act 只在符合 Accepted ADR-0004 的可信边界确认后启用本 Run 策略；TCB/可信表面资格缺失时写能力或有限预授权按合同关闭。
 3. writing 能完成章节与 Story Bible 的查、增、改、archive/status、逻辑删除/恢复，以及章节改名、唯一排序和卷归属管理；archive 与 tombstone/restore 语义分离。所有 mutation 使用领域工具、proposal-level 审批证明、完整 metadata history、事务、恢复和撤销；章节与 Story Bible dirty editor、apply/undo/启动恢复后的 editor/tree 同步正确，不直接改系统字段或物理路径。
 4. creative_general 必须完成允许普通文本的 list/read/search 和可信局部 replacement，并通过 clean base/checksum、dirty/stale、managed-path 拒绝和生产 E2E；create/move/delete 分别作为可选能力资格化，不能用“尚无 mutation 获得资格”满足本项。
 5. engineering 能在策略内完成 UTF-8 文本文件查、增、改、删和移动/重命名；list/read/search/index 与 mutation 均使用 root-handle hardened backend，所有 mutation 使用 raw-byte V2 receipt、精确 Change Set、结构化审批规则、事务、同卷恢复对象和全 workspace recovery gate，且当前文件、dirty/stale/unknown editor state 与 editor/tree 同步正确。
-6. 上下文可预览、最小披露、确定性预算；未允许内容和敏感 metadata 不进入 Provider。
+6. 上下文可预览、最小披露、确定性预算；未允许内容和敏感 metadata 不进入 Provider，四 profile 的完整 materialized authority 通过固定 estimator token 上限。
 7. start/refresh/compact/hydrate 不改变消息权限与版本合同。
 8. 所有写入状态、验证状态和完成报告可由持久化证据证明。
 9. 核心安全、隐私、恢复和跨 Provider E2E 全绿。
@@ -1340,24 +1432,25 @@ P0 exit criteria：旧 2.1 逐字恢复、新 3.0 快照、单一 native authori
 
 ## 17. 主要修改落点
 
-| 领域                   | 主要文件                                                                                                                                                                                                            |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| System Guidance        | `packages/application/src/agent-system-prompt.ts`                                                                                                                                                                   |
-| Profile/runtime facts  | `packages/application/src/agent-context-profile.ts`、`packages/agent-engine/src/effective-capability-state.ts`、`packages/agent-engine/src/agent-tool-capabilities.ts`                                              |
-| Prompt/materialization | `packages/application/src/agent-prompt-materializer.ts`、`packages/application/src/agent-run-session.ts`                                                                                                            |
-| Provider serialization | `packages/llm-adapter/src/openai-compatible-provider.ts`、`packages/llm-adapter/src/anthropic-provider.ts`、`packages/llm-adapter/src/gemini-provider.ts`                                                           |
-| Context policy/budget  | `apps/desktop/src/main/workspace-context-policy-store.ts`、`packages/application/src/agent-context-budget.ts`                                                                                                       |
-| Tool catalog           | `packages/agent-engine/src/tool-registry.ts`、`packages/agent-engine/src/agent-run-tool-catalog.ts`、`packages/application/src/agent-run-session.ts`                                                                |
-| Permission truth       | `packages/agent-engine/src/permission-summary.ts`、`packages/agent-engine/src/approval-gate.ts`、approval rule/proof registry、`packages/application/src/change-set-session.ts`                                     |
-| Story Bible contract   | `packages/schemas/src/story-bible.ts`、结构化 Story Bible tool/session                                                                                                                                              |
-| Writing domain CRUD    | `packages/application/src/project-workspace-session.ts`、chapter repository/editor/history session、Story Bible tool/session、writing editor-state registry、对应 Main IPC 与 workspace tree sync                   |
-| Engineering CRUD       | `packages/application/src/agent-file-operation-session.ts`、`packages/repository/src/agent-write-transaction.ts`、`packages/repository/src/no-follow-file-operations.ts`、新 access port/native mutation V2 backend |
-| Desktop runtime        | `apps/desktop/src/main/agent-run-runtime.ts`、Main IPC/editor-state registry                                                                                                                                        |
-| Current resource/dirty | `apps/desktop/src/renderer/App.tsx`、`apps/desktop/src/renderer/agent-run-bridge.ts`、Story Bible/engineering editor-state registry、`apps/desktop/src/renderer/workspace-file-editor-runtime.ts`                   |
-| Plan/Act approval UI   | `packages/ui/src/agent-composer.tsx`、`packages/ui/src/agent-permission-menu.tsx`、`packages/ui/src/plan-artifact-review.tsx`、`apps/desktop/src/renderer/agent-run-bridge.ts`                                      |
-| Workbench labels       | `packages/ui/src/workbench-switcher.tsx`、Workspace/Agent Inspector                                                                                                                                                 |
-| Writing style          | `packages/application/src/ai-writing-style-rules.ts`、AI writing workflow/session                                                                                                                                   |
-| Release evidence       | `docs/releases/stage5-agent-tool-evidence.json`、`ROADMAP.md`                                                                                                                                                       |
+| 领域                      | 主要文件                                                                                                                                                                                                                     |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| System Guidance           | `packages/application/src/agent-system-prompt.ts`、`packages/application/src/agent-guidance-registry.ts`、`packages/application/src/agent-guidance-budget.ts`                                                                |
+| Semantic version identity | `packages/agent-engine/src/provider-semantic-version-set.ts`、Prompt Artifact/Context Snapshot/canonical manifest/cache/native proof consumers                                                                               |
+| Profile/runtime facts     | `packages/application/src/agent-context-profile.ts`、`packages/agent-engine/src/effective-capability-state.ts`、`packages/agent-engine/src/agent-tool-capabilities.ts`                                                       |
+| Prompt/materialization    | `packages/application/src/agent-prompt-materializer.ts`、`packages/application/src/agent-run-session.ts`                                                                                                                     |
+| Provider serialization    | `packages/llm-adapter/src/openai-compatible-provider.ts`、`packages/llm-adapter/src/anthropic-provider.ts`、`packages/llm-adapter/src/gemini-provider.ts`                                                                    |
+| Context policy/budget     | `apps/desktop/src/main/workspace-context-policy-store.ts`、`packages/application/src/agent-context-budget.ts`                                                                                                                |
+| Tool catalog              | `packages/agent-engine/src/tool-registry.ts`、`packages/agent-engine/src/agent-run-tool-catalog.ts`、`packages/application/src/agent-run-session.ts`                                                                         |
+| Permission truth          | `packages/agent-engine/src/permission-summary.ts`、`packages/agent-engine/src/approval-gate.ts`、approval rule/proof registry、Change Set 2.0、Approval Binding/Ledger 2.0、`packages/application/src/change-set-session.ts` |
+| Story Bible contract      | `packages/schemas/src/story-bible.ts`、结构化 Story Bible tool/session                                                                                                                                                       |
+| Writing domain CRUD       | `packages/application/src/project-workspace-session.ts`、chapter repository/editor/history session、Story Bible tool/session、writing editor-state registry、对应 Main IPC 与 workspace tree sync                            |
+| Engineering CRUD          | `adr/ADR-0003-engineering-file-access-adapter.md`、`packages/application/src/agent-file-operation-session.ts`、`packages/repository/src/agent-write-transaction.ts`、新 access port/native mutation V2 backend               |
+| Desktop runtime           | `apps/desktop/src/main/agent-run-runtime.ts`、Main IPC/editor-state registry                                                                                                                                                 |
+| Current resource/dirty    | `apps/desktop/src/renderer/App.tsx`、`apps/desktop/src/renderer/agent-run-bridge.ts`、Story Bible/engineering editor-state registry、`apps/desktop/src/renderer/workspace-file-editor-runtime.ts`                            |
+| Plan/Act approval UI      | `adr/ADR-0004-agent-approval-ui-trust-boundary.md`、`packages/ui/src/agent-composer.tsx`、`packages/ui/src/agent-permission-menu.tsx`、`packages/ui/src/plan-artifact-review.tsx`、Main-owned/隔离确认表面                   |
+| Workbench labels          | `packages/ui/src/workbench-switcher.tsx`、Workspace/Agent Inspector                                                                                                                                                          |
+| Writing style             | `packages/application/src/ai-writing-style-rules.ts`、AI writing workflow/session                                                                                                                                            |
+| Release evidence          | `docs/releases/stage5-agent-tool-evidence.json`、`ROADMAP.md`                                                                                                                                                                |
 
 ## 18. 风险与决策
 
@@ -1365,13 +1458,13 @@ P0 exit criteria：旧 2.1 逐字恢复、新 3.0 快照、单一 native authori
 
 风险：更完整的合同增加 system token。
 
-决策：把类型 Schema、详细文风规则和项目约定留在工具/动态数据层；system 只保留稳定行为。对每个 profile 建立 token 上限和快照测试，writing 建议不超过 1200 tokens，其他 workspace profile 建议不超过 900 tokens。
+决策：把类型 Schema、详细文风规则和项目约定留在工具/动态数据层；system 只保留稳定行为。发布门禁计量完整 materialized system authority（含最大合法 runtime facts、operation/profile、completion 与适用 task intent/generation guidance，不含项目正文和 Provider tools），使用固定版本的 `AgentTokenEstimator` profile `guidance-budget-v1`；snapshot 必须同时冻结 estimator ID/version、规范化输入、正文 checksum 和 token count。writing 上限为 1200 tokens，standalone、creative_general 和 engineering 上限为 900 tokens；每个 profile × 合法 mode × 最大 operation/rule 组合都不得超限。更换 estimator、模板或合法最大输入都必须重建快照和发布证据，不能把“建议值”当成无验收的说明。
 
 ### 18.2 旧 Run 恢复
 
 风险：新 builder 重写旧提示导致行为与审计漂移。
 
-决策：guidance registry 保留受支持历史版本；旧 Run 按冻结版本逐字恢复，新 Run 使用 3.0。未知版本 fail closed。
+决策：guidance registry 保留受支持历史版本；2.1 旧 Run 只按冻结版本 hydrate/view/export/确定性历史回放，不允许新的 Provider round 或 proposal。继续对话/执行必须显式 handoff 为新的 3.0 Run。未知版本 fail closed。
 
 ### 18.3 UI 名称兼容
 
@@ -1383,7 +1476,7 @@ P0 exit criteria：旧 2.1 逐字恢复、新 3.0 快照、单一 native authori
 
 风险：用户可能把“具备文件 CRUD”进一步理解为可以运行测试、Shell 和 Git；也可能把“替我审批”误解成无范围的完全自治。
 
-决策：工程 CRUD 纳入 Agent Core，但 UI 和 system 同时明确“Change Set 内受限文件操作、无 Shell/任务/Git”。目录冻结时由 `approvalRuleSetVersion + approvalRules` 声明每项 operation 是 `always_human` 还是进入版本化条件规则；proposal 冻结后再由 Main 生成 `MainOnlyApprovalDecisionProofV1` 判定本组实际要求。“替我审批”只作用于当前 execution Run 中满足 `ordinary_clean_file_replace_v1` 或 `ordinary_create_only_v1` 的完整证明，不扩大工具、路径、sharing grant 或 operation；move/delete/create-directory、policy-managed、获 grant 的 ignored-generated、未知/缺证与混合组始终人工确认，hard-denied 始终不可用。proposal 内容或绑定事实变化后旧审批失效。
+决策：工程 CRUD 纳入 Agent Core，但 UI 和 system 同时明确“Change Set 内受限文件操作、无 Shell/任务/Git”。目录冻结时由不可变的 `approvalRuleSetVersion + approvalRuleSetChecksum + approvalRules` 声明每项 operation 是 `always_human` 还是进入版本化条件规则；proposal 冻结后再由 Main 生成 `MainOnlyApprovalDecisionProofV1` 判定本组实际要求。“替我审批”只作用于当前 execution Run 中满足 `ordinary_clean_file_replace_v1` 或 `ordinary_create_only_v1` 的完整证明，不扩大工具、路径、sharing grant 或 operation；move/delete/create-directory、policy-managed、获 grant 的 ignored-generated、未知/缺证与混合组始终人工确认，hard-denied 始终不可用。proposal 内容或绑定事实变化后旧审批失效。
 
 ### 18.5 自动上下文便利性
 
