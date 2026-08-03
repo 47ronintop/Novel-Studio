@@ -2,17 +2,27 @@ import { randomUUID } from "node:crypto";
 
 import {
   appendChangeSetProposal,
+  appendChangeSetProposalV2,
   appendChangeSetOperations,
+  appendChangeSetOperationsV2,
   buildApprovalDecisionProofRefV1,
   checksumChangeSetText,
+  createChangeSetRevisionV2,
+  createOperationsChangeSetRevisionV2,
   createChangeSetRevision,
   createOperationsChangeSetRevisionBatch,
   decideChangeSetApproval,
+  decideChangeSetApprovalV2,
+  isChangeSetV2,
+  parseChangeSetV2,
   parseApprovalDecisionProofV1,
   selectChangeSetRevision,
   validateAgentRelativePath,
   type ApprovalDecisionProofRefV1,
   type ChangeSet,
+  type ChangeSetApprovalV2,
+  type ChangeSetLegacy,
+  type ChangeSetV2,
   type ChangeSetApproval,
   type ChangeSetAssetType,
   type ChangeSetExternalValidation,
@@ -23,10 +33,14 @@ import {
   type DecideChangeSetCommand,
   type MainOnlyApprovalDecisionProofV1,
   type StoryBibleStatusTransitionProof,
-  type AgentWritePolicy
+  type AgentWritePolicy,
+  type DecideChangeSetApprovalV2Input
 } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
-import { consumeAgentRunProposalAuthorization } from "./agent-write-authorization.js";
+import {
+  authorizeApprovalBindingV2,
+  consumeAgentRunProposalAuthorization
+} from "./agent-write-authorization.js";
 
 export interface ChangeSetProposalTarget {
   readonly relativePath: string;
@@ -181,6 +195,9 @@ export interface ChangeSetSession {
   decide(
     command: DecideChangeSetCommand
   ): Promise<Result<ChangeSet | ChangeSetApproval, UnifiedError>>;
+  decideV2(
+    input: DecideChangeSetApprovalV2Input
+  ): Promise<Result<ChangeSetApprovalV2, UnifiedError>>;
 }
 
 export interface CreateChangeSetSessionOptions {
@@ -188,6 +205,10 @@ export interface CreateChangeSetSessionOptions {
   readonly createChangeSetId?: () => string;
   readonly createHunkId?: () => string;
   readonly now?: () => string;
+  /** Presence opts new proposals into strict Change Set 2.0 writing. */
+  readonly providerSemanticVersionSetChecksum?: string;
+  /** Main-owned issuer required before a v2 apply approval can cross the session boundary. */
+  readonly approvalBindingIssuer?: object;
 }
 
 export function createChangeSetSession(options: CreateChangeSetSessionOptions): ChangeSetSession {
@@ -222,8 +243,10 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           checkpointId: binding.checkpointId
         });
         if (!restored.ok) return restored;
-        existing = restored.value;
-        if (existing !== undefined) {
+        if (restored.value !== undefined) {
+          const validated = validateStoredChangeSet(restored.value);
+          if (!validated.ok) return validated;
+          existing = validated.value;
           rememberRevision(existing);
           activeChangeSetByCheckpoint.set(checkpointKey, existing.changeSetId);
         }
@@ -264,24 +287,45 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       };
       const revision =
         existing === undefined
-          ? await createChangeSetRevision(
-              {
-                changeSetId: createChangeSetId(),
-                runId: binding.runId,
-                projectId: binding.projectId,
-                checkpointId: binding.checkpointId,
-                contextSnapshotId: binding.contextSnapshotId,
-                writePolicy,
-                proposal,
-                createdAt: now()
-              },
-              revisionOptions
-            )
-          : await appendChangeSetProposal(
-              existing,
-              { proposal, createdAt: now() },
-              revisionOptions
-            );
+          ? options.providerSemanticVersionSetChecksum === undefined
+            ? await createChangeSetRevision(
+                {
+                  changeSetId: createChangeSetId(),
+                  runId: binding.runId,
+                  projectId: binding.projectId,
+                  checkpointId: binding.checkpointId,
+                  contextSnapshotId: binding.contextSnapshotId,
+                  writePolicy,
+                  proposal,
+                  createdAt: now()
+                },
+                revisionOptions
+              )
+            : await createChangeSetRevisionV2(
+                {
+                  changeSetId: createChangeSetId(),
+                  runId: binding.runId,
+                  projectId: binding.projectId,
+                  checkpointId: binding.checkpointId,
+                  contextSnapshotId: binding.contextSnapshotId,
+                  writePolicy,
+                  proposal,
+                  createdAt: now(),
+                  providerSemanticVersionSetChecksum: options.providerSemanticVersionSetChecksum
+                },
+                revisionOptions
+              )
+          : existing.schemaVersion === "2.0"
+            ? await appendChangeSetProposalV2(
+                existing as ChangeSetV2,
+                { proposal, createdAt: now() },
+                revisionOptions
+              )
+            : await appendChangeSetProposal(
+                existing as ChangeSetLegacy,
+                { proposal, createdAt: now() },
+                revisionOptions
+              );
       const persisted = await options.port.persistChangeSet(revision);
       if (!persisted.ok) return persisted;
       rememberRevision(revision);
@@ -339,8 +383,10 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       const persisted = await options.port.readChangeSet(changeSetId, revision);
       if (!persisted.ok) return persisted;
       if (persisted.value !== undefined) {
-        rememberRevision(persisted.value);
-        return { ok: true, value: persisted.value };
+        const validated = validateStoredChangeSet(persisted.value);
+        if (!validated.ok) return validated;
+        rememberRevision(validated.value);
+        return validated;
       }
     }
     return failure(
@@ -387,8 +433,10 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           checkpointId: input.checkpointId
         });
         if (!restored.ok) return restored;
-        existing = restored.value;
-        if (existing !== undefined) {
+        if (restored.value !== undefined) {
+          const validated = validateStoredChangeSet(restored.value);
+          if (!validated.ok) return validated;
+          existing = validated.value;
           rememberRevision(existing);
           activeChangeSetByCheckpoint.set(checkpointKey, existing.changeSetId);
         }
@@ -483,17 +531,34 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       }
       const revision =
         existing === undefined
-          ? createOperationsChangeSetRevisionBatch({
-              changeSetId: createChangeSetId(),
-              runId: input.runId,
-              projectId: input.projectId,
-              checkpointId: input.checkpointId,
-              contextSnapshotId: input.contextSnapshotId,
-              writePolicy,
-              operations,
-              createdAt: now()
-            })
-          : appendChangeSetOperations(existing, { operations, createdAt: now() });
+          ? options.providerSemanticVersionSetChecksum === undefined
+            ? createOperationsChangeSetRevisionBatch({
+                changeSetId: createChangeSetId(),
+                runId: input.runId,
+                projectId: input.projectId,
+                checkpointId: input.checkpointId,
+                contextSnapshotId: input.contextSnapshotId,
+                writePolicy,
+                operations,
+                createdAt: now()
+              })
+            : createOperationsChangeSetRevisionV2({
+                changeSetId: createChangeSetId(),
+                runId: input.runId,
+                projectId: input.projectId,
+                checkpointId: input.checkpointId,
+                contextSnapshotId: input.contextSnapshotId,
+                writePolicy,
+                operations,
+                createdAt: now(),
+                providerSemanticVersionSetChecksum: options.providerSemanticVersionSetChecksum
+              })
+          : existing.schemaVersion === "2.0"
+            ? appendChangeSetOperationsV2(existing as ChangeSetV2, { operations, createdAt: now() })
+            : appendChangeSetOperations(existing as ChangeSetLegacy, {
+                operations,
+                createdAt: now()
+              });
       const persisted = await options.port.persistChangeSet(revision);
       if (!persisted.ok) return persisted;
       rememberRevision(revision);
@@ -661,8 +726,11 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       if (options.port.readLatestChangeSet === undefined) return ok(undefined);
       const restored = await options.port.readLatestChangeSet(input);
       if (!restored.ok) return restored;
-      if (restored.value !== undefined) rememberRevision(restored.value);
-      return restored;
+      if (restored.value === undefined) return restored;
+      const validated = validateStoredChangeSet(restored.value);
+      if (!validated.ok) return validated;
+      rememberRevision(validated.value);
+      return validated;
     },
 
     async persistApprovalDecisionProof(input) {
@@ -719,6 +787,40 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       } catch (error) {
         return err(asUnifiedError(error));
       }
+    },
+
+    async decideV2(input) {
+      const current = await findRevision(input.changeSet.changeSetId, input.changeSet.revision);
+      if (!current.ok) return current as Result<ChangeSetApprovalV2, UnifiedError>;
+      if (current.value.schemaVersion !== "2.0") {
+        return failure(
+          "CHANGE_SET_V2_REQUIRED",
+          "Legacy Change Sets cannot enter the v2 approval gate.",
+          "Regenerate the proposal with Change Set 2.0."
+        );
+      }
+      const decided = decideChangeSetApprovalV2({
+        ...input,
+        changeSet: current.value as ChangeSetV2
+      });
+      if (!decided.ok || decided.value.decision !== "apply_selected") return decided;
+      if (options.approvalBindingIssuer === undefined) {
+        return failure(
+          "CHANGE_SET_MAIN_APPROVAL_ISSUER_UNAVAILABLE",
+          "A v2 approval requires the Main-owned approval coordinator.",
+          "Complete approval in the qualified Main confirmation surface."
+        );
+      }
+      try {
+        authorizeApprovalBindingV2(decided.value.binding, options.approvalBindingIssuer);
+      } catch {
+        return failure(
+          "CHANGE_SET_MAIN_APPROVAL_ISSUER_UNAVAILABLE",
+          "The Main-owned approval coordinator is unavailable.",
+          "Complete approval in the qualified Main confirmation surface."
+        );
+      }
+      return decided;
     },
 
     async decide(command) {
@@ -915,6 +1017,39 @@ function isStoryBibleV11Text(content: string): boolean {
   } catch {
     return false;
   }
+}
+
+function validateStoredChangeSet(value: ChangeSet): Result<ChangeSet, UnifiedError> {
+  const record = value as unknown as Record<string, unknown>;
+  if (record["schemaVersion"] === "2.0") {
+    if (!isChangeSetV2(value)) {
+      return failure(
+        "CHANGE_SET_V2_INVALID",
+        "The stored Change Set 2.0 failed strict validation.",
+        "Regenerate the proposal from the current runtime facts."
+      );
+    }
+    try {
+      return ok(parseChangeSetV2(value));
+    } catch {
+      return failure(
+        "CHANGE_SET_V2_INVALID",
+        "The stored Change Set 2.0 failed strict validation.",
+        "Regenerate the proposal from the current runtime facts."
+      );
+    }
+  }
+  if (
+    (record["schemaVersion"] === "1.0" || record["schemaVersion"] === "1.1") &&
+    typeof record["approvalToken"] === "string"
+  ) {
+    return ok(value);
+  }
+  return failure(
+    "CHANGE_SET_SCHEMA_UNSUPPORTED",
+    "The stored Change Set uses an unsupported or incomplete schema.",
+    "Rebuild the proposal with a supported Change Set version."
+  );
 }
 
 function failure(

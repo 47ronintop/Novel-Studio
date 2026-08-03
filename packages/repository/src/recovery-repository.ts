@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { validateStoryBibleV11Asset } from "@novel-studio/schemas";
+import { validateApprovalBindingV2 } from "@novel-studio/agent-engine";
+import type { ApprovalAuthorizationLedgerPort } from "./approval-authorization-ledger.js";
 import {
   createProjectPathGuard,
   verifyProjectStoragePath,
@@ -27,6 +29,11 @@ export interface RecoveryRepositoryOptions {
   projectRoot: string;
   traceId?: string;
   maxRollbackReviewBytes?: number;
+  readonly authorizationLedger?: Pick<
+    ApprovalAuthorizationLedgerPort,
+    "listReservationWals" | "reconcileOrphanReservations"
+  > &
+    Partial<Pick<ApprovalAuthorizationLedgerPort, "consume">>;
 }
 
 export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRecoveryPort {
@@ -271,6 +278,70 @@ export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRec
       return createdAt === 0 ? left.transactionId.localeCompare(right.transactionId) : createdAt;
     });
     return ok(journals);
+  }
+
+  public async reconcileAuthorizationReservationsAtStartup(): Promise<Result<void, UnifiedError>> {
+    const listed = await this.listAgentTransactionJournals();
+    if (!listed.ok) return listed;
+    if (this.options.authorizationLedger !== undefined) {
+      const wals = await this.options.authorizationLedger.listReservationWals();
+      if (!wals.ok) return wals;
+      const appliedTransactionIds = new Set(
+        listed.value
+          .filter((journal) => journal.transactionStatus === "applied")
+          .map((journal) => journal.transactionId)
+      );
+      const consume = this.options.authorizationLedger.consume;
+      for (const wal of wals.value.filter(
+        (candidate) =>
+          candidate.state === "prepared" && appliedTransactionIds.has(candidate.transactionId)
+      )) {
+        if (consume === undefined) {
+          return err(
+            storageError({
+              code: "AGENT_AUTHORIZATION_LEDGER_FINALIZE_UNAVAILABLE",
+              message: "An applied transaction still has an unconsumed authorization reservation.",
+              suggestedAction: "Restore the Main authorization ledger and retry startup recovery.",
+              traceId: this.traceId
+            })
+          );
+        }
+        const consumed = await consume.call(
+          this.options.authorizationLedger,
+          wal.authorizationId,
+          wal.transactionId
+        );
+        if (!consumed.ok) return consumed;
+      }
+    }
+    const reconciled = await this.reconcileAuthorizationReservations(
+      listed.value
+        .filter(
+          (journal) =>
+            journal.transactionStatus !== "applied" && journal.transactionStatus !== "rolled_back"
+        )
+        .map((journal) => journal.transactionId),
+      listed.value
+        .filter((journal) => journal.transactionStatus === "rolled_back")
+        .map((journal) => journal.transactionId)
+    );
+    if (!reconciled.ok) return reconciled;
+    return ok(undefined);
+  }
+
+  private async reconcileAuthorizationReservations(
+    preparedTransactionIds: readonly string[],
+    revokedTransactionIds: readonly string[] = []
+  ): Promise<Result<void, UnifiedError>> {
+    if (this.options.authorizationLedger === undefined) return ok(undefined);
+    const wals = await this.options.authorizationLedger.listReservationWals();
+    if (!wals.ok) return wals;
+    const reconciled = await this.options.authorizationLedger.reconcileOrphanReservations({
+      preparedTransactionIds,
+      revokedTransactionIds,
+      reservationWals: wals.value.filter((wal) => wal.state === "prepared")
+    });
+    return reconciled.ok ? ok(undefined) : reconciled;
   }
 
   public async writeRollbackReview(
@@ -618,7 +689,9 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
   if (typeof value !== "object" || value === null) return false;
   const journal = value as Partial<AgentTransactionJournal>;
   if (
-    (journal.schemaVersion !== "1.0" && journal.schemaVersion !== "1.1") ||
+    (journal.schemaVersion !== "1.0" &&
+      journal.schemaVersion !== "1.1" &&
+      journal.schemaVersion !== "2.0") ||
     typeof journal.transactionId !== "string" ||
     !isSafeTransactionId(journal.transactionId) ||
     typeof journal.versionGroupId !== "string" ||
@@ -676,7 +749,7 @@ function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): bo
   if (receipt === undefined) return journal.approvalSource !== "project_safe_auto_update";
   if (
     journal.kind !== "apply" ||
-    journal.schemaVersion !== "1.1" ||
+    (journal.schemaVersion !== "1.1" && journal.schemaVersion !== "2.0") ||
     typeof journal.changeSetId !== "string" ||
     typeof journal.consistencyGroupId !== "string" ||
     receipt.schemaVersion !== "1.0" ||
@@ -1009,6 +1082,38 @@ function hasValidMutationOrder(journal: Partial<AgentTransactionJournal>): boole
 }
 
 function hasValidApprovalBinding(journal: Partial<AgentTransactionJournal>): boolean {
+  if (journal.schemaVersion === "2.0") {
+    if (
+      journal.kind !== "apply" ||
+      journal.approvalToken !== undefined ||
+      (journal.writePolicy !== "write_before_confirmation" &&
+        journal.writePolicy !== "user_preapproved_run") ||
+      (journal.approvalSource !== "human_confirmation" &&
+        journal.approvalSource !== "user_preapproved_run" &&
+        journal.approvalSource !== "project_safe_auto_update") ||
+      typeof journal.authorizationId !== "string" ||
+      typeof journal.reservationTransactionId !== "string" ||
+      journal.transactionId !== journal.reservationTransactionId ||
+      typeof journal.providerSemanticVersionSetChecksum !== "string" ||
+      journal.approvalBindingV2 === undefined
+    ) {
+      return false;
+    }
+    const binding = validateApprovalBindingV2(journal.approvalBindingV2, Date.now(), {
+      allowExpired: true
+    });
+    return (
+      binding.ok &&
+      binding.value.providerSemanticVersionSetChecksum ===
+        journal.providerSemanticVersionSetChecksum &&
+      binding.value.runId === journal.runId &&
+      binding.value.changeSetId === journal.changeSetId &&
+      binding.value.changeSetRevision === journal.changeSetRevision &&
+      binding.value.changeSetChecksum === journal.changeSetChecksum &&
+      binding.value.executionWritePolicy === journal.writePolicy &&
+      binding.value.approvalSource === journal.approvalSource
+    );
+  }
   if (journal.kind !== "apply") {
     return (
       journal.schemaVersion === "1.0" &&

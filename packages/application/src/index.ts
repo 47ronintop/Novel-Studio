@@ -698,6 +698,14 @@ export type {
   RecordAgentRunErrorInput
 } from "./agent-diagnostics-session.js";
 export { createChangeSetSession } from "./change-set-session.js";
+export {
+  authorizeApprovalBindingV2,
+  consumeApprovalBindingV2Authorization,
+  createMainApprovalIssuer,
+  hasApprovalBindingV2Authorization,
+  mintMainOwnedCapability,
+  revokeApprovalBindingV2Authorization
+} from "./agent-write-authorization.js";
 export { createVersionGroupSession } from "./version-group-session.js";
 export type {
   AgentRunDraftInitialization,

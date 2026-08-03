@@ -388,6 +388,7 @@ export {
 } from "./plan-execution.js";
 export {
   appendChangeSetProposal,
+  appendChangeSetProposalV2,
   checksumChangeSetText,
   createChangeSetRevision,
   selectChangeSetRevision,
@@ -400,7 +401,14 @@ export {
   createOperationsChangeSetRevision,
   createOperationsChangeSetRevisionBatch,
   appendChangeSetOperation,
-  appendChangeSetOperations
+  appendChangeSetOperations,
+  appendChangeSetOperationsV2,
+  createChangeSetRevisionV2,
+  createOperationsChangeSetRevisionV2,
+  changeSetV2DisplayBindingChecksum,
+  isChangeSetV2,
+  parseChangeSetV2,
+  serializeChangeSetV2
 } from "./change-set.js";
 export type {
   AppendChangeSetProposalInput,
@@ -430,16 +438,47 @@ export type {
   ChangeSetMoveFileOperation,
   ChangeSetOperation,
   ChangeSetOperationKind,
-  ChangeSetOperationSelection
+  ChangeSetOperationSelection,
+  ChangeSetV2,
+  ChangeSetLegacy,
+  CreateChangeSetRevisionV2Input,
+  CreateOperationsChangeSetRevisionV2Input
 } from "./change-set.js";
 export { checksumChangeSetSelection, inspectChangeSetConsistencyGroups } from "./change-set.js";
-export { decideChangeSetApproval, deriveChangeSetGroupApprovalToken } from "./approval-gate.js";
+export {
+  decideChangeSetApproval,
+  decideChangeSetApprovalV2,
+  deriveChangeSetGroupApprovalToken
+} from "./approval-gate.js";
 export type {
   ChangeSetApproval,
   ChangeSetApprovalBinding,
+  ChangeSetApprovalV2,
   ChangeSetGroupApprovalTokenInput,
-  DecideChangeSetApprovalInput
+  DecideChangeSetApprovalInput,
+  DecideChangeSetApprovalV2Input
 } from "./approval-gate.js";
+export {
+  APPROVAL_BINDING_V2_SCHEMA_VERSION,
+  approvalBindingV2Checksum,
+  createApprovalBindingV2,
+  isApprovalBindingV2,
+  parseApprovalBindingV2,
+  projectApprovalBindingV2ForDisplay,
+  serializeApprovalBindingV2,
+  validateApprovalBindingV2
+} from "./approval-binding-v2.js";
+export type {
+  ApprovalBindingV2,
+  ApprovalBindingV2DisplayProjection,
+  ApprovalBindingV2Encoding,
+  ApprovalBindingV2Bom,
+  ApprovalBindingV2Eol,
+  ApprovalBindingV2OperationKind,
+  ApprovalBindingV2Source,
+  ApprovalBindingV2WritePolicy,
+  CreateApprovalBindingV2Input
+} from "./approval-binding-v2.js";
 export { createAppliedVersionGroup, createFailedVersionGroup } from "./version-group.js";
 export type {
   FailedVersionGroupInput,
@@ -463,8 +502,11 @@ export type {
 } from "./version-group.js";
 export {
   createTransactionJournal,
+  createTransactionJournalV2,
+  parseTransactionJournalV2,
   setTransactionJournalStatus,
-  updateTransactionJournalEntry
+  updateTransactionJournalEntry,
+  validateTransactionJournalV2
 } from "./transaction-journal.js";
 export type {
   CreateTransactionJournalInput,
@@ -472,7 +514,9 @@ export type {
   TransactionJournalEntry,
   TransactionJournalEntryStatus,
   TransactionJournalKind,
-  TransactionJournalStatus
+  TransactionJournalStatus,
+  TransactionJournalV2,
+  CreateTransactionJournalV2Input
 } from "./transaction-journal.js";
 export type {
   CreatePlanArtifactInput,

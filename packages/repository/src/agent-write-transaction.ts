@@ -11,8 +11,11 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 import {
+  approvalBindingV2Checksum,
   deriveChangeSetGroupApprovalToken,
+  validateApprovalBindingV2,
   type StoryBibleApplyReceipt,
+  type ApprovalBindingV2,
   type StoryBibleApplyReceiptAsset,
   type StoryBibleInversePatchOperation
 } from "@novel-studio/agent-engine";
@@ -20,6 +23,7 @@ import { isStoryBibleV11AssetType, validateStoryBibleV11Asset } from "@novel-stu
 
 import { storageError, validationError } from "./errors.js";
 import { withStoryBibleProjectWriteLock } from "./story-bible-write-coordinator.js";
+import type { ApprovalAuthorizationLedgerPort } from "./approval-authorization-ledger.js";
 import type {
   AgentTransactionJournal,
   AgentTransactionJournalEntry,
@@ -149,8 +153,13 @@ export interface AgentWriteTransactionOptions {
   readonly allowUnsafeReplaceFileForTesting?: boolean;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
+  /** Main-owned ledger boundary. Missing ledger makes v2 mutation fail closed. */
+  readonly authorizationLedger?: AgentWriteAuthorizationLedgerPort;
+  readonly requireV2Authorization?: boolean;
   readonly traceId?: string;
 }
+
+export type AgentWriteAuthorizationLedgerPort = ApprovalAuthorizationLedgerPort;
 
 interface PreparedFile extends AgentWriteTransactionFile {
   readonly targetPath: string;
@@ -256,6 +265,11 @@ export class AgentWriteTransaction {
     return this.exclusive(async () => {
       const validation = validateTransactionInput(input, "apply");
       if (!validation.ok) return validation;
+      if (this.options.requireV2Authorization === true && !hasV2Approval(input)) {
+        return err(this.error("AGENT_WRITE_V2_AUTHORIZATION_REQUIRED", "validation"));
+      }
+      const authorization = await this.validateV2Authorization(input);
+      if (!authorization.ok) return authorization;
       const lock = await this.options.projectLock.verifyProjectLockOwnership();
       if (!lock.ok) return lock;
       if (input.applyBatchId !== undefined && input.consistencyGroupId !== undefined) {
@@ -294,6 +308,12 @@ export class AgentWriteTransaction {
     return this.exclusive(async () => {
       const lock = await this.options.projectLock.verifyProjectLockOwnership();
       if (!lock.ok) return lock;
+      const startupReconciliation =
+        this.options.recoveryRepository.reconcileAuthorizationReservationsAtStartup;
+      if (startupReconciliation !== undefined) {
+        const reconciled = await startupReconciliation.call(this.options.recoveryRepository);
+        if (!reconciled.ok) return reconciled;
+      }
       const listed = await this.options.recoveryRepository.listAgentTransactionJournals();
       if (!listed.ok) return listed;
 
@@ -953,7 +973,12 @@ export class AgentWriteTransaction {
     if (!runSequence.ok) return runSequence;
 
     const versionGroupId = this.createVersionGroupId();
-    const transactionId = this.createTransactionId();
+    const transactionId =
+      transactionOptions.kind === "apply" &&
+      "reservationTransactionId" in input &&
+      input.reservationTransactionId !== undefined
+        ? input.reservationTransactionId
+        : this.createTransactionId();
     const preparedFiles: PreparedFile[] = [];
     const preparedOperations: PreparedOperation[] = [];
     for (const file of preflight.value) {
@@ -1120,7 +1145,96 @@ export class AgentWriteTransaction {
     journal = withJournalStatus(journal, "applied", this.now());
     const finalJournal = await this.persistJournal(journal);
     if (!finalJournal.ok) return this.compensate(journal);
+    if (
+      input.approvalBindingV2 !== undefined &&
+      input.authorizationId !== undefined &&
+      this.options.authorizationLedger !== undefined
+    ) {
+      const consumed = await this.options.authorizationLedger.consume(
+        input.authorizationId,
+        transactionId
+      );
+      if (!consumed.ok) {
+        await this.options.authorizationLedger.revoke(
+          input.authorizationId,
+          "authorization_consume_failed"
+        );
+        return this.compensate(journal);
+      }
+    }
     return ok(groupFromJournal(journal, "applied", undefined));
+  }
+
+  private async validateV2Authorization(
+    input: AgentWriteTransactionInput
+  ): Promise<Result<void, UnifiedError>> {
+    if (input.approvalBindingV2 === undefined) return ok(undefined);
+    if (
+      input.approvalToken !== undefined ||
+      input.changeSetSchemaVersion !== "2.0" ||
+      input.authorizationId === undefined ||
+      input.reservationTransactionId === undefined ||
+      input.providerSemanticVersionSetChecksum === undefined ||
+      this.options.authorizationLedger === undefined
+    ) {
+      return err(this.error("AGENT_WRITE_V2_AUTHORIZATION_REQUIRED", "validation"));
+    }
+    const binding = validateApprovalBindingV2(input.approvalBindingV2, Date.parse(this.now()));
+    if (!binding.ok) return binding;
+    if (
+      binding.value.runId !== input.runId ||
+      binding.value.changeSetId !== input.changeSetId ||
+      binding.value.changeSetRevision !== input.revision ||
+      binding.value.changeSetChecksum !== input.checksum ||
+      binding.value.providerSemanticVersionSetChecksum !==
+        input.providerSemanticVersionSetChecksum ||
+      binding.value.executionWritePolicy !== input.writePolicy ||
+      binding.value.approvalSource !== input.approvalSource
+    ) {
+      return err(this.error("AGENT_WRITE_V2_AUTHORIZATION_STALE", "validation"));
+    }
+    const selectedOperationIds = [
+      ...input.files.map((file) => file.relativePath),
+      ...(input.operations ?? []).map((operation) => operation.operationId)
+    ];
+    if (
+      selectedOperationIds.length !== binding.value.selectedOperationIds.length ||
+      selectedOperationIds.some(
+        (operationId, index) => operationId !== binding.value.selectedOperationIds[index]
+      ) ||
+      (input.selectionChecksum !== undefined &&
+        input.selectionChecksum !== binding.value.selectionChecksum)
+    ) {
+      return err(this.error("AGENT_WRITE_V2_SELECTION_MISMATCH", "validation"));
+    }
+    if (input.files.length === 1) {
+      const file = input.files[0];
+      if (
+        file === undefined ||
+        binding.value.baseChecksum !== file.baseChecksum ||
+        binding.value.candidateChecksum !== file.candidateChecksum
+      ) {
+        return err(this.error("AGENT_WRITE_V2_BINDING_MISMATCH", "validation"));
+      }
+    }
+    const reserved = await this.options.authorizationLedger.query(
+      input.authorizationId,
+      input.reservationTransactionId
+    );
+    if (
+      !reserved.ok ||
+      reserved.value.state !== "reserved" ||
+      reserved.value.authorizationId !== input.authorizationId ||
+      reserved.value.reservedTransactionId !== input.reservationTransactionId
+    ) {
+      return err(this.error("AGENT_WRITE_V2_RESERVATION_INVALID", "validation"));
+    }
+    if (
+      approvalBindingV2Checksum(reserved.value.binding) !== approvalBindingV2Checksum(binding.value)
+    ) {
+      return err(this.error("AGENT_WRITE_V2_BINDING_MISMATCH", "validation"));
+    }
+    return ok(undefined);
   }
 
   private async compensate(
@@ -2203,29 +2317,44 @@ function validateTransactionInput(
       : input.storyBibleSuggestionIds !== undefined;
   const approvalBindingInvalid =
     kind === "apply"
-      ? !("writePolicy" in input) ||
-        (input.writePolicy !== "write_before_confirmation" &&
-          input.writePolicy !== "user_preapproved_run") ||
-        !("approvalSource" in input) ||
-        (input.approvalSource !== "human_confirmation" &&
-          input.approvalSource !== "user_preapproved_run" &&
-          input.approvalSource !== "project_safe_auto_update") ||
-        (input.approvalSource === "user_preapproved_run" &&
-          input.writePolicy !== "user_preapproved_run") ||
-        !("approvalToken" in input) ||
-        input.approvalToken !== expectedApprovalToken ||
-        ((input.approvalSource === "user_preapproved_run" ||
-          input.approvalSource === "project_safe_auto_update") &&
-          destructiveOperation) ||
-        (input.approvalSource === "project_safe_auto_update" &&
-          (!hasCompleteGroupBinding ||
-            input.storyBibleSuggestionIds === undefined ||
-            input.storyBibleSuggestionIds.length === 0 ||
-            operations.length > 0 ||
-            input.files.length === 0 ||
-            input.files.some(
-              (file) => parseStoryBibleAssetRecord(file.candidateContent) === undefined
-            )))
+      ? hasV2Approval(input)
+        ? input.changeSetSchemaVersion !== "2.0" ||
+          input.approvalToken !== undefined ||
+          input.authorizationId === undefined ||
+          input.reservationTransactionId === undefined ||
+          input.providerSemanticVersionSetChecksum === undefined ||
+          !validateApprovalBindingV2(input.approvalBindingV2).ok ||
+          input.approvalBindingV2?.providerSemanticVersionSetChecksum !==
+            input.providerSemanticVersionSetChecksum ||
+          input.approvalBindingV2?.runId !== input.runId ||
+          input.approvalBindingV2?.changeSetId !== input.changeSetId ||
+          input.approvalBindingV2?.changeSetRevision !== input.revision ||
+          input.approvalBindingV2?.changeSetChecksum !== input.checksum
+        : input.changeSetSchemaVersion === "2.0" ||
+          !("writePolicy" in input) ||
+          (input.writePolicy !== "write_before_confirmation" &&
+            input.writePolicy !== "user_preapproved_run") ||
+          !("approvalSource" in input) ||
+          (input.approvalSource !== "human_confirmation" &&
+            input.approvalSource !== "user_preapproved_run" &&
+            input.approvalSource !== "project_safe_auto_update") ||
+          (input.approvalSource === "user_preapproved_run" &&
+            input.writePolicy !== "user_preapproved_run") ||
+          !("approvalToken" in input) ||
+          input.approvalToken === undefined ||
+          input.approvalToken !== expectedApprovalToken ||
+          ((input.approvalSource === "user_preapproved_run" ||
+            input.approvalSource === "project_safe_auto_update") &&
+            destructiveOperation) ||
+          (input.approvalSource === "project_safe_auto_update" &&
+            (!hasCompleteGroupBinding ||
+              input.storyBibleSuggestionIds === undefined ||
+              input.storyBibleSuggestionIds.length === 0 ||
+              operations.length > 0 ||
+              input.files.length === 0 ||
+              input.files.some(
+                (file) => parseStoryBibleAssetRecord(file.candidateContent) === undefined
+              )))
       : "writePolicy" in input || "approvalSource" in input || "approvalToken" in input;
   if (
     identifiers.some((value) => value.length === 0) ||
@@ -2261,6 +2390,15 @@ function validateTransactionInput(
     );
   }
   return ok(undefined);
+}
+
+function hasV2Approval(input: TransactionExecutionInput): input is AgentWriteTransactionInput & {
+  readonly approvalBindingV2: ApprovalBindingV2;
+  readonly authorizationId: string;
+  readonly reservationTransactionId: string;
+  readonly providerSemanticVersionSetChecksum: string;
+} {
+  return "approvalBindingV2" in input && input.approvalBindingV2 !== undefined;
 }
 
 function isStoryBibleTransactionRelativePath(relativePath: string): boolean {
@@ -2643,11 +2781,14 @@ function createJournal(input: {
     files: input.preparedFiles,
     operations: input.preparedOperations
   });
+  const v2 = input.kind === "apply" && hasV2Approval(input.input) ? input.input : undefined;
   return freezeJournal({
     schemaVersion:
-      input.input.applyBatchId === undefined || input.input.consistencyGroupId === undefined
-        ? "1.0"
-        : "1.1",
+      v2 !== undefined
+        ? "2.0"
+        : input.input.applyBatchId === undefined || input.input.consistencyGroupId === undefined
+          ? "1.0"
+          : "1.1",
     transactionId: input.transactionId,
     versionGroupId: input.versionGroupId,
     kind: input.kind,
@@ -2667,13 +2808,24 @@ function createJournal(input: {
     ...(input.kind === "apply" &&
     "writePolicy" in input.input &&
     "approvalSource" in input.input &&
-    "approvalToken" in input.input
+    "approvalToken" in input.input &&
+    v2 === undefined
       ? {
           writePolicy: input.input.writePolicy,
           approvalSource: input.input.approvalSource,
           approvalToken: input.input.approvalToken
         }
       : {}),
+    ...(v2 === undefined
+      ? {}
+      : {
+          writePolicy: v2.writePolicy,
+          approvalSource: v2.approvalSource,
+          authorizationId: v2.authorizationId,
+          reservationTransactionId: v2.reservationTransactionId,
+          providerSemanticVersionSetChecksum: v2.providerSemanticVersionSetChecksum,
+          approvalBindingV2: v2.approvalBindingV2
+        }),
     createdAt: input.createdAt,
     updatedAt: input.createdAt,
     transactionStatus: "prepared",
@@ -3068,7 +3220,15 @@ function freezeJournal(journal: AgentTransactionJournal): AgentTransactionJourna
       : { undoOfVersionGroupIds: Object.freeze([...journal.undoOfVersionGroupIds]) }),
     ...(journal.storyBibleReceipt === undefined
       ? {}
-      : { storyBibleReceipt: freezeStoryBibleReceipt(journal.storyBibleReceipt) })
+      : { storyBibleReceipt: freezeStoryBibleReceipt(journal.storyBibleReceipt) }),
+    ...(journal.approvalBindingV2 === undefined
+      ? {}
+      : {
+          approvalBindingV2: Object.freeze({
+            ...journal.approvalBindingV2,
+            selectedOperationIds: Object.freeze([...journal.approvalBindingV2.selectedOperationIds])
+          })
+        })
   });
 }
 
@@ -3379,7 +3539,7 @@ function groupFromJournal(
         ? "partial_failure"
         : "not_available";
   return freezeGroup({
-    schemaVersion: journal.schemaVersion,
+    schemaVersion: journal.schemaVersion === "2.0" ? "1.1" : journal.schemaVersion,
     versionGroupId: journal.versionGroupId,
     runId: journal.runId,
     checkpointId: journal.checkpointId,

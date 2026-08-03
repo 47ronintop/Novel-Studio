@@ -2,6 +2,7 @@ import type {
   AgentWritePolicy,
   ChangeSet,
   ChangeSetApproval,
+  ChangeSetApprovalV2,
   ChangeSetOperation,
   StoryBibleApplyReceipt,
   StoryBibleStatusTransitionProof,
@@ -10,8 +11,11 @@ import type {
 } from "@novel-studio/agent-engine";
 import {
   deriveChangeSetGroupApprovalToken,
+  isChangeSetV2,
   inspectChangeSetConsistencyGroups
 } from "@novel-studio/agent-engine";
+import type { ApprovalBindingV2 } from "@novel-studio/agent-engine";
+import { validateApprovalBindingV2 } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { consumeAgentRunApprovalAuthorization } from "./agent-write-authorization.js";
 import { consumeStoryAnalysisSafeAutoApproval } from "./story-analysis-safe-auto-authorization.js";
@@ -33,10 +37,15 @@ export interface VersionGroupTransactionApplyInput {
   readonly changeSetId: string;
   readonly revision: number;
   readonly checksum: string;
+  readonly changeSetSchemaVersion?: "1.0" | "1.1" | "2.0";
   readonly writePolicy: AgentWritePolicy;
   readonly approvalSource:
     "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
-  readonly approvalToken: string;
+  readonly approvalToken?: string;
+  readonly authorizationId?: string;
+  readonly reservationTransactionId?: string;
+  readonly providerSemanticVersionSetChecksum?: string;
+  readonly approvalBindingV2?: ApprovalBindingV2;
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
@@ -101,7 +110,7 @@ export interface VersionGroupSessionHooks {
 
 export interface VersionGroupApplyApprovedInput {
   readonly changeSet: ChangeSet;
-  readonly approval: ChangeSetApproval;
+  readonly approval: ChangeSetApproval | ChangeSetApprovalV2;
   readonly group?: {
     readonly applyBatchId: string;
     readonly consistencyGroupId: string;
@@ -129,7 +138,7 @@ export interface VersionGroupSession {
   applyApproved(input: VersionGroupApplyApprovedInput): Promise<Result<VersionGroup, UnifiedError>>;
   applyApprovedBatch(input: {
     readonly changeSet: ChangeSet;
-    readonly approval: ChangeSetApproval;
+    readonly approval: ChangeSetApproval | ChangeSetApprovalV2;
     readonly applyBatchId: string;
     readonly storyBibleSuggestionIdsByGroup?: Readonly<Record<string, readonly string[]>>;
   }): Promise<Result<VersionGroupApplyBatchResult, UnifiedError>>;
@@ -180,6 +189,13 @@ export function createVersionGroupSession(
         ? ok(undefined)
         : validateApprovalBinding(input.changeSet, input.approval);
       if (!binding.ok) return binding;
+      const v2Approval = isChangeSetApprovalV2(input.approval) ? input.approval : undefined;
+      if (input.changeSet.schemaVersion === "2.0" && v2Approval === undefined) {
+        return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
+      }
+      if (input.changeSet.schemaVersion !== "2.0" && v2Approval !== undefined) {
+        return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
+      }
       const consistencyGroups = inspectChangeSetConsistencyGroups(input.changeSet);
       if (input.group === undefined && consistencyGroups.selectedGroupIds.length > 0) {
         return err(versionGroupError("VERSION_GROUP_GROUPED_APPLY_REQUIRED"));
@@ -228,16 +244,21 @@ export function createVersionGroupSession(
       let committedGroup: VersionGroup | undefined;
       let result: Result<VersionGroup, UnifiedError> | undefined;
       const approvalToken =
-        input.group === undefined
-          ? input.approval.binding.approvalToken
-          : deriveChangeSetGroupApprovalToken({
-              changeSetId: input.changeSet.changeSetId,
-              revision: input.changeSet.revision,
-              checksum: input.changeSet.checksum,
-              applyBatchId: input.group.applyBatchId,
-              consistencyGroupId: input.group.consistencyGroupId,
-              selectionChecksum: input.approval.binding.selectionChecksum ?? ""
-            });
+        v2Approval !== undefined
+          ? undefined
+          : input.group === undefined
+            ? (input.approval as ChangeSetApproval).binding.approvalToken
+            : deriveChangeSetGroupApprovalToken({
+                changeSetId: input.changeSet.changeSetId,
+                revision: input.changeSet.revision,
+                checksum: input.changeSet.checksum,
+                applyBatchId: input.group.applyBatchId,
+                consistencyGroupId: input.group.consistencyGroupId,
+                selectionChecksum: input.approval.binding.selectionChecksum ?? ""
+              });
+      if (v2Approval === undefined && approvalToken === undefined) {
+        return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
+      }
       await options.hooks.pauseAutosave(relativePaths);
       try {
         result = await options.transaction.apply({
@@ -246,9 +267,19 @@ export function createVersionGroupSession(
           changeSetId: input.changeSet.changeSetId,
           revision: input.changeSet.revision,
           checksum: input.changeSet.checksum,
+          changeSetSchemaVersion: input.changeSet.schemaVersion,
           writePolicy: input.changeSet.writePolicy ?? "write_before_confirmation",
           approvalSource: input.approval.approvalSource,
-          approvalToken,
+          ...(approvalToken === undefined ? {} : { approvalToken }),
+          ...(v2Approval !== undefined
+            ? {
+                authorizationId: v2Approval.authorizationId,
+                reservationTransactionId: v2Approval.reservationTransactionId,
+                providerSemanticVersionSetChecksum:
+                  v2Approval.binding.providerSemanticVersionSetChecksum,
+                approvalBindingV2: v2Approval.binding
+              }
+            : {}),
           ...(input.group === undefined
             ? {}
             : {
@@ -348,6 +379,9 @@ export function createVersionGroupSession(
           ))
       ) {
         return err(versionGroupError("VERSION_GROUP_APPLY_BATCH_INVALID"));
+      }
+      if (isChangeSetApprovalV2(input.approval) && consistencyGroups.selectedGroupIds.length > 1) {
+        return err(versionGroupError("VERSION_GROUP_V2_BATCH_SINGLE_RESERVATION_REQUIRED"));
       }
       const binding = validateApprovalBinding(input.changeSet, input.approval);
       if (!binding.ok) return binding;
@@ -716,8 +750,28 @@ async function syncAppliedEditors(
 
 function validateApprovalBinding(
   changeSet: ChangeSet,
-  approval: ChangeSetApproval
+  approval: ChangeSetApproval | ChangeSetApprovalV2
 ): Result<void, UnifiedError> {
+  if (approval.schemaVersion === "2.0") {
+    const bindingValidation = validateApprovalBindingV2(approval.binding);
+    if (
+      !bindingValidation.ok ||
+      !isChangeSetV2(changeSet) ||
+      approval.decision !== "apply_selected" ||
+      approval.displayBindingChecksum !== changeSet.displayBindingChecksum ||
+      approval.binding.runId !== changeSet.runId ||
+      approval.binding.changeSetId !== changeSet.changeSetId ||
+      approval.binding.changeSetRevision !== changeSet.revision ||
+      approval.binding.changeSetChecksum !== changeSet.checksum ||
+      approval.binding.providerSemanticVersionSetChecksum !==
+        changeSet.providerSemanticVersionSetChecksum ||
+      typeof approval.authorizationId !== "string" ||
+      typeof approval.reservationTransactionId !== "string"
+    ) {
+      return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
+    }
+    return ok(undefined);
+  }
   const consistencyGroups = inspectChangeSetConsistencyGroups(changeSet);
   const expectedGroupIds = consistencyGroups.selectedGroupIds;
   const approvedGroupIds = approval.binding.selectedConsistencyGroupIds;
@@ -755,6 +809,17 @@ function validateApprovalBinding(
     return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
   }
   return ok(undefined);
+}
+
+function isChangeSetApprovalV2(
+  approval: ChangeSetApproval | ChangeSetApprovalV2
+): approval is ChangeSetApprovalV2 {
+  return (
+    approval.schemaVersion === "2.0" &&
+    typeof approval.binding === "object" &&
+    "capability" in approval.binding &&
+    typeof approval.displayBindingChecksum === "string"
+  );
 }
 
 function isStoryAnalysisBatchApprovalSource(source: ChangeSetApproval["approvalSource"]): boolean {

@@ -136,7 +136,7 @@ export interface ChangeSetFileChange {
 }
 
 export interface ChangeSet {
-  readonly schemaVersion: "1.0" | "1.1";
+  readonly schemaVersion: "1.0" | "1.1" | "2.0";
   readonly changeSetId: string;
   readonly revision: number;
   readonly runId: string;
@@ -146,7 +146,12 @@ export interface ChangeSet {
   readonly writePolicy?: AgentWritePolicy;
   readonly status: ChangeSetStatus;
   readonly checksum: string;
-  readonly approvalToken: string;
+  /** Legacy deterministic token. It is absent from newly written 2.0 sets. */
+  readonly approvalToken?: string;
+  /** Renderer-visible preview checksum. It is never an apply credential. */
+  readonly displayBindingChecksum?: string;
+  /** Exact Provider semantic version-set used to build this proposal. */
+  readonly providerSemanticVersionSetChecksum?: string;
   readonly files: readonly ChangeSetFileChange[];
   readonly createdAt: string;
   /**
@@ -155,6 +160,40 @@ export interface ChangeSet {
    */
   readonly operationsSchemaVersion?: "1.1";
   readonly operations?: readonly ChangeSetOperation[];
+}
+
+export type ChangeSetV2 = Omit<
+  ChangeSet,
+  | "schemaVersion"
+  | "approvalToken"
+  | "displayBindingChecksum"
+  | "providerSemanticVersionSetChecksum"
+> & {
+  readonly schemaVersion: "2.0";
+  readonly displayBindingChecksum: string;
+  readonly providerSemanticVersionSetChecksum: string;
+  readonly approvalToken?: never;
+};
+
+export type ChangeSetLegacy = Omit<ChangeSet, "schemaVersion" | "approvalToken"> & {
+  readonly schemaVersion: "1.0" | "1.1";
+  readonly approvalToken: string;
+};
+
+export interface CreateChangeSetRevisionV2Input extends CreateChangeSetRevisionInput {
+  readonly providerSemanticVersionSetChecksum: string;
+}
+
+export interface CreateOperationsChangeSetRevisionV2Input {
+  readonly changeSetId: string;
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly operations: readonly ChangeSetOperation[];
+  readonly createdAt: string;
+  readonly providerSemanticVersionSetChecksum: string;
 }
 
 export interface ChangeSetProposal {
@@ -247,7 +286,7 @@ export interface ChangeSetConsistencyGroupSelection {
 export async function createChangeSetRevision(
   input: CreateChangeSetRevisionInput,
   options: ChangeSetRevisionOptions = {}
-): Promise<ChangeSet> {
+): Promise<ChangeSetLegacy> {
   const draft = createDraftFile(input.proposal, options.createHunkId);
   return finalizeChangeSet(
     {
@@ -260,11 +299,320 @@ export async function createChangeSetRevision(
   );
 }
 
+/**
+ * Create a new Change Set 2.0. The legacy deterministic approval token is
+ * intentionally discarded; only the display binding checksum is retained.
+ */
+export async function createChangeSetRevisionV2(
+  input: CreateChangeSetRevisionV2Input,
+  options: ChangeSetRevisionOptions = {}
+): Promise<ChangeSetV2> {
+  assertProviderSemanticVersionSetChecksum(input.providerSemanticVersionSetChecksum);
+  const legacy = await createChangeSetRevision(input, options);
+  return asChangeSetV2(legacy, input.providerSemanticVersionSetChecksum);
+}
+
+/** Strictly validate and freeze a Change Set 2.0 read from Main storage. */
+export function parseChangeSetV2(value: unknown): ChangeSetV2 {
+  if (!isChangeSetV2(value)) {
+    throw changeSetError(
+      "CHANGE_SET_V2_INVALID",
+      "The Change Set is not a strict 2.0 record.",
+      "Regenerate the proposal from the current Provider semantic version set."
+    );
+  }
+  return deepFreeze(value as ChangeSetV2);
+}
+
+export function isChangeSetV2(value: unknown): value is ChangeSetV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    "schemaVersion",
+    "changeSetId",
+    "revision",
+    "runId",
+    "projectId",
+    "checkpointId",
+    "contextSnapshotId",
+    "writePolicy",
+    "status",
+    "checksum",
+    "displayBindingChecksum",
+    "providerSemanticVersionSetChecksum",
+    "files",
+    "createdAt",
+    "operationsSchemaVersion",
+    "operations"
+  ]);
+  if (
+    Object.keys(record).some((key) => !allowedKeys.has(key)) ||
+    record["schemaVersion"] !== "2.0" ||
+    "approvalToken" in record ||
+    typeof record["displayBindingChecksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record["displayBindingChecksum"] as string) ||
+    typeof record["providerSemanticVersionSetChecksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record["providerSemanticVersionSetChecksum"] as string)
+  ) {
+    return false;
+  }
+  if (!isStrictChangeSetV2Payload(record)) return false;
+  if (
+    typeof record["checksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record["checksum"] as string)
+  )
+    return false;
+  const { checksum, displayBindingChecksum, ...withoutChecksums } = record;
+  const expectedChecksum = checksumChangeSetText(
+    stableSerialize({ ...withoutChecksums, checksum: "" })
+  );
+  const expectedDisplayBindingChecksum = checksumChangeSetText(
+    stableSerialize({
+      ...withoutChecksums,
+      checksum: expectedChecksum,
+      displayBindingChecksum: "display-binding-placeholder"
+    })
+  );
+  return checksum === expectedChecksum && displayBindingChecksum === expectedDisplayBindingChecksum;
+}
+
+function isStrictChangeSetV2Payload(record: Record<string, unknown>): boolean {
+  const requiredStrings = [
+    "changeSetId",
+    "runId",
+    "projectId",
+    "checkpointId",
+    "contextSnapshotId",
+    "createdAt"
+  ];
+  if (
+    requiredStrings.some((key) => typeof record[key] !== "string" || record[key] === "") ||
+    !Number.isSafeInteger(record["revision"]) ||
+    (record["revision"] as number) < 1 ||
+    !["awaiting_approval", "approved", "rejected", "stale", "applied", "abandoned"].includes(
+      record["status"] as string
+    ) ||
+    (record["writePolicy"] !== undefined &&
+      record["writePolicy"] !== "write_before_confirmation" &&
+      record["writePolicy"] !== "user_preapproved_run") ||
+    !Array.isArray(record["files"]) ||
+    !(record["files"] as unknown[]).every(isChangeSetV2FileShape)
+  ) {
+    return false;
+  }
+  if (
+    record["operationsSchemaVersion"] !== undefined &&
+    record["operationsSchemaVersion"] !== "1.1"
+  ) {
+    return false;
+  }
+  if (
+    record["operations"] !== undefined &&
+    (!Array.isArray(record["operations"]) ||
+      !(record["operations"] as unknown[]).every(isChangeSetV2OperationShape))
+  ) {
+    return false;
+  }
+  try {
+    return (
+      record["operations"] === undefined ||
+      preflightChangeSetOperations(record["operations"] as ChangeSetOperation[]).ok
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isChangeSetV2FileShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const file = value as Record<string, unknown>;
+  if (
+    typeof file["relativePath"] !== "string" ||
+    typeof file["assetType"] !== "string" ||
+    (file["assetType"] !== "chapter" && file["assetType"] !== "text") ||
+    typeof file["baseChecksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(file["baseChecksum"] as string) ||
+    typeof file["candidateChecksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(file["candidateChecksum"] as string) ||
+    typeof file["baseContent"] !== "string" ||
+    typeof file["candidateContent"] !== "string" ||
+    typeof file["selected"] !== "boolean" ||
+    !Array.isArray(file["hunks"]) ||
+    !isChangeSetV2ValidationShape(file["validation"]) ||
+    !(file["hunks"] as unknown[]).every(isChangeSetV2HunkShape)
+  ) {
+    return false;
+  }
+  if (
+    file["assetId"] !== undefined &&
+    (typeof file["assetId"] !== "string" || file["assetId"] === "")
+  )
+    return false;
+  if (
+    file["consistencyGroupId"] !== undefined &&
+    (typeof file["consistencyGroupId"] !== "string" || file["consistencyGroupId"] === "")
+  )
+    return false;
+  return (
+    file["storyBibleStatusProof"] === undefined ||
+    isStoryBibleStatusProofShape(file["storyBibleStatusProof"])
+  );
+}
+
+function isChangeSetV2HunkShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const hunk = value as Record<string, unknown>;
+  const range = hunk["range"];
+  const characterRange = hunk["characterRange"];
+  return (
+    typeof hunk["hunkId"] === "string" &&
+    hunk["hunkId"].length > 0 &&
+    typeof hunk["baseContent"] === "string" &&
+    typeof hunk["replacement"] === "string" &&
+    typeof hunk["selected"] === "boolean" &&
+    isChangeSetRangeShape(range) &&
+    isCharacterRangeShape(characterRange)
+  );
+}
+
+function isChangeSetRangeShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const range = value as Record<string, unknown>;
+  return (
+    (range["unit"] === "character" || range["unit"] === "line" || range["unit"] === "paragraph") &&
+    Number.isSafeInteger(range["start"]) &&
+    Number.isSafeInteger(range["end"]) &&
+    (range["start"] as number) >= 0 &&
+    (range["end"] as number) >= (range["start"] as number)
+  );
+}
+
+function isCharacterRangeShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const range = value as Record<string, unknown>;
+  return (
+    Number.isSafeInteger(range["start"]) &&
+    Number.isSafeInteger(range["end"]) &&
+    (range["start"] as number) >= 0 &&
+    (range["end"] as number) >= (range["start"] as number)
+  );
+}
+
+function isChangeSetV2ValidationShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const validation = value as Record<string, unknown>;
+  if (typeof validation["valid"] !== "boolean") return false;
+  return ["utf8", "syntax", "schema", "asset"].every((key) => {
+    const check = validation[key];
+    return (
+      typeof check === "object" &&
+      check !== null &&
+      !Array.isArray(check) &&
+      (check as Record<string, unknown>)["status"] !== undefined &&
+      ["valid", "invalid", "not_applicable"].includes(
+        (check as Record<string, unknown>)["status"] as string
+      )
+    );
+  });
+}
+
+function isStoryBibleStatusProofShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proof = value as Record<string, unknown>;
+  if (proof["action"] === "delete") {
+    return (
+      typeof proof["deletionImpactChecksum"] === "string" &&
+      /^[a-f0-9]{64}$/u.test(proof["deletionImpactChecksum"] as string)
+    );
+  }
+  return (
+    proof["action"] === "restore" &&
+    (proof["expectedStatus"] === "active" ||
+      proof["expectedStatus"] === "draft" ||
+      proof["expectedStatus"] === "archived") &&
+    typeof proof["historyAuthorizationChecksum"] === "string" &&
+    /^[a-f0-9]{64}$/u.test(proof["historyAuthorizationChecksum"] as string)
+  );
+}
+
+function isChangeSetV2OperationShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const operation = value as Record<string, unknown>;
+  if (
+    typeof operation["kind"] !== "string" ||
+    typeof operation["operationId"] !== "string" ||
+    typeof operation["toolCallIdempotencyKey"] !== "string"
+  )
+    return false;
+  if (
+    (operation["selected"] !== undefined && typeof operation["selected"] !== "boolean") ||
+    (operation["consistencyGroupId"] !== undefined &&
+      typeof operation["consistencyGroupId"] !== "string") ||
+    (operation["dependsOn"] !== undefined &&
+      (!Array.isArray(operation["dependsOn"]) ||
+        (operation["dependsOn"] as unknown[]).some((dependency) => typeof dependency !== "string")))
+  ) {
+    return false;
+  }
+  switch (operation["kind"]) {
+    case "modify":
+    case "create_directory":
+      return typeof operation["relativePath"] === "string";
+    case "create_file":
+      return (
+        typeof operation["relativePath"] === "string" && typeof operation["content"] === "string"
+      );
+    case "delete_file":
+      return (
+        typeof operation["relativePath"] === "string" &&
+        typeof operation["baseChecksum"] === "string"
+      );
+    case "move_file":
+      return (
+        typeof operation["sourcePath"] === "string" &&
+        typeof operation["targetPath"] === "string" &&
+        typeof operation["sourceChecksum"] === "string"
+      );
+    default:
+      return false;
+  }
+}
+
+/** Canonical renderer-safe serialization; capability/authorization is absent by construction. */
+export function serializeChangeSetV2(changeSet: ChangeSetV2): string {
+  parseChangeSetV2(changeSet);
+  return stableSerialize(changeSet);
+}
+
+export function changeSetV2DisplayBindingChecksum(changeSet: ChangeSetV2): string {
+  parseChangeSetV2(changeSet);
+  const withoutDerivedChecksums = Object.fromEntries(
+    Object.entries(changeSet).filter(
+      ([key]) => key !== "approvalToken" && key !== "checksum" && key !== "displayBindingChecksum"
+    )
+  );
+  return checksumChangeSetText(
+    stableSerialize({
+      ...withoutDerivedChecksums,
+      checksum: changeSet.checksum,
+      displayBindingChecksum: "display-binding-placeholder"
+    })
+  );
+}
+
+export function createOperationsChangeSetRevisionV2(
+  input: CreateOperationsChangeSetRevisionV2Input
+): ChangeSetV2 {
+  assertProviderSemanticVersionSetChecksum(input.providerSemanticVersionSetChecksum);
+  const legacy = createOperationsChangeSetRevisionBatch(input);
+  return asChangeSetV2(legacy, input.providerSemanticVersionSetChecksum);
+}
+
 export async function appendChangeSetProposal(
-  current: ChangeSet,
+  current: ChangeSetLegacy,
   input: AppendChangeSetProposalInput,
   options: ChangeSetRevisionOptions = {}
-): Promise<ChangeSet> {
+): Promise<ChangeSetLegacy> {
   const proposed = createDraftFile(input.proposal, options.createHunkId);
   const existing = current.files.find((file) => file.relativePath === proposed.relativePath);
   const files: DraftFileChange[] = current.files.map(toAllSelectedDraft);
@@ -335,11 +683,25 @@ export async function appendChangeSetProposal(
   });
 }
 
+export async function appendChangeSetProposalV2(
+  current: ChangeSetV2,
+  input: AppendChangeSetProposalInput,
+  options: ChangeSetRevisionOptions = {}
+): Promise<ChangeSetV2> {
+  const legacyCurrent = asLegacyChangeSetForInternal(current);
+  const revised = await appendChangeSetProposal(legacyCurrent, input, options);
+  return asChangeSetV2(revised, current.providerSemanticVersionSetChecksum);
+}
+
 export async function selectChangeSetRevision(
   current: ChangeSet,
   input: SelectChangeSetRevisionInput,
   options: Pick<ChangeSetRevisionOptions, "validateCandidate"> = {}
 ): Promise<ChangeSet> {
+  const preserveSchema = (next: ChangeSet): ChangeSet =>
+    current.schemaVersion === "2.0"
+      ? asChangeSetV2(next, current.providerSemanticVersionSetChecksum ?? "")
+      : next;
   const selections = new Map(input.files.map((selection) => [selection.relativePath, selection]));
   for (const selection of input.files) {
     if (!current.files.some((file) => file.relativePath === selection.relativePath)) {
@@ -396,36 +758,40 @@ export async function selectChangeSetRevision(
       },
       options.validateCandidate
     );
-    return finalizeOperationsChangeSet({
-      changeSetId: current.changeSetId,
-      runId: current.runId,
-      projectId: current.projectId,
-      checkpointId: current.checkpointId,
-      contextSnapshotId: current.contextSnapshotId,
-      writePolicy: effectiveOperationsWritePolicy(
-        current.writePolicy ?? "write_before_confirmation",
-        selectedOperations
-      ),
-      revision: current.revision + 1,
-      createdAt: input.createdAt,
-      files: selectedFiles.files,
-      operations: selectedOperations
-    });
+    return preserveSchema(
+      finalizeOperationsChangeSet({
+        changeSetId: current.changeSetId,
+        runId: current.runId,
+        projectId: current.projectId,
+        checkpointId: current.checkpointId,
+        contextSnapshotId: current.contextSnapshotId,
+        writePolicy: effectiveOperationsWritePolicy(
+          current.writePolicy ?? "write_before_confirmation",
+          selectedOperations
+        ),
+        revision: current.revision + 1,
+        createdAt: input.createdAt,
+        files: selectedFiles.files,
+        operations: selectedOperations
+      })
+    );
   }
 
-  return finalizeChangeSet(
-    {
-      changeSetId: current.changeSetId,
-      runId: current.runId,
-      projectId: current.projectId,
-      checkpointId: current.checkpointId,
-      contextSnapshotId: current.contextSnapshotId,
-      writePolicy: current.writePolicy ?? "write_before_confirmation",
-      revision: current.revision + 1,
-      createdAt: input.createdAt,
-      files
-    },
-    options.validateCandidate
+  return preserveSchema(
+    await finalizeChangeSet(
+      {
+        changeSetId: current.changeSetId,
+        runId: current.runId,
+        projectId: current.projectId,
+        checkpointId: current.checkpointId,
+        contextSnapshotId: current.contextSnapshotId,
+        writePolicy: current.writePolicy ?? "write_before_confirmation",
+        revision: current.revision + 1,
+        createdAt: input.createdAt,
+        files
+      },
+      options.validateCandidate
+    )
   );
 }
 
@@ -538,7 +904,7 @@ async function finalizeChangeSet(
     readonly files: readonly DraftFileChange[];
   },
   validator: ChangeSetCandidateValidator | undefined
-): Promise<ChangeSet> {
+): Promise<ChangeSetLegacy> {
   const files = await Promise.all(input.files.map((file) => finalizeFile(file, validator)));
   const checksum = checksumChangeSetText(
     stableSerialize({
@@ -771,6 +1137,50 @@ function stableSerialize(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function asChangeSetV2(
+  changeSet: ChangeSet,
+  providerSemanticVersionSetChecksum: string
+): ChangeSetV2 {
+  const withoutLegacyToken = Object.fromEntries(
+    Object.entries(changeSet).filter(([key]) => key !== "approvalToken")
+  );
+  const base = {
+    ...withoutLegacyToken,
+    schemaVersion: "2.0" as const,
+    providerSemanticVersionSetChecksum,
+    checksum: ""
+  };
+  const checksum = checksumChangeSetText(stableSerialize(base));
+  const displayBindingChecksum = checksumChangeSetText(
+    stableSerialize({ ...base, checksum, displayBindingChecksum: "display-binding-placeholder" })
+  );
+  return deepFreeze({
+    ...base,
+    checksum,
+    displayBindingChecksum
+  }) as ChangeSetV2;
+}
+
+function asLegacyChangeSetForInternal(changeSet: ChangeSetV2): ChangeSetLegacy {
+  return {
+    ...changeSet,
+    schemaVersion: changeSet.operations === undefined ? "1.0" : "1.1",
+    approvalToken: checksumChangeSetText(
+      `${changeSet.changeSetId}:${changeSet.revision}:${changeSet.checksum}`
+    )
+  } as ChangeSetLegacy;
+}
+
+function assertProviderSemanticVersionSetChecksum(value: string): void {
+  if (!/^[a-f0-9]{64}$/u.test(value)) {
+    throw changeSetError(
+      "CHANGE_SET_PROVIDER_VERSION_SET_INVALID",
+      "A Change Set 2.0 must bind a canonical Provider semantic version-set checksum.",
+      "Rebuild the proposal from the current runtime semantic version set."
+    );
+  }
+}
+
 function isWellFormedUnicode(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -938,7 +1348,7 @@ export function createOperationsChangeSetRevision(input: {
   readonly writePolicy?: AgentWritePolicy;
   readonly operation: ChangeSetOperation;
   readonly createdAt: string;
-}): ChangeSet {
+}): ChangeSetLegacy {
   return createOperationsChangeSetRevisionBatch({
     ...input,
     operations: [input.operation]
@@ -955,7 +1365,7 @@ export function createOperationsChangeSetRevisionBatch(input: {
   readonly writePolicy?: AgentWritePolicy;
   readonly operations: readonly ChangeSetOperation[];
   readonly createdAt: string;
-}): ChangeSet {
+}): ChangeSetLegacy {
   const operations = input.operations.map(normalizeChangeSetOperation);
   if (operations.length === 0) {
     throw changeSetError(
@@ -984,9 +1394,9 @@ export function createOperationsChangeSetRevisionBatch(input: {
 
 /** Append one more lifecycle operation onto an existing Change Set revision. */
 export function appendChangeSetOperation(
-  current: ChangeSet,
+  current: ChangeSetLegacy,
   input: { readonly operation: ChangeSetOperation; readonly createdAt: string }
-): ChangeSet {
+): ChangeSetLegacy {
   return appendChangeSetOperations(current, {
     operations: [input.operation],
     createdAt: input.createdAt
@@ -995,9 +1405,9 @@ export function appendChangeSetOperation(
 
 /** Append one atomic lifecycle-operation batch onto an existing Change Set revision. */
 export function appendChangeSetOperations(
-  current: ChangeSet,
+  current: ChangeSetLegacy,
   input: { readonly operations: readonly ChangeSetOperation[]; readonly createdAt: string }
-): ChangeSet {
+): ChangeSetLegacy {
   if (input.operations.length === 0) {
     throw changeSetError(
       "CHANGE_SET_OPERATION_INVALID",
@@ -1027,6 +1437,14 @@ export function appendChangeSetOperations(
   });
 }
 
+export function appendChangeSetOperationsV2(
+  current: ChangeSetV2,
+  input: { readonly operations: readonly ChangeSetOperation[]; readonly createdAt: string }
+): ChangeSetV2 {
+  const revised = appendChangeSetOperations(asLegacyChangeSetForInternal(current), input);
+  return asChangeSetV2(revised, current.providerSemanticVersionSetChecksum);
+}
+
 function finalizeOperationsChangeSet(input: {
   readonly changeSetId: string;
   readonly runId: string;
@@ -1038,7 +1456,7 @@ function finalizeOperationsChangeSet(input: {
   readonly createdAt: string;
   readonly operations: readonly ChangeSetOperation[];
   readonly files: readonly ChangeSetFileChange[];
-}): ChangeSet {
+}): ChangeSetLegacy {
   const operations = input.operations.map(normalizeChangeSetOperation);
   assertOperationsPreflight(operations);
   assertConsistencyGroupsAreIndivisible(input.files, operations);

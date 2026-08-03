@@ -1,6 +1,25 @@
 export type { AtomicWriteFileSystem, AtomicWriteInput } from "./atomic-write.js";
 export { writeTextAtomically } from "./atomic-write.js";
 export { AgentWriteTransaction } from "./agent-write-transaction.js";
+export {
+  AUTHORIZATION_LEDGER_V2_SCHEMA_VERSION,
+  ApprovalAuthorizationLedger,
+  isLegacyAuthorizationLedgerRecord,
+  projectAuthorizationLedgerRecordForDisplay,
+  validateLedgerRecord,
+  validateWal
+} from "./approval-authorization-ledger.js";
+export type {
+  ApprovalAuthorizationLedgerPort,
+  ApprovalAuthorizationLedgerOptions,
+  ApprovalAuthorizationLedgerRecordV2,
+  AuthorizationLedgerStateV2,
+  AuthorizationReservationWalV2,
+  AuthorizationReservationWalStateV2,
+  IssueAuthorizationV2Input,
+  ReconcileReservationV2Input,
+  ReserveAuthorizationV2Input
+} from "./approval-authorization-ledger.js";
 export type {
   AgentWriteLifecycleMutation,
   AgentWriteLifecycleOperationPort,
@@ -8,6 +27,7 @@ export type {
   AgentWriteTrustedCreativeLifecycleMutation,
   AgentWriteTrustedCreativeMutationPort,
   AgentWriteTrustedCreativeReplaceMutation,
+  AgentWriteAuthorizationLedgerPort,
   AgentWriteTransactionOptions
 } from "./agent-write-transaction.js";
 export { CacheRepository } from "./cache-repository.js";

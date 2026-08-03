@@ -3,13 +3,16 @@ import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  createApprovalBindingV2,
   createMainOnlyApprovalDecisionProofV1,
   createOperationsChangeSetRevision,
   DEFAULT_APPROVAL_RULE_SET_CHECKSUM,
   DEFAULT_APPROVAL_RULE_SET_VERSION,
   type ChangeSet,
-  type MainOnlyApprovalDecisionProofV1
+  type MainOnlyApprovalDecisionProofV1,
+  type ChangeSetV2
 } from "@novel-studio/agent-engine";
+import { changeSetV2DisplayBindingChecksum } from "@novel-studio/agent-engine";
 import { createUnifiedError, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import {
@@ -18,6 +21,10 @@ import {
   type ChangeSetSessionPort
 } from "../src/change-set-session.js";
 import { authorizeAgentRunProposal } from "../src/agent-write-authorization.js";
+import {
+  consumeApprovalBindingV2Authorization,
+  createMainApprovalIssuer
+} from "../src/agent-write-authorization.js";
 
 describe("Change Set application session", () => {
   test("persists a Main-only proof only for its frozen Change Set revision", async () => {
@@ -71,6 +78,73 @@ describe("Change Set application session", () => {
     });
   });
 
+  test("requires and records Main ownership for a v2 apply approval", async () => {
+    const persisted: ChangeSet[] = [];
+    const providerChecksum = "a".repeat(64);
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "old", persisted }),
+      providerSemanticVersionSetChecksum: providerChecksum,
+      approvalBindingIssuer: createMainApprovalIssuer(),
+      createChangeSetId: () => "change-set-v2",
+      createHunkId: () => "v2-hunk",
+      now: () => "2099-01-01T00:00:00.000Z"
+    });
+    const changeSet = expectOk(
+      await session.proposeFileWrite({
+        ...proposalBinding(),
+        path: "notes/outline.md",
+        baseHash: sha256("old"),
+        range: { unit: "character", start: 0, end: 3 },
+        replacement: "new"
+      })
+    ) as ChangeSetV2;
+    const binding = createApprovalBindingV2({
+      workspaceBindingId: "workspace_01",
+      rootBindingId: "root_01",
+      runId: changeSet.runId,
+      changeSetId: changeSet.changeSetId,
+      changeSetRevision: changeSet.revision,
+      changeSetChecksum: changeSet.checksum,
+      providerSemanticVersionSetChecksum: providerChecksum,
+      operationKind: "replace_file",
+      selectionChecksum: "b".repeat(64),
+      selectedOperationIds: ["notes/outline.md"],
+      operationOrderChecksum: "c".repeat(64),
+      sourceRef: "file:notes/outline.md",
+      targetRef: "file:notes/outline.md",
+      baseChecksum: sha256("old"),
+      candidateChecksum: sha256("new"),
+      baseManifestChecksum: "d".repeat(64),
+      candidateManifestChecksum: "e".repeat(64),
+      encoding: "utf-8",
+      bom: "absent",
+      eol: "lf",
+      approvalRuleSetVersion: "rules-2.0",
+      approvalRuleSetChecksum: "f".repeat(64),
+      proofId: "proof_01",
+      proofChecksum: "1".repeat(64),
+      executionWritePolicy: "write_before_confirmation",
+      policyRevision: "policy_01",
+      capabilityRevision: "capability_01",
+      approvalSource: "human_confirmation",
+      issuedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T01:00:00.000Z"
+    });
+    const approval = await session.decideV2({
+      changeSet,
+      decision: "apply_selected",
+      displayBindingChecksum: changeSetV2DisplayBindingChecksum(changeSet),
+      binding,
+      authorizationId: "auth_01",
+      reservationTransactionId: "tx_01",
+      resolvedAt: "2099-01-01T00:00:01.000Z",
+      now: Date.parse("2099-01-01T00:00:30.000Z")
+    });
+    expect(approval).toMatchObject({ ok: true, value: { schemaVersion: "2.0" } });
+    if (!approval.ok) return;
+    expect(consumeApprovalBindingV2Authorization(approval.value.binding)).toBe(true);
+  });
+
   test("fails closed when Main proof storage is unavailable", async () => {
     const chapterBytes = "First.\n\nOld middle.\n\nLast.";
     const persisted: ChangeSet[] = [];
@@ -99,6 +173,26 @@ describe("Change Set application session", () => {
     ).toMatchObject({
       ok: false,
       error: { code: "APPROVAL_DECISION_PROOF_REPOSITORY_UNAVAILABLE" }
+    });
+  });
+
+  test("rejects an unknown persisted Change Set schema instead of legacy-appending it", async () => {
+    const malformed = {
+      schemaVersion: "9.0",
+      changeSetId: "change-set-unknown"
+    } as unknown as ChangeSet;
+    const session = createChangeSetSession({
+      port: {
+        ...targetPort({ chapter: () => "unused", file: () => "unused", persisted: [] }),
+        async readChangeSet() {
+          return { ok: true as const, value: malformed };
+        }
+      }
+    });
+
+    expect(await session.readChangeSet("change-set-unknown")).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_SCHEMA_UNSUPPORTED" }
     });
   });
 

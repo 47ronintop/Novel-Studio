@@ -7,6 +7,7 @@ import type {
 } from "@novel-studio/shared";
 import type {
   ChangeSetOperation,
+  ApprovalBindingV2,
   StoryBibleApplyReceipt,
   StoryBibleStatusTransitionProof
 } from "@novel-studio/agent-engine";
@@ -341,10 +342,15 @@ export interface AgentWriteTransactionInput {
   readonly changeSetId: string;
   readonly revision: number;
   readonly checksum: string;
+  readonly changeSetSchemaVersion?: "1.0" | "1.1" | "2.0";
   readonly writePolicy: "write_before_confirmation" | "user_preapproved_run";
   readonly approvalSource:
     "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
-  readonly approvalToken: string;
+  readonly approvalToken?: string;
+  readonly authorizationId?: string;
+  readonly reservationTransactionId?: string;
+  readonly providerSemanticVersionSetChecksum?: string;
+  readonly approvalBindingV2?: ApprovalBindingV2;
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
@@ -492,7 +498,7 @@ export interface AgentTransactionJournalMutationRecord {
 }
 
 export interface AgentTransactionJournal {
-  readonly schemaVersion: "1.0" | "1.1";
+  readonly schemaVersion: "1.0" | "1.1" | "2.0";
   readonly transactionId: string;
   readonly versionGroupId: string;
   readonly kind: AgentTransactionJournalKind;
@@ -506,6 +512,10 @@ export interface AgentTransactionJournal {
   readonly approvalSource?:
     "human_confirmation" | "user_preapproved_run" | "project_safe_auto_update";
   readonly approvalToken?: string;
+  readonly authorizationId?: string;
+  readonly reservationTransactionId?: string;
+  readonly providerSemanticVersionSetChecksum?: string;
+  readonly approvalBindingV2?: ApprovalBindingV2;
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
@@ -533,6 +543,11 @@ export interface AgentWriteRecoveryPort {
     transactionId: string
   ): Promise<Result<AgentTransactionJournal, UnifiedError>>;
   listAgentTransactionJournals(): Promise<Result<readonly AgentTransactionJournal[], UnifiedError>>;
+  /**
+   * Reconciles Main-owned authorization reservations against prepared
+   * transaction journals during startup recovery only.
+   */
+  reconcileAuthorizationReservationsAtStartup?(): Promise<Result<void, UnifiedError>>;
   writeRollbackReview?(
     review: RollbackReviewRecord
   ): Promise<Result<RollbackReviewRecord, UnifiedError>>;

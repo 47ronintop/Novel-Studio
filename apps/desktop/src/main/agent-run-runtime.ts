@@ -12,6 +12,7 @@ import {
   createAgentRunSession,
   createAgentUsageSession,
   createChangeSetSession,
+  createMainApprovalIssuer,
   createWorkspaceOutlineSource,
   createVersionGroupSession,
   DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
@@ -126,6 +127,7 @@ import {
 } from "@novel-studio/shared";
 import {
   AgentConversationFileRepository,
+  ApprovalAuthorizationLedger,
   ApprovalDecisionProofFileRepository,
   AgentWriteTransaction,
   CreativeProjectFileRepository,
@@ -134,6 +136,7 @@ import {
   normalizeCreativeProjectFilePath,
   type AgentWriteLifecycleOperationPort,
   type AgentWriteTrustedCreativeMutationPort,
+  type AgentWriteAuthorizationLedgerPort,
   AgentProjectReadRepository,
   AgentProjectSearchRepository,
   AgentRunFileRepository,
@@ -239,6 +242,8 @@ export interface DesktopAgentRunSessionOptions {
   readonly surfaceTransactionRecoveryReview?: (group: VersionGroup) => Promise<void>;
   readonly projectLockOwnerId?: string;
   readonly failAgentWriteAt?: number;
+  /** Main-owned v2 proposal binding, supplied by a qualified runtime host. */
+  readonly providerSemanticVersionSetChecksum?: string;
   /**
    * Main-owned release gates. These only request a capability; the runtime also requires the
    * corresponding concrete port to be present before exposing a tool to the model.
@@ -705,6 +710,12 @@ function createDesktopAgentRuntimeServices(
     workspaceKind: options.workspaceKind,
     workspaceId: options.projectId
   };
+  const approvalBindingIssuer = createMainApprovalIssuer();
+  const authorizationLedger = new ApprovalAuthorizationLedger({
+    projectRoot: options.stateRoot,
+    traceId: "desktop-agent-authorization-ledger"
+  });
+  const resolvedFeatureFlags = options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS;
   const packedContextCache = createDesktopPackedContextCache();
   const requestedCapabilities = requestedCapabilitySnapshot(options);
   const trustedCreativeMutations =
@@ -834,6 +845,10 @@ function createDesktopAgentRuntimeServices(
     ...(chapterRepository === undefined ? {} : { chapterRepository }),
     ...(storyBible === undefined ? {} : { storyBible }),
     repository,
+    ...(options.providerSemanticVersionSetChecksum === undefined
+      ? {}
+      : { providerSemanticVersionSetChecksum: options.providerSemanticVersionSetChecksum }),
+    approvalBindingIssuer,
     ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState })
   });
   const proofRepositoryBound = changeSetSession.bindApprovalDecisionProofRepository(
@@ -879,7 +894,9 @@ function createDesktopAgentRuntimeServices(
             : { surfaceTransactionRecoveryReview: options.surfaceTransactionRecoveryReview }),
           ...(options.failAgentWriteAt === undefined
             ? {}
-            : { failAgentWriteAt: options.failAgentWriteAt })
+            : { failAgentWriteAt: options.failAgentWriteAt }),
+          authorizationLedger,
+          requireV2Authorization: resolvedFeatureFlags.agentGuidanceV3
         });
   const writeMutationTrust: AgentWriteMutationTrust =
     versionGroupServices === undefined
@@ -895,7 +912,7 @@ function createDesktopAgentRuntimeServices(
             : "unavailable";
   const capabilitySnapshot = buildRuntimeCapabilitySnapshot({
     requested: requestedCapabilities,
-    featureFlags: options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS,
+    featureFlags: resolvedFeatureFlags,
     ...(searchToolExecutor === undefined ? {} : { searchToolExecutor }),
     ...(options.networkToolExecutor === undefined
       ? {}
@@ -1068,10 +1085,7 @@ function createDesktopAgentRuntimeServices(
       }
     },
     writeMutationTrust,
-    catalogSchemaVersion:
-      (options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS).agentGuidanceV3 === true
-        ? "2.0"
-        : "1.0",
+    catalogSchemaVersion: resolvedFeatureFlags.agentGuidanceV3 === true ? "2.0" : "1.0",
     limitedRunPreapprovalQualified: false,
     defaultCapabilitySnapshot: capabilitySnapshot,
     ...(options.externalToolDescriptors === undefined
@@ -1095,10 +1109,7 @@ function createDesktopAgentRuntimeServices(
       ? {}
       : { contextSourcePreferences: options.contextSourcePreferences }),
     capabilitySnapshot,
-    catalogSchemaVersion:
-      (options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS).agentGuidanceV3 === true
-        ? "2.0"
-        : "1.0",
+    catalogSchemaVersion: resolvedFeatureFlags.agentGuidanceV3 === true ? "2.0" : "1.0",
     ...(options.externalToolDescriptors === undefined
       ? {}
       : { externalToolDescriptors: options.externalToolDescriptors }),
@@ -1154,7 +1165,7 @@ function createDesktopAgentRuntimeServices(
     readToolExecutor,
     startPreflight,
     newRunToolFacadeVersion: "v2",
-    agentGuidanceV3: (options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS).agentGuidanceV3,
+    agentGuidanceV3: resolvedFeatureFlags.agentGuidanceV3,
     capabilitySnapshot,
     effectiveCapabilityState,
     getEffectiveCapabilityState: () => effectiveCapabilityState,
@@ -1730,8 +1741,16 @@ export function createDesktopChangeSetSession(input: {
   readonly storyBible?: StoryBibleFileRepository;
   readonly repository: AgentRunFileRepository;
   readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
+  readonly providerSemanticVersionSetChecksum?: string;
+  readonly approvalBindingIssuer?: object;
 }) {
   return createChangeSetSession({
+    ...(input.providerSemanticVersionSetChecksum === undefined
+      ? {}
+      : { providerSemanticVersionSetChecksum: input.providerSemanticVersionSetChecksum }),
+    ...(input.approvalBindingIssuer === undefined
+      ? {}
+      : { approvalBindingIssuer: input.approvalBindingIssuer }),
     port: {
       async readChapterTarget({ projectId, chapterId }) {
         if (projectId !== input.projectId) return err(runtimeError("CHANGE_SET_PROJECT_MISMATCH"));
@@ -2020,6 +2039,8 @@ export function createDesktopVersionGroupServices(input: {
   readonly projectLockOwnerId: string;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
+  readonly authorizationLedger?: AgentWriteAuthorizationLedgerPort;
+  readonly requireV2Authorization?: boolean;
   readonly projectReads: AgentProjectReadRepository;
   readonly chapterRepository?: ChapterFileRepository;
   readonly storyBible?: StoryBibleFileRepository;
@@ -2038,7 +2059,10 @@ export function createDesktopVersionGroupServices(input: {
 } {
   const recoveryRepository = new RecoveryRepository({
     projectRoot: input.stateRoot,
-    traceId: "desktop-agent-recovery"
+    traceId: "desktop-agent-recovery",
+    ...(input.authorizationLedger === undefined
+      ? {}
+      : { authorizationLedger: input.authorizationLedger })
   });
   const storyBible = input.storyBible;
   const historyRepository = new HistoryRepository({
@@ -2087,6 +2111,12 @@ export function createDesktopVersionGroupServices(input: {
                   input.failAgentWriteAt
                 )
         }),
+    ...(input.authorizationLedger === undefined
+      ? {}
+      : { authorizationLedger: input.authorizationLedger }),
+    ...(input.requireV2Authorization === undefined
+      ? {}
+      : { requireV2Authorization: input.requireV2Authorization }),
     traceId: "desktop-agent-write"
   });
   const transactionPort: VersionGroupSessionTransactionPort = {
@@ -2425,9 +2455,22 @@ async function prepareTransactionInput(
     changeSetId: input.changeSetId,
     revision: input.revision,
     checksum: input.checksum,
+    ...(input.changeSetSchemaVersion === undefined
+      ? {}
+      : { changeSetSchemaVersion: input.changeSetSchemaVersion }),
     writePolicy: input.writePolicy,
     approvalSource: input.approvalSource,
-    approvalToken: input.approvalToken,
+    ...(input.approvalToken === undefined ? {} : { approvalToken: input.approvalToken }),
+    ...(input.authorizationId === undefined ? {} : { authorizationId: input.authorizationId }),
+    ...(input.reservationTransactionId === undefined
+      ? {}
+      : { reservationTransactionId: input.reservationTransactionId }),
+    ...(input.providerSemanticVersionSetChecksum === undefined
+      ? {}
+      : { providerSemanticVersionSetChecksum: input.providerSemanticVersionSetChecksum }),
+    ...(input.approvalBindingV2 === undefined
+      ? {}
+      : { approvalBindingV2: input.approvalBindingV2 }),
     ...(input.applyBatchId === undefined ? {} : { applyBatchId: input.applyBatchId }),
     ...(input.consistencyGroupId === undefined
       ? {}

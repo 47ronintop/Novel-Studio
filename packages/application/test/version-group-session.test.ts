@@ -6,6 +6,7 @@ import {
   deriveChangeSetGroupApprovalToken,
   type ChangeSet,
   type ChangeSetApproval,
+  type ChangeSetApprovalV2,
   type VersionGroup
 } from "@novel-studio/agent-engine";
 import { err, ok } from "@novel-studio/shared";
@@ -220,6 +221,40 @@ describe("VersionGroupSession", () => {
       files: [{ relativePath: "timeline/main.json" }]
     });
     expect(Object.isFrozen(result.ok && result.value.groups)).toBe(true);
+  });
+
+  test("does not reuse one v2 reservation across multiple consistency groups", async () => {
+    const apply = vi.fn(async () => ok(appliedGroup()));
+    const session = createSession([], { apply });
+    const grouped = groupedChangeSet();
+    const approval = {
+      schemaVersion: "2.0" as const,
+      decision: "apply_selected" as const,
+      approvalSource: "human_confirmation" as const,
+      resolvedAt: "2026-07-13T01:01:00.000Z",
+      displayBindingChecksum: "f".repeat(64),
+      authorizationId: "auth_01",
+      reservationTransactionId: "tx_01",
+      binding: {
+        capability: "capability_abcdefghijklmnopqrstuvwxyz123456",
+        selectionChecksum: checksumChangeSetSelection(grouped, [
+          "fact_location_01",
+          "fact_timeline_01"
+        ])
+      }
+    } as unknown as ChangeSetApprovalV2;
+
+    await expect(
+      session.applyApprovedBatch({
+        changeSet: grouped,
+        approval,
+        applyBatchId: "apply_batch_v2"
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "VERSION_GROUP_V2_BATCH_SINGLE_RESERVATION_REQUIRED" }
+    });
+    expect(apply).not.toHaveBeenCalled();
   });
 
   test("rejects a publicly forged preapproved-run source before the transaction port", async () => {
