@@ -1035,6 +1035,7 @@ function createDesktopAgentRuntimeServices(
     readToolExecutor,
     startPreflight,
     newRunToolFacadeVersion: "v2",
+    agentGuidanceV3: (options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS).agentGuidanceV3,
     capabilitySnapshot,
     effectiveCapabilityState,
     getEffectiveCapabilityState: () => effectiveCapabilityState,
@@ -2959,6 +2960,7 @@ async function resolveStartFromDraft(
     writePolicy: runDraft.writePolicy,
     writePolicyAcknowledged: runDraft.writePolicyAcknowledged,
     userRequest: runDraft.userRequest,
+    writingTaskIntent: resolved.value.writingTaskIntent,
     ...(runDraft.reasoningEffort === undefined
       ? {}
       : { requestedReasoningEffort: runDraft.reasoningEffort }),

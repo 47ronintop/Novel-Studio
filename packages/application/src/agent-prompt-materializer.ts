@@ -5,30 +5,43 @@ import {
   createDeterministicTokenEstimator,
   createPackedAgentContext,
   createPackedAgentContextManifest,
-  isAgentContextScope,
+  parseProviderSemanticVersionSetV1,
   validatePackedAgentContext,
   validateAgentContextSourceMaterialization,
   type AgentContextPreferenceScope,
   type AgentContextPrecision,
-  type AgentContextScope,
   type AgentRunEvent,
   type AgentContextSourceInput,
   type AgentTokenEstimator,
   type PackedAgentContext,
-  type PackedAgentContextSourceManifest
+  type PackedAgentContextSourceManifest,
+  type ProviderSemanticVersionSetV1
 } from "@novel-studio/agent-engine";
 import type { JsonObject } from "@novel-studio/shared";
 
 import {
   AGENT_CONTEXT_PROFILE_VERSION,
+  parseAgentContextProfile,
   type AgentContextProfile,
   type AgentContextProfileId
 } from "./agent-context-profile.js";
 import {
+  parseCurrentAgentGuidanceRefId,
   parseHistoricalAgentGuidanceRefId,
+  verifyCurrentAgentGuidance,
   verifyHistoricalAgentGuidance
 } from "./agent-guidance-registry.js";
+import type {
+  MaterializedAgentGuidanceProofV3,
+  MaterializedAgentGuidanceV3,
+  NormalizedRegisteredGuidanceBuildInputV3
+} from "./agent-guidance-registry.js";
+import {
+  parseProviderVisibleAgentRuntimeFacts,
+  type ProviderVisibleAgentRuntimeFacts
+} from "./agent-runtime-facts.js";
 import { AGENT_SYSTEM_GUIDANCE_VERSION } from "./agent-system-prompt.js";
+import { parseWritingTaskIntent, type WritingTaskIntent } from "./writing-task-intent.js";
 import { createAgentContextSourceMaterializationArtifact } from "./workspace-project-context.js";
 
 export type MaterializedAgentMessageRole = "system" | "user" | "assistant" | "tool";
@@ -63,7 +76,7 @@ export interface AgentPromptMaterialization {
  * conversation/tool history remains event-sourced; this artifact freezes everything that precedes
  * that history, including the exact app-authored system prompt and current source bodies.
  */
-export interface AgentPromptMaterializationArtifact extends Omit<
+export interface LegacyAgentPromptMaterializationArtifactV11 extends Omit<
   AgentPromptMaterialization,
   "schemaVersion"
 > {
@@ -82,6 +95,36 @@ export interface AgentPromptMaterializationArtifact extends Omit<
   readonly packedContextManifestChecksum?: string;
   readonly checksum: string;
 }
+
+export interface AgentPromptMaterializationArtifactV2 extends Omit<
+  AgentPromptMaterialization,
+  "schemaVersion"
+> {
+  readonly schemaVersion: "2.0";
+  readonly artifactId: string;
+  readonly runId: string;
+  readonly contextSnapshotId: string;
+  readonly profile: AgentContextProfile;
+  readonly toolCatalogRevision: string;
+  readonly userRequest: string;
+  readonly systemGuidanceRefId: string;
+  readonly guidanceTemplateChecksum: string;
+  readonly guidanceRegistryKey: string;
+  readonly guidanceRendererVersion: string;
+  readonly normalizedGuidanceInput: NormalizedRegisteredGuidanceBuildInputV3;
+  readonly runtimeFacts: ProviderVisibleAgentRuntimeFacts;
+  readonly writingTaskIntent: WritingTaskIntent | null;
+  readonly writingGenerationGuidanceVersion: "not_applicable" | "2.0";
+  readonly providerSemanticVersionSet: ProviderSemanticVersionSetV1;
+  readonly guidanceProof: MaterializedAgentGuidanceProofV3;
+  readonly contextSources: readonly AgentContextSourceInput[];
+  readonly conversationSummaryMessages: readonly MaterializedAgentMessage[];
+  readonly packedContextManifestChecksum?: string;
+  readonly checksum: string;
+}
+
+export type AgentPromptMaterializationArtifact =
+  LegacyAgentPromptMaterializationArtifactV11 | AgentPromptMaterializationArtifactV2;
 
 export interface MaterializeAgentPromptInput {
   readonly profile: AgentContextProfile;
@@ -118,7 +161,13 @@ export interface CreateAgentPromptMaterializationArtifactInput extends Omit<
   readonly systemGuidanceRefId?: string;
   /** Parsing-only compatibility input; new writes derive this from packedContext. */
   readonly packedContextManifestChecksum?: string;
+  readonly guidanceMaterialization: MaterializedAgentGuidanceV3;
 }
+
+export type CreateHistoricalAgentPromptMaterializationArtifactInput = Omit<
+  CreateAgentPromptMaterializationArtifactInput,
+  "guidanceMaterialization"
+>;
 
 const stableProjectSourceKinds = new Set<string>(["project_conventions", "workspace_outline"]);
 
@@ -529,7 +578,63 @@ export function materializeAgentRunHistory(
 
 export function createAgentPromptMaterializationArtifact(
   input: CreateAgentPromptMaterializationArtifactInput
-): AgentPromptMaterializationArtifact {
+): AgentPromptMaterializationArtifactV2 {
+  assertPersistableContextSources(input.contextSources ?? []);
+  let guidance: MaterializedAgentGuidanceV3;
+  try {
+    guidance = verifyCurrentAgentGuidance(input.guidanceMaterialization);
+  } catch {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const guidanceRefId = `system_guidance:${guidance.proof.registryKey}`;
+  if (
+    guidance.normalizedInput.profile.profileId !== input.profile.profileId ||
+    stableSerialize(guidance.normalizedInput.profile) !== stableSerialize(input.profile) ||
+    guidance.materializedGuidance !== input.systemPrompt ||
+    (input.systemGuidanceRefId !== undefined && input.systemGuidanceRefId !== guidanceRefId)
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const materialization = materializeAgentPrompt({
+    ...input,
+    systemPrompt: guidance.materializedGuidance
+  });
+  const packedContextManifestChecksum = resolvePackedContextManifestChecksum(input);
+  const unsigned = {
+    ...materialization,
+    schemaVersion: "2.0" as const,
+    artifactId: promptMaterializationArtifactId(input.contextSnapshotId),
+    runId: input.runId,
+    contextSnapshotId: input.contextSnapshotId,
+    profile: structuredClone(input.profile),
+    toolCatalogRevision: input.toolCatalogRevision,
+    userRequest: input.userRequest,
+    systemGuidanceRefId: guidanceRefId,
+    guidanceTemplateChecksum: guidance.proof.templateChecksum,
+    guidanceRegistryKey: guidance.proof.registryKey,
+    guidanceRendererVersion: guidance.proof.guidanceRendererVersion,
+    normalizedGuidanceInput: structuredClone(guidance.normalizedInput),
+    runtimeFacts: structuredClone(guidance.normalizedInput.runtimeFacts),
+    writingTaskIntent: structuredClone(guidance.normalizedInput.writingTaskIntent),
+    writingGenerationGuidanceVersion: guidance.proof.writingGenerationGuidanceVersion,
+    providerSemanticVersionSet: structuredClone(
+      guidance.normalizedInput.providerSemanticVersionSet
+    ),
+    guidanceProof: structuredClone(guidance.proof),
+    contextSources: structuredClone(input.contextSources ?? []),
+    conversationSummaryMessages: structuredClone(input.conversationSummaryMessages ?? []),
+    ...(packedContextManifestChecksum === undefined ? {} : { packedContextManifestChecksum })
+  };
+  return deepFreeze({
+    ...unsigned,
+    checksum: checksum(stableSerialize(unsigned))
+  });
+}
+
+/** Legacy writer used only while the Main-owned Guidance 3.0 feature flag is off. */
+export function createHistoricalAgentPromptMaterializationArtifact(
+  input: CreateHistoricalAgentPromptMaterializationArtifactInput
+): LegacyAgentPromptMaterializationArtifactV11 {
   assertPersistableContextSources(input.contextSources ?? []);
   const systemGuidanceRefId =
     input.systemGuidanceRefId ??
@@ -551,16 +656,7 @@ export function createAgentPromptMaterializationArtifact(
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
   const materialization = materializeAgentPrompt(input);
-  const packedContextManifestChecksum =
-    input.packedContext === undefined
-      ? input.packedContextManifestChecksum
-      : createPackedAgentContextManifest(input.packedContext).manifestChecksum;
-  if (
-    packedContextManifestChecksum !== undefined &&
-    !/^[a-f0-9]{64}$/u.test(packedContextManifestChecksum)
-  ) {
-    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
-  }
+  const packedContextManifestChecksum = resolvePackedContextManifestChecksum(input);
   const unsigned = {
     ...materialization,
     schemaVersion: "1.1" as const,
@@ -590,7 +686,7 @@ export function rematerializeAgentPromptArtifact(
     readonly packedContext?: PackedAgentContext;
   }
 ): AgentPromptMaterializationArtifact {
-  return createAgentPromptMaterializationArtifact({
+  const common = {
     runId: prior.runId,
     contextSnapshotId: input.contextSnapshotId,
     profile: prior.profile,
@@ -601,12 +697,236 @@ export function rematerializeAgentPromptArtifact(
     ...(input.packedContext === undefined ? {} : { packedContext: input.packedContext }),
     conversationSummaryMessages: prior.conversationSummaryMessages,
     systemGuidanceRefId: prior.systemGuidanceRefId
-  });
+  };
+  return prior.schemaVersion === "2.0"
+    ? createAgentPromptMaterializationArtifact({
+        ...common,
+        guidanceMaterialization: {
+          normalizedInput: prior.normalizedGuidanceInput,
+          materializedGuidance: prior.systemPrompt,
+          proof: prior.guidanceProof
+        }
+      })
+    : createHistoricalAgentPromptMaterializationArtifact(common);
 }
 
 export function parseAgentPromptMaterializationArtifact(
   value: JsonObject
 ): AgentPromptMaterializationArtifact {
+  try {
+    return value["schemaVersion"] === "2.0"
+      ? parseAgentPromptMaterializationArtifactV2(value)
+      : parseLegacyAgentPromptMaterializationArtifact(value);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "AGENT_PROMPT_MATERIALIZATION_VERSION_UNSUPPORTED"
+    ) {
+      throw error;
+    }
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+}
+
+function parseAgentPromptMaterializationArtifactV2(
+  value: JsonObject
+): AgentPromptMaterializationArtifactV2 {
+  const fields = [
+    "schemaVersion",
+    "profileId",
+    "profileVersion",
+    "systemPrompt",
+    "toolCatalogRevision",
+    "contextSources",
+    "stablePrefixMessages",
+    "dynamicSuffixMessages",
+    "messages",
+    "stablePrefixChecksum",
+    "artifactId",
+    "runId",
+    "contextSnapshotId",
+    "profile",
+    "userRequest",
+    "systemGuidanceRefId",
+    "guidanceTemplateChecksum",
+    "guidanceRegistryKey",
+    "guidanceRendererVersion",
+    "normalizedGuidanceInput",
+    "runtimeFacts",
+    "writingTaskIntent",
+    "writingGenerationGuidanceVersion",
+    "providerSemanticVersionSet",
+    "guidanceProof",
+    "conversationSummaryMessages",
+    ...(value["packedContextManifestChecksum"] === undefined
+      ? []
+      : ["packedContextManifestChecksum"]),
+    "checksum"
+  ];
+  if (!hasExactlyFields(value, fields)) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const profile = parseProfile(value["profile"]);
+  const runId = safeId(value["runId"]);
+  const contextSnapshotId = safeId(value["contextSnapshotId"]);
+  const artifactId = safeId(value["artifactId"]);
+  const systemPrompt = stringValue(value["systemPrompt"]);
+  const toolCatalogRevision = stringValue(value["toolCatalogRevision"]);
+  const userRequest = stringValue(value["userRequest"]);
+  const systemGuidanceRefId = stringValue(value["systemGuidanceRefId"]);
+  const contextSources = parseContextSources(value["contextSources"]);
+  const conversationSummaryMessages = parseMessages(value["conversationSummaryMessages"]);
+  const packedContextManifestChecksum =
+    value["packedContextManifestChecksum"] === undefined
+      ? undefined
+      : checksumValue(value["packedContextManifestChecksum"]);
+  const normalized = value["normalizedGuidanceInput"];
+  const proofValue = value["guidanceProof"];
+  if (
+    runId === undefined ||
+    contextSnapshotId === undefined ||
+    artifactId !== promptMaterializationArtifactId(contextSnapshotId) ||
+    systemPrompt === undefined ||
+    toolCatalogRevision === undefined ||
+    userRequest === undefined ||
+    systemGuidanceRefId === undefined ||
+    contextSources === undefined ||
+    conversationSummaryMessages === undefined ||
+    (value["packedContextManifestChecksum"] !== undefined &&
+      packedContextManifestChecksum === undefined) ||
+    !isRecord(normalized) ||
+    !hasExactlyFields(normalized, [
+      "profile",
+      "runtimeFacts",
+      "writingTaskIntent",
+      "writingGenerationGuidanceVersion",
+      "providerSemanticVersionSet"
+    ]) ||
+    !isRecord(proofValue) ||
+    !hasExactlyFields(proofValue, [
+      "registryKey",
+      "guidanceRendererVersion",
+      "templateChecksum",
+      "runtimeFactsChecksum",
+      "writingGenerationGuidanceVersion",
+      "providerSemanticVersionSetChecksum",
+      "normalizedInputChecksum",
+      "materializedGuidanceChecksum"
+    ])
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const proofChecksums = {
+    templateChecksum: checksumValue(proofValue["templateChecksum"]),
+    runtimeFactsChecksum: checksumValue(proofValue["runtimeFactsChecksum"]),
+    providerSemanticVersionSetChecksum: checksumValue(
+      proofValue["providerSemanticVersionSetChecksum"]
+    ),
+    normalizedInputChecksum: checksumValue(proofValue["normalizedInputChecksum"]),
+    materializedGuidanceChecksum: checksumValue(proofValue["materializedGuidanceChecksum"])
+  };
+  const {
+    templateChecksum,
+    runtimeFactsChecksum,
+    providerSemanticVersionSetChecksum,
+    normalizedInputChecksum,
+    materializedGuidanceChecksum
+  } = proofChecksums;
+  if (
+    templateChecksum === undefined ||
+    runtimeFactsChecksum === undefined ||
+    providerSemanticVersionSetChecksum === undefined ||
+    normalizedInputChecksum === undefined ||
+    materializedGuidanceChecksum === undefined
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const normalizedProfile = parseProfile(normalized["profile"]);
+  const runtimeFacts = parseProviderVisibleAgentRuntimeFacts(normalized["runtimeFacts"]);
+  const writingTaskIntent =
+    normalized["writingTaskIntent"] === null
+      ? null
+      : parseWritingTaskIntent(normalized["writingTaskIntent"]);
+  const writingGenerationGuidanceVersion = normalized["writingGenerationGuidanceVersion"];
+  if (
+    writingGenerationGuidanceVersion !== "not_applicable" &&
+    writingGenerationGuidanceVersion !== "2.0"
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const providerSetChecksum = providerSemanticVersionSetChecksum;
+  const providerSemanticVersionSet = parseProviderSemanticVersionSetV1(
+    normalized["providerSemanticVersionSet"],
+    providerSetChecksum
+  );
+  const registryKey = stringValue(proofValue["registryKey"]);
+  const guidanceRendererVersion = stringValue(proofValue["guidanceRendererVersion"]);
+  const proofWritingVersion = proofValue["writingGenerationGuidanceVersion"];
+  if (
+    registryKey === undefined ||
+    guidanceRendererVersion === undefined ||
+    proofWritingVersion !== writingGenerationGuidanceVersion
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const guidanceRef = parseCurrentAgentGuidanceRefId(systemGuidanceRefId);
+  const guidanceMaterialization = verifyCurrentAgentGuidance({
+    normalizedInput: {
+      profile: normalizedProfile,
+      runtimeFacts,
+      writingTaskIntent,
+      writingGenerationGuidanceVersion,
+      providerSemanticVersionSet
+    },
+    materializedGuidance: systemPrompt,
+    proof: {
+      registryKey: guidanceRef.registryKey,
+      guidanceRendererVersion:
+        guidanceRendererVersion as MaterializedAgentGuidanceProofV3["guidanceRendererVersion"],
+      templateChecksum,
+      runtimeFactsChecksum,
+      writingGenerationGuidanceVersion,
+      providerSemanticVersionSetChecksum: providerSetChecksum,
+      normalizedInputChecksum,
+      materializedGuidanceChecksum
+    }
+  });
+  if (
+    registryKey !== guidanceRef.registryKey ||
+    stableSerialize(profile) !== stableSerialize(normalizedProfile) ||
+    stableSerialize(value["runtimeFacts"]) !== stableSerialize(runtimeFacts) ||
+    stableSerialize(value["writingTaskIntent"]) !== stableSerialize(writingTaskIntent) ||
+    value["writingGenerationGuidanceVersion"] !== writingGenerationGuidanceVersion ||
+    stableSerialize(value["providerSemanticVersionSet"]) !==
+      stableSerialize(providerSemanticVersionSet) ||
+    value["guidanceTemplateChecksum"] !== guidanceMaterialization.proof.templateChecksum ||
+    value["guidanceRegistryKey"] !== guidanceMaterialization.proof.registryKey ||
+    value["guidanceRendererVersion"] !== guidanceMaterialization.proof.guidanceRendererVersion
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const recreated = createAgentPromptMaterializationArtifact({
+    runId,
+    contextSnapshotId,
+    profile,
+    systemPrompt,
+    toolCatalogRevision,
+    userRequest,
+    contextSources,
+    conversationSummaryMessages,
+    systemGuidanceRefId,
+    guidanceMaterialization,
+    ...(packedContextManifestChecksum === undefined ? {} : { packedContextManifestChecksum })
+  });
+  if (stableSerialize(value) !== stableSerialize(recreated)) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  return recreated;
+}
+
+function parseLegacyAgentPromptMaterializationArtifact(
+  value: JsonObject
+): LegacyAgentPromptMaterializationArtifactV11 {
   const persistedSchemaVersion = value["schemaVersion"];
   if (persistedSchemaVersion !== "1.0" && persistedSchemaVersion !== "1.1") {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_VERSION_UNSUPPORTED");
@@ -642,7 +962,7 @@ export function parseAgentPromptMaterializationArtifact(
   ) {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
-  const recreated = createAgentPromptMaterializationArtifact({
+  const recreated = createHistoricalAgentPromptMaterializationArtifact({
     runId,
     contextSnapshotId,
     profile,
@@ -708,120 +1028,30 @@ export function materializeProjectDataSource(
   };
 }
 
+function resolvePackedContextManifestChecksum(input: {
+  readonly packedContext?: PackedAgentContext;
+  readonly packedContextManifestChecksum?: string;
+}): string | undefined {
+  const value =
+    input.packedContext === undefined
+      ? input.packedContextManifestChecksum
+      : createPackedAgentContextManifest(input.packedContext).manifestChecksum;
+  if (value !== undefined && !/^[a-f0-9]{64}$/u.test(value)) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  return value;
+}
+
 function checksum(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function parseProfile(value: unknown): AgentContextProfile {
-  if (!isRecord(value)) throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
-  const profileId = value["profileId"];
-  const profileVersion = profileVersionValue(value["profileVersion"]);
-  const scope = value["scope"];
-  const operationMode = value["operationMode"];
-  const contextMode = value["contextMode"];
-  const workspaceBound = value["workspaceBound"];
-  const toolPolicy = value["toolPolicy"];
-  if (
-    !isAgentContextScope(scope) ||
-    !isProfileId(profileId) ||
-    profileVersion === undefined ||
-    (operationMode !== "conversation" &&
-      operationMode !== "planning" &&
-      operationMode !== "execution") ||
-    (contextMode !== "standalone_chat" &&
-      contextMode !== "writing" &&
-      contextMode !== "general_file") ||
-    typeof workspaceBound !== "boolean" ||
-    !isToolPolicy(toolPolicy) ||
-    !isPersistedProfileCombination({
-      profileId,
-      scope,
-      operationMode,
-      contextMode,
-      workspaceBound,
-      toolPolicy
-    })
-  ) {
+  try {
+    return parseAgentContextProfile(value);
+  } catch {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
-  return deepFreeze({
-    profileId,
-    // Artifacts are immutable input. A later profile release must not rewrite their saved version.
-    profileVersion: profileVersion as AgentContextProfile["profileVersion"],
-    scope: structuredClone(scope),
-    operationMode,
-    contextMode,
-    workspaceBound,
-    toolPolicy
-  });
-}
-
-function isPersistedProfileCombination(input: {
-  readonly profileId: AgentContextProfileId;
-  readonly scope: AgentContextScope;
-  readonly operationMode: AgentContextProfile["operationMode"];
-  readonly contextMode: AgentContextProfile["contextMode"];
-  readonly workspaceBound: boolean;
-  readonly toolPolicy: AgentContextProfile["toolPolicy"];
-}): boolean {
-  const isWorkspace = input.scope.kind === "workspace";
-  const isWorkspaceRun = input.operationMode === "planning" || input.operationMode === "execution";
-  switch (input.profileId) {
-    case "standalone":
-      return (
-        input.scope.kind === "standalone" &&
-        input.operationMode === "conversation" &&
-        input.contextMode === "standalone_chat" &&
-        !input.workspaceBound &&
-        input.toolPolicy === "empty"
-      );
-    case "writing":
-      return (
-        isWorkspace &&
-        input.scope.workspaceKind === "creativeProject" &&
-        isWorkspaceRun &&
-        input.contextMode === "writing" &&
-        input.workspaceBound &&
-        input.toolPolicy === "writing"
-      );
-    case "creative_general":
-      return (
-        isWorkspace &&
-        input.scope.workspaceKind === "creativeProject" &&
-        isWorkspaceRun &&
-        input.contextMode === "general_file" &&
-        input.workspaceBound &&
-        input.toolPolicy === "creative_file"
-      );
-    case "engineering":
-      return (
-        isWorkspace &&
-        input.scope.workspaceKind === "engineeringWorkspace" &&
-        isWorkspaceRun &&
-        input.contextMode === "general_file" &&
-        input.workspaceBound &&
-        input.toolPolicy === "engineering"
-      );
-  }
-}
-
-function isProfileId(value: unknown): value is AgentContextProfileId {
-  return (
-    value === "standalone" ||
-    value === "writing" ||
-    value === "creative_general" ||
-    value === "engineering"
-  );
-}
-
-function isToolPolicy(value: unknown): value is AgentContextProfile["toolPolicy"] {
-  return (
-    value === "empty" || value === "writing" || value === "creative_file" || value === "engineering"
-  );
-}
-
-function profileVersionValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 && value.length <= 128 ? value : undefined;
 }
 
 function parseContextSources(value: unknown): readonly AgentContextSourceInput[] | undefined {
@@ -959,6 +1189,12 @@ function legacyArtifactChecksum(artifact: AgentPromptMaterializationArtifact): s
 
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactlyFields(value: JsonObject, fields: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  const expected = [...fields].sort();
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
 }
 
 function stableSerialize(value: unknown): string {

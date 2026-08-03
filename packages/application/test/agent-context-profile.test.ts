@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createStandaloneRuntimeFacts,
+  parseAgentContextProfile,
   resolveAgentContextProfile,
   tryResolveAgentContextProfile
 } from "../src/agent-context-profile.js";
@@ -18,6 +19,44 @@ const engineeringScope = {
 } as const;
 
 describe("Agent context profile", () => {
+  it("strictly parses canonical frozen profiles", () => {
+    const standalone = resolveAgentContextProfile(
+      { kind: "standalone", scopeId: "standalone" },
+      "conversation",
+      "standalone_chat"
+    );
+    const writing = resolveAgentContextProfile(creativeScope, "execution", "writing");
+
+    expect(parseAgentContextProfile(structuredClone(standalone))).toEqual(standalone);
+    expect(parseAgentContextProfile(structuredClone(writing))).toEqual(writing);
+    expect(Object.isFrozen(parseAgentContextProfile(structuredClone(writing)))).toBe(true);
+  });
+
+  it("rejects unknown versions, extra fields, and non-canonical nested scopes", () => {
+    const profile = resolveAgentContextProfile(creativeScope, "planning", "writing");
+
+    expect(() => parseAgentContextProfile({ ...profile, profileVersion: "2.0" })).toThrow(
+      "AGENT_CONTEXT_PROFILE_INVALID"
+    );
+    expect(() => parseAgentContextProfile({ ...profile, extra: true })).toThrow(
+      "AGENT_CONTEXT_PROFILE_INVALID"
+    );
+    expect(() =>
+      parseAgentContextProfile({ ...profile, scope: { ...profile.scope, extra: true } })
+    ).toThrow("AGENT_CONTEXT_PROFILE_INVALID");
+  });
+
+  it("rejects profile fields that do not match the canonical scope and modes", () => {
+    const profile = resolveAgentContextProfile(engineeringScope, "execution", "general_file");
+
+    expect(() => parseAgentContextProfile({ ...profile, profileId: "creative_general" })).toThrow(
+      "AGENT_CONTEXT_PROFILE_INVALID"
+    );
+    expect(() => parseAgentContextProfile({ ...profile, toolPolicy: "creative_file" })).toThrow(
+      "AGENT_CONTEXT_PROFILE_INVALID"
+    );
+  });
+
   it.each([
     [
       { kind: "standalone", scopeId: "standalone" } as const,

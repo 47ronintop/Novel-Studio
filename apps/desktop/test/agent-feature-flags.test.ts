@@ -15,6 +15,7 @@ import { createEngineeringFileAccessQualificationService } from "../../../apps/d
 describe("AgentFeatureFlags", () => {
   test("default flags are all false", () => {
     const flags = DEFAULT_AGENT_FEATURE_FLAGS;
+    expect(flags.agentGuidanceV3).toBe(false);
     expect(flags.phaseA_searchEnabled).toBe(false);
     expect(flags.phaseB_fileLifecycleEnabled).toBe(false);
     expect(flags.phaseD_networkReadEnabled).toBe(false);

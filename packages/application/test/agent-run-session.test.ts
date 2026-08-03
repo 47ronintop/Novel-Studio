@@ -7288,6 +7288,347 @@ describe("AgentRunSession v2 tool facade", () => {
       });
     });
   });
+
+  test("writes Guidance 3.0 and Prompt Artifact 2.0 only when the Main-owned gate is enabled", async () => {
+    const repository = durableMemoryRepository();
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_v3" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true
+    });
+
+    const started = await session.startAgentRun({
+      ...startCommand(),
+      writingTaskIntent: {
+        schemaVersion: "1.0",
+        kind: "rewrite",
+        bodyGeneration: true,
+        source: "composer_action"
+      },
+      initialContextSources: [
+        {
+          refId: "chapter:chapter-01",
+          sourceKind: "disk_file",
+          relativePath: "chapters/chapter-01.md",
+          content: "Chapter body",
+          dirty: false
+        },
+        {
+          refId: "story_bible:character-01",
+          sourceKind: "disk_file",
+          assetId: "character-01",
+          content: '{"type":"character","title":"Hero"}',
+          dirty: false
+        }
+      ]
+    });
+    expect(started).toMatchObject({ ok: true, value: { runId: "run_guidance_v3" } });
+
+    const stored = await repository.readPromptMaterialization(
+      "run_guidance_v3",
+      "prompt_context_run_guidance_v3"
+    );
+    expect(stored).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        guidanceRegistryKey: "writing@3.0",
+        writingTaskIntent: {
+          kind: "rewrite",
+          bodyGeneration: true,
+          source: "composer_action"
+        },
+        runtimeFacts: { activeResourceKind: "story_bible" },
+        writingGenerationGuidanceVersion: "not_applicable",
+        providerSemanticVersionSet: {
+          systemGuidanceVersion: "3.0",
+          promptArtifactSchemaVersion: "2.0",
+          writingTaskIntentSchemaVersion: "1.0"
+        }
+      }
+    });
+    const body = String((stored.value as Record<string, unknown>)["systemPrompt"]);
+    expect(body).not.toContain("foreshadow v1.0");
+    expect(body).not.toContain("actualPayoffChapterId");
+  });
+
+  test("preserves the frozen writing intent across a Guidance 3.0 Plan-to-Act handoff", async () => {
+    const repository = durableMemoryRepository();
+    let runSequence = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => `run_guidance_v3_plan_${++runSequence}` },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      modelDriver: {
+        async *streamRound(input: {
+          readonly snapshot: { readonly sourcePlanId?: string | null };
+        }) {
+          if (input.snapshot.sourcePlanId === "plan_guidance_v3_handoff") {
+            yield { type: "round_completed" as const, finishReason: "stop" as const };
+            return;
+          }
+          yield toolCall("finish_guidance_v3_plan", "finish_plan", {
+            planId: "plan_guidance_v3_handoff",
+            goal: "Analyze the existing chapter without generating prose",
+            successCriteria: ["The analysis is complete"],
+            nonGoals: [],
+            facts: [],
+            assumptions: [],
+            openQuestions: [],
+            targetRefs: [],
+            steps: [
+              {
+                stepId: "step_guidance_v3_handoff",
+                title: "Analyze the chapter",
+                verification: "Review the analysis"
+              }
+            ],
+            risks: [],
+            verification: [],
+            sourceRefs: []
+          });
+          yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    const planningStarted = await session.startAgentRun({
+      ...startCommand(),
+      operationMode: "planning",
+      userRequest: "Rewrite the ending of the current chapter.",
+      writingTaskIntent: {
+        schemaVersion: "1.0",
+        kind: "rewrite",
+        bodyGeneration: true,
+        source: "composer_action"
+      }
+    });
+    expect(planningStarted).toMatchObject({
+      ok: true,
+      value: { runId: "run_guidance_v3_plan_1" }
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_guidance_v3_plan_1")).toMatchObject({
+        value: { snapshot: { status: "plan_ready" } }
+      });
+    });
+    const planning = (await session.readAgentRun("run_guidance_v3_plan_1")) as {
+      readonly value: { readonly snapshot: { readonly runRevision: number } };
+    };
+
+    expect(
+      await session.decidePlan({
+        projectId: "project-01",
+        runId: "run_guidance_v3_plan_1",
+        commandId: "approve-guidance-v3-plan",
+        expectedRunRevision: planning.value.snapshot.runRevision,
+        planId: "plan_guidance_v3_handoff",
+        planRevision: 1,
+        decision: "approve"
+      })
+    ).toMatchObject({ ok: true, value: { runId: "run_guidance_v3_plan_2" } });
+
+    await expect(
+      repository.readPromptMaterialization(
+        "run_guidance_v3_plan_2",
+        "prompt_context_run_guidance_v3_plan_2"
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        writingTaskIntent: {
+          schemaVersion: "1.0",
+          kind: "rewrite",
+          bodyGeneration: true,
+          source: "composer_action"
+        }
+      }
+    });
+  });
+
+  test("keeps the default-off start path on the frozen historical artifact", async () => {
+    const repository = durableMemoryRepository();
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_legacy" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2"
+    });
+
+    const started = await session.startAgentRun(startCommand());
+    expect(started).toMatchObject({ ok: true, value: { runId: "run_guidance_legacy" } });
+    await expect(
+      repository.readPromptMaterialization(
+        "run_guidance_legacy",
+        "prompt_context_run_guidance_legacy"
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.1",
+        systemGuidanceRefId: "system_guidance:writing@2.1"
+      }
+    });
+  });
+
+  test("fails closed when Guidance 3.0 is requested on the legacy start pipeline", async () => {
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_v3_legacy_pipeline" },
+      repository: memoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      agentGuidanceV3: true
+    });
+
+    await expect(session.startAgentRun(startCommand())).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_GUIDANCE_V3_PIPELINE_UNAVAILABLE" }
+    });
+  });
+
+  test("fails closed when Guidance 3.0 would reuse a legacy prompt-cache identity", async () => {
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_v3_cache" },
+      repository: durableMemoryRepository(),
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true
+    });
+    const base = startCommand();
+    const providerCapabilitySnapshot = base["providerCapabilitySnapshot"] as Record<
+      string,
+      unknown
+    >;
+
+    await expect(
+      session.startAgentRun({
+        ...base,
+        providerCapabilitySnapshot: {
+          ...providerCapabilitySnapshot,
+          connectionIdentityChecksum: "a".repeat(64),
+          accountIsolationChecksum: "b".repeat(64),
+          promptCache: {
+            mode: "explicit_breakpoints",
+            policyVersion: "anthropic-ephemeral@1.0",
+            minimumCacheableTokens: 1,
+            ttlSeconds: 300,
+            inputTokenSemantics: "excluded_from_input",
+            reportsCacheReadTokens: true,
+            reportsCacheWriteTokens: true
+          }
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_GUIDANCE_V3_PROMPT_CACHE_UNQUALIFIED" }
+    });
+  });
+
+  test("requires an explicit handoff when a hydrated run no longer matches the Guidance gate", async () => {
+    const repository = durableMemoryRepository();
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_v3_gate_mismatch" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true
+    });
+    expect(await original.startAgentRun(startCommand())).toMatchObject({ ok: true });
+
+    const recovered = createSession({
+      repository,
+      modelDriver: {
+        streamRound: () => unexpectedModelRound("A mismatched Guidance run must not call Provider.")
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2"
+    });
+    const hydrated = (await recovered.readAgentRun("run_guidance_v3_gate_mismatch")) as {
+      readonly value: { readonly snapshot: { readonly runRevision: number } };
+    };
+
+    await expect(
+      recovered.resumeAgentRun({
+        projectId: "project-01",
+        runId: "run_guidance_v3_gate_mismatch",
+        commandId: "resume-guidance-gate-mismatch",
+        expectedRunRevision: hydrated.value.snapshot.runRevision
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_GUIDANCE_HANDOFF_REQUIRED" }
+    });
+  });
+
+  test("rejects a valid Guidance 3.0 artifact bound to another tool catalog revision", async () => {
+    const repository = durableMemoryRepository();
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_v3_catalog_mismatch" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true
+    });
+    expect(await original.startAgentRun(startCommand())).toMatchObject({ ok: true });
+
+    const restored = createSession({
+      repository: {
+        ...repository,
+        async readPromptMaterialization(runId: string, artifactId: string) {
+          const read = await repository.readPromptMaterialization(runId, artifactId);
+          if (!read.ok || read.value === undefined) return read;
+          const artifact = read.value as Record<string, unknown>;
+          const rebound = applicationExports.createAgentPromptMaterializationArtifact({
+            runId: String(artifact["runId"]),
+            contextSnapshotId: String(artifact["contextSnapshotId"]),
+            profile: artifact["profile"],
+            systemPrompt: String(artifact["systemPrompt"]),
+            toolCatalogRevision: "different-catalog-revision",
+            userRequest: String(artifact["userRequest"]),
+            systemGuidanceRefId: String(artifact["systemGuidanceRefId"]),
+            contextSources: artifact["contextSources"],
+            conversationSummaryMessages: artifact["conversationSummaryMessages"],
+            guidanceMaterialization: {
+              normalizedInput: artifact["normalizedGuidanceInput"],
+              materializedGuidance: artifact["systemPrompt"],
+              proof: artifact["guidanceProof"]
+            }
+          } as never);
+          return { ok: true, value: rebound as unknown as Record<string, unknown> };
+        }
+      },
+      modelDriver: {
+        streamRound: () => unexpectedModelRound("A mismatched artifact must not call Provider.")
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true
+    });
+
+    await expect(restored.readAgentRun("run_guidance_v3_catalog_mismatch")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROMPT_MATERIALIZATION_INVALID" }
+    });
+  });
 });
 
 async function runGuidanceProbe(overrides: {
@@ -7422,6 +7763,9 @@ function echoStartPreflight() {
           writePolicy: command["writePolicy"] ?? "write_before_confirmation",
           writePolicyAcknowledged: command["writePolicyAcknowledged"] === true,
           userRequest: command["userRequest"] ?? "",
+          ...(command["writingTaskIntent"] === undefined
+            ? {}
+            : { writingTaskIntent: command["writingTaskIntent"] }),
           ...(command["reasoningEffort"] === undefined
             ? {}
             : { requestedReasoningEffort: command["reasoningEffort"] }),
@@ -7433,10 +7777,19 @@ function echoStartPreflight() {
               streaming: snapshot["streaming"] ?? true,
               toolCalling: snapshot["toolCalling"] ?? true,
               structuredArguments: snapshot["structuredArguments"] ?? true,
-              contextWindow: snapshot["contextWindow"] ?? 128000
+              contextWindow: snapshot["contextWindow"] ?? 128000,
+              ...(snapshot["promptCache"] === undefined
+                ? {}
+                : { promptCache: snapshot["promptCache"] })
             },
             requiredContextTokens: snapshot["requiredContextTokens"] ?? 8000,
-            reasoningStrength
+            reasoningStrength,
+            ...(snapshot["connectionIdentityChecksum"] === undefined
+              ? {}
+              : { connectionIdentityChecksum: snapshot["connectionIdentityChecksum"] }),
+            ...(snapshot["accountIsolationChecksum"] === undefined
+              ? {}
+              : { accountIsolationChecksum: snapshot["accountIsolationChecksum"] })
           },
           initialContextSources: command["initialContextSources"] ?? []
         }

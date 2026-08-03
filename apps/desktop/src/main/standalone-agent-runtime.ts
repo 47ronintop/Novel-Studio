@@ -115,6 +115,8 @@ export interface CreateDesktopStandaloneAgentRuntimeOptions extends StandaloneAg
   readonly createRunId?: () => string;
   readonly createConversationId?: (commandId: string) => string;
   readonly createDraftId?: () => string;
+  /** Main-owned rollout gate; false unless explicitly enabled by the host. */
+  readonly agentGuidanceV3?: boolean;
 }
 
 /**
@@ -388,6 +390,7 @@ function composeDesktopStandaloneAgentRuntime(
     },
     startPreflight,
     newRunToolFacadeVersion: "v2",
+    agentGuidanceV3: options.agentGuidanceV3 === true,
     capabilitySnapshot: STANDALONE_CAPABILITY_SNAPSHOT,
     effectiveCapabilityState: createEffectiveCapabilityState(STANDALONE_CAPABILITY_SNAPSHOT),
     usageSink: {

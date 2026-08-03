@@ -263,7 +263,19 @@ describe("Agent Run Draft session", () => {
   });
 
   test("resolveStartDraft returns the draft pair for a matching reference", async () => {
-    const created = await session.readAgentRunDraft(readCommand);
+    const created = await session.syncStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_01",
+      commandId: "sync_start_pair",
+      userRequest: "分析当前章节。",
+      operationMode: "planning",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "model_01",
+      reasoningEffort: "medium",
+      contextRefs: []
+    });
     if (!created.ok) return;
     const resolved = await session.resolveStartDraft({
       projectId: "project_01",
@@ -278,6 +290,149 @@ describe("Agent Run Draft session", () => {
     expect(resolved.value.contextDraft.contextDraftId).toBe(
       created.value.contextDraft.contextDraftId
     );
+  });
+
+  test("fails closed instead of reclassifying writing intent after a session restart", async () => {
+    const repository = createMemoryRepository();
+    const firstSession = createAgentRunDraftSession({
+      repository,
+      now: () => "2026-07-16T00:00:00.000Z",
+      createId: () => "draft_restart"
+    });
+    const synced = await firstSession.syncStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_restart_intent",
+      commandId: "sync_restart_intent",
+      userRequest: "分析这一段，不要改写。",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "model_01",
+      contextRefs: [],
+      writingComposerAction: "rewrite"
+    });
+    expect(synced.ok).toBe(true);
+    if (!synced.ok) return;
+
+    const restartedSession = createAgentRunDraftSession({ repository });
+    await expect(
+      restartedSession.resolveStartDraft({
+        projectId: "project_01",
+        conversationId: "conv_restart_intent",
+        runDraftId: synced.value.runDraft.runDraftId,
+        runDraftRevision: synced.value.runDraft.revision,
+        runDraftChecksum: synced.value.runDraft.checksum
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WRITING_TASK_INTENT_UNAVAILABLE" }
+    });
+  });
+
+  test("binds app-owned writing intent and explicit-selection presence to the start draft", async () => {
+    const synced = await session.syncStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_intent",
+      commandId: "sync_intent",
+      userRequest: "分析这一段，不要改写。",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "model_01",
+      contextRefs: [
+        {
+          kind: "editor_selection",
+          refId: "selection_01",
+          editorRevision: 4,
+          label: "选区",
+          range: { start: 0, end: 8 }
+        }
+      ],
+      writingComposerAction: "rewrite"
+    });
+    expect(synced.ok).toBe(true);
+    if (!synced.ok) return;
+
+    const resolved = await session.resolveStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_intent",
+      runDraftId: synced.value.runDraft.runDraftId,
+      runDraftRevision: synced.value.runDraft.revision,
+      runDraftChecksum: synced.value.runDraft.checksum
+    });
+
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: {
+        writingTaskIntent: {
+          schemaVersion: "1.0",
+          kind: "rewrite",
+          bodyGeneration: true,
+          source: "composer_action"
+        }
+      }
+    });
+  });
+
+  test("rejects writing intent controls outside the writing context", async () => {
+    const result = await session.syncStartDraft({
+      projectId: "project_01",
+      conversationId: "conv_general_intent",
+      commandId: "sync_general_intent",
+      userRequest: "Review notes.md",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "model_01",
+      contextRefs: [],
+      writingComposerAction: "rewrite"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WRITING_TASK_INTENT_INVALID" }
+    });
+  });
+
+  test("validates writing confirmation intent before persisting the draft", async () => {
+    const memory = createMemoryRepository();
+    let writes = 0;
+    const guardedSession = createAgentRunDraftSession({
+      repository: {
+        ...memory,
+        writeRunDraft(draft) {
+          writes += 1;
+          return memory.writeRunDraft(draft);
+        },
+        writeContextDraft(draft) {
+          writes += 1;
+          return memory.writeContextDraft(draft);
+        }
+      }
+    });
+
+    await expect(
+      guardedSession.syncStartDraft({
+        projectId: "project_01",
+        conversationId: "conv_invalid_confirmation",
+        commandId: "sync_invalid_confirmation",
+        userRequest: "分析这一段。",
+        operationMode: "execution",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        modelProfileId: "model_01",
+        contextRefs: [],
+        writingUserConfirmedKind: "rewrite"
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WRITING_TASK_INTENT_INVALID" }
+    });
+    expect(writes).toBe(0);
   });
 
   test("resolveStartDraft rejects when no draft exists", async () => {

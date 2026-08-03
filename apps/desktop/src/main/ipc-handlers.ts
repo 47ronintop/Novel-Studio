@@ -1599,7 +1599,9 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
       "modelName",
       "reasoningEffort",
       "contextRefs",
-      "activeResourceRef"
+      "activeResourceRef",
+      "writingComposerAction",
+      "writingUserConfirmedKind"
     ]) ||
     identity === undefined ||
     !isSafeId(value["conversationId"]) ||
@@ -1617,6 +1619,18 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
     !isNonEmptyString(value["modelProfileId"]) ||
     (value["modelName"] !== undefined && !isNonEmptyString(value["modelName"])) ||
     (value["reasoningEffort"] !== undefined && !isNonEmptyString(value["reasoningEffort"])) ||
+    (value["writingComposerAction"] !== undefined &&
+      value["writingComposerAction"] !== "analysis" &&
+      value["writingComposerAction"] !== "brainstorm" &&
+      value["writingComposerAction"] !== "continue" &&
+      value["writingComposerAction"] !== "rewrite" &&
+      value["writingComposerAction"] !== "story_bible") ||
+    (value["writingUserConfirmedKind"] !== undefined &&
+      value["writingUserConfirmedKind"] !== "analysis" &&
+      value["writingUserConfirmedKind"] !== "brainstorm" &&
+      value["writingUserConfirmedKind"] !== "continue" &&
+      value["writingUserConfirmedKind"] !== "rewrite" &&
+      value["writingUserConfirmedKind"] !== "story_bible") ||
     !Array.isArray(value["contextRefs"]) ||
     (value["activeResourceRef"] !== undefined &&
       value["activeResourceRef"] !== null &&

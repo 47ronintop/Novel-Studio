@@ -28,6 +28,12 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
+import {
+  createWritingTaskIntent,
+  type WritingComposerAction,
+  type WritingTaskIntent,
+  type WritingTaskIntentKind
+} from "./writing-task-intent.js";
 
 export interface AgentRunDraftSessionRepository {
   writeRunDraft(draft: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
@@ -118,11 +124,19 @@ export interface SyncStartDraftCommand {
   readonly reasoningEffort?: AgentReasoningEffort;
   readonly contextRefs: readonly ContextDraftRef[];
   readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
+  /** App-owned composer affordance; project/tool/remote content has no slot in this contract. */
+  readonly writingComposerAction?: WritingComposerAction;
+  /** Fresh user decision resolving a mixed/unknown writing intent. */
+  readonly writingUserConfirmedKind?: Exclude<WritingTaskIntentKind, "mixed" | "unknown">;
 }
 
 export interface AgentRunDraftView {
   readonly runDraft: AgentRunDraft;
   readonly contextDraft: ContextDraft;
+}
+
+export interface AgentRunStartDraftView extends AgentRunDraftView {
+  readonly writingTaskIntent: WritingTaskIntent | null;
 }
 
 export type AgentRunDraftResult = Result<AgentRunDraftView, UnifiedError>;
@@ -132,7 +146,9 @@ export interface AgentRunDraftSession {
   updateAgentRunDraft(command: UpdateAgentRunDraftCommand): Promise<AgentRunDraftResult>;
   updateContextDraft(command: UpdateContextDraftCommand): Promise<AgentRunDraftResult>;
   refreshContextDraft(command: RefreshContextDraftCommand): Promise<AgentRunDraftResult>;
-  resolveStartDraft(command: ResolveStartDraftCommand): Promise<AgentRunDraftResult>;
+  resolveStartDraft(
+    command: ResolveStartDraftCommand
+  ): Promise<Result<AgentRunStartDraftView, UnifiedError>>;
   syncStartDraft(command: SyncStartDraftCommand): Promise<AgentRunDraftResult>;
 }
 
@@ -150,6 +166,7 @@ export function createAgentRunDraftSession(
   const createId = options.createId ?? createDefaultId;
   const receipts = new Map<string, AgentRunDraftResult>();
   const inFlight = new Map<string, Promise<AgentRunDraftResult>>();
+  const writingTaskIntentByDraftChecksum = new Map<string, WritingTaskIntent>();
   const legacyWorkspaceKind =
     options.scope?.kind === "workspace" ? options.scope.workspaceKind : undefined;
 
@@ -398,15 +415,41 @@ export function createAgentRunDraftSession(
           )
         );
       }
-      return ok(view);
+      const writingTaskIntent = writingTaskIntentByDraftChecksum.get(view.runDraft.checksum);
+      if (view.runDraft.contextMode === "writing" && writingTaskIntent === undefined) {
+        return err(
+          draftError(
+            "WRITING_TASK_INTENT_UNAVAILABLE",
+            "The app-owned writing intent is not frozen for this draft; resync the composer before starting."
+          )
+        );
+      }
+      return ok({
+        ...view,
+        writingTaskIntent:
+          view.runDraft.contextMode === "writing" ? (writingTaskIntent ?? null) : null
+      });
     },
 
     syncStartDraft(command) {
       const scope = resolveDraftCommandScope(command, options.scope);
       if (!scope.ok) return Promise.resolve(err(scope.error));
       return runOnce(scope.value, command.conversationId, command.commandId, async () => {
+        if (
+          command.contextMode !== "writing" &&
+          (command.writingComposerAction !== undefined ||
+            command.writingUserConfirmedKind !== undefined)
+        ) {
+          return err(
+            draftError(
+              "WRITING_TASK_INTENT_INVALID",
+              "Writing intent controls are only valid for the writing context."
+            )
+          );
+        }
         const loaded = await load(command.conversationId);
         if (!loaded.ok) return err(loaded.error);
+        let nextView: AgentRunDraftView;
         if (loaded.value === undefined) {
           // No draft yet: initialize the whole state from the intent in one revision.
           const view = initialize(
@@ -435,13 +478,49 @@ export function createAgentRunDraftSession(
             now()
           );
           if (!withRequest.ok) return err(withRequest.error);
-          return persist({ runDraft: withRequest.value, contextDraft: view.contextDraft });
+          nextView = {
+            runDraft: withRequest.value,
+            contextDraft: view.contextDraft
+          };
+        } else {
+          const scoped = validateDraftScope(loaded.value, scope.value);
+          if (!scoped.ok) return scoped;
+          nextView = syncToIntent(scoped.value, command, now);
         }
-        const scoped = validateDraftScope(loaded.value, scope.value);
-        return scoped.ok ? persist(syncToIntent(scoped.value, command, now)) : scoped;
+        let writingTaskIntent: WritingTaskIntent | undefined;
+        try {
+          writingTaskIntent =
+            command.contextMode === "writing"
+              ? createDraftWritingTaskIntent(nextView, command)
+              : undefined;
+        } catch {
+          return err(
+            draftError("WRITING_TASK_INTENT_INVALID", "The app-owned writing intent is invalid.")
+          );
+        }
+        const persisted = await persist(nextView);
+        if (!persisted.ok || writingTaskIntent === undefined) return persisted;
+        writingTaskIntentByDraftChecksum.set(persisted.value.runDraft.checksum, writingTaskIntent);
+        return persisted;
       });
     }
   };
+}
+
+function createDraftWritingTaskIntent(
+  view: AgentRunDraftView,
+  signals: Pick<SyncStartDraftCommand, "writingComposerAction" | "writingUserConfirmedKind"> = {}
+): WritingTaskIntent {
+  return createWritingTaskIntent({
+    currentRequest: view.runDraft.userRequest,
+    hasExplicitSelection: view.contextDraft.refs.some((ref) => ref.kind === "editor_selection"),
+    ...(signals.writingComposerAction === undefined
+      ? {}
+      : { composerAction: signals.writingComposerAction }),
+    ...(signals.writingUserConfirmedKind === undefined
+      ? {}
+      : { userConfirmedKind: signals.writingUserConfirmedKind })
+  });
 }
 
 /**

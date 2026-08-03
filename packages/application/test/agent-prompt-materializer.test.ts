@@ -2,11 +2,18 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "@novel-studio/shared";
-import type { AgentRunEvent } from "@novel-studio/agent-engine";
+import {
+  createDefaultCapabilitySnapshot,
+  createEffectiveCapabilityState,
+  createProviderSemanticVersionSetV1,
+  listAgentTools,
+  type AgentRunEvent
+} from "@novel-studio/agent-engine";
 
 import { resolveAgentContextProfile } from "../src/agent-context-profile.js";
 import {
   createAgentPromptMaterializationArtifact,
+  createHistoricalAgentPromptMaterializationArtifact,
   materializeAgentPrompt,
   materializeAgentRunHistory,
   packAgentContext,
@@ -14,11 +21,19 @@ import {
   rematerializeAgentPromptArtifact
 } from "../src/agent-prompt-materializer.js";
 import {
+  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+  ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+  createProviderVisibleAgentRuntimeFacts
+} from "../src/agent-runtime-facts.js";
+import {
   checksumProjectContext,
   createWorkspaceOutlineSource,
   type WorkspaceOutlineDependencyManifest
 } from "../src/workspace-project-context.js";
-import { buildAgentSystemPrompt } from "../src/agent-system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  materializeAgentSystemPromptV3
+} from "../src/agent-system-prompt.js";
 
 const profile = resolveAgentContextProfile(
   { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_1" },
@@ -363,13 +378,15 @@ describe("Agent prompt materializer", () => {
   });
 
   it("round-trips a frozen prompt artifact and rematerializes sources without retaining old bodies", () => {
+    const guidance = v3Guidance();
     const artifact = createAgentPromptMaterializationArtifact({
       runId: "run_1",
       contextSnapshotId: "context_1",
       profile,
-      systemPrompt: buildAgentSystemPrompt(profile),
+      systemPrompt: guidance.materializedGuidance,
       toolCatalogRevision: "catalog_1",
       userRequest: "Edit the notes",
+      guidanceMaterialization: guidance,
       contextSources: [
         {
           refId: "current-file",
@@ -422,15 +439,17 @@ describe("Agent prompt materializer", () => {
       precision: "estimated",
       createdAt: "2026-08-01T00:00:00.000Z"
     });
+    const guidance = v3Guidance();
     const artifact = createAgentPromptMaterializationArtifact({
       runId: "run_1",
       contextSnapshotId: "context_1",
       profile,
-      systemPrompt: buildAgentSystemPrompt(profile),
+      systemPrompt: guidance.materializedGuidance,
       toolCatalogRevision: "catalog_1",
       userRequest: "Edit the notes",
       contextSources,
-      packedContext: packed
+      packedContext: packed,
+      guidanceMaterialization: guidance
     });
 
     expect(artifact.packedContextManifestChecksum).toMatch(/^[a-f0-9]{64}$/);
@@ -443,7 +462,7 @@ describe("Agent prompt materializer", () => {
   });
 
   it("replays only a registered historical guidance renderer", () => {
-    const artifact = createAgentPromptMaterializationArtifact({
+    const artifact = createHistoricalAgentPromptMaterializationArtifact({
       runId: "run_1",
       contextSnapshotId: "context_1",
       profile,
@@ -458,7 +477,7 @@ describe("Agent prompt materializer", () => {
       parseAgentPromptMaterializationArtifact(structuredClone(artifact) as unknown as JsonObject)
     ).toEqual(artifact);
     expect(() =>
-      createAgentPromptMaterializationArtifact({
+      createHistoricalAgentPromptMaterializationArtifact({
         runId: "run_unknown_guidance",
         contextSnapshotId: "context_unknown_guidance",
         profile,
@@ -471,13 +490,15 @@ describe("Agent prompt materializer", () => {
   });
 
   it("fails closed for unknown or tampered artifact versions", () => {
+    const guidance = v3Guidance();
     const artifact = createAgentPromptMaterializationArtifact({
       runId: "run_1",
       contextSnapshotId: "context_1",
       profile,
-      systemPrompt: buildAgentSystemPrompt(profile),
+      systemPrompt: guidance.materializedGuidance,
       toolCatalogRevision: "catalog_1",
-      userRequest: "Edit the notes"
+      userRequest: "Edit the notes",
+      guidanceMaterialization: guidance
     });
     expect(() =>
       parseAgentPromptMaterializationArtifact({
@@ -498,7 +519,7 @@ describe("Agent prompt materializer", () => {
       } as unknown as JsonObject)
     ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
     expect(() =>
-      createAgentPromptMaterializationArtifact({
+      createHistoricalAgentPromptMaterializationArtifact({
         runId: "run_forged_authority",
         contextSnapshotId: "context_forged_authority",
         profile,
@@ -510,3 +531,32 @@ describe("Agent prompt materializer", () => {
     ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
   });
 });
+
+function v3Guidance() {
+  const capability = createDefaultCapabilitySnapshot("creativeProject");
+  const runtimeFacts = createProviderVisibleAgentRuntimeFacts({
+    profile,
+    toolDescriptors: listAgentTools({
+      facadeVersion: "v2",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: capability
+    }),
+    effectiveCapabilityState: createEffectiveCapabilityState(capability),
+    executionWritePolicy: "write_before_confirmation",
+    activeResourceKind: "project_file"
+  });
+  return materializeAgentSystemPromptV3({
+    profile,
+    runtimeFacts,
+    writingTaskIntent: null,
+    writingGenerationGuidanceVersion: "not_applicable",
+    providerSemanticVersionSet: createProviderSemanticVersionSetV1({
+      writingTaskIntentSchemaVersion: "not_applicable",
+      writingGenerationGuidanceVersion: "not_applicable",
+      approvalRuleSetVersion: ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+      approvalRuleSetChecksum: ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM
+    })
+  });
+}

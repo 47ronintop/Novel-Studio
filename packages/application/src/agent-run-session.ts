@@ -5,6 +5,7 @@ import {
   computeAgentRunToolCatalogRevision,
   createAgentContextSnapshot,
   createPackedAgentContextManifest,
+  createProviderSemanticVersionSetV1,
   createDefaultCapabilitySnapshot,
   createEffectiveCapabilityState,
   isCapabilityEffective,
@@ -61,6 +62,7 @@ import {
   type PlanOpenQuestion,
   type PlanStep,
   type PlanTargetRef,
+  type ProviderSemanticVersionSetV1,
   type DecideAgentPlanCommand,
   type DecideToolApprovalCommand,
   type DecidePlanRevisionCommand,
@@ -103,8 +105,10 @@ import {
 import {
   AGENT_SYSTEM_GUIDANCE_VERSION,
   buildAgentSystemGuidance,
-  buildAgentSystemPrompt
+  buildAgentSystemPrompt,
+  materializeAgentSystemPromptV3
 } from "./agent-system-prompt.js";
+import type { MaterializedAgentGuidanceV3 } from "./agent-guidance-registry.js";
 import type { AgentContextProfile, AgentContextProfileId } from "./agent-context-profile.js";
 import {
   resolveAgentContextProfile,
@@ -112,6 +116,7 @@ import {
 } from "./agent-context-profile.js";
 import {
   createAgentPromptMaterializationArtifact,
+  createHistoricalAgentPromptMaterializationArtifact,
   materializeAgentConversationContext,
   materializeAgentPrompt,
   materializeProjectDataSource,
@@ -123,6 +128,17 @@ import {
   type AgentPromptMaterialization,
   type AgentPromptMaterializationArtifact
 } from "./agent-prompt-materializer.js";
+import {
+  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+  ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+  createProviderVisibleAgentRuntimeFacts,
+  type ProviderVisibleAgentRuntimeFacts
+} from "./agent-runtime-facts.js";
+import {
+  createWritingTaskIntent,
+  parseWritingTaskIntent,
+  type WritingTaskIntent
+} from "./writing-task-intent.js";
 import {
   createAgentPromptCacheIdentityArtifact,
   deriveAgentPromptCacheIdentityChecksum,
@@ -445,6 +461,8 @@ export interface AgentRunStartFacts {
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
   readonly userRequest: string;
+  /** Main-owned intent resolved from the matching Run Draft; null for non-writing profiles. */
+  readonly writingTaskIntent?: WritingTaskIntent | null;
   readonly requestedReasoningEffort?: AgentReasoningEffort;
   readonly model: AgentRunStartModelFacts;
   readonly initialContextSources: readonly AgentContextSourceInput[];
@@ -719,6 +737,8 @@ export interface CreateAgentRunSessionOptions {
   readonly startPreflight: AgentRunStartPreflightPort;
   /** Product runtimes set v2; the v1 default keeps lower-level legacy embedders compatible. */
   readonly newRunToolFacadeVersion?: AgentToolFacadeVersion;
+  /** Main-owned rollout gate. Default false keeps the legacy 2.1 pipeline intact. */
+  readonly agentGuidanceV3?: boolean;
   /**
    * Main-authored tool capabilities frozen for the lifetime of this session. Omitting this preserves
    * the legacy core-tool set; new capabilities remain fail-closed.
@@ -828,6 +848,8 @@ interface RunRuntime {
   promptArtifact?: AgentPromptMaterializationArtifact;
   promptCacheArtifact?: AgentPromptCacheIdentityArtifact;
   systemPrompt: string;
+  /** Prevents a rollback or historical hydrate from starting a Provider round under another contract. */
+  providerRoundsAllowed: boolean;
   readonly seenToolCallIds: Set<string>;
   controller: AbortController;
   generation: number;
@@ -1167,6 +1189,38 @@ function agentGuidanceSource(
   };
 }
 
+function activeResourceKindFor(
+  profile: AgentContextProfile,
+  sources: readonly AgentContextSourceInput[]
+): ProviderVisibleAgentRuntimeFacts["activeResourceKind"] {
+  if (profile.profileId === "standalone") return "none";
+  const dynamicSources = [...sources].reverse();
+  if (profile.profileId === "writing") {
+    for (const source of dynamicSources) {
+      if (
+        source.sourceKind === "story_bible_asset" ||
+        (source.sourceKind === "disk_file" &&
+          source.assetId !== undefined &&
+          source.relativePath === undefined)
+      ) {
+        return "story_bible";
+      }
+      if (
+        (source.sourceKind === "disk_file" || source.sourceKind === "editor_buffer") &&
+        source.relativePath !== undefined
+      ) {
+        return "chapter";
+      }
+    }
+    return "none";
+  }
+  return dynamicSources.some(
+    (source) => source.sourceKind === "disk_file" || source.sourceKind === "editor_buffer"
+  )
+    ? "project_file"
+    : "none";
+}
+
 /**
  * The sources written into a Context Snapshot: the run's live sources with the system-guidance audit
  * source prepended (once). Guidance stays out of `runtime.contextSources` so it never reaches the
@@ -1383,6 +1437,59 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return isCompatibleEffectiveCapabilityState(candidate, frozenCapabilitySnapshot)
       ? candidate
       : deniedEffectiveCapabilityState;
+  }
+
+  function materializeRunGuidanceV3(input: {
+    readonly profile: AgentContextProfile;
+    readonly toolDescriptors: readonly AgentToolDescriptor[];
+    readonly writePolicy: AgentWritePolicy;
+    readonly writePolicyAcknowledged?: boolean;
+    readonly userRequest: string;
+    readonly writingTaskIntent?: WritingTaskIntent | null;
+    readonly contextSources: readonly AgentContextSourceInput[];
+  }): MaterializedAgentGuidanceV3 {
+    const runtimeFacts = createProviderVisibleAgentRuntimeFacts({
+      profile: input.profile,
+      toolDescriptors: input.toolDescriptors,
+      ...(input.profile.scope.kind === "workspace"
+        ? { effectiveCapabilityState: effectiveCapabilityState() }
+        : {}),
+      executionWritePolicy: input.writePolicy,
+      ...(input.writePolicyAcknowledged === true
+        ? { executionWritePolicyAcknowledged: true as const }
+        : {}),
+      limitedRunPreapprovalQualified: false,
+      activeResourceKind: activeResourceKindFor(input.profile, input.contextSources)
+    });
+    if (input.profile.profileId !== "writing" && input.writingTaskIntent != null) {
+      throw new Error("AGENT_GUIDANCE_REGISTRY_AUTHORITY_INVALID");
+    }
+    const writingTaskIntent =
+      input.profile.profileId === "writing"
+        ? input.writingTaskIntent === undefined || input.writingTaskIntent === null
+          ? createWritingTaskIntent({ currentRequest: input.userRequest })
+          : parseWritingTaskIntent(input.writingTaskIntent)
+        : null;
+    const providerSemanticVersionSet: ProviderSemanticVersionSetV1 =
+      createProviderSemanticVersionSetV1({
+        writingTaskIntentSchemaVersion: writingTaskIntent === null ? "not_applicable" : "1.0",
+        writingGenerationGuidanceVersion: "not_applicable",
+        approvalRuleSetVersion:
+          runtimeFacts.writeCapability === "none"
+            ? "not_applicable"
+            : ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+        approvalRuleSetChecksum:
+          runtimeFacts.writeCapability === "none"
+            ? "not_applicable"
+            : ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM
+      });
+    return materializeAgentSystemPromptV3({
+      profile: input.profile,
+      runtimeFacts,
+      writingTaskIntent,
+      writingGenerationGuidanceVersion: "not_applicable",
+      providerSemanticVersionSet
+    });
   }
 
   function toolsFor(snapshot: AgentRunSnapshot): readonly AgentToolDescriptor[] {
@@ -2294,8 +2401,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         artifact.contextSnapshotId !== contextSnapshot.contextSnapshotId ||
         artifact.profileId !== snapshot.contextProfileId ||
         artifact.profileVersion !== snapshot.profileVersion ||
+        artifact.toolCatalogRevision !== snapshot.toolCatalogRevision ||
         artifact.stablePrefixChecksum !== contextSnapshot.materialization.stablePrefixChecksum ||
-        createHash("sha256").update(artifact.systemPrompt, "utf8").digest("hex") !==
+        (artifact.schemaVersion === "2.0"
+          ? artifact.guidanceTemplateChecksum
+          : createHash("sha256").update(artifact.systemPrompt, "utf8").digest("hex")) !==
           snapshot.guidanceTemplateChecksum ||
         !sourcesMatch
       ) {
@@ -2550,6 +2660,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         : { promptCacheArtifact: restoredPromptCacheArtifact }),
       systemPrompt:
         restoredPromptArtifact?.systemPrompt ?? buildAgentSystemPrompt(snapshot.contextProfileId),
+      providerRoundsAllowed:
+        options.agentGuidanceV3 === true
+          ? restoredPromptArtifact?.schemaVersion === "2.0"
+          : restoredPromptArtifact?.schemaVersion !== "2.0",
       seenToolCallIds: new Set(
         events.flatMap((event) =>
           typeof event.detail?.["toolCallId"] === "string" ? [event.detail["toolCallId"]] : []
@@ -3036,6 +3150,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     const runtime = runtimes.get(runId);
     let snapshot = coordinator.readSnapshot(runId);
     if (runtime === undefined || snapshot === undefined) return;
+    if (!runtime.providerRoundsAllowed) return;
 
     if (runtime.modelRounds >= snapshot.limits.maxModelRounds) {
       await recordEvent(runId, {
@@ -5606,6 +5721,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           )
         );
       }
+      if (options.agentGuidanceV3 === true && newRunToolFacadeVersion !== "v2") {
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_GUIDANCE_V3_PIPELINE_UNAVAILABLE",
+            "Guidance 3.0 requires the durable v2 Agent start pipeline."
+          )
+        );
+      }
       if (newRunToolFacadeVersion === "v2" && options.repository.writeToolCatalog === undefined) {
         return recordPreflightFailure(
           command,
@@ -5653,16 +5777,51 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : { externalToolDescriptors: frozenExternalToolDescriptors })
       });
+      const initialEffectiveState = effectiveCapabilityState();
+      const newRunProviderDescriptors = newRunDescriptors.filter((descriptor) =>
+        isToolDescriptorEffective(descriptor, initialEffectiveState)
+      );
       const newRunProviderMapping = freezeProviderNameMapping(
-        newRunDescriptors.map((descriptor) => ({
+        newRunProviderDescriptors.map((descriptor) => ({
           id: canonicalToolId(descriptor),
           providerName: providerNameForDescriptorInput(descriptor)
         }))
       );
       const newRunCatalogRevision = computeAgentRunToolCatalogRevision(
         newRunToolFacadeVersion,
-        newRunDescriptors
+        newRunProviderDescriptors
       );
+      let initialGuidanceV3: MaterializedAgentGuidanceV3 | undefined;
+      try {
+        if (options.agentGuidanceV3 === true) {
+          initialGuidanceV3 = materializeRunGuidanceV3({
+            profile: resolveAgentContextProfile(
+              startInput.scope ?? commandScope,
+              startInput.operationMode,
+              startInput.contextMode
+            ),
+            toolDescriptors: newRunProviderDescriptors,
+            writePolicy: startInput.writePolicy ?? "write_before_confirmation",
+            ...(startInput.writePolicyAcknowledged === true
+              ? { writePolicyAcknowledged: true as const }
+              : {}),
+            userRequest: startInput.userRequest,
+            ...(preflight.value.writingTaskIntent === undefined
+              ? {}
+              : { writingTaskIntent: preflight.value.writingTaskIntent }),
+            contextSources: startInput.initialContextSources ?? []
+          });
+        }
+      } catch {
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_GUIDANCE_V3_INVALID",
+            "The frozen Guidance 3.0 inputs do not form a valid Provider authority."
+          ),
+          preflight.value.model
+        );
+      }
       // Regenerate the Permission Summary from the current Tool Registry and canonical root, and
       // compare it against whatever the composer last previewed for this draft (Task 2.1). Drift —
       // a Tool Registry change, a root-fingerprint change, or a resolved write-policy change since
@@ -5742,7 +5901,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       );
       const initialMaterialization = materializeAgentPrompt({
         profile: startProfile,
-        systemPrompt: buildAgentSystemPrompt(startProfile),
+        systemPrompt:
+          initialGuidanceV3?.materializedGuidance ?? buildAgentSystemPrompt(startProfile),
         toolCatalogRevision: newRunCatalogRevision,
         userRequest: startInput.userRequest,
         ...(startInput.initialContextSources === undefined
@@ -5755,6 +5915,17 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       });
       const promptCacheCapability =
         startInput.providerCapabilitySnapshot.promptCache ?? NO_AGENT_PROMPT_CACHE_CAPABILITY;
+      if (initialGuidanceV3 !== undefined && promptCacheCapability.mode !== "none") {
+        await cancelConversationStart();
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_GUIDANCE_V3_PROMPT_CACHE_UNQUALIFIED",
+            "Guidance 3.0 cannot use the legacy prompt-cache identity."
+          ),
+          preflight.value.model
+        );
+      }
       if (
         promptCacheCapability.mode !== "none" &&
         options.repository.writePromptCacheArtifact === undefined
@@ -5793,15 +5964,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         scope: startInput.scope ?? commandScope,
         contextProfileId: startProfile.profileId,
         profileVersion: startProfile.profileVersion,
-        guidanceTemplateChecksum: createHash("sha256")
-          .update(initialMaterialization.systemPrompt, "utf8")
-          .digest("hex"),
+        guidanceTemplateChecksum:
+          initialGuidanceV3?.proof.templateChecksum ??
+          createHash("sha256").update(initialMaterialization.systemPrompt, "utf8").digest("hex"),
         toolCatalogRevision: newRunCatalogRevision,
         logicalPrefixChecksum: initialMaterialization.stablePrefixChecksum,
         stablePrefixMessageCount: 1 + initialMaterialization.stablePrefixMessages.length,
         eligibleInputTokens: estimatePromptCacheEligibleTokens(
           initialMaterialization,
-          newRunDescriptors,
+          newRunProviderDescriptors,
           startInput.providerCapabilitySnapshot.profileId,
           options.contextBudgetEstimator
         ),
@@ -5823,7 +5994,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         toolCatalog: {
           facadeVersion: newRunToolFacadeVersion,
           catalogRevision: newRunCatalogRevision,
-          descriptors: newRunDescriptors
+          descriptors: newRunProviderDescriptors
         },
         calculatedAt: new Date().toISOString()
       });
@@ -5847,6 +6018,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const catalogStartInput = {
         ...startInput,
+        ...(initialGuidanceV3 === undefined
+          ? {}
+          : { guidanceTemplateChecksum: initialGuidanceV3.proof.templateChecksum }),
         providerCapabilitySnapshot: {
           ...startInput.providerCapabilitySnapshot,
           promptCache:
@@ -5892,7 +6066,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const catalog = createAgentRunToolCatalogSnapshot({
         runId: result.value.runId,
         facadeVersion: newRunToolFacadeVersion,
-        descriptors: newRunDescriptors,
+        descriptors: newRunProviderDescriptors,
         createdAt: result.value.startedAt
       });
       if (newRunToolFacadeVersion === "v2") {
@@ -5926,6 +6100,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         messages: [...initialMaterialization.messages],
         promptBaseMessageCount: initialMaterialization.messages.length,
         systemPrompt: initialMaterialization.systemPrompt,
+        providerRoundsAllowed: true,
         ...(options.repository.writePromptCacheArtifact === undefined
           ? {}
           : { promptCacheArtifact }),
@@ -5936,7 +6111,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextSources: initialContextSources,
         systemGuidanceSource: agentGuidanceSource(
           result.value.contextProfileId,
-          initialMaterialization.systemPrompt
+          initialMaterialization.systemPrompt,
+          initialGuidanceV3 === undefined
+            ? undefined
+            : `system_guidance:${initialGuidanceV3.proof.registryKey}`
         ),
         modelRounds: 0,
         hasRecordedFinalUsage: false,
@@ -5949,7 +6127,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       runtimes.set(result.value.runId, runtime);
       const contextSnapshotId =
         options.createContextSnapshotId?.(result.value.runId) ?? `context_${result.value.runId}`;
-      const promptArtifact = createAgentPromptMaterializationArtifact({
+      const promptArtifactInput = {
         runId: result.value.runId,
         contextSnapshotId,
         profile: startProfile,
@@ -5961,7 +6139,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : { packedContext: startInput.packedContext }),
         conversationSummaryMessages: materializeAgentConversationContext(conversationContext)
-      });
+      };
+      const promptArtifact =
+        initialGuidanceV3 === undefined
+          ? createHistoricalAgentPromptMaterializationArtifact(promptArtifactInput)
+          : createAgentPromptMaterializationArtifact({
+              ...promptArtifactInput,
+              guidanceMaterialization: initialGuidanceV3
+            });
       runtime.promptArtifact = promptArtifact;
       runtime.contextSnapshot = createAgentContextSnapshot({
         contextSnapshotId,
@@ -6358,6 +6543,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const runtime = runtimes.get(command.runId);
       if (runtime === undefined)
         return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+      if (!runtime.providerRoundsAllowed) {
+        return failure(
+          "AGENT_GUIDANCE_HANDOFF_REQUIRED",
+          "The run's frozen Guidance contract does not match the active rollout gate; create an explicit handoff before continuing."
+        );
+      }
       runtime.controller.abort();
       runtime.controller = new AbortController();
       runtime.generation += 1;
@@ -6598,6 +6789,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       ) {
         return failure("AGENT_PLAN_REVISION_CONFLICT", "The plan revision is stale.");
       }
+      if (command.decision === "approve" && !runtime.providerRoundsAllowed) {
+        return failure(
+          "AGENT_GUIDANCE_HANDOFF_REQUIRED",
+          "The plan's frozen Guidance contract does not match the active rollout gate; create an explicit handoff before execution."
+        );
+      }
       if (command.decision === "approve" && !canExecutePlanArtifact(plan)) {
         return failure(
           "AGENT_PLAN_BLOCKING_QUESTIONS",
@@ -6815,8 +7012,45 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         );
       }
       const executionProfile = approvedExecutionProfile;
-      const executionSystemPrompt = buildAgentSystemPrompt(executionProfile);
       const executionUserRequest = `Execute approved plan ${plan.planId} revision ${plan.revision}: ${plan.goal}`;
+      let executionGuidanceV3: MaterializedAgentGuidanceV3 | undefined;
+      try {
+        if (options.agentGuidanceV3 === true) {
+          const planningPromptArtifact = runtime.promptArtifact;
+          if (planningPromptArtifact?.schemaVersion !== "2.0") {
+            throw new Error("AGENT_GUIDANCE_V3_INVALID");
+          }
+          if (
+            executionProfile.profileId === "writing" &&
+            planningPromptArtifact.writingTaskIntent === null
+          ) {
+            throw new Error("AGENT_GUIDANCE_V3_INVALID");
+          }
+          const executionWritingTaskIntent =
+            executionProfile.profileId === "writing"
+              ? parseWritingTaskIntent(planningPromptArtifact.writingTaskIntent)
+              : null;
+          executionGuidanceV3 = materializeRunGuidanceV3({
+            profile: executionProfile,
+            toolDescriptors: executionDescriptors,
+            writePolicy: executionWritePolicy,
+            ...(command.executionWritePolicyAcknowledged === true
+              ? { writePolicyAcknowledged: true as const }
+              : {}),
+            userRequest: executionUserRequest,
+            writingTaskIntent: executionWritingTaskIntent,
+            contextSources: runtime.contextSources
+          });
+        }
+      } catch {
+        await cancelExecutionStart();
+        return failure(
+          "AGENT_GUIDANCE_V3_INVALID",
+          "The execution Guidance 3.0 inputs do not form a valid Provider authority."
+        );
+      }
+      const executionSystemPrompt =
+        executionGuidanceV3?.materializedGuidance ?? buildAgentSystemPrompt(executionProfile);
       const executionConversationSummary = materializeAgentConversationContext(
         executionConversationContext
       );
@@ -6845,9 +7079,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               scope: snapshot.scope,
               contextProfileId: executionProfile.profileId,
               profileVersion: executionProfile.profileVersion,
-              guidanceTemplateChecksum: createHash("sha256")
-                .update(executionSystemPrompt, "utf8")
-                .digest("hex"),
+              guidanceTemplateChecksum:
+                executionGuidanceV3?.proof.templateChecksum ??
+                createHash("sha256").update(executionSystemPrompt, "utf8").digest("hex"),
               toolCatalogRevision: executionCatalogRevision,
               logicalPrefixChecksum: executionMaterialization.stablePrefixChecksum,
               stablePrefixMessageCount: 1 + executionMaterialization.stablePrefixMessages.length,
@@ -6924,9 +7158,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextBudgetSnapshotId: executionBudget.value.contextBudgetSnapshotId,
         contextProfileId: executionProfile.profileId,
         profileVersion: executionProfile.profileVersion,
-        guidanceTemplateChecksum: createHash("sha256")
-          .update(executionSystemPrompt, "utf8")
-          .digest("hex"),
+        guidanceTemplateChecksum:
+          executionGuidanceV3?.proof.templateChecksum ??
+          createHash("sha256").update(executionSystemPrompt, "utf8").digest("hex"),
         conventionsArtifactId: snapshot.conventionsArtifactId,
         promptCachePolicyVersion: snapshot.promptCachePolicyVersion,
         cachePrefixChecksum: executionMaterialization.stablePrefixChecksum,
@@ -6997,6 +7231,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         messages: [...executionMaterialization.messages, approvedPlanMessage],
         promptBaseMessageCount: executionMaterialization.messages.length,
         systemPrompt: executionSystemPrompt,
+        providerRoundsAllowed: true,
         ...(executionPromptCacheArtifact === undefined
           ? {}
           : { promptCacheArtifact: executionPromptCacheArtifact }),
@@ -7007,7 +7242,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextSources: [...runtime.contextSources],
         systemGuidanceSource: agentGuidanceSource(
           executionStarted.value.contextProfileId,
-          executionSystemPrompt
+          executionSystemPrompt,
+          executionGuidanceV3 === undefined
+            ? undefined
+            : `system_guidance:${executionGuidanceV3.proof.registryKey}`
         ),
         planArtifact: Object.freeze({ ...plan, status: "executing" }),
         modelRounds: 0,
@@ -7022,7 +7260,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const executionContextSnapshotId =
         options.createContextSnapshotId?.(executionStarted.value.runId) ??
         `context_${executionStarted.value.runId}`;
-      const executionPromptArtifact = createAgentPromptMaterializationArtifact({
+      const executionPromptArtifactInput = {
         runId: executionStarted.value.runId,
         contextSnapshotId: executionContextSnapshotId,
         profile: executionProfile,
@@ -7031,7 +7269,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         userRequest: executionUserRequest,
         contextSources: executionRuntime.contextSources,
         conversationSummaryMessages: executionConversationSummary
-      });
+      };
+      const executionPromptArtifact =
+        executionGuidanceV3 === undefined
+          ? createHistoricalAgentPromptMaterializationArtifact(executionPromptArtifactInput)
+          : createAgentPromptMaterializationArtifact({
+              ...executionPromptArtifactInput,
+              guidanceMaterialization: executionGuidanceV3
+            });
       executionRuntime.promptArtifact = executionPromptArtifact;
       executionRuntime.contextSnapshot = createAgentContextSnapshot({
         contextSnapshotId: executionContextSnapshotId,

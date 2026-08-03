@@ -76,7 +76,7 @@ export function tryResolveAgentContextProfile(
   contextMode: AgentContextMode
 ): Result<AgentContextProfile, UnifiedError> {
   if (
-    !isAgentContextScope(scope) ||
+    !isStrictAgentContextScope(scope) ||
     !isAgentOperationMode(operationMode) ||
     !isAgentContextMode(contextMode)
   ) {
@@ -98,6 +98,47 @@ export function tryResolveAgentContextProfile(
   return contextMode === "writing"
     ? ok(profile("writing", scope, operationMode, contextMode, true, "writing"))
     : ok(profile("creative_general", scope, operationMode, contextMode, true, "creative_file"));
+}
+
+/** Strict persisted/frozen profile parser; unknown versions and extra fields fail closed. */
+export function parseAgentContextProfile(value: unknown): AgentContextProfile {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !hasExactlyFields(value as Record<string, unknown>, [
+      "profileId",
+      "profileVersion",
+      "scope",
+      "operationMode",
+      "contextMode",
+      "workspaceBound",
+      "toolPolicy"
+    ])
+  ) {
+    throw new Error("AGENT_CONTEXT_PROFILE_INVALID");
+  }
+  const record = value as Record<string, unknown>;
+  const scope = record["scope"];
+  const operationMode = record["operationMode"];
+  const contextMode = record["contextMode"];
+  if (
+    record["profileVersion"] !== AGENT_CONTEXT_PROFILE_VERSION ||
+    !isStrictAgentContextScope(scope) ||
+    !isAgentOperationMode(operationMode) ||
+    !isAgentContextMode(contextMode)
+  ) {
+    throw new Error("AGENT_CONTEXT_PROFILE_INVALID");
+  }
+  const resolved = resolveAgentContextProfile(scope, operationMode, contextMode);
+  if (
+    record["profileId"] !== resolved.profileId ||
+    record["workspaceBound"] !== resolved.workspaceBound ||
+    record["toolPolicy"] !== resolved.toolPolicy
+  ) {
+    throw new Error("AGENT_CONTEXT_PROFILE_INVALID");
+  }
+  return resolved;
 }
 
 export function createStandaloneRuntimeFacts(input: {
@@ -180,4 +221,17 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+function hasExactlyFields(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  const expected = [...fields].sort();
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
+}
+
+function isStrictAgentContextScope(value: unknown): value is AgentContextScope {
+  if (!isAgentContextScope(value)) return false;
+  return value.kind === "standalone"
+    ? hasExactlyFields(value, ["kind", "scopeId"])
+    : hasExactlyFields(value, ["kind", "workspaceKind", "workspaceId"]);
 }

@@ -9,7 +9,8 @@ import {
   createAgentPricingRegistry,
   createCompactionSummaryArtifact,
   buildCompactionSummaryPrompt,
-  createAgentPromptMaterializationArtifact,
+  buildAgentSystemPrompt,
+  createHistoricalAgentPromptMaterializationArtifact,
   checksumProjectContext,
   contextSourceMaterializationArtifactId,
   promptMaterializationArtifactId,
@@ -656,8 +657,8 @@ async function seedRun(
   expect(
     await repository.writeToolCatalog("run_01", catalog as unknown as JsonObject)
   ).toMatchObject({ ok: true });
-  const systemPrompt = "app-authored writing guidance";
-  const prompt = createAgentPromptMaterializationArtifact({
+  const systemPrompt = buildAgentSystemPrompt(profile);
+  const prompt = createHistoricalAgentPromptMaterializationArtifact({
     runId: "run_01",
     contextSnapshotId: "context_run_01",
     profile,
@@ -775,7 +776,7 @@ async function seedC3OutlineRun(): Promise<{
   outlineManifestChecksum: string;
   outlineRereadHint: string;
 }> {
-  const seeded = await seedRun({ contextWindow: 44_000 });
+  const seeded = await seedRun({ contextWindow: 46_000 });
   const scope = {
     kind: "workspace" as const,
     workspaceKind: "engineeringWorkspace" as const,
@@ -890,8 +891,8 @@ async function seedC3OutlineRun(): Promise<{
     descriptors: [],
     createdAt: "2026-07-15T00:00:00.000Z"
   }).catalogRevision;
-  const systemPrompt = "app-authored system guidance";
-  const prompt = createAgentPromptMaterializationArtifact({
+  const systemPrompt = buildAgentSystemPrompt(profile);
+  const prompt = createHistoricalAgentPromptMaterializationArtifact({
     runId: "run_01",
     contextSnapshotId,
     profile,

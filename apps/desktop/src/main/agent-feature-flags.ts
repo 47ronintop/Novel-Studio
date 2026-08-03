@@ -11,6 +11,8 @@ import {
  */
 
 export interface AgentFeatureFlags {
+  /** Guidance Registry/System Guidance 3.0; default off until its protocol dependencies ship. */
+  readonly agentGuidanceV3: boolean;
   /** Phase A: search_project_text + find_project_references */
   readonly phaseA_searchEnabled: boolean;
   /** Phase B: file lifecycle (create/move/delete/mkdir) + Change Set v1.1 */
@@ -35,6 +37,7 @@ export interface AgentFeatureFlags {
 
 /** Default flags keep every optional capability off. */
 export const DEFAULT_AGENT_FEATURE_FLAGS: AgentFeatureFlags = Object.freeze<AgentFeatureFlags>({
+  agentGuidanceV3: false,
   phaseA_searchEnabled: false,
   phaseB_fileLifecycleEnabled: false,
   phaseD_networkReadEnabled: false,

@@ -3,18 +3,38 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  createDefaultCapabilitySnapshot,
+  createEffectiveCapabilityState,
+  createProviderSemanticVersionSetV1,
+  listAgentTools
+} from "@novel-studio/agent-engine";
 import { describe, expect, test } from "vitest";
 
 import {
+  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+  ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+  CURRENT_AGENT_SYSTEM_GUIDANCE_VERSION,
   HISTORICAL_AGENT_GUIDANCE_RENDERER_VERSION,
   HISTORICAL_AGENT_SYSTEM_GUIDANCE_VERSION,
   buildAgentSystemPrompt,
+  buildAgentSystemPromptV3,
+  createProviderVisibleAgentRuntimeFacts,
+  createWritingTaskIntent,
+  getCurrentAgentGuidanceRegistration,
   getHistoricalAgentGuidanceRegistration,
+  listCurrentAgentGuidanceRegistrations,
   listHistoricalAgentGuidanceRegistrations,
+  materializeAgentSystemPromptV3,
   materializeHistoricalAgentGuidance,
+  parseCurrentAgentGuidanceRefId,
   parseHistoricalAgentGuidanceRefId,
+  resolveAgentContextProfile,
+  verifyCurrentAgentGuidance,
   verifyHistoricalAgentGuidance,
-  type AgentContextProfileId
+  type AgentContextProfile,
+  type AgentContextProfileId,
+  type RegisteredGuidanceBuildInputV3
 } from "../src/index.js";
 
 interface GuidanceFixtureManifest {
@@ -153,6 +173,81 @@ describe("historical Agent guidance registry", () => {
   });
 });
 
+describe("Agent guidance 3.0 registry", () => {
+  test("registers immutable profile templates separately from materialized authority", () => {
+    expect(CURRENT_AGENT_SYSTEM_GUIDANCE_VERSION).toBe("3.0");
+    expect(listCurrentAgentGuidanceRegistrations().map(({ registryKey }) => registryKey)).toEqual([
+      "standalone@3.0",
+      "writing@3.0",
+      "creative_general@3.0",
+      "engineering@3.0"
+    ]);
+
+    const materialized = materializeAgentSystemPromptV3(v3Input(standaloneProfile()));
+    const registration = getCurrentAgentGuidanceRegistration("standalone");
+    expect(materialized.proof.registryKey).toBe("standalone@3.0");
+    expect(materialized.proof.templateChecksum).toBe(registration.templateChecksum);
+    expect(materialized.proof.materializedGuidanceChecksum).not.toBe(registration.templateChecksum);
+    expect(parseCurrentAgentGuidanceRefId("system_guidance:standalone@3.0")).toEqual({
+      registryKey: "standalone@3.0",
+      profileId: "standalone",
+      version: "3.0"
+    });
+  });
+
+  test("assembles the seven fixed layers from complete frozen inputs", () => {
+    const profile = workspaceProfile("creativeProject", "planning", "writing");
+    const materialized = materializeAgentSystemPromptV3(v3Input(profile, "请分析当前章节。"));
+    const body = materialized.materializedGuidance;
+
+    expect(body.indexOf("【AUTHORITY】")).toBeLessThan(body.indexOf("【SANITIZED_RUNTIME_FACTS】"));
+    expect(body.indexOf("【SANITIZED_RUNTIME_FACTS】")).toBeLessThan(body.indexOf("【OPERATION】"));
+    expect(body.indexOf("【OPERATION】")).toBeLessThan(body.indexOf("【PROFILE】"));
+    expect(body.indexOf("【PROFILE】")).toBeLessThan(body.indexOf("【TOOL_EVIDENCE】"));
+    expect(body.indexOf("【TOOL_EVIDENCE】")).toBeLessThan(body.indexOf("【COMPLETION】"));
+    expect(body).toContain('"writeCapability":"none"');
+    expect(body).toContain('"kind":"analysis"');
+    expect(body).toContain("任务意图为 unknown/mixed");
+    expect(buildAgentSystemPromptV3(materialized.normalizedInput)).toBe(body);
+  });
+
+  test("keeps historical defects out of every new 3.0 profile", () => {
+    const profiles = [
+      standaloneProfile(),
+      workspaceProfile("creativeProject", "execution", "writing"),
+      workspaceProfile("creativeProject", "execution", "general_file"),
+      workspaceProfile("engineeringWorkspace", "execution", "general_file")
+    ];
+    for (const profile of profiles) {
+      const body = buildAgentSystemPromptV3(v3Input(profile));
+      expect(body).not.toContain("foreshadow v1.0");
+      expect(body).not.toContain("fsh_");
+      expect(body).not.toContain("actualPayoffChapterId");
+      expect(body).not.toContain("连续比喻");
+    }
+  });
+
+  test("rebuilds from the registry and rejects body, proof, profile, or version tampering", () => {
+    const materialized = materializeAgentSystemPromptV3(
+      v3Input(workspaceProfile("engineeringWorkspace", "execution", "general_file"))
+    );
+    expect(verifyCurrentAgentGuidance(materialized)).toEqual(materialized);
+    expect(() =>
+      verifyCurrentAgentGuidance({
+        ...materialized,
+        materializedGuidance: `${materialized.materializedGuidance}\nforged authority`,
+        proof: {
+          ...materialized.proof,
+          materializedGuidanceChecksum: "a".repeat(64)
+        }
+      })
+    ).toThrow("AGENT_GUIDANCE_REGISTRY_AUTHORITY_INVALID");
+    expect(() => getCurrentAgentGuidanceRegistration("writing", "2.1")).toThrow(
+      "AGENT_GUIDANCE_REGISTRY_ENTRY_UNKNOWN"
+    );
+  });
+});
+
 async function readManifest(): Promise<GuidanceFixtureManifest> {
   return JSON.parse(
     await readFile(join(fixtureDirectory, "manifest.json"), "utf8")
@@ -161,4 +256,78 @@ async function readManifest(): Promise<GuidanceFixtureManifest> {
 
 function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function standaloneProfile(): AgentContextProfile {
+  return resolveAgentContextProfile(
+    { kind: "standalone", scopeId: "standalone" },
+    "conversation",
+    "standalone_chat"
+  );
+}
+
+function workspaceProfile(
+  workspaceKind: "creativeProject" | "engineeringWorkspace",
+  operationMode: "planning" | "execution",
+  contextMode: "writing" | "general_file"
+): AgentContextProfile {
+  return resolveAgentContextProfile(
+    { kind: "workspace", workspaceKind, workspaceId: "workspace-1" },
+    operationMode,
+    contextMode
+  );
+}
+
+function v3Input(
+  profile: AgentContextProfile,
+  currentRequest = profile.profileId === "writing" ? "续写下一段。" : "检查当前内容。"
+): RegisteredGuidanceBuildInputV3 {
+  const capability =
+    profile.scope.kind === "workspace"
+      ? createDefaultCapabilitySnapshot(profile.scope.workspaceKind)
+      : undefined;
+  const tools =
+    profile.scope.kind === "workspace"
+      ? listAgentTools({
+          facadeVersion: "v2",
+          operationMode: profile.operationMode,
+          contextMode: profile.contextMode,
+          writePolicy: "write_before_confirmation",
+          ...(capability === undefined ? {} : { capabilitySnapshot: capability })
+        })
+      : [];
+  const runtimeFacts = createProviderVisibleAgentRuntimeFacts({
+    profile,
+    toolDescriptors: tools,
+    ...(capability === undefined
+      ? {}
+      : { effectiveCapabilityState: createEffectiveCapabilityState(capability) }),
+    executionWritePolicy: "write_before_confirmation",
+    activeResourceKind:
+      profile.profileId === "writing"
+        ? "chapter"
+        : profile.profileId === "standalone"
+          ? "none"
+          : "project_file"
+  });
+  const writingTaskIntent =
+    profile.profileId === "writing" ? createWritingTaskIntent({ currentRequest }) : null;
+  return {
+    profile,
+    runtimeFacts,
+    writingTaskIntent,
+    writingGenerationGuidanceVersion: "not_applicable",
+    providerSemanticVersionSet: createProviderSemanticVersionSetV1({
+      writingTaskIntentSchemaVersion: writingTaskIntent === null ? "not_applicable" : "1.0",
+      writingGenerationGuidanceVersion: "not_applicable",
+      approvalRuleSetVersion:
+        runtimeFacts.writeCapability === "none"
+          ? "not_applicable"
+          : ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+      approvalRuleSetChecksum:
+        runtimeFacts.writeCapability === "none"
+          ? "not_applicable"
+          : ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM
+    })
+  };
 }

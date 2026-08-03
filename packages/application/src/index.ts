@@ -486,29 +486,104 @@ export {
 } from "./agent-run-session.js";
 export {
   AGENT_SYSTEM_GUIDANCE_VERSION,
+  AGENT_SYSTEM_GUIDANCE_V3_VERSION,
   buildAgentSystemGuidance,
-  buildAgentSystemPrompt
+  buildAgentSystemPrompt,
+  buildAgentSystemPromptV3,
+  materializeAgentSystemPromptV3
 } from "./agent-system-prompt.js";
 export type { AgentConventionsArtifactReference } from "./agent-system-prompt.js";
 export {
+  CURRENT_AGENT_GUIDANCE_RENDERER_VERSION,
+  CURRENT_AGENT_SYSTEM_GUIDANCE_VERSION,
   HISTORICAL_AGENT_GUIDANCE_RENDERER_VERSION,
   HISTORICAL_AGENT_SYSTEM_GUIDANCE_VERSION,
+  getCurrentAgentGuidanceRegistration,
   getHistoricalAgentGuidanceRegistration,
+  listCurrentAgentGuidanceRegistrations,
   listHistoricalAgentGuidanceRegistrations,
+  materializeCurrentAgentGuidance,
   materializeHistoricalAgentGuidance,
+  parseCurrentAgentGuidanceRefId,
   parseHistoricalAgentGuidanceRefId,
+  verifyCurrentAgentGuidance,
   verifyHistoricalAgentGuidance
 } from "./agent-guidance-registry.js";
 export type {
+  CurrentAgentGuidanceRegistryKey,
   HistoricalAgentGuidanceDeviationCode,
   HistoricalAgentGuidanceRegistryKey,
   HistoricalAgentGuidanceVersion,
+  MaterializedAgentGuidanceProofV3,
+  MaterializedAgentGuidanceV3,
+  NormalizedRegisteredGuidanceBuildInputV3,
+  RegisteredAgentGuidanceV3,
+  RegisteredGuidanceBuildInputV3,
   RegisteredHistoricalAgentGuidance,
   VerifyHistoricalAgentGuidanceInput
 } from "./agent-guidance-registry.js";
 export {
+  AGENT_GUIDANCE_BUDGET_ESTIMATOR_ID,
+  AGENT_GUIDANCE_BUDGET_ESTIMATOR_PROFILE_ID,
+  AGENT_GUIDANCE_BUDGET_ESTIMATOR_VERSION,
+  AGENT_GUIDANCE_BUDGET_SCHEMA_VERSION,
+  AGENT_GUIDANCE_BUDGET_SNAPSHOTS,
+  AGENT_GUIDANCE_BUDGET_TOKEN_ESTIMATOR,
+  AGENT_GUIDANCE_BUDGET_WORKSPACE_TOKEN_LIMIT,
+  AGENT_GUIDANCE_BUDGET_WRITING_TOKEN_LIMIT,
+  agentGuidanceBudgetTokenLimit,
+  assertAgentGuidanceBudgetWithinLimit,
+  createAgentGuidanceBudgetProof,
+  createAgentGuidanceBudgetSnapshot,
+  listAgentGuidanceBudgetSnapshots,
+  parseAgentGuidanceBudgetSnapshot,
+  verifyAgentGuidanceBudgetSnapshot
+} from "./agent-guidance-budget.js";
+export type {
+  AgentGuidanceBudgetProofV1,
+  AgentGuidanceBudgetSnapshotV1,
+  CreateAgentGuidanceBudgetSnapshotInput,
+  GuidanceBudgetTokenEstimator
+} from "./agent-guidance-budget.js";
+export {
+  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+  ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+  PROVIDER_VISIBLE_RUNTIME_FACTS_SCHEMA_VERSION,
+  createAllHumanApprovalRuleSetProjection,
+  createProviderVisibleAgentRuntimeFacts,
+  parseProviderVisibleAgentRuntimeFacts,
+  providerVisibleAgentRuntimeFactsChecksum,
+  serializeProviderVisibleAgentRuntimeFacts
+} from "./agent-runtime-facts.js";
+export type {
+  CreateProviderVisibleAgentRuntimeFactsInput,
+  ProviderVisibleAgentRuntimeFacts,
+  ProviderVisibleApprovalRule,
+  ProviderVisibleApprovalRuleSetProjection,
+  ProviderVisibleConditionalApprovalRuleId,
+  ProviderVisibleWorkspaceFileOperation,
+  ProviderVisibleWriteOperation,
+  ProviderVisibleWritingOperation
+} from "./agent-runtime-facts.js";
+export {
+  WRITING_TASK_INTENT_MAX_REQUEST_LENGTH,
+  WRITING_TASK_INTENT_SCHEMA_VERSION,
+  createWritingTaskIntent,
+  parseWritingTaskIntent,
+  serializeWritingTaskIntent,
+  writingTaskIntentChecksum
+} from "./writing-task-intent.js";
+export type {
+  CreateWritingTaskIntentInput,
+  WritingComposerAction,
+  WritingTaskIntent,
+  WritingTaskIntentKind,
+  WritingTaskIntentSource
+} from "./writing-task-intent.js";
+export {
   AGENT_CONTEXT_PROFILE_VERSION,
   createStandaloneRuntimeFacts,
+  parseAgentContextProfile,
   resolveAgentContextProfile,
   tryResolveAgentContextProfile
 } from "./agent-context-profile.js";
@@ -519,6 +594,7 @@ export type {
 } from "./agent-context-profile.js";
 export {
   createAgentPromptMaterializationArtifact,
+  createHistoricalAgentPromptMaterializationArtifact,
   materializeAgentConversationContext,
   materializeAgentRunHistory,
   materializeAgentPrompt,
@@ -541,7 +617,10 @@ export type {
 } from "./agent-prompt-cache.js";
 export type {
   AgentPromptMaterializationArtifact,
+  AgentPromptMaterializationArtifactV2,
   CreateAgentPromptMaterializationArtifactInput,
+  CreateHistoricalAgentPromptMaterializationArtifactInput,
+  LegacyAgentPromptMaterializationArtifactV11,
   AgentPromptMaterialization,
   MaterializeAgentPromptInput,
   PackAgentContextInput,
@@ -625,6 +704,7 @@ export type {
   AgentRunDraftResult,
   AgentRunDraftSession,
   AgentRunDraftSessionRepository,
+  AgentRunStartDraftView,
   AgentRunDraftView,
   CreateAgentRunDraftSessionOptions,
   ReadAgentRunDraftCommand,

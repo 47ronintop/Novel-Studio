@@ -66,6 +66,17 @@ export type {
   EffectiveCapabilityState,
   RevokedCapability
 } from "./effective-capability-state.js";
+export {
+  PROVIDER_SEMANTIC_VERSION_SET_SCHEMA_VERSION,
+  createProviderSemanticVersionSetV1,
+  parseProviderSemanticVersionSetV1,
+  providerSemanticVersionSetChecksum,
+  serializeProviderSemanticVersionSetV1
+} from "./provider-semantic-version-set.js";
+export type {
+  CreateProviderSemanticVersionSetV1Input,
+  ProviderSemanticVersionSetV1
+} from "./provider-semantic-version-set.js";
 export { validateAgentRelativePath } from "./path-guard.js";
 export type { AgentRelativePath } from "./path-guard.js";
 export {
