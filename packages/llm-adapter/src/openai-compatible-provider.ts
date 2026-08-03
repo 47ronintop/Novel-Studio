@@ -81,6 +81,7 @@ export function createOpenAiCompatibleProvider(
       }
     },
     stream(request) {
+      assertCanonicalMessageContract(request);
       if (options.streamTransport === undefined) {
         return unsupportedStream();
       }
@@ -167,6 +168,7 @@ function createTransportRequest(
   options: Pick<OpenAiCompatibleProviderOptions, "resolveApiKey">,
   streaming = false
 ): Promise<OpenAiCompatibleTransportRequest> {
+  assertCanonicalMessageContract(request);
   const baseUrl = request.modelProfile.baseUrl;
   if (baseUrl === undefined || baseUrl.length === 0) {
     throw new LlmProviderFailure({
@@ -320,6 +322,91 @@ function toOpenAiCompatibleMessage(message: LlmMessage): JsonObject {
           }))
         })
   };
+}
+
+function assertCanonicalMessageContract(request: LlmRequest): void {
+  const authorityIndexes = request.messages.flatMap((message, index) =>
+    message.role === "system" || message.role === "developer" ? [index] : []
+  );
+  if (authorityIndexes.length > 1 || (authorityIndexes.length === 1 && authorityIndexes[0] !== 0)) {
+    throw providerContractFailure("A request may contain only one leading authority message.");
+  }
+  const callsById = new Map<string, string>();
+  const consumed = new Set<string>();
+  for (const message of request.messages) {
+    if (!hasOnlyMessageKeys(message)) {
+      throw providerContractFailure("Provider messages contain unsupported fields.");
+    }
+    if (message.role === "system" || message.role === "developer") {
+      if (message.toolCallId !== undefined || message.toolCalls !== undefined) {
+        throw providerContractFailure("Authority messages cannot carry tool state.");
+      }
+      continue;
+    }
+    if (message.role === "assistant") {
+      if (message.toolCallId !== undefined) {
+        throw providerContractFailure("Assistant messages cannot carry a tool result id.");
+      }
+      for (const call of message.toolCalls ?? []) {
+        if (
+          !hasOnlyToolCallKeys(call) ||
+          !safeAuthorityIdentifier(call.id) ||
+          !safeAuthorityIdentifier(call.name) ||
+          typeof call.arguments !== "string"
+        ) {
+          throw providerContractFailure("Assistant tool calls are malformed.");
+        }
+        if (callsById.has(call.id)) throw providerContractFailure("Tool call ids must be unique.");
+        callsById.set(call.id, call.name);
+      }
+      continue;
+    }
+    if (message.role === "tool") {
+      if (
+        message.toolCallId === undefined ||
+        message.toolCalls !== undefined ||
+        !callsById.has(message.toolCallId) ||
+        consumed.has(message.toolCallId)
+      ) {
+        throw providerContractFailure("Tool results require one prior assistant tool call.");
+      }
+      consumed.add(message.toolCallId);
+      continue;
+    }
+    if (message.toolCallId !== undefined || message.toolCalls !== undefined) {
+      throw providerContractFailure("User messages cannot carry tool state.");
+    }
+  }
+}
+
+function hasOnlyMessageKeys(message: LlmMessage): boolean {
+  return Object.keys(message).every((key) =>
+    ["role", "content", "toolCallId", "toolCalls"].includes(key)
+  );
+}
+
+function hasOnlyToolCallKeys(call: unknown): call is {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: string;
+} {
+  return (
+    isRecord(call) &&
+    Object.keys(call).every((key) =>
+      ["id", "name", "arguments", "providerMetadata"].includes(key)
+    ) &&
+    typeof call["id"] === "string" &&
+    typeof call["name"] === "string" &&
+    typeof call["arguments"] === "string"
+  );
+}
+
+function safeAuthorityIdentifier(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u.test(value);
+}
+
+function providerContractFailure(message: string): LlmProviderFailure {
+  return new LlmProviderFailure({ code: "LLM_PROVIDER_ERROR", message, retryable: false });
 }
 
 function parseChatCompletion(payload: unknown, request: LlmRequest): LlmProviderCompletion {

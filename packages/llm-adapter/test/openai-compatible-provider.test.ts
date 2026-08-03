@@ -752,6 +752,44 @@ describe("OpenAI-compatible provider", () => {
       }
     });
   });
+  test("fails closed on duplicate authority for both generic and official OpenAI profiles", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => ({ choices: [{ message: { content: "unused" } }] })
+    });
+    for (const providerId of ["openai-compatible", "openai"] as const) {
+      await expect(
+        provider.complete({
+          ...request,
+          modelProfile: { ...request.modelProfile, provider: providerId },
+          messages: [
+            { role: "system", content: "authority one" },
+            { role: "developer", content: "authority two" },
+            { role: "user", content: "request" }
+          ]
+        })
+      ).rejects.toThrow("one leading authority");
+    }
+  });
+
+  test("rejects a tool result that appears before its assistant call", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => ({ choices: [{ message: { content: "unused" } }] })
+    });
+    await expect(
+      provider.complete({
+        ...request,
+        messages: [
+          { role: "developer", content: "authority" },
+          { role: "tool", toolCallId: "call-1", content: "orphan" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [{ id: "call-1", name: "read_file", arguments: "{}" }]
+          }
+        ]
+      })
+    ).rejects.toThrow("prior assistant tool call");
+  });
 });
 
 function readFixture(fileName: string): JsonObject {

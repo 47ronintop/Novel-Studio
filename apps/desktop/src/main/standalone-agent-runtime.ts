@@ -10,7 +10,6 @@ import {
   createAgentRunSession,
   createAgentUsageSession,
   buildAgentSystemPrompt,
-  materializeAgentConversationContext,
   materializeAgentPrompt,
   readResolvedContextBudgetUsageLimits,
   resolveBudgetInputs as resolveCanonicalBudgetInputs,
@@ -33,6 +32,7 @@ import {
   createEffectiveCapabilityState,
   freezeAgentToolCapabilitySnapshot,
   normalizeAgentRunSnapshot,
+  validateAgentRunToolCatalogSnapshot,
   type AgentContextScope,
   type AgentRunSnapshot,
   type AgentUsageRecord
@@ -582,7 +582,7 @@ function createStandaloneBudgetInputs(
         systemPrompt,
         toolCatalogRevision: catalogRevision,
         userRequest: input.draft.userRequest,
-        conversationSummaryMessages: materializeAgentConversationContext(conversation.value)
+        conversationSummaryMessages: conversation.value
       });
       const resolved = resolveCanonicalBudgetInputs({
         provider: model.provider,
@@ -620,13 +620,29 @@ async function resolveStandaloneUsageBudget(
   snapshot: AgentRunSnapshot
 ) {
   const budgetId = snapshot.contextBudgetSnapshotId;
+  const catalogSnapshotId = snapshot.toolCatalogSnapshotId;
   const catalogRevision = snapshot.toolCatalogRevision;
   const facadeVersion = snapshot.toolFacadeVersion;
   if (
     budgetId === null ||
+    typeof catalogSnapshotId !== "string" ||
     catalogRevision === null ||
     catalogRevision === undefined ||
     (facadeVersion !== "v1" && facadeVersion !== "v2")
+  ) {
+    return err(standaloneRuntimeError("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
+  }
+  const storedCatalog = await repository.readToolCatalog(snapshot.runId, catalogSnapshotId);
+  if (!storedCatalog.ok || storedCatalog.value === undefined) {
+    return err(standaloneRuntimeError("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
+  }
+  const catalog = validateAgentRunToolCatalogSnapshot(storedCatalog.value);
+  if (
+    !catalog.ok ||
+    catalog.value.runId !== snapshot.runId ||
+    catalog.value.toolCatalogSnapshotId !== catalogSnapshotId ||
+    catalog.value.catalogRevision !== catalogRevision ||
+    catalog.value.facadeVersion !== facadeVersion
   ) {
     return err(standaloneRuntimeError("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
   }
@@ -642,6 +658,7 @@ async function resolveStandaloneUsageBudget(
     modelProfileId: snapshot.providerCapabilitySnapshot.profileId,
     contextWindow: snapshot.providerCapabilitySnapshot.contextWindow,
     facadeVersion,
+    schemaVersion: catalog.value.schemaVersion,
     catalogRevision
   });
 }

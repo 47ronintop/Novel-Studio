@@ -149,8 +149,8 @@ describe("engineering Agent runtime", () => {
     expect(started).toMatchObject({
       ok: false,
       error: {
-        code: "AGENT_CONTEXT_MODE_UNAVAILABLE",
-        message: "The selected Agent context mode is not available in the current workspace."
+        code: "AGENT_CONTEXT_PREVIEW_REQUIRED",
+        message: "A current context preview is required before this Agent request can start."
       }
     });
     expect(resolveModelStartFacts).not.toHaveBeenCalled();

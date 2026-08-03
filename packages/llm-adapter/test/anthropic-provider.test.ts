@@ -392,6 +392,21 @@ describe("Anthropic provider", () => {
       expect(result.error).toMatchObject({ code: "LLM_TIMEOUT", recoverability: "retryable" });
     }
   });
+  test("rejects duplicate authority instead of joining it into one system block", async () => {
+    const provider = createAnthropicProvider({
+      transport: async () => ({ content: [{ type: "text", text: "unused" }] })
+    });
+    await expect(
+      provider.complete({
+        ...request,
+        messages: [
+          { role: "system", content: "authority one" },
+          { role: "developer", content: "authority two" },
+          { role: "user", content: "request" }
+        ]
+      })
+    ).rejects.toThrow("one leading authority");
+  });
 });
 
 async function collectStream(stream: AsyncIterable<unknown>): Promise<unknown[]> {

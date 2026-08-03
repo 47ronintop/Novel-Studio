@@ -1754,14 +1754,13 @@ describe("AgentRunSession", () => {
     const summaryMessage = resumedMessages.find(
       (message) =>
         typeof message["content"] === "string" &&
-        message["content"].includes('"sourceKind":"compaction_summary"')
+        message["content"].includes('"kind":"untrusted_conversation_data"')
     );
     expect(summaryMessage).toBeDefined();
     expect(JSON.parse(String(summaryMessage?.["content"]))).toMatchObject({
-      kind: "untrusted_project_data",
+      kind: "untrusted_conversation_data",
       source: {
-        sourceKind: "compaction_summary",
-        assetId: summaryArtifact.artifactId
+        sourceKind: "compaction"
       },
       data: body
     });
@@ -5256,13 +5255,13 @@ describe("AgentRunSession", () => {
     });
     expect(observedMessages[0]).toMatchObject({
       role: "user",
-      content: "核对第 3 章的人物动机。"
+      content: expect.stringContaining('"kind":"untrusted_conversation_data"')
     });
+    expect(String(observedMessages[0]?.["content"])).toContain("Earlier request");
     expect(observedMessages.at(-1)).toMatchObject({
       role: "user",
-      content: expect.stringContaining("Untrusted conversation context")
+      content: "核对第 3 章的人物动机。"
     });
-    expect(String(observedMessages.at(-1)?.["content"])).toContain("Earlier request");
     expect(order).toContain("note-terminal");
   });
 

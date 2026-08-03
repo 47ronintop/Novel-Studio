@@ -77,8 +77,7 @@ describe("desktop workspace project context runtime", () => {
       workspaceKind: "creativeProject",
       projectId: "workspace-creative",
       contextMode: "general_file",
-      reattestCreativeProjectFileTreeSnapshot: async () =>
-        ok(creativeTree("workspace-creative")),
+      reattestCreativeProjectFileTreeSnapshot: async () => ok(creativeTree("workspace-creative")),
       ...creative
     });
     expectProjectPrefix(creativeInput, "CREATIVE_CONVENTION", "notes/brief.md");
@@ -273,7 +272,7 @@ describe("desktop workspace project context runtime", () => {
       })
     ).resolves.toMatchObject({
       ok: false,
-      error: { code: "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED" }
+      error: { code: "AGENT_CONTEXT_PREVIEW_REQUIRED" }
     });
   });
 

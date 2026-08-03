@@ -122,4 +122,37 @@ describe("createAgentExternalToolSession", () => {
     // Must be ok:true (not an error) even when outcome_unknown
     expect(result.ok).toBe(true);
   });
+
+  it("fails closed before dispatch for invalid ids, arguments, and results", async () => {
+    const dispatch = makeDispatch({ status: "completed", result: { answer: "42" } });
+    const session = createAgentExternalToolSession({ dispatch });
+    const invalidId = await session.callTool({
+      runId: "r1",
+      canonicalToolId: "remote:unsafe",
+      toolArguments: {},
+      signal
+    });
+    expect(invalidId.ok).toBe(false);
+    expect(dispatch.callTool).not.toHaveBeenCalled();
+
+    const invalidArguments = await session.callTool({
+      runId: "r1",
+      canonicalToolId: "mcp:server/tool",
+      toolArguments: [] as never,
+      signal
+    });
+    expect(invalidArguments.ok).toBe(false);
+    expect(dispatch.callTool).not.toHaveBeenCalled();
+
+    const malformedResult = createAgentExternalToolSession({
+      dispatch: makeDispatch({ status: "completed", result: [] as never })
+    });
+    const result = await malformedResult.callTool({
+      runId: "r1",
+      canonicalToolId: "mcp:server/tool",
+      toolArguments: {},
+      signal
+    });
+    expect(result.ok).toBe(false);
+  });
 });

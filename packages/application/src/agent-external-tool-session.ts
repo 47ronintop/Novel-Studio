@@ -40,23 +40,59 @@ export function createAgentExternalToolSession(
 ): AgentExternalToolExecutor {
   return {
     async callTool(input): Promise<Result<AgentExternalToolOutcome, UnifiedError>> {
-      const args = input.toolArguments as Record<string, unknown>;
+      const args = input.toolArguments;
+      if (!isCanonicalExternalToolId(input.canonicalToolId) || !isSafeJsonObject(args)) {
+        return err(
+          externalToolError(
+            "EXTERNAL_TOOL_INPUT_INVALID",
+            "The external tool id or arguments did not satisfy the local invocation contract."
+          )
+        );
+      }
+      if (input.idempotencyKey !== undefined && !isSafeIdentifier(input.idempotencyKey)) {
+        return err(
+          externalToolError(
+            "EXTERNAL_TOOL_INPUT_INVALID",
+            "The external tool idempotency key is malformed."
+          )
+        );
+      }
       try {
         const outcome = await options.dispatch.callTool({
           canonicalToolId: input.canonicalToolId,
-          toolArguments: args,
+          toolArguments: structuredClone(args),
           ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
           signal: input.signal
         });
 
         if (outcome.status === "completed") {
+          if (!isSafeJsonObject(outcome.result)) {
+            return err(
+              externalToolError(
+                "EXTERNAL_TOOL_RESULT_INVALID",
+                "The external tool returned a non-object or oversized result."
+              )
+            );
+          }
           return ok({
             status: "completed",
-            result: outcome.result as import("@novel-studio/shared").JsonObject
+            result: structuredClone(outcome.result)
           });
         }
 
         if (outcome.status === "outcome_unknown") {
+          if (
+            typeof outcome.reason !== "string" ||
+            outcome.reason.length === 0 ||
+            outcome.reason.length > 1024
+          ) {
+            return err(
+              externalToolError(
+                "EXTERNAL_TOOL_RESULT_INVALID",
+                "The external tool returned an invalid outcome-unknown reason."
+              )
+            );
+          }
           // outcome_unknown is a terminal state — never auto-retry
           return ok({ status: "outcome_unknown", reason: outcome.reason });
         }
@@ -77,4 +113,64 @@ export function createAgentExternalToolSession(
       }
     }
   };
+}
+
+function isCanonicalExternalToolId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    /^(?:mcp|plugin):[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(value)
+  );
+}
+
+function isSafeIdentifier(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u.test(value);
+}
+
+function isSafeJsonObject(
+  value: unknown,
+  depth = 0,
+  nodes = { count: 0 }
+): value is import("@novel-studio/shared").JsonObject {
+  if (depth > 8 || !isRecord(value)) return false;
+  nodes.count += 1;
+  if (nodes.count > 512) return false;
+  for (const [key, entry] of Object.entries(value)) {
+    if (
+      key.length > 128 ||
+      // eslint-disable-next-line no-control-regex -- external JSON keys must reject ASCII controls.
+      /[\u0000-\u001f\u007f]/u.test(key) ||
+      !isSafeJsonValue(entry, depth + 1, nodes)
+    ) {
+      return false;
+    }
+  }
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength <= 262_144;
+  } catch {
+    return false;
+  }
+}
+
+function isSafeJsonValue(value: unknown, depth: number, nodes: { count: number }): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return typeof value !== "string" || value.length <= 262_144;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) {
+    if (depth > 8) return false;
+    for (const entry of value) {
+      nodes.count += 1;
+      if (nodes.count > 512 || !isSafeJsonValue(entry, depth + 1, nodes)) return false;
+    }
+    return true;
+  }
+  return isSafeJsonObject(value, depth, nodes);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

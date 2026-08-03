@@ -97,12 +97,12 @@ describe("Agent prompt materializer", () => {
     expect(output.messages.map((message) => message.content)).toEqual([
       expect.stringContaining("project_conventions"),
       expect.stringContaining("workspace_outline"),
-      "Edit the notes",
-      "summary",
-      expect.stringContaining("current body")
+      expect.stringContaining("untrusted_conversation_data"),
+      expect.stringContaining("current body"),
+      "Edit the notes"
     ]);
     expect(output.stablePrefixMessages).toHaveLength(2);
-    expect(output.dynamicSuffixMessages[0]?.content).toBe("Edit the notes");
+    expect(output.dynamicSuffixMessages.at(-1)?.content).toBe("Edit the notes");
   });
 
   it("packs the exact author-visible sources consumed by prompt materialization", () => {
@@ -195,7 +195,8 @@ describe("Agent prompt materializer", () => {
     expect(prompt.stablePrefixMessages.map((message) => message.content)).toEqual(
       packed.blocks.slice(0, 2).map((block) => block.content)
     );
-    expect(prompt.dynamicSuffixMessages.at(-1)?.content).toBe(packed.blocks[2]?.content);
+    expect(prompt.dynamicSuffixMessages.at(-2)?.content).toBe(packed.blocks[2]?.content);
+    expect(prompt.dynamicSuffixMessages.at(-1)?.content).toBe("Edit the notes");
     expect(Object.isFrozen(packed)).toBe(true);
 
     expect(() =>

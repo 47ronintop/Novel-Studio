@@ -110,7 +110,7 @@ describe("desktop compaction composer", () => {
     expect(usage.ok).toBe(true);
     if (!usage.ok) return;
     expect(usage.value?.["terminationReason"]).toBe("context_compaction");
-    expect(usage.value?.["compactionAfterTokens"]).toBe(4309);
+    expect(usage.value?.["compactionAfterTokens"]).toBe(4335);
   });
 
   test("protects conventions and evicts workspace outlines to a manifest pointer", async () => {
@@ -776,7 +776,7 @@ async function seedC3OutlineRun(): Promise<{
   outlineManifestChecksum: string;
   outlineRereadHint: string;
 }> {
-  const seeded = await seedRun({ contextWindow: 46_000 });
+  const seeded = await seedRun({ contextWindow: 42_000 });
   const scope = {
     kind: "workspace" as const,
     workspaceKind: "engineeringWorkspace" as const,

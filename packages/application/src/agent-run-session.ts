@@ -124,7 +124,6 @@ import {
 import {
   createAgentPromptMaterializationArtifact,
   createHistoricalAgentPromptMaterializationArtifact,
-  materializeAgentConversationContext,
   materializeAgentPrompt,
   materializeProjectDataSource,
   materializeAgentRunHistory,
@@ -5979,7 +5978,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...(startInput.packedContext === undefined
           ? {}
           : { packedContext: startInput.packedContext }),
-        conversationSummaryMessages: materializeAgentConversationContext(conversationContext)
+        conversationSummaryMessages: conversationContext
       });
       const promptCacheCapability =
         startInput.providerCapabilitySnapshot.promptCache ?? NO_AGENT_PROMPT_CACHE_CAPABILITY;
@@ -6061,7 +6060,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextSources: startInput.initialContextSources ?? [],
         toolCatalog: {
           facadeVersion: newRunToolFacadeVersion,
-          ...(useCatalogV2 ? { schemaVersion: "2.0" as const } : {}),
+          schemaVersion: useCatalogV2 ? "2.0" : "1.0",
           catalogRevision: newRunCatalogRevision,
           descriptors: newRunProviderDescriptors
         },
@@ -6213,7 +6212,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...(startInput.packedContext === undefined
           ? {}
           : { packedContext: startInput.packedContext }),
-        conversationSummaryMessages: materializeAgentConversationContext(conversationContext)
+        conversationSummaryMessages: conversationContext
       };
       const promptArtifact =
         initialGuidanceV3 === undefined
@@ -7138,16 +7137,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const executionSystemPrompt =
         executionGuidanceV3?.materializedGuidance ?? buildAgentSystemPrompt(executionProfile);
-      const executionConversationSummary = materializeAgentConversationContext(
-        executionConversationContext
-      );
       const executionMaterialization = materializeAgentPrompt({
         profile: executionProfile,
         systemPrompt: executionSystemPrompt,
         toolCatalogRevision: executionCatalogRevision,
         userRequest: executionUserRequest,
         contextSources: runtime.contextSources,
-        conversationSummaryMessages: executionConversationSummary
+        conversationSummaryMessages: executionConversationContext
       });
       const executionPromptCacheArtifact =
         runtime.promptCacheArtifact === undefined
@@ -7211,7 +7207,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         historyMessages: [approvedPlanMessage],
         toolCatalog: {
           facadeVersion: newRunToolFacadeVersion,
-          ...(useExecutionCatalogV2 ? { schemaVersion: "2.0" as const } : {}),
+          schemaVersion: useExecutionCatalogV2 ? "2.0" : "1.0",
           catalogRevision: executionCatalogRevision,
           descriptors: executionProviderDescriptors
         },
@@ -7362,7 +7358,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         toolCatalogRevision: executionCatalogRevision,
         userRequest: executionUserRequest,
         contextSources: executionRuntime.contextSources,
-        conversationSummaryMessages: executionConversationSummary
+        conversationSummaryMessages: executionConversationContext
       };
       const executionPromptArtifact =
         executionGuidanceV3 === undefined

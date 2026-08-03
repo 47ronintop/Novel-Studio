@@ -949,6 +949,20 @@ export {
   createAgentExternalToolSession,
   type ExternalToolDispatchPort
 } from "./agent-external-tool-session.js";
+export {
+  createProviderVisibleUntrustedEnvelope,
+  isProviderVisibleEnvelopeAllowedInRole,
+  isProviderVisibleUntrustedEnvelope,
+  parseProviderVisibleUntrustedEnvelope,
+  providerVisibleEnvelopeRole,
+  providerVisibleSummaryRevision,
+  serializeProviderVisibleUntrustedEnvelope,
+  type CreateProviderVisibleUntrustedEnvelopeInput,
+  type ProviderVisibleProjectSourceKind,
+  type ProviderVisibleUntrustedEnvelope,
+  type ProviderVisibleUntrustedEnvelopeKind,
+  type ProviderVisibleUntrustedSource
+} from "./agent-untrusted-envelope.js";
 export type {
   AgentSearchToolExecutor,
   AgentNetworkReadResult,

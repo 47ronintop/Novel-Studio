@@ -1219,9 +1219,11 @@ describe("desktop Agent Run runtime", () => {
       message.content.includes("Manual research context.")
     );
     expect(requestIndex).toBeGreaterThanOrEqual(0);
-    expect(manualIndex).toBeGreaterThan(requestIndex);
-    expect(activeIndex).toBeGreaterThan(manualIndex);
-    expect(firstRoundMessages.at(-1)?.content).toContain("Current active file body.");
+    expect(manualIndex).toBeGreaterThanOrEqual(0);
+    expect(activeIndex).toBeGreaterThanOrEqual(0);
+    expect(activeIndex).toBeLessThan(requestIndex);
+    expect(manualIndex).toBeLessThan(requestIndex);
+    expect(firstRoundMessages.at(-1)?.content).toBe("Use the current project file.");
   });
 
   test("reads the active Story Bible asset into the writing prompt suffix", async () => {
@@ -1315,8 +1317,9 @@ describe("desktop Agent Run runtime", () => {
       message.content.includes("ACTIVE_STORY_DETAIL_MARKER")
     );
     expect(requestIndex).toBeGreaterThanOrEqual(0);
-    expect(activeIndex).toBeGreaterThan(requestIndex);
-    expect(firstRoundMessages.at(-1)?.content).toContain("ACTIVE_STORY_DETAIL_MARKER");
+    expect(activeIndex).toBeGreaterThanOrEqual(0);
+    expect(activeIndex).toBeLessThan(requestIndex);
+    expect(firstRoundMessages.at(-1)?.content).toBe("Use the open character setting.");
   });
 
   test("fails closed when an active creative file changes after its checksum is captured", async () => {
@@ -1456,7 +1459,7 @@ describe("desktop Agent Run runtime", () => {
       expect.arrayContaining([
         expect.objectContaining({
           role: "user",
-          content: expect.stringContaining("Untrusted conversation context")
+          content: expect.stringContaining('"kind":"untrusted_conversation_data"')
         })
       ])
     );

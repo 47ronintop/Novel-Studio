@@ -18,7 +18,6 @@ import {
   DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
   DEFAULT_WORKSPACE_OUTLINE_LIMITS,
   buildAgentSystemPrompt,
-  materializeAgentConversationContext,
   materializeAgentPrompt,
   isStoryBibleAssetType,
   isStoryBibleV11AssetType,
@@ -1466,7 +1465,7 @@ async function resolveDesktopUsageBudget(
     modelProfileId: snapshot.providerCapabilitySnapshot.profileId,
     contextWindow: snapshot.providerCapabilitySnapshot.contextWindow,
     facadeVersion,
-    ...(catalog.value.schemaVersion === "2.0" ? { schemaVersion: "2.0" as const } : {}),
+    schemaVersion: catalog.value.schemaVersion,
     catalogRevision
   });
 }
@@ -1636,7 +1635,7 @@ function createDesktopAgentContextSession(input: {
         toolCatalogRevision: catalogRevision,
         userRequest: draft.userRequest,
         contextSources: selectedSources.active,
-        conversationSummaryMessages: materializeAgentConversationContext(conversation.value)
+        conversationSummaryMessages: conversation.value
       });
       const resolvedBudget = resolveCanonicalBudgetInputs({
         provider: model.provider,
@@ -1651,7 +1650,7 @@ function createDesktopAgentContextSession(input: {
         contextSources: selectedSources.active,
         toolCatalog: {
           facadeVersion: "v2",
-          ...(input.catalogSchemaVersion === "2.0" ? { schemaVersion: "2.0" as const } : {}),
+          schemaVersion: input.catalogSchemaVersion,
           catalogRevision,
           descriptors: toolDescriptors
         }

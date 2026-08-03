@@ -380,6 +380,7 @@ function calculateCompactionBudget(input: {
     ...(input.artifactPointers.length === 0 ? {} : { artifactPointers: input.artifactPointers }),
     toolCatalog: {
       facadeVersion: input.material.toolCatalog.facadeVersion,
+      schemaVersion: input.material.toolCatalog.schemaVersion,
       catalogRevision: input.material.toolCatalog.catalogRevision,
       descriptors: input.material.toolCatalog.descriptors
     }

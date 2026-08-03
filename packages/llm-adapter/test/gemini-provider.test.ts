@@ -537,6 +537,35 @@ describe("Gemini provider", () => {
     expect(isErr(aborted)).toBe(true);
     if (!aborted.ok) expect(aborted.error.code).toBe("LLM_ABORTED");
   });
+  test("rejects duplicate authority and future tool pairing before serialization", async () => {
+    const provider = createGeminiProvider({
+      transport: async () => ({ candidates: [{ content: { parts: [{ text: "unused" }] } }] })
+    });
+    await expect(
+      provider.complete({
+        ...request,
+        messages: [
+          { role: "system", content: "authority one" },
+          { role: "developer", content: "authority two" },
+          { role: "user", content: "request" }
+        ]
+      })
+    ).rejects.toThrow("one leading authority");
+    await expect(
+      provider.complete({
+        ...request,
+        messages: [
+          { role: "system", content: "authority" },
+          { role: "tool", toolCallId: "call-1", content: "orphan" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [{ id: "call-1", name: "read_file", arguments: "{}" }]
+          }
+        ]
+      })
+    ).rejects.toThrow("prior assistant tool call");
+  });
 });
 
 async function collect(stream: AsyncIterable<unknown>): Promise<unknown[]> {
