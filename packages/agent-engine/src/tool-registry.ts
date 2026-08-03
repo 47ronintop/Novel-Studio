@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 
 import type { AgentContextMode, AgentOperationMode, AgentWritePolicy } from "./agent-run-types.js";
 import type { JsonObject } from "@novel-studio/shared";
-import type { AgentToolCapabilitySnapshot } from "./agent-tool-capabilities.js";
+import {
+  qualifiedWorkspaceFileOperations,
+  qualifiedWritingOperations,
+  type AgentToolCapabilitySnapshot,
+  type ProviderVisibleWriteOperation
+} from "./agent-tool-capabilities.js";
 import { validateStrictToolSchema, validateToolText } from "./agent-tool-schema.js";
 
 /** The 9 static tool names that exist in Stage 5 baseline (v1.0). */
@@ -59,7 +64,15 @@ export type NetworkAgentToolName = "web_search" | "fetch_url";
 
 /** Compact model-facing facade used by new Agent runs. */
 export type V2AgentToolName =
-  "read_resource" | "search_project" | "edit_text" | "create_resource" | "manage_path";
+  | "read_resource"
+  | "search_project"
+  | "edit_text"
+  | "create_resource"
+  | "manage_path"
+  | "rename_chapter"
+  | "reorder_chapter"
+  | "set_chapter_status"
+  | "restore_chapter";
 
 export type AgentToolFacadeVersion = "v1" | "v2";
 
@@ -119,6 +132,8 @@ export interface AgentToolDescriptor {
   readonly description?: string;
   readonly kind: AgentToolKind;
   readonly effect: AgentToolEffect;
+  /** Catalog 2.0 binds each mutation descriptor to exactly one provider-visible operation. */
+  readonly writeOperation?: ProviderVisibleWriteOperation;
   /** Optional for test stubs; defaults to "none". */
   readonly dataEgress?: AgentToolDataEgress;
   /** Optional for test stubs; defaults to false. */
@@ -146,6 +161,8 @@ export interface ListAgentToolsInput {
   readonly writePolicy: AgentWritePolicy;
   /** Defaults to v1 so persisted runs and existing callers retain their frozen tool contract. */
   readonly facadeVersion?: AgentToolFacadeVersion;
+  /** Catalog 2.0 uses the operation-qualified, effect-specific directory. */
+  readonly catalogSchemaVersion?: "1.0" | "2.0";
   /**
    * Task 0.1: Optional capability snapshot. When absent the registry falls back to v1.0
    * behaviour — exactly the original 9 tools, preserving all pre-Phase-0 test contracts.
@@ -170,7 +187,8 @@ export function listAgentTools(input: ListAgentToolsInput): readonly AgentToolDe
 }
 
 function listV1AgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
-  const storyBibleToolsEnabled = input.capabilitySnapshot?.storyBibleStructuredToolsEnabled === true;
+  const storyBibleToolsEnabled =
+    input.capabilitySnapshot?.storyBibleStructuredToolsEnabled === true;
   const readTools: AgentToolDescriptor[] =
     input.contextMode === "writing"
       ? [
@@ -289,6 +307,12 @@ function listV1AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
 }
 
 function listV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
+  return input.catalogSchemaVersion === "2.0"
+    ? listCatalogV2AgentTools(input)
+    : listLegacyV2AgentTools(input);
+}
+
+function listLegacyV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
   const cap = input.capabilitySnapshot;
   const storyBibleReadTools =
     input.contextMode === "writing" && cap?.storyBibleStructuredToolsEnabled === true
@@ -365,11 +389,138 @@ function listV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescrip
   ];
 }
 
+function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentToolDescriptor[] {
+  const cap = input.capabilitySnapshot;
+  const writingOperations = new Set(cap === undefined ? [] : qualifiedWritingOperations(cap));
+  const workspaceOperations = new Set(
+    cap === undefined ? [] : qualifiedWorkspaceFileOperations(cap)
+  );
+  const writing = input.contextMode === "writing";
+  const readResourceSchema = strictStableRefObject("ref", writing ? "chapter" : "file");
+  const storyBibleReadTools =
+    writing && cap?.storyBibleStructuredToolsEnabled === true
+      ? [
+          coreTool("describe_story_bible_type", "file_tool", "read"),
+          coreTool("list_story_bible", "file_tool", "read"),
+          coreTool("read_story_bible", "file_tool", "read"),
+          coreTool("get_story_bible_references", "file_tool", "read")
+        ]
+      : [];
+  const searchTools =
+    cap?.searchEnabled === true ? [coreTool("search_project", "search_tool", "read")] : [];
+  const reads = [
+    coreTool("list_project_entries", "file_tool", "read"),
+    coreTool("read_resource", "file_tool", "read", { inputSchema: readResourceSchema }),
+    ...storyBibleReadTools,
+    ...searchTools
+  ];
+
+  if (input.operationMode === "planning") {
+    return [
+      ...reads,
+      coreTool("finish_plan", "protocol_action", "control"),
+      coreTool("request_user_input", "protocol_action", "control")
+    ];
+  }
+
+  const mutations: AgentToolDescriptor[] = [];
+  if (writing) {
+    if (writingOperations.has("chapter_replace")) {
+      mutations.push(
+        coreTool("edit_text", "file_tool", "propose", {
+          writeOperation: "chapter_replace",
+          inputSchema: v2EditSchema("chapter")
+        })
+      );
+    }
+    if (writingOperations.has("chapter_create")) {
+      mutations.push(
+        coreTool("create_resource", "file_tool", "propose", {
+          writeOperation: "chapter_create",
+          inputSchema: v2CreateSchema("chapter")
+        })
+      );
+    }
+    for (const [operation, name] of [
+      ["chapter_rename", "rename_chapter"],
+      ["chapter_reorder", "reorder_chapter"],
+      ["chapter_status", "set_chapter_status"],
+      ["chapter_restore", "restore_chapter"]
+    ] as const) {
+      if (writingOperations.has(operation)) {
+        mutations.push(coreTool(name, "file_tool", "propose", { writeOperation: operation }));
+      }
+    }
+    for (const [operation, name] of [
+      ["story_bible_create", "create_story_bible"],
+      ["story_bible_patch", "patch_story_bible"],
+      ["story_bible_status", "set_story_bible_status"],
+      ["story_bible_restore", "restore_story_bible"]
+    ] as const) {
+      if (writingOperations.has(operation)) {
+        mutations.push(coreTool(name, "file_tool", "propose", { writeOperation: operation }));
+      }
+    }
+  } else {
+    const engineering = cap?.workspaceKind === "engineeringWorkspace";
+    if (workspaceOperations.has("replace_file")) {
+      mutations.push(
+        coreTool(engineering ? "propose_file_write" : "edit_text", "file_tool", "propose", {
+          writeOperation: "replace_file",
+          ...(engineering ? {} : { inputSchema: v2EditSchema("file") })
+        })
+      );
+    }
+    if (workspaceOperations.has("create_file")) {
+      mutations.push(
+        coreTool(engineering ? "propose_file_create" : "create_resource", "file_tool", "propose", {
+          writeOperation: "create_file",
+          ...(engineering ? {} : { inputSchema: v2CreateSchema("file") })
+        })
+      );
+    }
+    for (const [operation, name] of [
+      ["move_file", "propose_file_move"],
+      ["delete_file", "propose_file_delete"],
+      ["create_directory", "propose_directory_create"]
+    ] as const) {
+      if (workspaceOperations.has(operation)) {
+        mutations.push(coreTool(name, "file_tool", "propose", { writeOperation: operation }));
+      }
+    }
+  }
+
+  const networkTools =
+    cap?.networkReadEnabled === true
+      ? [
+          coreTool("web_search", "network_tool", "external_read"),
+          coreTool("fetch_url", "network_tool", "external_read")
+        ]
+      : [];
+  const externalValidation = validateExternalToolDescriptors(input.externalToolDescriptors ?? []);
+  const remoteExternalTools =
+    input.externalToolDescriptors !== undefined && externalValidation.ok && cap?.mcpToolsEnabled
+      ? input.externalToolDescriptors.filter((descriptor) => descriptor.source?.kind === "mcp")
+      : [];
+  return [
+    ...reads,
+    ...mutations,
+    ...networkTools,
+    ...remoteExternalTools,
+    coreTool("finish", "protocol_action", "control"),
+    coreTool("request_user_input", "protocol_action", "control")
+  ];
+}
+
 /** Build a fully-populated descriptor for a static core tool. */
 function coreTool(
   name: StaticAgentToolName,
   kind: AgentToolKind,
-  effect: AgentToolEffect
+  effect: AgentToolEffect,
+  options?: {
+    readonly writeOperation?: ProviderVisibleWriteOperation;
+    readonly inputSchema?: JsonObject;
+  }
 ): AgentToolDescriptor {
   const descriptor: Omit<AgentToolDescriptor, "descriptorDigest"> = {
     id: name,
@@ -379,11 +530,12 @@ function coreTool(
     description: descriptionFor(name),
     kind,
     effect,
+    ...(options?.writeOperation === undefined ? {} : { writeOperation: options.writeOperation }),
     dataEgress: dataEgressFor(effect),
     destructive: isDestructive(name),
     retrySemantics: retrySemanticsFor(effect),
     source: { kind: "core", id: name },
-    inputSchema: inputSchemaFor(name)
+    inputSchema: options?.inputSchema ?? inputSchemaFor(name)
   };
   return { ...descriptor, descriptorDigest: computeAgentToolDescriptorDigest(descriptor) };
 }
@@ -426,6 +578,7 @@ export function validateExternalToolDescriptors(
       source.kind !== sourceKind ||
       source.id !== sourceId ||
       descriptor.kind !== "external_tool" ||
+      descriptor.writeOperation !== undefined ||
       (descriptor.effect !== "external_read" && descriptor.effect !== "external_action")
     ) {
       return { ok: false, error: `Dynamic tool "${id}" has an invalid source or effect.` };
@@ -486,6 +639,9 @@ export function computeAgentToolDescriptorDigest(
         description: descriptor.description ?? "",
         kind: descriptor.kind,
         effect: descriptor.effect,
+        ...(descriptor.writeOperation === undefined
+          ? {}
+          : { writeOperation: descriptor.writeOperation }),
         dataEgress: descriptor.dataEgress ?? "none",
         destructive: descriptor.destructive ?? false,
         retrySemantics: descriptor.retrySemantics ?? "safe",
@@ -515,6 +671,8 @@ function isDestructive(name: StaticAgentToolName): boolean {
     name === "propose_file_move" ||
     name === "propose_directory_create" ||
     name === "set_story_bible_status" ||
+    name === "set_chapter_status" ||
+    name === "reorder_chapter" ||
     name === "run_project_task" ||
     name === "manage_path"
   );
@@ -555,7 +713,11 @@ function displayNameFor(name: StaticAgentToolName): string {
     search_project: "搜索项目",
     edit_text: "修改文本",
     create_resource: "创建资源",
-    manage_path: "管理路径"
+    manage_path: "管理路径",
+    rename_chapter: "提案修改章节标题",
+    reorder_chapter: "提案调整章节顺序",
+    set_chapter_status: "提案更改章节状态",
+    restore_chapter: "提案恢复章节"
   };
   return labels[name] ?? name;
 }
@@ -597,7 +759,11 @@ function descriptionFor(name: StaticAgentToolName): string {
     edit_text: "基于内容哈希和有界范围提案修改已有文本。",
     create_resource:
       "提案创建章节、Story Bible JSON 资产或普通文本文件；Story Bible 使用 assetType（含 foreshadow）和完整 JSON 内容，写入进入 Change Set 审批流程。",
-    manage_path: "提案移动、删除文件或创建目录。"
+    manage_path: "提案移动、删除文件或创建目录。",
+    rename_chapter: "按稳定章节引用和新鲜 revision 提案修改标题。",
+    reorder_chapter: "按稳定相邻章节引用提案调整顺序或卷归属。",
+    set_chapter_status: "按稳定章节引用提案更改状态；删除边界始终需要人工确认。",
+    restore_chapter: "按认证的删除证明提案恢复章节。"
   };
   return descs[name] ?? "";
 }
@@ -621,6 +787,10 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
   if (name === "edit_text") return v2EditSchema();
   if (name === "create_resource") return v2CreateSchema();
   if (name === "manage_path") return v2ManagePathSchema();
+  if (name === "rename_chapter") return renameChapterSchema();
+  if (name === "reorder_chapter") return reorderChapterSchema();
+  if (name === "set_chapter_status") return setChapterStatusSchema();
+  if (name === "restore_chapter") return restoreChapterSchema();
   if (name === "propose_chapter_write") {
     return proposalSchema("chapterId");
   }
@@ -1021,9 +1191,16 @@ function dependencyIdArraySchema(): JsonObject {
 }
 
 const STABLE_RESOURCE_REF_PATTERN = "^(chapter|story_bible|file):[^\\s]+$";
+const STABLE_CHAPTER_REF_PATTERN = "^chapter:[^\\s]+$";
 const STABLE_FILE_REF_PATTERN = "^file:[^\\s]+$";
 
-function strictStableRefObject(key: string): JsonObject {
+function strictStableRefObject(key: string, kind?: "chapter" | "file"): JsonObject {
+  const pattern =
+    kind === "chapter"
+      ? STABLE_CHAPTER_REF_PATTERN
+      : kind === "file"
+        ? STABLE_FILE_REF_PATTERN
+        : STABLE_RESOURCE_REF_PATTERN;
   return {
     type: "object",
     additionalProperties: false,
@@ -1033,7 +1210,7 @@ function strictStableRefObject(key: string): JsonObject {
         type: "string",
         minLength: 6,
         maxLength: 1036,
-        pattern: STABLE_RESOURCE_REF_PATTERN
+        pattern
       }
     }
   };
@@ -1081,7 +1258,13 @@ function v2SearchSchema(): JsonObject {
   };
 }
 
-function v2EditSchema(): JsonObject {
+function v2EditSchema(kind?: "chapter" | "file"): JsonObject {
+  const pattern =
+    kind === "chapter"
+      ? STABLE_CHAPTER_REF_PATTERN
+      : kind === "file"
+        ? STABLE_FILE_REF_PATTERN
+        : STABLE_RESOURCE_REF_PATTERN;
   return {
     type: "object",
     additionalProperties: false,
@@ -1091,7 +1274,7 @@ function v2EditSchema(): JsonObject {
         type: "string",
         minLength: 6,
         maxLength: 1036,
-        pattern: STABLE_RESOURCE_REF_PATTERN
+        pattern
       },
       baseHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
       range: textRangeSchema(),
@@ -1100,48 +1283,116 @@ function v2EditSchema(): JsonObject {
   };
 }
 
-function v2CreateSchema(): JsonObject {
+function v2CreateSchema(kind?: "chapter" | "story_bible" | "file"): JsonObject {
   const dependsOn = {
     type: "array",
     items: { type: "string", minLength: 1, maxLength: 256 },
     maxItems: 50
   };
-  return {
-    oneOf: [
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["kind", "title"],
-        properties: {
-          kind: { const: "chapter" },
-          title: { type: "string", minLength: 1, maxLength: 512 },
-          content: { type: "string", maxLength: 1_000_000 },
-          dependsOn
-        }
-      },
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["kind", "assetType", "content"],
-        properties: {
-          kind: { const: "story_bible" },
-          assetType: { type: "string", minLength: 1, maxLength: 128 },
-          content: { type: "string", minLength: 1, maxLength: 1_048_576 },
-          dependsOn
-        }
-      },
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["kind", "path", "content"],
-        properties: {
-          kind: { const: "file" },
-          path: { type: "string", minLength: 1, maxLength: 1024 },
-          content: { type: "string", maxLength: 10_485_760 },
-          dependsOn
-        }
+  const variants: Readonly<Record<"chapter" | "story_bible" | "file", JsonObject>> = {
+    chapter: {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "title"],
+      properties: {
+        kind: { const: "chapter" },
+        title: { type: "string", minLength: 1, maxLength: 512 },
+        content: { type: "string", maxLength: 1_000_000 },
+        dependsOn
       }
-    ]
+    },
+    story_bible: {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "assetType", "content"],
+      properties: {
+        kind: { const: "story_bible" },
+        assetType: { type: "string", minLength: 1, maxLength: 128 },
+        content: { type: "string", minLength: 1, maxLength: 1_048_576 },
+        dependsOn
+      }
+    },
+    file: {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "path", "content"],
+      properties: {
+        kind: { const: "file" },
+        path: { type: "string", minLength: 1, maxLength: 1024 },
+        content: { type: "string", maxLength: 10_485_760 },
+        dependsOn
+      }
+    }
+  };
+  return kind === undefined
+    ? { oneOf: [variants.chapter, variants.story_bible, variants.file] }
+    : variants[kind];
+}
+
+function renameChapterSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["chapterRef", "baseRevision", "title"],
+    properties: {
+      chapterRef: stableChapterRefSchema(),
+      baseRevision: { type: "integer", minimum: 1 },
+      title: { type: "string", minLength: 1, maxLength: 512 }
+    }
+  };
+}
+
+function reorderChapterSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["chapterRef", "baseRevision"],
+    properties: {
+      chapterRef: stableChapterRefSchema(),
+      baseRevision: { type: "integer", minimum: 1 },
+      beforeChapterRef: stableChapterRefSchema(),
+      afterChapterRef: stableChapterRefSchema(),
+      targetVolumeRef: {
+        type: "string",
+        minLength: 1,
+        maxLength: 1036,
+        pattern: "^story_bible:[^\\s]+$"
+      }
+    }
+  };
+}
+
+function setChapterStatusSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["chapterRef", "baseRevision", "status"],
+    properties: {
+      chapterRef: stableChapterRefSchema(),
+      baseRevision: { type: "integer", minimum: 1 },
+      status: { type: "string", enum: ["active", "draft", "archived", "deleted"] }
+    }
+  };
+}
+
+function restoreChapterSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["chapterRef", "baseRevision"],
+    properties: {
+      chapterRef: stableChapterRefSchema(),
+      baseRevision: { type: "integer", minimum: 1 }
+    }
+  };
+}
+
+function stableChapterRefSchema(): JsonObject {
+  return {
+    type: "string",
+    minLength: 9,
+    maxLength: 1036,
+    pattern: STABLE_CHAPTER_REF_PATTERN
   };
 }
 

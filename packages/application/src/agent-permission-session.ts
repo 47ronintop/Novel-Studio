@@ -1,7 +1,11 @@
 import {
+  computeProviderMappingRevision,
   findPermissionSummaryDrift,
   generatePermissionSummary,
+  generatePermissionSummaryV2,
   hasValidPermissionSummaryChecksums,
+  isPermissionSummaryV20,
+  parsePermissionSummaryV20,
   type AgentContextMode,
   type AgentOperationMode,
   type AgentToolCapabilitySnapshot,
@@ -59,6 +63,13 @@ export interface PreparePermissionSummaryInput {
   readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
   /** Revision from the immutable canonical-id <-> provider-name mapping. */
   readonly providerMappingRevision?: string;
+  /** Target Permission Summary/catalog schema for this run. Legacy callers default to 1.1. */
+  readonly catalogSchemaVersion?: "1.0" | "2.0";
+  /** Frozen final provider directory for a 2.0 summary. */
+  readonly frozenToolDescriptors?: readonly AgentToolDescriptor[];
+  /** Main-owned acknowledgement/qualification facts for limited preapproval. */
+  readonly writePolicyAcknowledged?: boolean;
+  readonly limitedRunPreapprovalQualified?: boolean;
 }
 
 export type VerifyPermissionSummaryForStartInput = PreparePermissionSummaryInput;
@@ -124,6 +135,8 @@ export interface CreateAgentPermissionSessionOptions {
   readonly defaultExternalToolDescriptors?: readonly AgentToolDescriptor[];
   /** Injectable Tool Registry lister; defaults to the real registry. Tests use it to prove drift. */
   readonly listTools?: AgentToolLister;
+  readonly catalogSchemaVersion?: "1.0" | "2.0";
+  readonly limitedRunPreapprovalQualified?: boolean;
 }
 
 export function createAgentPermissionSession(
@@ -141,32 +154,72 @@ export function createAgentPermissionSession(
   ): Promise<Result<PermissionSummary, UnifiedError>> {
     const fingerprint = await options.rootFingerprint.resolveRootFingerprint(input.projectId);
     if (!fingerprint.ok) return err(fingerprint.error);
+    const common = {
+      permissionSummaryId: createId(),
+      projectId: input.projectId,
+      runDraftId: input.runDraftId,
+      operationMode: input.operationMode,
+      contextMode: input.contextMode,
+      writePolicy: input.writePolicy,
+      rootFingerprint: fingerprint.value,
+      generatedAt: now(),
+      writeMutationTrust: options.writeMutationTrust ?? "unavailable",
+      ...((input.capabilitySnapshot ?? options.defaultCapabilitySnapshot) === undefined
+        ? {}
+        : {
+            capabilitySnapshot: input.capabilitySnapshot ?? options.defaultCapabilitySnapshot
+          }),
+      ...((input.externalToolDescriptors ?? options.defaultExternalToolDescriptors) === undefined
+        ? {}
+        : {
+            externalToolDescriptors:
+              input.externalToolDescriptors ?? options.defaultExternalToolDescriptors
+          }),
+      ...(input.providerMappingRevision === undefined
+        ? {}
+        : { providerMappingRevision: input.providerMappingRevision }),
+      ...(options.listTools === undefined ? {} : { listTools: options.listTools })
+    } satisfies Omit<
+      Parameters<typeof generatePermissionSummary>[0],
+      "permissionSummaryId" | "generatedAt"
+    > & { permissionSummaryId: string; generatedAt: string };
+    if ((input.catalogSchemaVersion ?? options.catalogSchemaVersion ?? "1.0") === "2.0") {
+      if (
+        input.frozenToolDescriptors !== undefined &&
+        input.providerMappingRevision !== undefined
+      ) {
+        const computedProviderMappingRevision = computeProviderMappingRevision(
+          input.frozenToolDescriptors
+        );
+        if (input.providerMappingRevision !== computedProviderMappingRevision) {
+          return err(
+            permissionSummaryDriftError([
+              {
+                field: "providerMappingRevision",
+                stored: input.providerMappingRevision,
+                regenerated: computedProviderMappingRevision
+              }
+            ])
+          );
+        }
+      }
+      return ok(
+        generatePermissionSummaryV2({
+          ...common,
+          ...(input.frozenToolDescriptors === undefined
+            ? {}
+            : { frozenToolDescriptors: input.frozenToolDescriptors }),
+          ...(input.writePolicyAcknowledged === undefined
+            ? {}
+            : { writePolicyAcknowledged: input.writePolicyAcknowledged }),
+          limitedRunPreapprovalQualified:
+            input.limitedRunPreapprovalQualified ?? options.limitedRunPreapprovalQualified ?? false
+        })
+      );
+    }
     return ok(
       generatePermissionSummary({
-        permissionSummaryId: createId(),
-        projectId: input.projectId,
-        runDraftId: input.runDraftId,
-        operationMode: input.operationMode,
-        contextMode: input.contextMode,
-        writePolicy: input.writePolicy,
-        rootFingerprint: fingerprint.value,
-        generatedAt: now(),
-        writeMutationTrust: options.writeMutationTrust ?? "unavailable",
-        ...((input.capabilitySnapshot ?? options.defaultCapabilitySnapshot) === undefined
-          ? {}
-          : {
-              capabilitySnapshot: input.capabilitySnapshot ?? options.defaultCapabilitySnapshot
-            }),
-        ...((input.externalToolDescriptors ?? options.defaultExternalToolDescriptors) === undefined
-          ? {}
-          : {
-              externalToolDescriptors:
-                input.externalToolDescriptors ?? options.defaultExternalToolDescriptors
-            }),
-        ...(input.providerMappingRevision === undefined
-          ? {}
-          : { providerMappingRevision: input.providerMappingRevision }),
-        ...(options.listTools === undefined ? {} : { listTools: options.listTools })
+        ...common
       })
     );
   }
@@ -199,7 +252,9 @@ export function createAgentPermissionSession(
     prepareForPlanHandoff: generate,
 
     async bindToRun(input) {
-      const bound: PermissionSummary = { ...input.summary, runId: input.runId };
+      const bound: PermissionSummary = isPermissionSummaryV20(input.summary)
+        ? parsePermissionSummaryV20({ ...input.summary, runId: input.runId })
+        : { ...input.summary, runId: input.runId };
       const written = await options.repository.writePermissionSummary(
         input.runId,
         bound as unknown as JsonObject
@@ -217,9 +272,8 @@ export function createAgentPermissionSession(
         input.permissionSummaryId
       );
       if (!read.ok || read.value === undefined) return read as Result<undefined, UnifiedError>;
-      return isPermissionSummary(read.value, input)
-        ? ok(read.value as unknown as PermissionSummary)
-        : err(permissionSummaryInvalid());
+      const parsed = parsePersistedPermissionSummary(read.value, input);
+      return parsed === undefined ? err(permissionSummaryInvalid()) : ok(parsed);
     }
   };
 }
@@ -242,6 +296,9 @@ function createDefaultPermissionSummaryId(): string {
 }
 
 function isPermissionSummary(value: JsonObject, input: ReadPermissionSummaryForRunInput): boolean {
+  if (value["schemaVersion"] === "2.0") {
+    return parsePersistedPermissionSummary(value, input) !== undefined;
+  }
   if (
     (value["schemaVersion"] !== "1.0" && value["schemaVersion"] !== "1.1") ||
     value["permissionSummaryId"] !== input.permissionSummaryId ||
@@ -283,6 +340,25 @@ function isPermissionSummary(value: JsonObject, input: ReadPermissionSummaryForR
     }
   }
   return hasValidPermissionSummaryChecksums(value as unknown as PermissionSummary);
+}
+
+function parsePersistedPermissionSummary(
+  value: JsonObject,
+  input: ReadPermissionSummaryForRunInput
+): PermissionSummary | undefined {
+  if (value["schemaVersion"] === "2.0") {
+    try {
+      const parsed = parsePermissionSummaryV20(value);
+      return parsed.permissionSummaryId === input.permissionSummaryId &&
+        parsed.runId === input.runId &&
+        parsed.projectId.length > 0
+        ? parsed
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return isPermissionSummary(value, input) ? (value as unknown as PermissionSummary) : undefined;
 }
 
 function isStringArray(value: unknown): value is readonly string[] {

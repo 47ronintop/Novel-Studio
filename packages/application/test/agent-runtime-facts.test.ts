@@ -1,13 +1,14 @@
 import {
+  createApprovalRuleSetProjection,
   createDefaultCapabilitySnapshot,
   createEffectiveCapabilityState,
+  DEFAULT_APPROVAL_RULE_SET_VERSION,
   listAgentTools
 } from "@novel-studio/agent-engine";
 import { describe, expect, it } from "vitest";
 
 import { resolveAgentContextProfile } from "../src/agent-context-profile.js";
 import {
-  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
   createProviderVisibleAgentRuntimeFacts,
   parseProviderVisibleAgentRuntimeFacts,
   providerVisibleAgentRuntimeFactsChecksum
@@ -60,12 +61,20 @@ describe("Provider-visible Agent runtime facts 1.0", () => {
     const capability = {
       ...createDefaultCapabilitySnapshot("creativeProject"),
       storyBibleStructuredToolsEnabled: true,
+      writingOperations: [
+        "chapter_replace",
+        "story_bible_create",
+        "story_bible_patch",
+        "story_bible_status",
+        "story_bible_restore"
+      ] as const,
       featureFlagRevision: "story-bible-on"
     };
     const facts = createProviderVisibleAgentRuntimeFacts({
       profile,
       toolDescriptors: listAgentTools({
         facadeVersion: "v2",
+        catalogSchemaVersion: "2.0",
         operationMode: "execution",
         contextMode: "writing",
         writePolicy: "write_before_confirmation",
@@ -85,16 +94,26 @@ describe("Provider-visible Agent runtime facts 1.0", () => {
     ]);
     expect(facts.workspaceFileOperations).toEqual([]);
     expect(facts.writeApprovalPolicy).toBe("confirm_each_change_set");
-    expect(facts.approvalRuleSetChecksum).toBe(ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM);
-    expect(facts.approvalRules).toHaveLength(facts.writingOperations.length);
+    const expectedRules = createApprovalRuleSetProjection(
+      facts.writingOperations,
+      DEFAULT_APPROVAL_RULE_SET_VERSION
+    );
+    expect(facts.approvalRuleSetVersion).toBe(DEFAULT_APPROVAL_RULE_SET_VERSION);
+    expect(facts.approvalRuleSetChecksum).toBe(expectedRules.checksum);
+    expect(facts.approvalRules).toEqual(expectedRules.rules);
     expect(providerVisibleAgentRuntimeFactsChecksum(facts)).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("keeps limited preapproval closed until the trusted surface is qualified", () => {
     const profile = workspaceProfile("creativeProject", "execution", "general_file");
-    const capability = createDefaultCapabilitySnapshot("creativeProject");
+    const capability = {
+      ...createDefaultCapabilitySnapshot("creativeProject"),
+      workspaceFileOperations: ["replace_file"] as const,
+      featureFlagRevision: "replace-qualified"
+    };
     const tools = listAgentTools({
       facadeVersion: "v2",
+      catalogSchemaVersion: "2.0",
       operationMode: "execution",
       contextMode: "general_file",
       writePolicy: "user_preapproved_run",
@@ -111,6 +130,37 @@ describe("Provider-visible Agent runtime facts 1.0", () => {
         activeResourceKind: "project_file"
       })
     ).toThrow("PROVIDER_VISIBLE_RUNTIME_FACTS_PREAPPROVAL_UNQUALIFIED");
+  });
+
+  it("fails closed when a frozen proposal operation is no longer effective", () => {
+    const profile = workspaceProfile("creativeProject", "execution", "writing");
+    const qualified = {
+      ...createDefaultCapabilitySnapshot("creativeProject"),
+      writingOperations: ["chapter_replace"] as const,
+      featureFlagRevision: "chapter-write-qualified"
+    };
+    const tools = listAgentTools({
+      facadeVersion: "v2",
+      catalogSchemaVersion: "2.0",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: qualified
+    });
+    const revoked = {
+      ...createDefaultCapabilitySnapshot("creativeProject"),
+      featureFlagRevision: "chapter-write-revoked"
+    };
+
+    expect(() =>
+      createProviderVisibleAgentRuntimeFacts({
+        profile,
+        toolDescriptors: tools,
+        effectiveCapabilityState: createEffectiveCapabilityState(revoked),
+        executionWritePolicy: "write_before_confirmation",
+        activeResourceKind: "chapter"
+      })
+    ).toThrow("PROVIDER_VISIBLE_RUNTIME_FACTS_INVALID");
   });
 
   it("rejects extra fields, non-canonical arrays, and proposal-proof leakage", () => {
@@ -132,6 +182,36 @@ describe("Provider-visible Agent runtime facts 1.0", () => {
       parseProviderVisibleAgentRuntimeFacts({
         ...facts,
         workspaceFileOperations: ["create_file", "replace_file"]
+      })
+    ).toThrow("PROVIDER_VISIBLE_RUNTIME_FACTS_INVALID");
+  });
+
+  it("rejects a persisted approval rule projection that does not match its operation set", () => {
+    const profile = workspaceProfile("creativeProject", "execution", "general_file");
+    const capability = {
+      ...createDefaultCapabilitySnapshot("creativeProject"),
+      workspaceFileOperations: ["replace_file"] as const,
+      featureFlagRevision: "replace-qualified"
+    };
+    const facts = createProviderVisibleAgentRuntimeFacts({
+      profile,
+      toolDescriptors: listAgentTools({
+        facadeVersion: "v2",
+        catalogSchemaVersion: "2.0",
+        operationMode: "execution",
+        contextMode: "general_file",
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: capability
+      }),
+      effectiveCapabilityState: createEffectiveCapabilityState(capability),
+      executionWritePolicy: "write_before_confirmation",
+      activeResourceKind: "project_file"
+    });
+
+    expect(() =>
+      parseProviderVisibleAgentRuntimeFacts({
+        ...facts,
+        approvalRuleSetChecksum: "0".repeat(64)
       })
     ).toThrow("PROVIDER_VISIBLE_RUNTIME_FACTS_INVALID");
   });

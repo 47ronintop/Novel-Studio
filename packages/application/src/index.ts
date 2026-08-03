@@ -786,6 +786,7 @@ export type {
   ChangeSetSession,
   ChangeSetSessionPort,
   CreateChangeSetSessionOptions,
+  MainOnlyApprovalDecisionProofRepositoryPort,
   ProposeChapterWriteInput,
   ProposeFileWriteInput,
   ProposeOperationBatchInput,

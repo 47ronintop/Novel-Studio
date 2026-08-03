@@ -8,6 +8,7 @@ import {
   checksumChangeSetText,
   createChangeSetRevision,
   decideChangeSetApproval,
+  type AgentToolCapabilitySnapshot,
   type ChangeSet,
   type ChangeSetApproval
 } from "@novel-studio/agent-engine";
@@ -41,6 +42,65 @@ afterEach(async () => {
 });
 
 describe("desktop Agent Run runtime", () => {
+  test("intersects operation release evidence, feature gate, backend, and transaction executor", () => {
+    const requested: AgentToolCapabilitySnapshot = {
+      workspaceKind: "creativeProject",
+      searchEnabled: false,
+      fileLifecycleEnabled: false,
+      writingOperations: ["chapter_replace"],
+      workspaceFileOperations: [],
+      storyBibleStructuredToolsEnabled: false,
+      controlledExecutionEnabled: false,
+      gitReadEnabled: false,
+      networkReadEnabled: false,
+      pluginToolsEnabled: false,
+      mcpToolsEnabled: false,
+      featureFlagRevision: "desktop-operation-evidence"
+    };
+    const featureFlags = createAgentFeatureFlags({
+      agentGuidanceV3: true,
+      revision: "desktop-operation-feature"
+    });
+    const qualified = {
+      requested,
+      featureFlags,
+      lifecycleOperations: createTestingReplaceLifecyclePort("unused-operation-root"),
+      hasVersionGroupExecutor: true
+    };
+
+    expect(runtimeExports.buildRuntimeCapabilitySnapshot(qualified).writingOperations).toEqual([
+      "chapter_replace"
+    ]);
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        ...qualified,
+        requested: { ...requested, writingOperations: [] }
+      }).writingOperations
+    ).toEqual([]);
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        requested,
+        featureFlags,
+        hasVersionGroupExecutor: true
+      }).writingOperations
+    ).toEqual([]);
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        ...qualified,
+        hasVersionGroupExecutor: false
+      }).writingOperations
+    ).toEqual([]);
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        ...qualified,
+        featureFlags: createAgentFeatureFlags({
+          agentGuidanceV3: false,
+          revision: "desktop-operation-feature-disabled"
+        })
+      }).writingOperations
+    ).toEqual([]);
+  });
+
   test.each([
     {
       label: "creative trusted fallback",
@@ -324,6 +384,100 @@ describe("desktop Agent Run runtime", () => {
     expect(record["safeInputBudget"]).toEqual(expect.any(Number));
     expect(record["safeInputBudget"]).toBeGreaterThan(0);
     expect(JSON.stringify(record)).not.toMatch(/prompt|body|authorization|providerFrame/i);
+  });
+
+  test("persists Catalog 2.0 usage from the frozen tool catalog schema", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-usage-v2-project-"));
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-usage-v2-data-"));
+    roots.push(projectRoot, userDataRoot);
+    const runId = "run-desktop-usage-v2";
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      userDataRoot,
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      projectLockOwnerId: "desktop-usage-v2",
+      createRunId: () => runId,
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
+      featureFlags: createAgentFeatureFlags({
+        agentGuidanceV3: true,
+        revision: "desktop-usage-catalog-v2"
+      }),
+      resolveModelStartFacts: async () => ({
+        profileId: "demo-agent",
+        provider: "demo",
+        modelName: "desktop-scripted-agent",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound() {
+          yield {
+            type: "usage",
+            usage: {
+              inputTokens: 20,
+              outputTokens: 5,
+              totalTokens: 25,
+              usageStatus: "actual",
+              cost: { amount: 0.001, currency: "USD", status: "actual" }
+            }
+          };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-desktop-usage-v2"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-desktop-usage-v2",
+      userRequest: "Review the project context.",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "demo-agent",
+      contextRefs: []
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const previewed = await previewDraftStart(runtime, prepared.value, "start-desktop-usage-v2");
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: true
+    });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+
+    const detailFiles = await readdir(join(userDataRoot, "agent-usage", "details"));
+    expect(detailFiles).toHaveLength(1);
+    const [detailFile] = detailFiles;
+    if (detailFile === undefined) throw new Error("Expected one persisted Catalog 2.0 usage file");
+    const record = JSON.parse(
+      await readFile(join(userDataRoot, "agent-usage", "details", detailFile), "utf8")
+    ) as Record<string, unknown>;
+    expect(record).toMatchObject({
+      runId,
+      provider: "demo",
+      model: "desktop-scripted-agent",
+      contextWindow: 128000,
+      safeInputBudget: expect.any(Number)
+    });
   });
 
   test("binds strict Conversation and Run persistence to the selected project root", async () => {

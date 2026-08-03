@@ -2889,7 +2889,9 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     bridge.getComposerProps()?.onWritePolicyChange("user_preapproved_run");
 
     await vi.waitFor(() => expect(permissionCalls).toHaveLength(2));
-    expect(permissionCalls[1]).toMatchObject({ runDraftRevision: 3 });
+    expect(Number(permissionCalls[1]?.["runDraftRevision"])).toBeGreaterThan(
+      Number(permissionCalls[0]?.["runDraftRevision"])
+    );
     expect(bridge.getComposerProps()?.permission?.summary?.writePolicy).toBe(
       "user_preapproved_run"
     );
@@ -2934,7 +2936,9 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     );
     await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
     await vi.waitFor(() => expect(permissionCalls).toHaveLength(2));
-    expect(permissionCalls[1]).toMatchObject({ runDraftRevision: 3 });
+    expect(Number(permissionCalls[1]?.["runDraftRevision"])).toBeGreaterThan(
+      Number(permissionCalls[0]?.["runDraftRevision"])
+    );
     await vi.waitFor(() =>
       expect(bridge.getComposerProps()?.permission).toMatchObject({
         loading: false,
@@ -3645,19 +3649,21 @@ function createDraftApi(
           if (permissionCalls.length === 1 && options.firstPermissionRead !== undefined) {
             await options.firstPermissionRead;
           }
-          const draft = runDrafts.get(String(command["conversationId"]));
+          const resolved = await session.resolveStartDraft(command as never);
+          if (!resolved.ok) return err(resolved.error);
+          const draft = resolved.value.runDraft;
           return ok({
             schemaVersion: "1.0",
             permissionSummaryId: `permission-${String(command["runDraftRevision"])}`,
             projectId: command["projectId"],
             runDraftId: command["runDraftId"],
-            contextMode: draft?.["contextMode"] ?? "writing",
-            writePolicy: draft?.["writePolicy"] ?? "write_before_confirmation",
+            contextMode: draft.contextMode,
+            writePolicy: draft.writePolicy,
             toolRegistryRevision: "registry-01",
             rootFingerprint: "f".repeat(64),
             readCapabilities: ["read_chapter"],
             proposalCapabilities:
-              draft?.["operationMode"] === "execution" ? ["propose_chapter_write"] : [],
+              draft.operationMode === "execution" ? ["propose_chapter_write"] : [],
             forbiddenCapabilities: ["shell", "git", "network"],
             checksum: String(command["runDraftRevision"]).padStart(64, "0"),
             generatedAt: "2026-07-17T00:00:00.000Z"

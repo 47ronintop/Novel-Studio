@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
+  computeProviderMappingRevision,
+  createDefaultCapabilitySnapshot,
+  listAgentTools
+} from "@novel-studio/agent-engine";
+
+import {
   checkProviderNameCollisions,
   freezeProviderNameMapping,
   mangleToolId,
@@ -91,5 +97,48 @@ describe("buildFrozenProviderNameMapping", () => {
         { id: "plugin:acme/summarise", providerName: "second" }
       ])
     ).toThrow(/collision/i);
+  });
+
+  test("binds the revision to the frozen Catalog 2.0 canonical/provider directory", () => {
+    const descriptors = listAgentTools({
+      facadeVersion: "v2",
+      catalogSchemaVersion: "2.0",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: createDefaultCapabilitySnapshot("engineeringWorkspace")
+    });
+    const entries = descriptors.map((descriptor) => ({
+      id: descriptor.id ?? descriptor.name,
+      providerName: descriptor.providerName ?? descriptor.name
+    }));
+    const mapping = freezeProviderNameMapping(entries);
+    const reordered = freezeProviderNameMapping([...entries].reverse());
+    const remapped = freezeProviderNameMapping(
+      entries.map((descriptor) =>
+        descriptor.id === "read_resource"
+          ? { ...descriptor, providerName: "read_resource_alias" }
+          : descriptor
+      )
+    );
+
+    expect(mapping.revision).toBe(computeProviderMappingRevision(descriptors));
+    expect(reordered.revision).toBe(mapping.revision);
+    expect(remapped.revision).not.toBe(mapping.revision);
+    expect(mapping.providerNameFor("read_resource")).toBe("read_resource");
+    expect(remapped.providerNameFor("read_resource")).toBe("read_resource_alias");
+  });
+
+  test("detaches the attested mapping from later caller mutations", () => {
+    const descriptors = [{ id: "plugin:acme/summarise", providerName: "plugin__acme__summarise" }];
+    const mapping = freezeProviderNameMapping(descriptors);
+    const descriptor = descriptors[0];
+    if (descriptor === undefined) throw new Error("Missing mapping fixture descriptor.");
+    descriptor.providerName = "plugin__acme__rewritten";
+
+    expect(mapping.entries).toEqual([
+      { canonicalId: "plugin:acme/summarise", providerName: "plugin__acme__summarise" }
+    ]);
+    expect(mapping.providerNameFor("plugin:acme/summarise")).toBe("plugin__acme__summarise");
   });
 });

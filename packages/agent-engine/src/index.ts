@@ -31,19 +31,38 @@ export type {
 export {
   agentRunToolCatalogSnapshotId,
   computeAgentRunToolCatalogRevision,
+  computeAgentRunToolCatalogRevisionV2,
   createAgentRunToolCatalogSnapshot,
+  createAgentRunToolCatalogSnapshotV2,
   validateAgentRunToolCatalogSnapshot
 } from "./agent-run-tool-catalog.js";
 export type {
   AgentRunToolCatalogSnapshot,
+  AgentRunToolCatalogSnapshotV1,
+  AgentRunToolCatalogSnapshotV2,
   AgentRunToolCatalogValidation,
-  CreateAgentRunToolCatalogSnapshotInput
+  CreateAgentRunToolCatalogSnapshotInput,
+  CreateAgentRunToolCatalogSnapshotV2Input
 } from "./agent-run-tool-catalog.js";
 export {
   createDefaultCapabilitySnapshot,
-  freezeAgentToolCapabilitySnapshot
+  freezeAgentToolCapabilitySnapshot,
+  isProviderVisibleWorkspaceFileOperation,
+  isProviderVisibleWriteOperation,
+  isProviderVisibleWritingOperation,
+  qualifiedWorkspaceFileOperations,
+  qualifiedWritingOperations,
+  WORKSPACE_FILE_OPERATION_ORDER,
+  WRITE_OPERATION_ORDER,
+  WRITING_OPERATION_ORDER
 } from "./agent-tool-capabilities.js";
-export type { AgentToolCapabilitySnapshot, AgentWorkspaceKind } from "./agent-tool-capabilities.js";
+export type {
+  AgentToolCapabilitySnapshot,
+  AgentWorkspaceKind,
+  ProviderVisibleWorkspaceFileOperation,
+  ProviderVisibleWriteOperation,
+  ProviderVisibleWritingOperation
+} from "./agent-tool-capabilities.js";
 export {
   validateStrictToolSchema,
   validateToolText,
@@ -58,9 +77,69 @@ export {
   createEffectiveCapabilityState,
   revokeCapability,
   deactivateCapabilityState,
+  effectiveWorkspaceFileOperations,
+  effectiveWritingOperations,
   effectiveCapabilityRevision,
-  isCapabilityEffective
+  isCapabilityEffective,
+  workspaceFileOperationCapabilityKey,
+  writingOperationCapabilityKey
 } from "./effective-capability-state.js";
+export {
+  APPROVAL_RULE_SCHEMA_VERSION,
+  DEFAULT_APPROVAL_RULE_SET_CHECKSUM,
+  DEFAULT_APPROVAL_RULE_SET_VERSION,
+  LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+  LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+  approvalRuleForOperation,
+  canonicalizeWriteOperations,
+  createApprovalRuleSetProjection,
+  parseApprovalRuleSetProjection,
+  resolveApprovalEffectRuleDefinition,
+  resolveRegisteredApprovalRuleSet
+} from "./approval-rule-registry.js";
+export {
+  APPROVAL_DECISION_PROOF_SCHEMA_VERSION,
+  approvalDecisionProofChecksum,
+  buildApprovalDecisionProofRefV1,
+  canonicalizeApprovalDecisionProofJson,
+  checksumApprovalDecisionProofV1,
+  createApprovalDecisionProofRefV1,
+  createApprovalDecisionProofV1,
+  createMainOnlyApprovalDecisionProofV1,
+  createProviderVisibleApprovalDecisionSummaryV1,
+  evaluateApprovalDecision,
+  isApprovalDecisionProofBindingCurrent,
+  parseApprovalDecisionProofV1,
+  parseApprovalDecisionProofV1Json,
+  parseMainOnlyApprovalDecisionProofV1,
+  providerVisibleApprovalDecisionSummaryV1,
+  resolveApprovalDecisionProofGroup,
+  serializeApprovalDecisionProofV1,
+  serializeMainOnlyApprovalDecisionProofV1,
+  verifyApprovalDecisionProofBinding
+} from "./approval-decision-proof.js";
+export type {
+  ApprovalDecision,
+  ApprovalDecisionEvaluation,
+  ApprovalDecisionProofBindingV1,
+  ApprovalDecisionProofBindingVerification,
+  ApprovalDecisionProofEvidenceV1,
+  ApprovalDecisionProofGroupResolution,
+  ApprovalDecisionProofRefV1,
+  CreateMainOnlyApprovalDecisionProofV1Input,
+  EvaluateApprovalDecisionInput,
+  MainOnlyApprovalDecisionProofV1,
+  ProviderSafeApprovalReasonCode,
+  ProviderVisibleApprovalDecisionSummaryV1,
+  ResolveApprovalDecisionProofGroupInput
+} from "./approval-decision-proof.js";
+export type {
+  ApprovalEffectRuleDefinitionV1,
+  ProviderVisibleApprovalRule,
+  ProviderVisibleApprovalRuleSetProjection,
+  ProviderVisibleConditionalApprovalRuleId,
+  RegisteredApprovalRuleSetV1
+} from "./approval-rule-registry.js";
 export type {
   CapabilityRevocationReason,
   EffectiveCapabilityState,
@@ -110,9 +189,12 @@ export {
   AGENT_FORBIDDEN_CAPABILITIES,
   findPermissionSummaryDrift,
   generatePermissionSummary,
+  generatePermissionSummaryV2,
   hasValidPermissionSummaryChecksums,
+  isPermissionSummaryV20,
   isPermissionSummaryV11,
   normalizePermissionSummaryV10,
+  parsePermissionSummaryV20,
   resolvePermissionSummaryCapabilities,
   computeDescriptorRevision,
   computeProviderMappingRevision
@@ -121,11 +203,13 @@ export type {
   AgentWriteMutationTrust,
   AgentToolLister,
   GeneratePermissionSummaryInput,
+  GeneratePermissionSummaryV2Input,
   PermissionSummary,
   PermissionSummaryFieldDrift,
   ResolvedPermissionSummaryCapabilities,
   PermissionSummaryV10,
-  PermissionSummaryV11
+  PermissionSummaryV11,
+  PermissionSummaryV20
 } from "./permission-summary.js";
 export {
   applyAgentRunDraftMutation,

@@ -5,7 +5,7 @@
  */
 import { createHash } from "node:crypto";
 
-import type { CoreAgentToolName } from "@novel-studio/agent-engine";
+import type { StaticAgentToolName } from "@novel-studio/agent-engine";
 
 /** Max length for a single providerName (provider-imposed; conservative across providers). */
 export const PROVIDER_NAME_MAX_LENGTH = 63;
@@ -37,7 +37,7 @@ export interface FrozenProviderNameMapping {
  * Compute the provider-safe name for a static core tool.
  * Core tool names already satisfy the safe pattern so no mangling is needed.
  */
-export function coreToolProviderName(name: CoreAgentToolName): string {
+export function coreToolProviderName(name: StaticAgentToolName): string {
   return name;
 }
 
@@ -120,7 +120,9 @@ export function freezeProviderNameMapping(
   const entries = Object.freeze(
     mappings
       .map((mapping) => Object.freeze({ ...mapping }))
-      .sort((left, right) => left.canonicalId.localeCompare(right.canonicalId))
+      .sort((left, right) =>
+        left.canonicalId < right.canonicalId ? -1 : left.canonicalId > right.canonicalId ? 1 : 0
+      )
   );
   const canonicalToProvider = new Map(
     entries.map((entry) => [entry.canonicalId, entry.providerName])

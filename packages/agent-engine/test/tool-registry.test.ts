@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import type { JsonObject } from "@novel-studio/shared";
 
 import * as engineExports from "../src/index.js";
 
@@ -606,5 +607,212 @@ describe("Agent tool registry", () => {
     expect(namesFor(true, false)).not.toContain("mcp__docs__search");
     expect(namesFor(false, true)).not.toContain("plugin__acme__search");
     expect(namesFor(false, true)).toContain("mcp__docs__search");
+  });
+
+  test("does not upgrade Catalog 2.0 mutations from the legacy lifecycle switch", () => {
+    const legacyCapabilities = {
+      workspaceKind: "creativeProject" as const,
+      searchEnabled: false,
+      fileLifecycleEnabled: true,
+      writingOperations: [],
+      workspaceFileOperations: [],
+      controlledExecutionEnabled: false,
+      gitReadEnabled: false,
+      networkReadEnabled: false,
+      pluginToolsEnabled: false,
+      mcpToolsEnabled: false,
+      featureFlagRevision: "legacy-lifecycle-only"
+    };
+    const catalogV2Tools = (
+      contextMode: "writing" | "general_file",
+      workspaceKind: "creativeProject" | "engineeringWorkspace"
+    ) =>
+      engineExports.listAgentTools({
+        facadeVersion: "v2",
+        catalogSchemaVersion: "2.0",
+        operationMode: "execution",
+        contextMode,
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: { ...legacyCapabilities, workspaceKind }
+      });
+
+    for (const [contextMode, workspaceKind] of [
+      ["writing", "creativeProject"],
+      ["general_file", "creativeProject"],
+      ["general_file", "engineeringWorkspace"]
+    ] as const) {
+      const catalogV2 = catalogV2Tools(contextMode, workspaceKind);
+      expect(catalogV2.filter((tool) => tool.effect === "propose")).toEqual([]);
+      expect(catalogV2.map((tool) => tool.name)).not.toContain("manage_path");
+    }
+
+    expect(
+      engineExports
+        .listAgentTools({
+          facadeVersion: "v2",
+          operationMode: "execution",
+          contextMode: "general_file",
+          writePolicy: "write_before_confirmation",
+          capabilitySnapshot: legacyCapabilities
+        })
+        .map((tool) => tool.name)
+    ).toContain("manage_path");
+  });
+
+  test("uses profile-specific Catalog 2.0 schemas without aggregate mutation tools", () => {
+    const baseCapabilities = {
+      searchEnabled: false,
+      fileLifecycleEnabled: false,
+      controlledExecutionEnabled: false,
+      gitReadEnabled: false,
+      networkReadEnabled: false,
+      pluginToolsEnabled: false,
+      mcpToolsEnabled: false,
+      featureFlagRevision: "catalog-v2-profile-schemas"
+    };
+    const options = {
+      facadeVersion: "v2" as const,
+      catalogSchemaVersion: "2.0" as const,
+      operationMode: "execution" as const,
+      writePolicy: "write_before_confirmation" as const
+    };
+    const baseHash = "a".repeat(64);
+    const range = { unit: "character", start: 0, end: 1 };
+    const isValid = (
+      descriptor: ReturnType<typeof engineExports.listAgentTools>[number],
+      arguments_: JsonObject
+    ) =>
+      engineExports.validateAgentToolArguments({
+        descriptor,
+        arguments: arguments_,
+        argumentsText: JSON.stringify(arguments_)
+      }).ok;
+    const requireDescriptor = (
+      descriptors: readonly ReturnType<typeof engineExports.listAgentTools>[number][],
+      name: string
+    ) => {
+      const descriptor = descriptors.find((candidate) => candidate.name === name);
+      if (descriptor === undefined) throw new Error(`Missing ${name} descriptor.`);
+      return descriptor;
+    };
+
+    const writing = engineExports.listAgentTools({
+      ...options,
+      contextMode: "writing",
+      capabilitySnapshot: {
+        ...baseCapabilities,
+        workspaceKind: "creativeProject",
+        writingOperations: ["chapter_replace", "chapter_create", "story_bible_create"],
+        workspaceFileOperations: []
+      }
+    });
+    const writingNames = writing.map((tool) => tool.name);
+    expect(writingNames).toContain("edit_text");
+    expect(writingNames).toContain("create_resource");
+    expect(writingNames).toContain("create_story_bible");
+    expect(writingNames).not.toContain("manage_path");
+    expect(writingNames).not.toContain("propose_chapter_write");
+    expect(writingNames).not.toContain("propose_chapter_create");
+    expect(writingNames).not.toContain("propose_story_bible_write");
+    expect(isValid(requireDescriptor(writing, "read_resource"), { ref: "chapter:ch_01" })).toBe(
+      true
+    );
+    expect(isValid(requireDescriptor(writing, "read_resource"), { ref: "file:notes.md" })).toBe(
+      false
+    );
+    expect(
+      isValid(requireDescriptor(writing, "edit_text"), {
+        ref: "chapter:ch_01",
+        baseHash,
+        range,
+        replacement: "Updated"
+      })
+    ).toBe(true);
+    expect(
+      isValid(requireDescriptor(writing, "edit_text"), {
+        ref: "file:notes.md",
+        baseHash,
+        range,
+        replacement: "Updated"
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(writing, "create_resource"), {
+        kind: "chapter",
+        title: "Opening"
+      })
+    ).toBe(true);
+    expect(
+      isValid(requireDescriptor(writing, "create_resource"), {
+        kind: "file",
+        path: "notes/new.md",
+        content: "Draft"
+      })
+    ).toBe(false);
+
+    const creative = engineExports.listAgentTools({
+      ...options,
+      contextMode: "general_file",
+      capabilitySnapshot: {
+        ...baseCapabilities,
+        workspaceKind: "creativeProject",
+        writingOperations: [],
+        workspaceFileOperations: ["replace_file", "create_file"]
+      }
+    });
+    const creativeNames = creative.map((tool) => tool.name);
+    expect(creativeNames).toContain("edit_text");
+    expect(creativeNames).toContain("create_resource");
+    expect(creativeNames).not.toContain("manage_path");
+    expect(creativeNames).not.toContain("propose_file_write");
+    expect(
+      isValid(requireDescriptor(creative, "edit_text"), {
+        ref: "file:notes.md",
+        baseHash,
+        range,
+        replacement: "Updated"
+      })
+    ).toBe(true);
+    expect(
+      isValid(requireDescriptor(creative, "edit_text"), {
+        ref: "chapter:ch_01",
+        baseHash,
+        range,
+        replacement: "Updated"
+      })
+    ).toBe(false);
+
+    const engineering = engineExports.listAgentTools({
+      ...options,
+      contextMode: "general_file",
+      capabilitySnapshot: {
+        ...baseCapabilities,
+        workspaceKind: "engineeringWorkspace",
+        writingOperations: [],
+        workspaceFileOperations: [
+          "replace_file",
+          "create_file",
+          "move_file",
+          "delete_file",
+          "create_directory"
+        ]
+      }
+    });
+    const engineeringNames = engineering.map((tool) => tool.name);
+    expect(engineeringNames).toEqual(
+      expect.arrayContaining([
+        "propose_file_write",
+        "propose_file_create",
+        "propose_file_move",
+        "propose_file_delete",
+        "propose_directory_create"
+      ])
+    );
+    expect(engineeringNames).not.toContain("edit_text");
+    expect(engineeringNames).not.toContain("create_resource");
+    expect(engineeringNames).not.toContain("manage_path");
+    expect(
+      engineering.filter((tool) => tool.effect === "propose").map((tool) => tool.writeOperation)
+    ).toEqual(["replace_file", "create_file", "move_file", "delete_file", "create_directory"]);
   });
 });

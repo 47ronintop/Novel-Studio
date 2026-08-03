@@ -6,6 +6,50 @@
 
 export type AgentWorkspaceKind = "creativeProject" | "engineeringWorkspace";
 
+export type ProviderVisibleWorkspaceFileOperation =
+  "replace_file" | "create_file" | "move_file" | "delete_file" | "create_directory";
+
+export type ProviderVisibleWritingOperation =
+  | "chapter_replace"
+  | "chapter_create"
+  | "chapter_rename"
+  | "chapter_reorder"
+  | "chapter_status"
+  | "chapter_restore"
+  | "story_bible_create"
+  | "story_bible_patch"
+  | "story_bible_status"
+  | "story_bible_restore";
+
+export type ProviderVisibleWriteOperation =
+  ProviderVisibleWorkspaceFileOperation | ProviderVisibleWritingOperation;
+
+export const WORKSPACE_FILE_OPERATION_ORDER = Object.freeze([
+  "replace_file",
+  "create_file",
+  "move_file",
+  "delete_file",
+  "create_directory"
+] as const satisfies readonly ProviderVisibleWorkspaceFileOperation[]);
+
+export const WRITING_OPERATION_ORDER = Object.freeze([
+  "chapter_replace",
+  "chapter_create",
+  "chapter_rename",
+  "chapter_reorder",
+  "chapter_status",
+  "chapter_restore",
+  "story_bible_create",
+  "story_bible_patch",
+  "story_bible_status",
+  "story_bible_restore"
+] as const satisfies readonly ProviderVisibleWritingOperation[]);
+
+export const WRITE_OPERATION_ORDER = Object.freeze([
+  ...WORKSPACE_FILE_OPERATION_ORDER,
+  ...WRITING_OPERATION_ORDER
+] as const satisfies readonly ProviderVisibleWriteOperation[]);
+
 /**
  * Snapshot of which tool categories are currently available in this workspace + session.
  * All Phase flags default to false; Phase 0 (foundation) is implied by the presence of the object.
@@ -18,6 +62,13 @@ export interface AgentToolCapabilitySnapshot {
   readonly searchEnabled: boolean;
   /** Phase B: file create/move/delete/mkdir + Change Set v1.1 */
   readonly fileLifecycleEnabled: boolean;
+  /**
+   * Catalog 2.0 mutation qualifications. These are already intersected with the Main-owned
+   * feature, backend, trusted-surface, and release-evidence gates. The legacy lifecycle flag above
+   * never implies any member of either operation list.
+   */
+  readonly writingOperations?: readonly ProviderVisibleWritingOperation[];
+  readonly workspaceFileOperations?: readonly ProviderVisibleWorkspaceFileOperation[];
   /** Story Bible v1.1: schema discovery, stable listing, references, and structured CRUD. */
   readonly storyBibleStructuredToolsEnabled?: boolean;
   /** Phase C: run_project_task — only when sandbox attestation is verified. */
@@ -47,6 +98,10 @@ export interface AgentToolCapabilitySnapshot {
 export function freezeAgentToolCapabilitySnapshot(
   snapshot: AgentToolCapabilitySnapshot
 ): AgentToolCapabilitySnapshot {
+  const writingOperations = canonicalWritingOperations(snapshot.writingOperations ?? []);
+  const workspaceFileOperations = canonicalWorkspaceFileOperations(
+    snapshot.workspaceFileOperations ?? []
+  );
   if (
     (snapshot.workspaceKind !== "creativeProject" &&
       snapshot.workspaceKind !== "engineeringWorkspace") ||
@@ -73,6 +128,8 @@ export function freezeAgentToolCapabilitySnapshot(
     workspaceKind: snapshot.workspaceKind,
     searchEnabled: snapshot.searchEnabled,
     fileLifecycleEnabled: snapshot.fileLifecycleEnabled,
+    writingOperations,
+    workspaceFileOperations,
     storyBibleStructuredToolsEnabled: snapshot.storyBibleStructuredToolsEnabled ?? false,
     controlledExecutionEnabled: snapshot.controlledExecutionEnabled,
     ...(snapshot.sandboxAttestationId === undefined
@@ -94,6 +151,8 @@ export function createDefaultCapabilitySnapshot(
     workspaceKind,
     searchEnabled: false,
     fileLifecycleEnabled: false,
+    writingOperations: [],
+    workspaceFileOperations: [],
     storyBibleStructuredToolsEnabled: false,
     controlledExecutionEnabled: false,
     gitReadEnabled: false,
@@ -102,4 +161,69 @@ export function createDefaultCapabilitySnapshot(
     mcpToolsEnabled: false,
     featureFlagRevision: "v1.0-default"
   });
+}
+
+export function qualifiedWritingOperations(
+  snapshot: AgentToolCapabilitySnapshot
+): readonly ProviderVisibleWritingOperation[] {
+  return canonicalWritingOperations(snapshot.writingOperations ?? []);
+}
+
+export function qualifiedWorkspaceFileOperations(
+  snapshot: AgentToolCapabilitySnapshot
+): readonly ProviderVisibleWorkspaceFileOperation[] {
+  return canonicalWorkspaceFileOperations(snapshot.workspaceFileOperations ?? []);
+}
+
+export function isProviderVisibleWritingOperation(
+  value: unknown
+): value is ProviderVisibleWritingOperation {
+  return WRITING_OPERATION_ORDER.some((operation) => operation === value);
+}
+
+export function isProviderVisibleWorkspaceFileOperation(
+  value: unknown
+): value is ProviderVisibleWorkspaceFileOperation {
+  return WORKSPACE_FILE_OPERATION_ORDER.some((operation) => operation === value);
+}
+
+export function isProviderVisibleWriteOperation(
+  value: unknown
+): value is ProviderVisibleWriteOperation {
+  return isProviderVisibleWritingOperation(value) || isProviderVisibleWorkspaceFileOperation(value);
+}
+
+function canonicalWritingOperations(
+  operations: readonly ProviderVisibleWritingOperation[]
+): readonly ProviderVisibleWritingOperation[] {
+  return canonicalOperations(
+    operations,
+    WRITING_OPERATION_ORDER,
+    isProviderVisibleWritingOperation
+  );
+}
+
+function canonicalWorkspaceFileOperations(
+  operations: readonly ProviderVisibleWorkspaceFileOperation[]
+): readonly ProviderVisibleWorkspaceFileOperation[] {
+  return canonicalOperations(
+    operations,
+    WORKSPACE_FILE_OPERATION_ORDER,
+    isProviderVisibleWorkspaceFileOperation
+  );
+}
+
+function canonicalOperations<T extends ProviderVisibleWriteOperation>(
+  operations: readonly T[],
+  order: readonly T[],
+  predicate: (value: unknown) => value is T
+): readonly T[] {
+  if (!Array.isArray(operations) || operations.some((operation) => !predicate(operation))) {
+    throw new Error("Invalid Agent operation capability snapshot.");
+  }
+  const unique = new Set<T>(operations);
+  if (unique.size !== operations.length) {
+    throw new Error("Invalid Agent operation capability snapshot.");
+  }
+  return Object.freeze(order.filter((operation) => unique.has(operation)));
 }

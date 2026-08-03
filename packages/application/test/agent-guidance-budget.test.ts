@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
-import { providerSemanticVersionSetChecksum } from "@novel-studio/agent-engine";
+import {
+  DEFAULT_APPROVAL_RULE_SET_VERSION,
+  providerSemanticVersionSetChecksum
+} from "@novel-studio/agent-engine";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -62,6 +65,9 @@ describe("Agent guidance budget", () => {
         expect(facts.writingOperations).toEqual([]);
         expect(facts.workspaceFileOperations).toEqual([]);
         expect(facts.writeApprovalPolicy).toBe("not_applicable");
+      }
+      if (snapshot.operationMode === "execution") {
+        expect(facts.approvalRuleSetVersion).toBe(DEFAULT_APPROVAL_RULE_SET_VERSION);
       }
       if (snapshot.operationMode === "execution" && snapshot.profileId === "writing") {
         expect(facts.writingOperations).toEqual([
@@ -170,7 +176,7 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "3e0aa9653f1ed914f3e19064addc788944f2d028118b4c78edb12884cf4f561e",
     normalizedInputChecksum: "fd29a6c78d2a989e69ab107f5386cbf53aeeded7f22b5e884d3fecea8d0b2912",
     materializedGuidanceChecksum:
-      "f09332ce1d700c78223cad0a95b818d8835992bc4d79f5c0ca473ad99009ccb6",
+      "85ea83b24f874649128556861d100cac1fa5f6b5db3e167e1f4b86871e40800d",
     tokenCount: 546,
     tokenLimit: 900,
     writingTaskIntent: null,
@@ -189,7 +195,7 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "f209e3d18c15d65b3806390cc461c08076d943c2c01ffee2bf8f5401a532cf02",
     normalizedInputChecksum: "85fe7ef758116f9f648ea9da1e96853fe7cadb5ae725fd43903e16c282dd18b7",
     materializedGuidanceChecksum:
-      "3193baa397c01d99d361d31dc0841d7bcd836807173278405c9253f8698cc28e",
+      "1addd8bf3282d464a3f8ba8d863e0c4554c76bce8f89228e11ca2ea237aa4b3c",
     tokenCount: 761,
     tokenLimit: 1200,
     writingTaskIntent: {
@@ -210,11 +216,11 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
     estimatorVersion: "guidance-budget-v1",
     estimatorProfileId: "guidance-budget-v1",
     providerSemanticVersionSetChecksum:
-      "74d95ed4166621dcf88e51101385659020691b3eb23b38877b40a36b4263f5be",
-    normalizedInputChecksum: "c296a11c8c661f4ecdcff9a193a1b51002e93946588e78385e557c09b569f9b0",
+      "5355b1561c4a34b11038e945ff08517b3fd1c2ce16319de31004557dc997db9d",
+    normalizedInputChecksum: "f34c5a401ca264a515034f400fc4c95031dc6cafc63e43521d13aa194078fa07",
     materializedGuidanceChecksum:
-      "f7052075affaf54421428258e22856e5f8a053f995105d213a6ca2bf4cbf6bf2",
-    tokenCount: 975,
+      "7ddb06c913755e0f0eb7b578c680db5e13289b61927dfe232e65a1f7d2a564be",
+    tokenCount: 1035,
     tokenLimit: 1200,
     writingTaskIntent: {
       schemaVersion: "1.0",
@@ -248,7 +254,7 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "3e0aa9653f1ed914f3e19064addc788944f2d028118b4c78edb12884cf4f561e",
     normalizedInputChecksum: "e6a520dc7bfb4e5d5ac8892e083bbd3ebd197170a351faf9686a85bddd2fb8e2",
     materializedGuidanceChecksum:
-      "21d1a5c5f89dfc45789fef45bd69c082f55cbdbcf32d8ff9f2e0d29f6b630f80",
+      "5a38d44067df97f944a30f06ecd8411af2ff572d33e1825b1a6ccadbd4190d45",
     tokenCount: 649,
     tokenLimit: 900,
     writingTaskIntent: null,
@@ -264,11 +270,11 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
     estimatorVersion: "guidance-budget-v1",
     estimatorProfileId: "guidance-budget-v1",
     providerSemanticVersionSetChecksum:
-      "e2a89d8ea3b323cc2d51e375424ea5cb73c1ca32af726deccc74a52beffba86f",
-    normalizedInputChecksum: "90c03b2b47177a2b54e6733d26019d939d1fb58800e90e83551e0f2b8e55f487",
+      "76136689cfd189b4d5398195625cf6475f5bfebfa98db1c6a4bcabe457409db6",
+    normalizedInputChecksum: "bbad40da8b6943fa5ac160c3e634f68201766aa4fa90f8c1eb098caa87612d6b",
     materializedGuidanceChecksum:
-      "57d8d6c4e02cc1ea9b29a15ba2afb9725f91a7d969c4ef1abad4799990530fda",
-    tokenCount: 754,
+      "7f0a79c6f9a42429b967375e67eba169cf42b744a662592b06d8d24188a13961",
+    tokenCount: 783,
     tokenLimit: 900,
     writingTaskIntent: null,
     writingOperations: [],
@@ -292,7 +298,7 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "3e0aa9653f1ed914f3e19064addc788944f2d028118b4c78edb12884cf4f561e",
     normalizedInputChecksum: "7cf11491b1bbdbf5a07685b24bf3c9e699cf8df880dee7dc3ec3bc80ded87981",
     materializedGuidanceChecksum:
-      "203f7c60fbcaf66737553e6b2d272ec216ad27a28d586bfd68c4974d14827fba",
+      "6c80ba39c56a5a63e9cc542d2bf4a0bf5cf2b48615ee4275f8097bbaa8ca94b6",
     tokenCount: 709,
     tokenLimit: 900,
     writingTaskIntent: null,
@@ -308,11 +314,11 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
     estimatorVersion: "guidance-budget-v1",
     estimatorProfileId: "guidance-budget-v1",
     providerSemanticVersionSetChecksum:
-      "e2a89d8ea3b323cc2d51e375424ea5cb73c1ca32af726deccc74a52beffba86f",
-    normalizedInputChecksum: "dbd16ce427e76e47f166c0a9175eb68fd2c8a08c30db182b32225bb8b3b259eb",
+      "76136689cfd189b4d5398195625cf6475f5bfebfa98db1c6a4bcabe457409db6",
+    normalizedInputChecksum: "59f9550d5457e23356d131d7a2230fd2008afeb2a30e03574c7e72e14f94f50b",
     materializedGuidanceChecksum:
-      "76c5e070e2a3f0b04ff1ff71c278490b7c1adc3c92eb050d2f3114889e37fa0e",
-    tokenCount: 813,
+      "c6b4b575881e2af54f9d2b47243f6d575dd0d35289251aa36bac7a076cd1787b",
+    tokenCount: 843,
     tokenLimit: 900,
     writingTaskIntent: null,
     writingOperations: [],

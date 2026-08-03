@@ -7356,6 +7356,311 @@ describe("AgentRunSession v2 tool facade", () => {
     expect(body).not.toContain("actualPayoffChapterId");
   });
 
+  test("binds Catalog 2.0 and Guidance 3.0 to the same operation rule set", async () => {
+    const repository = durableMemoryRepository();
+    const capabilitySnapshot: AgentToolCapabilitySnapshot = {
+      ...creativeV2Capabilities(),
+      writingOperations: ["chapter_replace"]
+    };
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_v3_rules" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await expect(
+      repository.readToolCatalog("run_guidance_v3_rules", "tool_catalog_run_guidance_v3_rules")
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        descriptors: expect.arrayContaining([
+          expect.objectContaining({
+            name: "edit_text",
+            effect: "propose",
+            writeOperation: "chapter_replace"
+          })
+        ]),
+        approvalRules: [expect.objectContaining({ operation: "chapter_replace" })]
+      }
+    });
+    const prompt = await repository.readPromptMaterialization(
+      "run_guidance_v3_rules",
+      "prompt_context_run_guidance_v3_rules"
+    );
+    expect(prompt).toMatchObject({
+      ok: true,
+      value: {
+        runtimeFacts: {
+          writingOperations: ["chapter_replace"],
+          workspaceFileOperations: []
+        }
+      }
+    });
+    const promptValue = (prompt as { readonly value: Record<string, unknown> }).value;
+    const runtimeFacts = promptValue["runtimeFacts"] as Record<string, unknown>;
+    const semanticVersions = promptValue["providerSemanticVersionSet"] as Record<string, unknown>;
+    expect(semanticVersions["approvalRuleSetVersion"]).toBe(runtimeFacts["approvalRuleSetVersion"]);
+    expect(semanticVersions["approvalRuleSetChecksum"]).toBe(
+      runtimeFacts["approvalRuleSetChecksum"]
+    );
+  });
+
+  test("fails before another Provider call when a frozen Catalog 2.0 operation is revoked", async () => {
+    const repository = durableMemoryRepository();
+    const capabilitySnapshot: AgentToolCapabilitySnapshot = {
+      ...creativeV2Capabilities(),
+      writingOperations: ["chapter_replace"]
+    };
+    let effectiveCapabilityState = createEffectiveCapabilityState(capabilitySnapshot);
+    let providerCalls = 0;
+    let markReadStarted: () => void = () => undefined;
+    let releaseRead: () => void = () => undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const readReleased = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_v3_operation_revoked" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          providerCalls += 1;
+          yield toolCall("read-before-operation-revocation", "read_resource", {
+            ref: "chapter:chapter-01"
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          markReadStarted();
+          await readReleased;
+          return { ok: true, value: { summary: "ok", data: {} } };
+        }
+      },
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot,
+      getEffectiveCapabilityState: () => effectiveCapabilityState
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await readStarted;
+    effectiveCapabilityState = revokeCapability(
+      effectiveCapabilityState,
+      "writing_operation:chapter_replace",
+      "user_revoked",
+      "2026-08-03T00:00:00.000Z"
+    );
+    releaseRead();
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_guidance_v3_operation_revoked")).toMatchObject({
+        value: {
+          snapshot: { status: "failed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "run_failed",
+              detail: expect.objectContaining({ code: "AGENT_CAPABILITY_CHANGED" })
+            })
+          ])
+        }
+      });
+    });
+    expect(providerCalls).toBe(1);
+  });
+
+  test("rechecks Catalog 2.0 authority after budget persistence and before the first Provider call", async () => {
+    const durable = durableMemoryRepository();
+    let markBudgetWriteStarted: () => void = () => undefined;
+    let releaseBudgetWrite: () => void = () => undefined;
+    const budgetWriteStarted = new Promise<void>((resolve) => {
+      markBudgetWriteStarted = resolve;
+    });
+    const budgetWriteReleased = new Promise<void>((resolve) => {
+      releaseBudgetWrite = resolve;
+    });
+    const repository = {
+      ...durable,
+      async writeBudgetSnapshot(runId: string, snapshot: Record<string, unknown>) {
+        if (String(snapshot["contextBudgetSnapshotId"]).includes("_round_")) {
+          markBudgetWriteStarted();
+          await budgetWriteReleased;
+        }
+        return durable.writeBudgetSnapshot(runId, snapshot);
+      }
+    };
+    const capabilitySnapshot: AgentToolCapabilitySnapshot = {
+      ...creativeV2Capabilities(),
+      writingOperations: ["chapter_replace"]
+    };
+    let effectiveCapabilityState = createEffectiveCapabilityState(capabilitySnapshot);
+    let providerCalls = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_guidance_v3_pre_provider_revoked" },
+      repository,
+      modelDriver: {
+        async *streamRound() {
+          providerCalls += 1;
+          yield { type: "round_completed" as const, finishReason: "stop" as const };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot,
+      getEffectiveCapabilityState: () => effectiveCapabilityState
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await budgetWriteStarted;
+    effectiveCapabilityState = revokeCapability(
+      effectiveCapabilityState,
+      "writing_operation:chapter_replace",
+      "user_revoked",
+      "2026-08-03T00:00:02.000Z"
+    );
+    releaseBudgetWrite();
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_guidance_v3_pre_provider_revoked")).toMatchObject({
+        value: {
+          snapshot: { status: "failed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "run_failed",
+              detail: expect.objectContaining({ code: "AGENT_CAPABILITY_CHANGED" })
+            })
+          ])
+        }
+      });
+    });
+    expect(providerCalls).toBe(0);
+  });
+
+  test("filters a Guidance 3.0 Plan-to-Act handoff through the current operation state", async () => {
+    const repository = durableMemoryRepository();
+    const capabilitySnapshot: AgentToolCapabilitySnapshot = {
+      ...creativeV2Capabilities(),
+      writingOperations: ["chapter_replace", "chapter_create"]
+    };
+    let effectiveCapabilityState = createEffectiveCapabilityState(capabilitySnapshot);
+    let runSequence = 0;
+    let executionToolNames: readonly string[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => `run_guidance_v3_filtered_${++runSequence}` },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot,
+      getEffectiveCapabilityState: () => effectiveCapabilityState,
+      modelDriver: {
+        async *streamRound(input: {
+          readonly snapshot: { readonly sourcePlanId?: string | null };
+          readonly tools: readonly { readonly name: string }[];
+        }) {
+          if (input.snapshot.sourcePlanId === "plan_guidance_v3_filtered") {
+            executionToolNames = input.tools.map((tool) => tool.name);
+            yield { type: "round_completed" as const, finishReason: "stop" as const };
+            return;
+          }
+          yield toolCall("finish_guidance_v3_filtered", "finish_plan", {
+            planId: "plan_guidance_v3_filtered",
+            goal: "Execute only currently qualified writing operations",
+            successCriteria: ["The execution catalog is filtered"],
+            nonGoals: [],
+            facts: [],
+            assumptions: [],
+            openQuestions: [],
+            targetRefs: [],
+            steps: [
+              {
+                stepId: "step_guidance_v3_filtered",
+                title: "Execute the approved change",
+                verification: "Inspect the frozen directory"
+              }
+            ],
+            risks: [],
+            verification: [],
+            sourceRefs: []
+          });
+          yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    expect(
+      await session.startAgentRun({ ...startCommand(), operationMode: "planning" })
+    ).toMatchObject({ ok: true, value: { runId: "run_guidance_v3_filtered_1" } });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_guidance_v3_filtered_1")).toMatchObject({
+        value: { snapshot: { status: "plan_ready" } }
+      });
+    });
+    effectiveCapabilityState = revokeCapability(
+      effectiveCapabilityState,
+      "writing_operation:chapter_create",
+      "user_revoked",
+      "2026-08-03T00:00:01.000Z"
+    );
+    const planning = (await session.readAgentRun("run_guidance_v3_filtered_1")) as {
+      readonly value: { readonly snapshot: { readonly runRevision: number } };
+    };
+    expect(
+      await session.decidePlan({
+        projectId: "project-01",
+        runId: "run_guidance_v3_filtered_1",
+        commandId: "approve-guidance-v3-filtered",
+        expectedRunRevision: planning.value.snapshot.runRevision,
+        planId: "plan_guidance_v3_filtered",
+        planRevision: 1,
+        decision: "approve"
+      })
+    ).toMatchObject({ ok: true, value: { runId: "run_guidance_v3_filtered_2" } });
+    await vi.waitFor(() => expect(executionToolNames.length).toBeGreaterThan(0));
+    expect(executionToolNames).toContain("edit_text");
+    expect(executionToolNames).not.toContain("create_resource");
+    await expect(
+      repository.readToolCatalog(
+        "run_guidance_v3_filtered_2",
+        "tool_catalog_run_guidance_v3_filtered_2"
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        descriptors: expect.not.arrayContaining([
+          expect.objectContaining({ writeOperation: "chapter_create" })
+        ])
+      }
+    });
+    await expect(
+      repository.readPromptMaterialization(
+        "run_guidance_v3_filtered_2",
+        "prompt_context_run_guidance_v3_filtered_2"
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        runtimeFacts: {
+          writingOperations: ["chapter_replace"],
+          workspaceFileOperations: []
+        }
+      }
+    });
+  });
+
   test("preserves the frozen writing intent across a Guidance 3.0 Plan-to-Act handoff", async () => {
     const repository = durableMemoryRepository();
     let runSequence = 0;

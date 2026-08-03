@@ -43,7 +43,7 @@ export class AgentRunFileRepository {
       !isSafeId(runId) ||
       snapshotId === undefined ||
       catalog["runId"] !== runId ||
-      catalog["schemaVersion"] !== "1.0"
+      (catalog["schemaVersion"] !== "1.0" && catalog["schemaVersion"] !== "2.0")
     ) {
       return Promise.resolve(this.invalidRecord("AGENT_TOOL_CATALOG_INVALID"));
     }
@@ -67,7 +67,7 @@ export class AgentRunFileRepository {
     if (!read.ok || read.value === undefined) return read;
     return read.value["runId"] === runId &&
       read.value["toolCatalogSnapshotId"] === toolCatalogSnapshotId &&
-      read.value["schemaVersion"] === "1.0"
+      (read.value["schemaVersion"] === "1.0" || read.value["schemaVersion"] === "2.0")
       ? read
       : this.invalidRecord("AGENT_TOOL_CATALOG_INVALID");
   }
@@ -180,7 +180,9 @@ export class AgentRunFileRepository {
       artifactId === undefined ||
       contextSnapshotId === undefined ||
       artifact["runId"] !== runId ||
-      (artifact["schemaVersion"] !== "1.0" && artifact["schemaVersion"] !== "1.1")
+      (artifact["schemaVersion"] !== "1.0" &&
+        artifact["schemaVersion"] !== "1.1" &&
+        artifact["schemaVersion"] !== "2.0")
     ) {
       return Promise.resolve(this.invalidRecord("AGENT_PROMPT_MATERIALIZATION_INVALID"));
     }
@@ -201,7 +203,11 @@ export class AgentRunFileRepository {
       this.runPath(runId, join("prompt-materializations", `${artifactId}.json`))
     );
     if (!read.ok || read.value === undefined) return read;
-    return read.value["runId"] === runId && read.value["artifactId"] === artifactId
+    return read.value["runId"] === runId &&
+      read.value["artifactId"] === artifactId &&
+      (read.value["schemaVersion"] === "1.0" ||
+        read.value["schemaVersion"] === "1.1" ||
+        read.value["schemaVersion"] === "2.0")
       ? read
       : this.invalidRecord("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }

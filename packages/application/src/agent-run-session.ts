@@ -2,13 +2,19 @@ import {
   createAgentRunCoordinator,
   agentContextScopeKey,
   createAgentRunToolCatalogSnapshot,
+  createAgentRunToolCatalogSnapshotV2,
+  createApprovalRuleSetProjection,
   computeAgentRunToolCatalogRevision,
+  computeAgentRunToolCatalogRevisionV2,
   createAgentContextSnapshot,
   createPackedAgentContextManifest,
   createProviderSemanticVersionSetV1,
   createDefaultCapabilitySnapshot,
   createEffectiveCapabilityState,
+  effectiveWorkspaceFileOperations,
+  effectiveWritingOperations,
   isCapabilityEffective,
+  isProviderVisibleWritingOperation,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord,
   resolveLegacyRetryTarget,
@@ -59,6 +65,7 @@ import {
   type PermissionSummary,
   type PackedAgentContext,
   type PackedAgentContextRebuildResult,
+  type ProviderVisibleWriteOperation,
   type PlanOpenQuestion,
   type PlanStep,
   type PlanTargetRef,
@@ -129,8 +136,6 @@ import {
   type AgentPromptMaterializationArtifact
 } from "./agent-prompt-materializer.js";
 import {
-  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
-  ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
   createProviderVisibleAgentRuntimeFacts,
   type ProviderVisibleAgentRuntimeFacts
 } from "./agent-runtime-facts.js";
@@ -1069,7 +1074,19 @@ function isCompatibleEffectiveCapabilityState(
     "pluginToolsEnabled",
     "mcpToolsEnabled"
   ];
-  return flags.every((flag) => !state.capabilitySnapshot[flag] || frozenSnapshot[flag] === true);
+  if (!flags.every((flag) => !state.capabilitySnapshot[flag] || frozenSnapshot[flag] === true)) {
+    return false;
+  }
+  const frozenWritingOperations = new Set(frozenSnapshot.writingOperations ?? []);
+  const frozenWorkspaceFileOperations = new Set(frozenSnapshot.workspaceFileOperations ?? []);
+  return (
+    (state.capabilitySnapshot.writingOperations ?? []).every((operation) =>
+      frozenWritingOperations.has(operation)
+    ) &&
+    (state.capabilitySnapshot.workspaceFileOperations ?? []).every((operation) =>
+      frozenWorkspaceFileOperations.has(operation)
+    )
+  );
 }
 
 function collectPotentialToolDescriptors(
@@ -1143,6 +1160,11 @@ function isToolDescriptorEffective(
   descriptor: AgentToolDescriptor,
   state: EffectiveCapabilityState
 ): boolean {
+  if (descriptor.writeOperation !== undefined) {
+    return isProviderVisibleWritingOperation(descriptor.writeOperation)
+      ? effectiveWritingOperations(state).includes(descriptor.writeOperation)
+      : effectiveWorkspaceFileOperations(state).includes(descriptor.writeOperation);
+  }
   const capability = capabilityNameForTool(descriptor);
   return capability === undefined || isCapabilityEffective(state, capability);
 }
@@ -1477,11 +1499,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         approvalRuleSetVersion:
           runtimeFacts.writeCapability === "none"
             ? "not_applicable"
-            : ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+            : runtimeFacts.approvalRuleSetVersion,
         approvalRuleSetChecksum:
           runtimeFacts.writeCapability === "none"
             ? "not_applicable"
-            : ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM
+            : runtimeFacts.approvalRuleSetChecksum
       });
     return materializeAgentSystemPromptV3({
       profile: input.profile,
@@ -1513,9 +1535,17 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return descriptors.filter((descriptor) => isToolDescriptorEffective(descriptor, state));
   }
 
+  function catalogCapabilityChanged(snapshot: AgentRunSnapshot): boolean {
+    const catalog = toolCatalogs.get(snapshot.runId);
+    if (catalog?.schemaVersion !== "2.0") return false;
+    const state = effectiveCapabilityState();
+    return catalog.descriptors.some((descriptor) => !isToolDescriptorEffective(descriptor, state));
+  }
+
   function budgetCatalogFor(snapshot: AgentRunSnapshot):
     | {
         readonly facadeVersion: AgentToolFacadeVersion;
+        readonly schemaVersion?: "1.0" | "2.0";
         readonly catalogRevision: string;
         readonly descriptors: readonly AgentToolDescriptor[];
       }
@@ -1524,6 +1554,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (catalog !== undefined) {
       return {
         facadeVersion: catalog.facadeVersion,
+        schemaVersion: catalog.schemaVersion,
         catalogRevision: catalog.catalogRevision,
         descriptors: catalog.descriptors
       };
@@ -1554,6 +1585,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     readonly contextSources: readonly AgentContextSourceInput[];
     readonly toolCatalog: {
       readonly facadeVersion: AgentToolFacadeVersion;
+      readonly schemaVersion?: "1.0" | "2.0";
       readonly catalogRevision: string;
       readonly descriptors: readonly AgentToolDescriptor[];
     };
@@ -3152,6 +3184,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (runtime === undefined || snapshot === undefined) return;
     if (!runtime.providerRoundsAllowed) return;
 
+    if (await stopForCatalogCapabilityChange(runId, snapshot, runtime)) return;
+
     if (runtime.modelRounds >= snapshot.limits.maxModelRounds) {
       await recordEvent(runId, {
         runId,
@@ -3279,7 +3313,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         snapshot = warned.value;
         roundSnapshot = warned.value;
       }
-      const availableTools = toolsFor(roundSnapshot);
       const budgetExceeded = roundBudget.value.usedTokens > roundBudget.value.safeInputBudget;
       // This guard is deliberately adjacent to the provider boundary: a full context is never sent.
       if (budgetExceeded || budgetPressure === "compact") {
@@ -3300,6 +3333,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         runtime.modelRounds -= 1;
         return;
       }
+      // Re-check after every pre-provider await. Revocation must terminate the frozen authority,
+      // never silently shrink the tool list under an already-materialized system prompt.
+      if (catalogCapabilityChanged(roundSnapshot)) {
+        runtime.modelRounds -= 1;
+        await stopForCatalogCapabilityChange(runId, roundSnapshot, runtime);
+        return;
+      }
+      const availableTools = toolsFor(roundSnapshot);
       for await (const modelEvent of options.modelDriver.streamRound({
         runId,
         snapshot: roundSnapshot,
@@ -3594,6 +3635,26 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         }
       });
     }
+  }
+
+  async function stopForCatalogCapabilityChange(
+    runId: string,
+    snapshot: AgentRunSnapshot,
+    runtime: RunRuntime
+  ): Promise<boolean> {
+    if (!catalogCapabilityChanged(snapshot)) return false;
+    runtime.providerRoundsAllowed = false;
+    await recordEvent(runId, {
+      runId,
+      status: "failed",
+      type: "run_failed",
+      detail: {
+        code: "AGENT_CAPABILITY_CHANGED",
+        message:
+          "The frozen Agent tool catalog is no longer authorized by the effective capability state."
+      }
+    });
+    return true;
   }
 
   async function writeFinalRoundUsage(input: {
@@ -5767,8 +5828,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         return recordPreflightFailure(command, resolvedStart.error, preflight.value.model);
       }
       const startInput = resolvedStart.value;
+      const useCatalogV2 = options.agentGuidanceV3 === true && newRunToolFacadeVersion === "v2";
       const newRunDescriptors = listAgentTools({
         facadeVersion: newRunToolFacadeVersion,
+        ...(useCatalogV2 ? { catalogSchemaVersion: "2.0" as const } : {}),
         operationMode: startInput.operationMode,
         contextMode: startInput.contextMode,
         writePolicy: startInput.writePolicy ?? "write_before_confirmation",
@@ -5787,10 +5850,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           providerName: providerNameForDescriptorInput(descriptor)
         }))
       );
-      const newRunCatalogRevision = computeAgentRunToolCatalogRevision(
-        newRunToolFacadeVersion,
-        newRunProviderDescriptors
-      );
+      const newRunCatalogRevision = useCatalogV2
+        ? computeCatalogV2RevisionForDescriptors(newRunProviderDescriptors)
+        : computeAgentRunToolCatalogRevision(newRunToolFacadeVersion, newRunProviderDescriptors);
       let initialGuidanceV3: MaterializedAgentGuidanceV3 | undefined;
       try {
         if (options.agentGuidanceV3 === true) {
@@ -5844,6 +5906,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           operationMode: startInput.operationMode,
           contextMode: startInput.contextMode,
           writePolicy: startInput.writePolicy ?? "write_before_confirmation",
+          ...(useCatalogV2 ? { catalogSchemaVersion: "2.0" as const } : {}),
+          ...(useCatalogV2 ? { frozenToolDescriptors: newRunProviderDescriptors } : {}),
+          ...(useCatalogV2
+            ? { writePolicyAcknowledged: startInput.writePolicyAcknowledged === true }
+            : {}),
+          ...(useCatalogV2 ? { limitedRunPreapprovalQualified: false } : {}),
           capabilitySnapshot: frozenCapabilitySnapshot,
           ...(frozenExternalToolDescriptors === undefined
             ? {}
@@ -5993,6 +6061,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextSources: startInput.initialContextSources ?? [],
         toolCatalog: {
           facadeVersion: newRunToolFacadeVersion,
+          ...(useCatalogV2 ? { schemaVersion: "2.0" as const } : {}),
           catalogRevision: newRunCatalogRevision,
           descriptors: newRunProviderDescriptors
         },
@@ -6063,16 +6132,22 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         commandReceipts.set(receiptKey, rejected);
         return rejected;
       };
-      const catalog = createAgentRunToolCatalogSnapshot({
-        runId: result.value.runId,
-        facadeVersion: newRunToolFacadeVersion,
-        descriptors: newRunProviderDescriptors,
-        createdAt: result.value.startedAt
-      });
+      const persistedCatalog = useCatalogV2
+        ? createAgentRunToolCatalogSnapshotV2({
+            runId: result.value.runId,
+            descriptors: newRunProviderDescriptors,
+            createdAt: result.value.startedAt
+          })
+        : createAgentRunToolCatalogSnapshot({
+            runId: result.value.runId,
+            facadeVersion: newRunToolFacadeVersion,
+            descriptors: newRunProviderDescriptors,
+            createdAt: result.value.startedAt
+          });
       if (newRunToolFacadeVersion === "v2") {
         const written = await options.repository.writeToolCatalog?.(
           result.value.runId,
-          catalog as unknown as JsonObject
+          persistedCatalog as unknown as JsonObject
         );
         if (written?.ok !== true) {
           const error =
@@ -6093,7 +6168,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           return rejectUnpersistedStart(cacheArtifactPersisted.error);
         }
       }
-      toolCatalogs.set(result.value.runId, catalog);
+      toolCatalogs.set(result.value.runId, persistedCatalog);
       providerMappingsByRun.set(result.value.runId, newRunProviderMapping);
       const initialContextSources = [...(startInput.initialContextSources ?? [])];
       const runtime: RunRuntime = {
@@ -6843,6 +6918,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         );
       }
       const executionWritePolicy = command.executionWritePolicy ?? "write_before_confirmation";
+      const useExecutionCatalogV2 =
+        options.agentGuidanceV3 === true && newRunToolFacadeVersion === "v2";
       let approvedExecutionProfile: AgentContextProfile | undefined;
       if (command.decision === "approve") {
         const resolvedProfile = tryResolveAgentContextProfile(
@@ -6855,6 +6932,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const executionDescriptors = listAgentTools({
         facadeVersion: newRunToolFacadeVersion,
+        ...(useExecutionCatalogV2 ? { catalogSchemaVersion: "2.0" as const } : {}),
         operationMode: "execution",
         contextMode: executionContextMode,
         writePolicy: executionWritePolicy,
@@ -6863,16 +6941,19 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : { externalToolDescriptors: frozenExternalToolDescriptors })
       });
+      const executionEffectiveState = effectiveCapabilityState();
+      const executionProviderDescriptors = executionDescriptors.filter((descriptor) =>
+        isToolDescriptorEffective(descriptor, executionEffectiveState)
+      );
       const executionProviderMapping = freezeProviderNameMapping(
-        executionDescriptors.map((descriptor) => ({
+        executionProviderDescriptors.map((descriptor) => ({
           id: canonicalToolId(descriptor),
           providerName: providerNameForDescriptorInput(descriptor)
         }))
       );
-      const executionCatalogRevision = computeAgentRunToolCatalogRevision(
-        newRunToolFacadeVersion,
-        executionDescriptors
-      );
+      const executionCatalogRevision = useExecutionCatalogV2
+        ? computeCatalogV2RevisionForDescriptors(executionProviderDescriptors)
+        : computeAgentRunToolCatalogRevision(newRunToolFacadeVersion, executionProviderDescriptors);
       let executionConversationContext: readonly AgentModelMessage[] = [];
       let executionConversationReserved = false;
       const cancelExecutionStart = async (): Promise<void> => {
@@ -6948,6 +7029,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           operationMode: "execution",
           contextMode: executionContextMode,
           writePolicy: executionWritePolicy,
+          ...(useExecutionCatalogV2 ? { catalogSchemaVersion: "2.0" as const } : {}),
+          ...(useExecutionCatalogV2 ? { frozenToolDescriptors: executionProviderDescriptors } : {}),
+          ...(useExecutionCatalogV2
+            ? { writePolicyAcknowledged: command.executionWritePolicyAcknowledged === true }
+            : {}),
+          ...(useExecutionCatalogV2 ? { limitedRunPreapprovalQualified: false } : {}),
           capabilitySnapshot: frozenCapabilitySnapshot,
           ...(frozenExternalToolDescriptors === undefined
             ? {}
@@ -7032,7 +7119,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               : null;
           executionGuidanceV3 = materializeRunGuidanceV3({
             profile: executionProfile,
-            toolDescriptors: executionDescriptors,
+            toolDescriptors: executionProviderDescriptors,
             writePolicy: executionWritePolicy,
             ...(command.executionWritePolicyAcknowledged === true
               ? { writePolicyAcknowledged: true as const }
@@ -7087,7 +7174,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               stablePrefixMessageCount: 1 + executionMaterialization.stablePrefixMessages.length,
               eligibleInputTokens: estimatePromptCacheEligibleTokens(
                 executionMaterialization,
-                executionDescriptors,
+                executionProviderDescriptors,
                 snapshot.providerCapabilitySnapshot.profileId,
                 options.contextBudgetEstimator
               ),
@@ -7124,8 +7211,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         historyMessages: [approvedPlanMessage],
         toolCatalog: {
           facadeVersion: newRunToolFacadeVersion,
+          ...(useExecutionCatalogV2 ? { schemaVersion: "2.0" as const } : {}),
           catalogRevision: executionCatalogRevision,
-          descriptors: executionDescriptors
+          descriptors: executionProviderDescriptors
         },
         calculatedAt: new Date().toISOString()
       });
@@ -7192,12 +7280,18 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         await cancelExecutionStart();
         return { ok: false, error };
       };
-      const executionCatalog = createAgentRunToolCatalogSnapshot({
-        runId: executionStarted.value.runId,
-        facadeVersion: newRunToolFacadeVersion,
-        descriptors: executionDescriptors,
-        createdAt: executionStarted.value.startedAt
-      });
+      const executionCatalog = useExecutionCatalogV2
+        ? createAgentRunToolCatalogSnapshotV2({
+            runId: executionStarted.value.runId,
+            descriptors: executionProviderDescriptors,
+            createdAt: executionStarted.value.startedAt
+          })
+        : createAgentRunToolCatalogSnapshot({
+            runId: executionStarted.value.runId,
+            facadeVersion: newRunToolFacadeVersion,
+            descriptors: executionProviderDescriptors,
+            createdAt: executionStarted.value.startedAt
+          });
       if (newRunToolFacadeVersion === "v2") {
         const written = await options.repository.writeToolCatalog?.(
           executionStarted.value.runId,
@@ -9882,6 +9976,29 @@ function nextPromptCacheIdentityChecksum(
         logicalPrefixChecksum
       )
     : "legacy";
+}
+
+function computeCatalogV2RevisionForDescriptors(
+  descriptors: readonly AgentToolDescriptor[]
+): string {
+  const operations: ProviderVisibleWriteOperation[] = [];
+  for (const descriptor of descriptors) {
+    if (descriptor.effect !== "propose") continue;
+    if (descriptor.writeOperation === undefined) {
+      throw new Error("AGENT_TOOL_OPERATION_UNMAPPED");
+    }
+    operations.push(descriptor.writeOperation);
+  }
+  const projection =
+    operations.length === 0
+      ? { version: "not_applicable", checksum: "not_applicable", rules: [] as const }
+      : createApprovalRuleSetProjection(operations);
+  return computeAgentRunToolCatalogRevisionV2({
+    descriptors,
+    approvalRuleSetVersion: projection.version,
+    approvalRuleSetChecksum: projection.checksum,
+    approvalRules: projection.rules
+  });
 }
 
 /**

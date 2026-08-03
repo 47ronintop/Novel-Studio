@@ -6,8 +6,12 @@
  */
 import {
   freezeAgentToolCapabilitySnapshot,
+  qualifiedWorkspaceFileOperations,
+  qualifiedWritingOperations,
   type AgentToolCapabilitySnapshot,
-  type AgentWorkspaceKind
+  type AgentWorkspaceKind,
+  type ProviderVisibleWorkspaceFileOperation,
+  type ProviderVisibleWritingOperation
 } from "./agent-tool-capabilities.js";
 
 export type CapabilityRevocationReason =
@@ -124,5 +128,39 @@ export function isCapabilityEffective(
   if (!state.active) return false;
   return !state.revokedCapabilities.some(
     (rc) => rc.capability === capability || rc.capability === "all"
+  );
+}
+
+export function writingOperationCapabilityKey(
+  operation: ProviderVisibleWritingOperation
+): `writing_operation:${ProviderVisibleWritingOperation}` {
+  return `writing_operation:${operation}`;
+}
+
+export function workspaceFileOperationCapabilityKey(
+  operation: ProviderVisibleWorkspaceFileOperation
+): `workspace_file_operation:${ProviderVisibleWorkspaceFileOperation}` {
+  return `workspace_file_operation:${operation}`;
+}
+
+export function effectiveWritingOperations(
+  state: EffectiveCapabilityState
+): readonly ProviderVisibleWritingOperation[] {
+  if (!state.active || !isCapabilityEffective(state, "writing_mutation")) return [];
+  return Object.freeze(
+    qualifiedWritingOperations(state.capabilitySnapshot).filter((operation) =>
+      isCapabilityEffective(state, writingOperationCapabilityKey(operation))
+    )
+  );
+}
+
+export function effectiveWorkspaceFileOperations(
+  state: EffectiveCapabilityState
+): readonly ProviderVisibleWorkspaceFileOperation[] {
+  if (!state.active || !isCapabilityEffective(state, "workspace_file_mutation")) return [];
+  return Object.freeze(
+    qualifiedWorkspaceFileOperations(state.capabilitySnapshot).filter((operation) =>
+      isCapabilityEffective(state, workspaceFileOperationCapabilityKey(operation))
+    )
   );
 }

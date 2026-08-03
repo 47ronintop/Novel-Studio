@@ -3,12 +3,15 @@ import { randomUUID } from "node:crypto";
 import {
   appendChangeSetProposal,
   appendChangeSetOperations,
+  buildApprovalDecisionProofRefV1,
   checksumChangeSetText,
   createChangeSetRevision,
   createOperationsChangeSetRevisionBatch,
   decideChangeSetApproval,
+  parseApprovalDecisionProofV1,
   selectChangeSetRevision,
   validateAgentRelativePath,
+  type ApprovalDecisionProofRefV1,
   type ChangeSet,
   type ChangeSetApproval,
   type ChangeSetAssetType,
@@ -18,6 +21,7 @@ import {
   type ChangeSetRange,
   type ChangeSetFileSelection,
   type DecideChangeSetCommand,
+  type MainOnlyApprovalDecisionProofV1,
   type StoryBibleStatusTransitionProof,
   type AgentWritePolicy
 } from "@novel-studio/agent-engine";
@@ -42,6 +46,14 @@ export interface ChangeSetCandidateValidationPortInput {
   readonly assetType: ChangeSetAssetType;
   readonly assetId?: string;
   readonly candidateContent: string;
+}
+
+/** Main-only immutable storage for approval proofs. It is not a Provider-facing port. */
+export interface MainOnlyApprovalDecisionProofRepositoryPort {
+  writeApprovalDecisionProof(
+    runId: string,
+    proof: MainOnlyApprovalDecisionProofV1
+  ): Promise<Result<MainOnlyApprovalDecisionProofV1, UnifiedError>>;
 }
 
 export interface ChangeSetSessionPort {
@@ -70,6 +82,7 @@ export interface ChangeSetSessionPort {
     readonly projectId: string;
     readonly checkpointId: string;
   }): Promise<Result<ChangeSet | undefined, UnifiedError>>;
+  readonly approvalDecisionProofRepository?: MainOnlyApprovalDecisionProofRepositoryPort;
 }
 
 interface ChangeSetProposalBinding {
@@ -155,6 +168,16 @@ export interface ChangeSetSession {
     readonly projectId: string;
     readonly checkpointId: string;
   }): Promise<Result<ChangeSet | undefined, UnifiedError>>;
+  /** Binds the immutable proof repository once from Desktop Main composition. */
+  bindApprovalDecisionProofRepository(
+    repository: MainOnlyApprovalDecisionProofRepositoryPort
+  ): Result<void, UnifiedError>;
+  /** Persists a Main-created proof only when it exactly binds to a frozen Change Set revision. */
+  persistApprovalDecisionProof(input: {
+    readonly changeSetId: string;
+    readonly revision: number;
+    readonly proof: MainOnlyApprovalDecisionProofV1;
+  }): Promise<Result<ApprovalDecisionProofRefV1, UnifiedError>>;
   decide(
     command: DecideChangeSetCommand
   ): Promise<Result<ChangeSet | ChangeSetApproval, UnifiedError>>;
@@ -171,6 +194,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
   const revisions = new Map<string, Map<number, ChangeSet>>();
   const activeChangeSetByCheckpoint = new Map<string, string>();
   const decisionReceipts = new Map<string, Result<ChangeSet | ChangeSetApproval, UnifiedError>>();
+  let approvalDecisionProofRepository = options.port.approvalDecisionProofRepository;
   const createChangeSetId =
     options.createChangeSetId ?? (() => `change_set_${randomUUID().replaceAll("-", "")}`);
   const now = options.now ?? (() => new Date().toISOString());
@@ -481,6 +505,29 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
   }
 
   return {
+    bindApprovalDecisionProofRepository(repository) {
+      if (
+        repository === null ||
+        typeof repository !== "object" ||
+        typeof repository.writeApprovalDecisionProof !== "function"
+      ) {
+        return failure(
+          "APPROVAL_DECISION_PROOF_REPOSITORY_INVALID",
+          "Approval proof storage is invalid.",
+          "Recreate the Main Change Set session before staging a proposal."
+        );
+      }
+      if (approvalDecisionProofRepository !== undefined) {
+        return failure(
+          "APPROVAL_DECISION_PROOF_REPOSITORY_ALREADY_BOUND",
+          "Approval proof storage is already bound to this Change Set session.",
+          "Create a new Main Change Set session for another workspace."
+        );
+      }
+      approvalDecisionProofRepository = repository;
+      return ok(undefined);
+    },
+
     async proposeChapterWrite(input) {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.chapterId)) {
         return failure(
@@ -618,6 +665,62 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       return restored;
     },
 
+    async persistApprovalDecisionProof(input) {
+      const repository = approvalDecisionProofRepository;
+      if (repository === undefined) {
+        return failure(
+          "APPROVAL_DECISION_PROOF_REPOSITORY_UNAVAILABLE",
+          "Approval proof storage is unavailable for this Change Set.",
+          "Regenerate the proposal after Main proof storage is available."
+        );
+      }
+      const current = await findRevision(input.changeSetId, input.revision);
+      if (!current.ok) return current;
+
+      let proof: MainOnlyApprovalDecisionProofV1;
+      try {
+        proof = parseApprovalDecisionProofV1(input.proof);
+      } catch {
+        return failure(
+          "APPROVAL_DECISION_PROOF_INVALID",
+          "The approval decision proof is invalid.",
+          "Regenerate the frozen proposal and its approval proof."
+        );
+      }
+      if (!isApprovalDecisionProofBoundToChangeSet(proof, current.value)) {
+        return failure(
+          "APPROVAL_DECISION_PROOF_BINDING_MISMATCH",
+          "The approval decision proof does not match the frozen Change Set.",
+          "Regenerate the proposal and its approval proof."
+        );
+      }
+
+      try {
+        const persisted = await repository.writeApprovalDecisionProof(proof.binding.runId, proof);
+        if (!persisted.ok) return persisted;
+        let storedProof: MainOnlyApprovalDecisionProofV1;
+        try {
+          storedProof = parseApprovalDecisionProofV1(persisted.value);
+        } catch {
+          return failure(
+            "APPROVAL_DECISION_PROOF_INVALID",
+            "The stored approval decision proof is invalid.",
+            "Regenerate the frozen proposal and its approval proof."
+          );
+        }
+        if (!isApprovalDecisionProofBoundToChangeSet(storedProof, current.value)) {
+          return failure(
+            "APPROVAL_DECISION_PROOF_BINDING_MISMATCH",
+            "The stored approval decision proof does not match the frozen Change Set.",
+            "Regenerate the proposal and its approval proof."
+          );
+        }
+        return ok(buildApprovalDecisionProofRefV1(storedProof));
+      } catch (error) {
+        return err(asUnifiedError(error));
+      }
+    },
+
     async decide(command) {
       const receiptKey = `${command.projectId}:${command.commandId}`;
       const prior = decisionReceipts.get(receiptKey);
@@ -720,6 +823,19 @@ function validateTarget(
     );
   }
   return undefined;
+}
+
+function isApprovalDecisionProofBoundToChangeSet(
+  proof: MainOnlyApprovalDecisionProofV1,
+  changeSet: ChangeSet
+): boolean {
+  return (
+    proof.binding.runId === changeSet.runId &&
+    proof.binding.changeSetId === changeSet.changeSetId &&
+    proof.binding.changeSetRevision === changeSet.revision &&
+    proof.binding.changeSetChecksum === changeSet.checksum &&
+    proof.binding.executionWritePolicy === (changeSet.writePolicy ?? "write_before_confirmation")
+  );
 }
 
 function checkpointBindingKey(

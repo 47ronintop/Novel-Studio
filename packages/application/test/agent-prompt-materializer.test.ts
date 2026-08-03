@@ -20,11 +20,7 @@ import {
   parseAgentPromptMaterializationArtifact,
   rematerializeAgentPromptArtifact
 } from "../src/agent-prompt-materializer.js";
-import {
-  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
-  ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
-  createProviderVisibleAgentRuntimeFacts
-} from "../src/agent-runtime-facts.js";
+import { createProviderVisibleAgentRuntimeFacts } from "../src/agent-runtime-facts.js";
 import {
   checksumProjectContext,
   createWorkspaceOutlineSource,
@@ -533,11 +529,16 @@ describe("Agent prompt materializer", () => {
 });
 
 function v3Guidance() {
-  const capability = createDefaultCapabilitySnapshot("creativeProject");
+  const capability = {
+    ...createDefaultCapabilitySnapshot("creativeProject"),
+    writingOperations: [],
+    workspaceFileOperations: ["replace_file"] as const
+  };
   const runtimeFacts = createProviderVisibleAgentRuntimeFacts({
     profile,
     toolDescriptors: listAgentTools({
       facadeVersion: "v2",
+      catalogSchemaVersion: "2.0",
       operationMode: "execution",
       contextMode: "general_file",
       writePolicy: "write_before_confirmation",
@@ -555,8 +556,8 @@ function v3Guidance() {
     providerSemanticVersionSet: createProviderSemanticVersionSetV1({
       writingTaskIntentSchemaVersion: "not_applicable",
       writingGenerationGuidanceVersion: "not_applicable",
-      approvalRuleSetVersion: ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
-      approvalRuleSetChecksum: ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM
+      approvalRuleSetVersion: runtimeFacts.approvalRuleSetVersion,
+      approvalRuleSetChecksum: runtimeFacts.approvalRuleSetChecksum
     })
   });
 }

@@ -241,6 +241,55 @@ describe("AgentRunFileRepository", () => {
     });
   });
 
+  test("accepts Prompt Materialization 2.0 and rejects unknown persisted schemas", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-prompt-v2-store-"));
+    roots.push(projectRoot);
+    const repository = new repositoryExports.AgentRunFileRepository({ projectRoot });
+    const artifact = {
+      schemaVersion: "2.0",
+      artifactId: "prompt_context_v2",
+      runId: "run_prompt_v2",
+      contextSnapshotId: "context_v2",
+      checksum: "a".repeat(64)
+    };
+
+    expect(await repository.writePromptMaterialization(artifact.runId, artifact)).toMatchObject({
+      ok: true
+    });
+    expect(await repository.readPromptMaterialization(artifact.runId, artifact.artifactId)).toEqual(
+      { ok: true, value: artifact }
+    );
+    expect(
+      await repository.writePromptMaterialization(artifact.runId, {
+        ...artifact,
+        schemaVersion: "3.0",
+        artifactId: "prompt_context_unknown"
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROMPT_MATERIALIZATION_INVALID" }
+    });
+
+    await writeFile(
+      join(
+        projectRoot,
+        "history",
+        "agent-runs",
+        artifact.runId,
+        "prompt-materializations",
+        `${artifact.artifactId}.json`
+      ),
+      JSON.stringify({ ...artifact, schemaVersion: "3.0" }),
+      "utf8"
+    );
+    expect(
+      await repository.readPromptMaterialization(artifact.runId, artifact.artifactId)
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROMPT_MATERIALIZATION_INVALID" }
+    });
+  });
+
   test("persists immutable tool catalogs and rejects invalid or conflicting catalog identities", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-tool-catalog-store-"));
     roots.push(projectRoot);

@@ -4,6 +4,8 @@ import {
   aggregateContextPrecision,
   calculateContextBudget,
   computeAgentRunToolCatalogRevision,
+  computeAgentRunToolCatalogRevisionV2,
+  createApprovalRuleSetProjection,
   createDeterministicTokenEstimator,
   type AgentContextPrecision,
   type AgentTokenEstimator,
@@ -33,6 +35,7 @@ export const AGENT_MAX_TOOL_RESULT_SUMMARY_UTF8_BYTES = 4_096;
 
 export interface AgentBudgetToolCatalogInput {
   readonly facadeVersion: AgentToolFacadeVersion;
+  readonly schemaVersion?: "1.0" | "2.0";
   readonly catalogRevision: string;
   readonly descriptors: readonly AgentToolDescriptor[];
 }
@@ -73,6 +76,7 @@ export interface ResolvedAgentContextBudgetInputs {
   readonly precision: AgentContextPrecision;
   readonly toolCatalog: {
     readonly facadeVersion: AgentToolFacadeVersion;
+    readonly schemaVersion?: "1.0" | "2.0";
     readonly catalogRevision: string;
     readonly descriptorChecksum: string;
     readonly descriptorCount: number;
@@ -97,6 +101,7 @@ export function readResolvedContextBudgetUsageLimits(
     readonly modelProfileId: string;
     readonly contextWindow: number;
     readonly facadeVersion: AgentToolFacadeVersion;
+    readonly schemaVersion?: "1.0" | "2.0";
     readonly catalogRevision: string;
   }
 ): Result<ResolvedContextBudgetUsageLimits, UnifiedError> {
@@ -140,6 +145,9 @@ export function readResolvedContextBudgetUsageLimits(
     !isChecksum(audit["usedMaterializationChecksum"]) ||
     !isRecord(catalog) ||
     catalog["facadeVersion"] !== expected.facadeVersion ||
+    (expected.schemaVersion === undefined
+      ? catalog["schemaVersion"] !== undefined
+      : catalog["schemaVersion"] !== expected.schemaVersion) ||
     catalog["catalogRevision"] !== expected.catalogRevision ||
     !isChecksum(catalog["descriptorChecksum"]) ||
     !isTokenCount(catalog["descriptorCount"])
@@ -159,6 +167,7 @@ export function readResolvedContextBudgetUsageLimits(
     precision,
     toolCatalog: {
       facadeVersion: expected.facadeVersion,
+      ...(expected.schemaVersion === undefined ? {} : { schemaVersion: expected.schemaVersion }),
       catalogRevision: expected.catalogRevision,
       descriptorChecksum: catalog["descriptorChecksum"],
       descriptorCount: catalog["descriptorCount"]
@@ -219,10 +228,7 @@ export function resolveBudgetInputs(
   const invalid = validateInput(input);
   if (invalid !== undefined) return err(budgetInputsInvalid(input, invalid));
 
-  const expectedCatalogRevision = computeAgentRunToolCatalogRevision(
-    input.toolCatalog.facadeVersion,
-    input.toolCatalog.descriptors
-  );
+  const expectedCatalogRevision = computeBudgetCatalogRevision(input.toolCatalog);
   if (input.toolCatalog.catalogRevision !== expectedCatalogRevision) {
     return err(budgetInputsInvalid(input, "toolCatalog.catalogRevision"));
   }
@@ -340,6 +346,9 @@ export function resolveBudgetInputs(
   );
   const proof = {
     facadeVersion: input.toolCatalog.facadeVersion,
+    ...(input.toolCatalog.schemaVersion === undefined
+      ? {}
+      : { schemaVersion: input.toolCatalog.schemaVersion }),
     catalogRevision: input.toolCatalog.catalogRevision,
     descriptorChecksum,
     descriptorCount: input.toolCatalog.descriptors.length
@@ -390,6 +399,27 @@ function createResolvedOperands(
     systemMaterializationChecksum: input.systemMaterializationChecksum,
     usedMaterializationChecksum: input.usedMaterializationChecksum
   };
+}
+
+function computeBudgetCatalogRevision(input: AgentBudgetToolCatalogInput): string {
+  if (input.schemaVersion !== "2.0") {
+    return computeAgentRunToolCatalogRevision(input.facadeVersion, input.descriptors);
+  }
+  const operations = input.descriptors.flatMap((descriptor) => {
+    if (descriptor.effect !== "propose") return [];
+    if (descriptor.writeOperation === undefined) throw new Error("AGENT_TOOL_OPERATION_UNMAPPED");
+    return [descriptor.writeOperation];
+  });
+  const projection =
+    operations.length === 0
+      ? { version: "not_applicable", checksum: "not_applicable", rules: [] as const }
+      : createApprovalRuleSetProjection(operations);
+  return computeAgentRunToolCatalogRevisionV2({
+    descriptors: input.descriptors,
+    approvalRuleSetVersion: projection.version,
+    approvalRuleSetChecksum: projection.checksum,
+    approvalRules: projection.rules
+  });
 }
 
 function validateInput(input: ResolveBudgetInputsInput): string | undefined {

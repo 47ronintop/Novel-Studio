@@ -48,6 +48,7 @@ import {
 } from "@novel-studio/llm-adapter";
 import {
   ChapterFileRepository,
+  ApprovalDecisionProofFileRepository,
   AgentProjectReadRepository,
   AgentRunFileRepository,
   AgentUsageFileRepository,
@@ -503,6 +504,13 @@ export function createProjectDesktopApplication(
         storyBible,
         repository: runRepository
       });
+      const proofRepositoryBound = changeSets.bindApprovalDecisionProofRepository(
+        new ApprovalDecisionProofFileRepository({
+          projectRoot,
+          traceId: "trace_desktop_story_bible_explicit_inverse_approval_decision_proof_repository"
+        })
+      );
+      if (!proofRepositoryBound.ok) throw new Error(proofRepositoryBound.error.message);
       const versionGroups = createDesktopVersionGroupServices({
         contentRoot: projectRoot,
         stateRoot: projectRoot,
@@ -563,6 +571,13 @@ export function createProjectDesktopApplication(
         storyBible,
         repository: runRepository
       });
+      const proofRepositoryBound = changeSets.bindApprovalDecisionProofRepository(
+        new ApprovalDecisionProofFileRepository({
+          projectRoot,
+          traceId: "trace_desktop_story_analysis_apply_approval_decision_proof_repository"
+        })
+      );
+      if (!proofRepositoryBound.ok) throw new Error(proofRepositoryBound.error.message);
       const fileOperations = createAgentFileOperationSession({
         traceId: "trace_desktop_story_analysis_apply_file_operations"
       });

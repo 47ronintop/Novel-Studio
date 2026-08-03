@@ -3,14 +3,18 @@ import { describe, expect, test } from "vitest";
 import {
   findPermissionSummaryDrift,
   generatePermissionSummary,
+  generatePermissionSummaryV2,
   hasValidPermissionSummaryChecksums,
   listAgentTools,
+  normalizePermissionSummaryV10,
+  parsePermissionSummaryV20,
   resolvePermissionSummaryCapabilities,
   type AgentContextMode,
   type AgentOperationMode,
   type AgentToolDescriptor,
   type AgentWritePolicy,
   type GeneratePermissionSummaryInput,
+  type GeneratePermissionSummaryV2Input,
   type ListAgentToolsInput,
   type PermissionSummary
 } from "../src/index.js";
@@ -297,6 +301,198 @@ describe("PermissionSummary v1.1 migration and integrity", () => {
     const fields = findPermissionSummaryDrift(stored, regenerated).map((entry) => entry.field);
     expect(fields).toContain("providerMappingRevision");
     expect(fields).toContain("extendedChecksum");
+  });
+});
+
+describe("PermissionSummary v2.0 projection and strict reader", () => {
+  function v2BaseInput(
+    overrides: Partial<GeneratePermissionSummaryV2Input> = {}
+  ): GeneratePermissionSummaryV2Input {
+    return {
+      permissionSummaryId: "permission_summary_v2_01",
+      projectId: "project_01",
+      runDraftId: "run_draft_01",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      rootFingerprint: "f".repeat(64),
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      writeMutationTrust: "standard_trusted_creative",
+      capabilitySnapshot: {
+        workspaceKind: "creativeProject",
+        searchEnabled: true,
+        fileLifecycleEnabled: true,
+        writingOperations: ["chapter_replace", "chapter_rename"],
+        workspaceFileOperations: [],
+        storyBibleStructuredToolsEnabled: true,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "flags_v2"
+      },
+      ...overrides
+    };
+  }
+
+  test("planning is read-only even when a future execution policy is carried by the draft", () => {
+    const summary = generatePermissionSummaryV2(
+      v2BaseInput({ operationMode: "planning", writePolicy: "user_preapproved_run" })
+    );
+    expect(summary.writePolicy).toBe("write_before_confirmation");
+    expect(summary.writeCapability).toBe("none");
+    expect(summary.writingOperations).toEqual([]);
+    expect(summary.writeApprovalPolicy).toBe("not_applicable");
+    expect(summary.approvalRuleSetVersion).toBe("not_applicable");
+    expect(parsePermissionSummaryV20(summary)).toEqual(summary);
+  });
+
+  test("execution mutation projection binds one rule per operation and separates allowed/forbidden", () => {
+    const summary = generatePermissionSummaryV2(v2BaseInput());
+    expect(summary.schemaVersion).toBe("2.0");
+    expect(summary.writeCapability).toBe("propose");
+    expect(summary.writeApprovalPolicy).toBe("confirm_each_change_set");
+    expect(summary.writingOperations).toEqual(["chapter_replace", "chapter_rename"]);
+    expect(summary.approvalRules).toHaveLength(2);
+    expect(summary.approvalRules.map((rule) => rule.operation)).toEqual([
+      "chapter_replace",
+      "chapter_rename"
+    ]);
+    expect(summary.toolRegistryRevision).toMatch(/^[a-f0-9]{64}$/u);
+    expect(summary.toolRegistryRevision).not.toBe(summary.descriptorRevision);
+    expect(
+      summary.allowedCapabilities.filter((capability) =>
+        summary.forbiddenCapabilities.includes(capability)
+      )
+    ).toEqual([]);
+    expect(hasValidPermissionSummaryChecksums(summary)).toBe(true);
+    expect(parsePermissionSummaryV20(summary)).toEqual(summary);
+  });
+
+  test("unconfirmed or unqualified limited preapproval fails closed", () => {
+    expect(() =>
+      generatePermissionSummaryV2(
+        v2BaseInput({ writePolicy: "user_preapproved_run", writePolicyAcknowledged: false })
+      )
+    ).toThrow("PERMISSION_SUMMARY_V2_PREAPPROVAL_UNQUALIFIED");
+    expect(() =>
+      generatePermissionSummaryV2(
+        v2BaseInput({
+          writePolicy: "user_preapproved_run",
+          writePolicyAcknowledged: true,
+          limitedRunPreapprovalQualified: false
+        })
+      )
+    ).toThrow("PERMISSION_SUMMARY_V2_PREAPPROVAL_UNQUALIFIED");
+  });
+
+  test("qualified limited preapproval is explicit and still carries catalog-time rules", () => {
+    const summary = generatePermissionSummaryV2(
+      v2BaseInput({
+        writePolicy: "user_preapproved_run",
+        writePolicyAcknowledged: true,
+        limitedRunPreapprovalQualified: true
+      })
+    );
+    expect(summary.writeApprovalPolicy).toBe("limited_run_preapproval");
+    expect(summary.approvalRules.every((rule) => rule.operation)).toBe(true);
+    expect(parsePermissionSummaryV20(summary)).toEqual(summary);
+  });
+
+  test("network is dynamic rather than simultaneously forbidden", () => {
+    const capabilitySnapshot = v2BaseInput().capabilitySnapshot;
+    if (capabilitySnapshot === undefined) throw new Error("Missing V2 capability fixture.");
+    const summary = generatePermissionSummaryV2(
+      v2BaseInput({
+        capabilitySnapshot: {
+          ...capabilitySnapshot,
+          writingOperations: [],
+          networkReadEnabled: true
+        }
+      })
+    );
+    expect(summary.allowedCapabilities).toContain("network");
+    expect(summary.forbiddenCapabilities).not.toContain("network");
+    expect(parsePermissionSummaryV20(summary)).toEqual(summary);
+  });
+
+  test("strict reader rejects extra fields, unsorted arrays, and recomputed-but-invalid semantics", () => {
+    const summary = generatePermissionSummaryV2(v2BaseInput());
+    expect(() => parsePermissionSummaryV20({ ...summary, unexpected: true })).toThrow(
+      "PERMISSION_SUMMARY_V2_INVALID"
+    );
+    expect(() =>
+      parsePermissionSummaryV20({
+        ...summary,
+        toolRegistryRevision: summary.descriptorRevision
+      })
+    ).toThrow("PERMISSION_SUMMARY_V2_INVALID");
+    expect(() =>
+      parsePermissionSummaryV20({
+        ...summary,
+        allowedCapabilities: [...summary.allowedCapabilities].reverse()
+      })
+    ).toThrow("PERMISSION_SUMMARY_V2_INVALID");
+    expect(() =>
+      parsePermissionSummaryV20({
+        ...summary,
+        forbiddenCapabilities: [...summary.forbiddenCapabilities, "read"],
+        checksum: summary.checksum
+      })
+    ).toThrow("PERMISSION_SUMMARY_V2_INVALID");
+    expect(() =>
+      parsePermissionSummaryV20({
+        ...summary,
+        generatedAt: "2026-07-16T08:00:00+08:00"
+      })
+    ).toThrow("PERMISSION_SUMMARY_V2_INVALID");
+    expect(() =>
+      parsePermissionSummaryV20({
+        ...summary,
+        dataEgressCapabilities: ["provider_query"]
+      })
+    ).toThrow("PERMISSION_SUMMARY_V2_INVALID");
+    expect(() =>
+      parsePermissionSummaryV20({
+        ...summary,
+        workspaceKind: "engineeringWorkspace"
+      })
+    ).toThrow("PERMISSION_SUMMARY_V2_INVALID");
+    expect(() =>
+      parsePermissionSummaryV20({
+        ...summary,
+        writeMutationTrust: "unavailable"
+      })
+    ).toThrow("PERMISSION_SUMMARY_V2_INVALID");
+  });
+
+  test("legacy normalizer rejects Permission Summary 2.0 instead of dropping new authority", () => {
+    const summary = generatePermissionSummaryV2(v2BaseInput());
+    expect(() => {
+      // @ts-expect-error Permission Summary 2.0 must never enter the legacy reader.
+      normalizePermissionSummaryV10(summary);
+    }).toThrow("PERMISSION_SUMMARY_LEGACY_VERSION_INVALID");
+  });
+
+  test("legacy fileLifecycleEnabled does not upgrade a v2 catalog without qualified operations", () => {
+    const capabilitySnapshot = v2BaseInput().capabilitySnapshot;
+    if (capabilitySnapshot === undefined) throw new Error("Missing V2 capability fixture.");
+    const summary = generatePermissionSummaryV2(
+      v2BaseInput({
+        contextMode: "general_file",
+        writeMutationTrust: "unavailable",
+        capabilitySnapshot: {
+          ...capabilitySnapshot,
+          workspaceKind: "engineeringWorkspace",
+          writingOperations: [],
+          workspaceFileOperations: [],
+          fileLifecycleEnabled: true
+        }
+      })
+    );
+    expect(summary.writeCapability).toBe("none");
+    expect(summary.workspaceFileOperations).toEqual([]);
   });
 });
 

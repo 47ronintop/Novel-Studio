@@ -1,53 +1,42 @@
 import { createHash } from "node:crypto";
 
 import {
+  DEFAULT_APPROVAL_RULE_SET_VERSION,
+  LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+  LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+  WRITE_OPERATION_ORDER,
+  createApprovalRuleSetProjection,
+  effectiveWorkspaceFileOperations,
+  effectiveWritingOperations,
   isCapabilityEffective,
+  isProviderVisibleWorkspaceFileOperation,
+  isProviderVisibleWritingOperation,
+  parseApprovalRuleSetProjection,
   type AgentToolDescriptor,
   type AgentWritePolicy,
-  type EffectiveCapabilityState
+  type EffectiveCapabilityState,
+  type ProviderVisibleApprovalRule,
+  type ProviderVisibleApprovalRuleSetProjection,
+  type ProviderVisibleConditionalApprovalRuleId,
+  type ProviderVisibleWorkspaceFileOperation,
+  type ProviderVisibleWriteOperation,
+  type ProviderVisibleWritingOperation
 } from "@novel-studio/agent-engine";
 
 import type { AgentContextProfile } from "./agent-context-profile.js";
 
+export type {
+  ProviderVisibleApprovalRule,
+  ProviderVisibleApprovalRuleSetProjection,
+  ProviderVisibleConditionalApprovalRuleId,
+  ProviderVisibleWorkspaceFileOperation,
+  ProviderVisibleWriteOperation,
+  ProviderVisibleWritingOperation
+} from "@novel-studio/agent-engine";
+
 export const PROVIDER_VISIBLE_RUNTIME_FACTS_SCHEMA_VERSION = "1.0" as const;
-export const ALL_HUMAN_APPROVAL_RULE_SET_VERSION = "all-human@1.0" as const;
-
-export type ProviderVisibleWorkspaceFileOperation =
-  "replace_file" | "create_file" | "move_file" | "delete_file" | "create_directory";
-
-export type ProviderVisibleWritingOperation =
-  | "chapter_replace"
-  | "chapter_create"
-  | "chapter_rename"
-  | "chapter_reorder"
-  | "chapter_status"
-  | "chapter_restore"
-  | "story_bible_create"
-  | "story_bible_patch"
-  | "story_bible_status"
-  | "story_bible_restore";
-
-export type ProviderVisibleWriteOperation =
-  ProviderVisibleWorkspaceFileOperation | ProviderVisibleWritingOperation;
-
-export type ProviderVisibleConditionalApprovalRuleId =
-  | "clean_chapter_body_v1"
-  | "bounded_chapter_create_v1"
-  | "bounded_story_bible_create_v1"
-  | "no_reference_impact_story_bible_patch_v1"
-  | "ordinary_clean_file_replace_v1"
-  | "ordinary_create_only_v1";
-
-export type ProviderVisibleApprovalRule =
-  | {
-      readonly operation: ProviderVisibleWriteOperation;
-      readonly reviewMode: "always_human";
-    }
-  | {
-      readonly operation: ProviderVisibleWriteOperation;
-      readonly reviewMode: "conditional_auto_review";
-      readonly effectRuleId: ProviderVisibleConditionalApprovalRuleId;
-    };
+export const ALL_HUMAN_APPROVAL_RULE_SET_VERSION = LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION;
+export const ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM = LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM;
 
 export interface ProviderVisibleAgentRuntimeFacts {
   readonly schemaVersion: typeof PROVIDER_VISIBLE_RUNTIME_FACTS_SCHEMA_VERSION;
@@ -68,12 +57,6 @@ export interface ProviderVisibleAgentRuntimeFacts {
   readonly activeResourceKind: "none" | "chapter" | "story_bible" | "project_file";
 }
 
-export interface ProviderVisibleApprovalRuleSetProjection {
-  readonly version: string;
-  readonly checksum: string;
-  readonly rules: readonly ProviderVisibleApprovalRule[];
-}
-
 export interface CreateProviderVisibleAgentRuntimeFactsInput {
   readonly profile: AgentContextProfile;
   /** The final Provider-projected directory, after Main capability/backend guards. */
@@ -86,44 +69,6 @@ export interface CreateProviderVisibleAgentRuntimeFactsInput {
   readonly approvalRuleSet?: ProviderVisibleApprovalRuleSetProjection;
   readonly activeResourceKind: ProviderVisibleAgentRuntimeFacts["activeResourceKind"];
 }
-
-const WORKSPACE_OPERATION_ORDER = Object.freeze([
-  "replace_file",
-  "create_file",
-  "move_file",
-  "delete_file",
-  "create_directory"
-] as const satisfies readonly ProviderVisibleWorkspaceFileOperation[]);
-
-const WRITING_OPERATION_ORDER = Object.freeze([
-  "chapter_replace",
-  "chapter_create",
-  "chapter_rename",
-  "chapter_reorder",
-  "chapter_status",
-  "chapter_restore",
-  "story_bible_create",
-  "story_bible_patch",
-  "story_bible_status",
-  "story_bible_restore"
-] as const satisfies readonly ProviderVisibleWritingOperation[]);
-
-const ALL_OPERATION_ORDER = Object.freeze([
-  ...WORKSPACE_OPERATION_ORDER,
-  ...WRITING_OPERATION_ORDER
-] as const satisfies readonly ProviderVisibleWriteOperation[]);
-
-const ALL_HUMAN_RULES = deepFreeze(
-  ALL_OPERATION_ORDER.map((operation) => ({ operation, reviewMode: "always_human" as const }))
-);
-
-export const ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM = checksum(
-  stableSerialize({
-    schemaVersion: "1.0",
-    version: ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
-    rules: ALL_HUMAN_RULES
-  })
-);
 
 const ROOT_FIELDS = Object.freeze([
   "schemaVersion",
@@ -146,12 +91,7 @@ const ROOT_FIELDS = Object.freeze([
 export function createAllHumanApprovalRuleSetProjection(
   operations: readonly ProviderVisibleWriteOperation[]
 ): ProviderVisibleApprovalRuleSetProjection {
-  const canonical = canonicalOperations(operations);
-  return deepFreeze({
-    version: ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
-    checksum: ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
-    rules: canonical.map((operation) => ({ operation, reviewMode: "always_human" as const }))
-  });
+  return createApprovalRuleSetProjection(operations, ALL_HUMAN_APPROVAL_RULE_SET_VERSION);
 }
 
 export function createProviderVisibleAgentRuntimeFacts(
@@ -192,6 +132,18 @@ export function createProviderVisibleAgentRuntimeFacts(
   ) {
     throw new Error("PROVIDER_VISIBLE_RUNTIME_FACTS_INVALID");
   }
+  if (input.effectiveCapabilityState !== undefined) {
+    const effectiveWriting = new Set(effectiveWritingOperations(input.effectiveCapabilityState));
+    const effectiveWorkspace = new Set(
+      effectiveWorkspaceFileOperations(input.effectiveCapabilityState)
+    );
+    if (
+      writingOperations.some((operation) => !effectiveWriting.has(operation)) ||
+      workspaceFileOperations.some((operation) => !effectiveWorkspace.has(operation))
+    ) {
+      throw new Error("PROVIDER_VISIBLE_RUNTIME_FACTS_INVALID");
+    }
+  }
   const writeCapability = operations.length === 0 ? "none" : "propose";
   let writeApprovalPolicy: ProviderVisibleAgentRuntimeFacts["writeApprovalPolicy"] =
     "not_applicable";
@@ -210,7 +162,9 @@ export function createProviderVisibleAgentRuntimeFacts(
       input.executionWritePolicy === "user_preapproved_run"
         ? "limited_run_preapproval"
         : "confirm_each_change_set";
-    const projection = input.approvalRuleSet ?? createAllHumanApprovalRuleSetProjection(operations);
+    const projection =
+      input.approvalRuleSet ??
+      createApprovalRuleSetProjection(operations, DEFAULT_APPROVAL_RULE_SET_VERSION);
     assertApprovalRuleProjection(projection, operations);
     approvalRuleSetVersion = projection.version;
     approvalRuleSetChecksum = projection.checksum;
@@ -299,40 +253,17 @@ function operationsForTool(
   descriptor: AgentToolDescriptor
 ): readonly ProviderVisibleWriteOperation[] {
   if (descriptor.effect !== "propose") return [];
-  const id = canonicalToolId(descriptor);
-  switch (id) {
-    case "edit_text":
-    case "propose_chapter_write":
-      return [profile.profileId === "writing" ? "chapter_replace" : "replace_file"];
-    case "propose_file_write":
-      return ["replace_file"];
-    case "create_resource":
-      return [profile.profileId === "writing" ? "chapter_create" : "create_file"];
-    case "propose_chapter_create":
-      return ["chapter_create"];
-    case "propose_file_create":
-      return ["create_file"];
-    case "propose_file_move":
-      return ["move_file"];
-    case "propose_file_delete":
-      return ["delete_file"];
-    case "propose_directory_create":
-      return ["create_directory"];
-    case "manage_path":
-      return profile.profileId === "writing"
-        ? []
-        : ["move_file", "delete_file", "create_directory"];
-    case "create_story_bible":
-      return ["story_bible_create"];
-    case "patch_story_bible":
-      return ["story_bible_patch"];
-    case "set_story_bible_status":
-      return ["story_bible_status"];
-    case "restore_story_bible":
-      return ["story_bible_restore"];
-    default:
-      throw new Error("PROVIDER_VISIBLE_RUNTIME_FACTS_UNMAPPED_MUTATION_TOOL");
+  const operation = descriptor.writeOperation;
+  if (operation === undefined) {
+    throw new Error("PROVIDER_VISIBLE_RUNTIME_FACTS_UNMAPPED_MUTATION_TOOL");
   }
+  if (
+    (profile.profileId === "writing" && !isWritingOperation(operation)) ||
+    (profile.profileId !== "writing" && !isWorkspaceOperation(operation))
+  ) {
+    throw new Error("PROVIDER_VISIBLE_RUNTIME_FACTS_INVALID");
+  }
+  return [operation];
 }
 
 function assertProfileAndCapabilityState(
@@ -389,12 +320,9 @@ function assertApprovalRuleProjection(
   projection: ProviderVisibleApprovalRuleSetProjection,
   operations: readonly ProviderVisibleWriteOperation[]
 ): void {
-  if (
-    projection.version !== ALL_HUMAN_APPROVAL_RULE_SET_VERSION ||
-    projection.checksum !== ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM ||
-    stableSerialize(projection.rules) !==
-      stableSerialize(createAllHumanApprovalRuleSetProjection(operations).rules)
-  ) {
+  try {
+    parseApprovalRuleSetProjection(projection, operations);
+  } catch {
     throw new Error("PROVIDER_VISIBLE_RUNTIME_FACTS_INVALID");
   }
 }
@@ -430,11 +358,27 @@ function runtimeFactsCrossInvariants(value: ProviderVisibleAgentRuntimeFacts): b
     value.writeCapability === "propose" &&
     (value.writeApprovalPolicy === "confirm_each_change_set" ||
       value.writeApprovalPolicy === "limited_run_preapproval") &&
-    value.approvalRuleSetVersion === ALL_HUMAN_APPROVAL_RULE_SET_VERSION &&
-    value.approvalRuleSetChecksum === ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM &&
-    stableSerialize(value.approvalRules) ===
-      stableSerialize(createAllHumanApprovalRuleSetProjection(operations).rules)
+    validApprovalRuleProjection(value, operations)
   );
+}
+
+function validApprovalRuleProjection(
+  value: ProviderVisibleAgentRuntimeFacts,
+  operations: readonly ProviderVisibleWriteOperation[]
+): boolean {
+  try {
+    parseApprovalRuleSetProjection(
+      {
+        version: value.approvalRuleSetVersion,
+        checksum: value.approvalRuleSetChecksum,
+        rules: value.approvalRules
+      },
+      operations
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRuntimeFactsShape(value: unknown): value is ProviderVisibleAgentRuntimeFacts {
@@ -505,7 +449,7 @@ function canonicalOperations(
 ): readonly ProviderVisibleWriteOperation[] {
   const unique = new Set(operations);
   if (unique.size !== operations.length) throw new Error("PROVIDER_VISIBLE_RUNTIME_FACTS_INVALID");
-  return ALL_OPERATION_ORDER.filter((operation) => unique.has(operation));
+  return WRITE_OPERATION_ORDER.filter((operation) => unique.has(operation));
 }
 
 function canonicalToolId(descriptor: AgentToolDescriptor): string {
@@ -513,11 +457,11 @@ function canonicalToolId(descriptor: AgentToolDescriptor): string {
 }
 
 function isWorkspaceOperation(value: unknown): value is ProviderVisibleWorkspaceFileOperation {
-  return WORKSPACE_OPERATION_ORDER.some((operation) => operation === value);
+  return isProviderVisibleWorkspaceFileOperation(value);
 }
 
 function isWritingOperation(value: unknown): value is ProviderVisibleWritingOperation {
-  return WRITING_OPERATION_ORDER.some((operation) => operation === value);
+  return isProviderVisibleWritingOperation(value);
 }
 
 function isWriteOperation(value: unknown): value is ProviderVisibleWriteOperation {
@@ -581,7 +525,7 @@ function stableSerialize(value: unknown): string {
   if (value !== null && typeof value === "object") {
     return `{${Object.entries(value as Record<string, unknown>)
       .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, child]) => `${JSON.stringify(key)}:${stableSerialize(child)}`)
       .join(",")}}`;
   }

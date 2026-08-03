@@ -1,8 +1,14 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  computeDescriptorRevision,
+  computeProviderMappingRevision,
+  createDefaultCapabilitySnapshot,
   listAgentTools,
+  normalizePermissionSummaryV10,
+  resolvePermissionSummaryCapabilities,
   type AgentToolDescriptor,
+  type AgentToolCapabilitySnapshot,
   type ListAgentToolsInput
 } from "@novel-studio/agent-engine";
 import {
@@ -33,6 +39,41 @@ function baseInput(
     writePolicy: "write_before_confirmation",
     ...overrides
   };
+}
+
+function catalogV2WritingCapability(): AgentToolCapabilitySnapshot {
+  return {
+    ...createDefaultCapabilitySnapshot("creativeProject"),
+    writingOperations: ["chapter_replace"],
+    featureFlagRevision: "catalog-v2-writing"
+  };
+}
+
+function catalogV2WritingDescriptors(
+  capability: AgentToolCapabilitySnapshot
+): readonly AgentToolDescriptor[] {
+  return listAgentTools({
+    facadeVersion: "v2",
+    catalogSchemaVersion: "2.0",
+    operationMode: "execution",
+    contextMode: "writing",
+    writePolicy: "write_before_confirmation",
+    capabilitySnapshot: capability
+  });
+}
+
+function catalogV2WritingInput(
+  overrides: Partial<PreparePermissionSummaryInput> = {}
+): PreparePermissionSummaryInput {
+  const capability = overrides.capabilitySnapshot ?? catalogV2WritingCapability();
+  const descriptors = overrides.frozenToolDescriptors ?? catalogV2WritingDescriptors(capability);
+  return baseInput({
+    catalogSchemaVersion: "2.0",
+    capabilitySnapshot: capability,
+    frozenToolDescriptors: descriptors,
+    providerMappingRevision: computeProviderMappingRevision(descriptors),
+    ...overrides
+  });
 }
 
 function fakeRootFingerprint(resolve: () => string): AgentPermissionRootFingerprintPort {
@@ -103,6 +144,137 @@ describe("createAgentPermissionSession.prepareForDraft", () => {
     });
     const result = await session.prepareForDraft(baseInput());
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("createAgentPermissionSession Catalog and Permission Summary 2.0", () => {
+  test("binds the supplied frozen provider directory and its mapping revision", async () => {
+    const capability = catalogV2WritingCapability();
+    const frozenDescriptors = catalogV2WritingDescriptors(capability);
+    let listToolsCalls = 0;
+    const session = createAgentPermissionSession({
+      repository: memoryRepository(),
+      rootFingerprint: fakeRootFingerprint(() => "f".repeat(64)),
+      createId: () => "permission_summary_v2",
+      writeMutationTrust: "standard_trusted_creative",
+      listTools: () => {
+        listToolsCalls += 1;
+        throw new Error("the frozen directory must be used instead");
+      }
+    });
+
+    const prepared = await session.prepareForDraft(
+      catalogV2WritingInput({
+        capabilitySnapshot: capability,
+        frozenToolDescriptors: frozenDescriptors
+      })
+    );
+
+    expect(prepared).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        toolCatalogSchemaVersion: "2.0",
+        providerMappingRevision: computeProviderMappingRevision(frozenDescriptors),
+        descriptorRevision: computeDescriptorRevision(frozenDescriptors),
+        writingOperations: ["chapter_replace"],
+        workspaceFileOperations: [],
+        writeCapability: "propose",
+        writeApprovalPolicy: "confirm_each_change_set"
+      }
+    });
+    if (!prepared.ok) return;
+    expect(prepared.value.proposalCapabilities).toEqual(["edit_text"]);
+    expect(listToolsCalls).toBe(0);
+  });
+
+  test("treats frozen provider mapping and descriptor changes as stale", async () => {
+    const capability = catalogV2WritingCapability();
+    const frozenDescriptors = catalogV2WritingDescriptors(capability);
+    const session = createAgentPermissionSession({
+      repository: memoryRepository(),
+      rootFingerprint: fakeRootFingerprint(() => "f".repeat(64)),
+      writeMutationTrust: "standard_trusted_creative"
+    });
+    const input = catalogV2WritingInput({
+      capabilitySnapshot: capability,
+      frozenToolDescriptors: frozenDescriptors
+    });
+    const prepared = await session.prepareForDraft(input);
+    expect(prepared.ok).toBe(true);
+
+    const mappingChanged = await session.verifyForStart({
+      ...input,
+      providerMappingRevision: "0".repeat(64)
+    });
+    expect(mappingChanged.ok).toBe(false);
+    if (!mappingChanged.ok) {
+      expect(mappingChanged.error.redactedDetail?.["driftedFields"]).toContain(
+        "providerMappingRevision"
+      );
+    }
+
+    const descriptorsChanged = await session.verifyForStart({
+      ...input,
+      frozenToolDescriptors: frozenDescriptors.filter(
+        (descriptor) => descriptor.id !== "read_resource"
+      ),
+      providerMappingRevision: computeProviderMappingRevision(
+        frozenDescriptors.filter((descriptor) => descriptor.id !== "read_resource")
+      )
+    });
+    expect(descriptorsChanged.ok).toBe(false);
+    if (!descriptorsChanged.ok) {
+      expect(descriptorsChanged.error.redactedDetail?.["driftedFields"]).toContain(
+        "descriptorRevision"
+      );
+    }
+  });
+
+  test("keeps limited run preapproval closed without Main qualification", async () => {
+    const session = createAgentPermissionSession({
+      repository: memoryRepository(),
+      rootFingerprint: fakeRootFingerprint(() => "f".repeat(64))
+    });
+
+    await expect(
+      session.prepareForDraft(
+        catalogV2WritingInput({
+          writePolicy: "user_preapproved_run",
+          writePolicyAcknowledged: true,
+          limitedRunPreapprovalQualified: false
+        })
+      )
+    ).rejects.toThrow("PERMISSION_SUMMARY_V2_PREAPPROVAL_UNQUALIFIED");
+  });
+
+  test("strictly rejects a persisted V2 summary with proposal-proof leakage", async () => {
+    const repository = memoryRepository();
+    const session = createAgentPermissionSession({
+      repository,
+      rootFingerprint: fakeRootFingerprint(() => "f".repeat(64)),
+      createId: () => "permission_summary_v2_read",
+      writeMutationTrust: "standard_trusted_creative"
+    });
+    const prepared = await session.prepareForDraft(catalogV2WritingInput());
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    const bound = await session.bindToRun({ runId: "run_01", summary: prepared.value });
+    expect(bound.ok).toBe(true);
+    repository.written[0] = {
+      ...repository.written[0],
+      proposalProofChecksum: "a".repeat(64)
+    };
+
+    await expect(
+      session.readForRun({
+        runId: "run_01",
+        permissionSummaryId: "permission_summary_v2_read"
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PERMISSION_SUMMARY_INVALID" }
+    });
   });
 });
 
@@ -304,6 +476,40 @@ describe("createAgentPermissionSession.readForRun", () => {
         permissionSummaryId: "permission_summary_read",
         checksum: prepared.value.checksum
       })
+    });
+  });
+
+  test("keeps a legacy persisted summary deny-new for post-v1 authorization", async () => {
+    const repository = memoryRepository();
+    const session = createAgentPermissionSession({
+      repository,
+      rootFingerprint: fakeRootFingerprint(() => "f".repeat(64)),
+      createId: () => "permission_summary_legacy"
+    });
+    const prepared = await session.prepareForDraft(baseInput());
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    if (prepared.value.schemaVersion === "2.0") {
+      throw new Error("Expected the legacy Permission Summary writer for this migration test.");
+    }
+    const legacy = normalizePermissionSummaryV10(prepared.value);
+    const bound = await session.bindToRun({ runId: "run_legacy", summary: legacy });
+    expect(bound.ok).toBe(true);
+    const read = await session.readForRun({
+      runId: "run_legacy",
+      permissionSummaryId: "permission_summary_legacy"
+    });
+    expect(read.ok).toBe(true);
+    if (!read.ok || read.value === undefined) return;
+
+    expect(resolvePermissionSummaryCapabilities(read.value)).toMatchObject({
+      executeCapabilities: [],
+      externalReadCapabilities: [],
+      externalActionCapabilities: [],
+      dataEgressCapabilities: [],
+      featureFlagRevision: "legacy-v1.0-deny",
+      descriptorRevision: "legacy-v1.0-deny",
+      providerMappingRevision: "legacy-v1.0-deny"
     });
   });
 });

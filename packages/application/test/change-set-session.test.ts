@@ -2,7 +2,14 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, test, vi } from "vitest";
 
-import { createOperationsChangeSetRevision, type ChangeSet } from "@novel-studio/agent-engine";
+import {
+  createMainOnlyApprovalDecisionProofV1,
+  createOperationsChangeSetRevision,
+  DEFAULT_APPROVAL_RULE_SET_CHECKSUM,
+  DEFAULT_APPROVAL_RULE_SET_VERSION,
+  type ChangeSet,
+  type MainOnlyApprovalDecisionProofV1
+} from "@novel-studio/agent-engine";
 import { createUnifiedError, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import {
@@ -13,6 +20,143 @@ import {
 import { authorizeAgentRunProposal } from "../src/agent-write-authorization.js";
 
 describe("Change Set application session", () => {
+  test("persists a Main-only proof only for its frozen Change Set revision", async () => {
+    const chapterBytes = "First.\n\nOld middle.\n\nLast.";
+    const persisted: ChangeSet[] = [];
+    const storedProofs: MainOnlyApprovalDecisionProofV1[] = [];
+    const approvalDecisionProofRepository = {
+      async writeApprovalDecisionProof(runId: string, proof: MainOnlyApprovalDecisionProofV1) {
+        expect(runId).toBe("run-01");
+        storedProofs.push(proof);
+        return { ok: true as const, value: proof };
+      }
+    };
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => chapterBytes, file: () => "unused", persisted }),
+      createChangeSetId: () => "change-set-proof",
+      createHunkId: () => "proof-hunk",
+      now: () => "2026-08-03T03:00:00.000Z"
+    });
+    expect(session.bindApprovalDecisionProofRepository(approvalDecisionProofRepository)).toEqual({
+      ok: true,
+      value: undefined
+    });
+    const changeSet = expectOk(
+      await session.proposeChapterWrite({
+        ...proposalBinding(),
+        chapterId: "chapter-03",
+        range: { unit: "paragraph", start: 1, end: 2 },
+        baseHash: sha256(chapterBytes),
+        replacement: "New middle."
+      })
+    );
+    const proof = approvalDecisionProof(changeSet);
+
+    const persistedProof = await session.persistApprovalDecisionProof({
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      proof
+    });
+
+    expect(persistedProof).toMatchObject({
+      ok: true,
+      value: { proofId: "proof_01" }
+    });
+    expect(storedProofs).toEqual([proof]);
+    expect(
+      session.bindApprovalDecisionProofRepository(approvalDecisionProofRepository)
+    ).toMatchObject({
+      ok: false,
+      error: { code: "APPROVAL_DECISION_PROOF_REPOSITORY_ALREADY_BOUND" }
+    });
+  });
+
+  test("fails closed when Main proof storage is unavailable", async () => {
+    const chapterBytes = "First.\n\nOld middle.\n\nLast.";
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => chapterBytes, file: () => "unused", persisted }),
+      createChangeSetId: () => "change-set-no-proof-repository",
+      createHunkId: () => "no-proof-repository-hunk",
+      now: () => "2026-08-03T03:00:00.000Z"
+    });
+    const changeSet = expectOk(
+      await session.proposeChapterWrite({
+        ...proposalBinding(),
+        chapterId: "chapter-03",
+        range: { unit: "paragraph", start: 1, end: 2 },
+        baseHash: sha256(chapterBytes),
+        replacement: "New middle."
+      })
+    );
+
+    expect(
+      await session.persistApprovalDecisionProof({
+        changeSetId: changeSet.changeSetId,
+        revision: changeSet.revision,
+        proof: approvalDecisionProof(changeSet)
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "APPROVAL_DECISION_PROOF_REPOSITORY_UNAVAILABLE" }
+    });
+  });
+
+  test("does not persist a proof bound to another Change Set revision", async () => {
+    const chapterBytes = "First.\n\nOld middle.\n\nLast.";
+    const persisted: ChangeSet[] = [];
+    const storedProof: { value?: MainOnlyApprovalDecisionProofV1 } = {};
+    const writeApprovalDecisionProof = vi.fn(
+      async (_runId: string, proof: MainOnlyApprovalDecisionProofV1) => ({
+        ok: true as const,
+        value: storedProof.value ?? proof
+      })
+    );
+    const session = createChangeSetSession({
+      port: {
+        ...targetPort({ chapter: () => chapterBytes, file: () => "unused", persisted }),
+        approvalDecisionProofRepository: { writeApprovalDecisionProof }
+      },
+      createChangeSetId: () => "change-set-proof-mismatch",
+      createHunkId: () => "proof-mismatch-hunk",
+      now: () => "2026-08-03T03:00:00.000Z"
+    });
+    const changeSet = expectOk(
+      await session.proposeChapterWrite({
+        ...proposalBinding(),
+        chapterId: "chapter-03",
+        range: { unit: "paragraph", start: 1, end: 2 },
+        baseHash: sha256(chapterBytes),
+        replacement: "New middle."
+      })
+    );
+
+    expect(
+      await session.persistApprovalDecisionProof({
+        changeSetId: changeSet.changeSetId,
+        revision: changeSet.revision,
+        proof: approvalDecisionProof(changeSet, { revision: changeSet.revision + 1 })
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "APPROVAL_DECISION_PROOF_BINDING_MISMATCH" }
+    });
+    expect(writeApprovalDecisionProof).not.toHaveBeenCalled();
+
+    storedProof.value = approvalDecisionProof(changeSet, { revision: changeSet.revision + 1 });
+    expect(
+      await session.persistApprovalDecisionProof({
+        changeSetId: changeSet.changeSetId,
+        revision: changeSet.revision,
+        proof: approvalDecisionProof(changeSet)
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "APPROVAL_DECISION_PROOF_BINDING_MISMATCH" }
+    });
+    expect(writeApprovalDecisionProof).toHaveBeenCalledTimes(1);
+  });
+
   test("proposes chapter and file writes through read-only ports without touching target bytes", async () => {
     const chapterBytes = "First.\n\nOld middle.\n\nLast.";
     const fileBytes = "alpha\nbeta";
@@ -806,6 +950,39 @@ function proposalBinding() {
     checkpointId: "checkpoint-01",
     contextSnapshotId: "context-01"
   };
+}
+
+function approvalDecisionProof(
+  changeSet: ChangeSet,
+  options: { readonly revision?: number } = {}
+): MainOnlyApprovalDecisionProofV1 {
+  return createMainOnlyApprovalDecisionProofV1({
+    proofId: "proof_01",
+    approvalRuleSetVersion: DEFAULT_APPROVAL_RULE_SET_VERSION,
+    approvalRuleSetChecksum: DEFAULT_APPROVAL_RULE_SET_CHECKSUM,
+    operation: "chapter_replace",
+    effectRuleId: "clean_chapter_body_v1",
+    binding: {
+      workspaceBindingId: "workspace_01",
+      runId: changeSet.runId,
+      changeSetId: changeSet.changeSetId,
+      changeSetRevision: options.revision ?? changeSet.revision,
+      changeSetChecksum: changeSet.checksum,
+      consistencyGroupChecksum: "a".repeat(64),
+      proposalPayloadChecksum: "b".repeat(64),
+      executionWritePolicy: changeSet.writePolicy ?? "write_before_confirmation",
+      policyRevision: "policy_01",
+      capabilityRevision: "capability_01"
+    },
+    evidence: {
+      pathClass: "not_applicable",
+      targetFreshness: "clean_stable",
+      createOnly: "not_applicable",
+      referenceImpact: "not_applicable",
+      limits: "within",
+      stateBoundary: "ordinary"
+    }
+  });
 }
 
 function migrationBatchInput(options: { readonly deleteDependsOn?: readonly string[] } = {}) {

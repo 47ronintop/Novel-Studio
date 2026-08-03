@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   computeAgentRunToolCatalogRevision,
+  computeAgentRunToolCatalogRevisionV2,
   createDeterministicTokenEstimator,
   freezeAgentToolCapabilitySnapshot,
   listAgentTools,
@@ -503,6 +504,71 @@ describe("C4 shared budget inputs", () => {
     ).toMatchObject({
       ok: false,
       error: { code: "AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID" }
+    });
+  });
+
+  test("round-trips a persisted Catalog 2.0 budget with its schema identity", () => {
+    const standaloneProfile = resolveAgentContextProfile(
+      { kind: "standalone", scopeId: "standalone" },
+      "conversation",
+      "standalone_chat"
+    );
+    const v2Descriptors: readonly AgentToolDescriptor[] = [];
+    const catalogRevision = computeAgentRunToolCatalogRevisionV2({
+      descriptors: v2Descriptors,
+      approvalRuleSetVersion: "not_applicable",
+      approvalRuleSetChecksum: "not_applicable",
+      approvalRules: []
+    });
+    const prompt = materializeAgentPrompt({
+      profile: standaloneProfile,
+      systemPrompt: buildAgentSystemPrompt(standaloneProfile),
+      toolCatalogRevision: catalogRevision,
+      userRequest: "Help me think this through."
+    });
+    const resolved = resolveBudgetInputs({
+      provider: "anthropic",
+      model: "claude-test",
+      modelProfileId: "profile-standalone",
+      contextWindow: 32_768,
+      requiredContextTokens: 8_000,
+      profile: standaloneProfile,
+      prompt,
+      contextSources: [],
+      toolCatalog: {
+        facadeVersion: "v2",
+        schemaVersion: "2.0",
+        catalogRevision,
+        descriptors: v2Descriptors
+      }
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const snapshot = calculateResolvedContextBudget({
+      contextBudgetSnapshotId: "budget_catalog_v2",
+      resolved: resolved.value,
+      calculatedAt: "2026-08-03T00:00:00.000Z"
+    });
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+
+    expect(
+      readResolvedContextBudgetUsageLimits(snapshot.value as unknown as JsonObject, {
+        contextBudgetSnapshotId: snapshot.value.contextBudgetSnapshotId,
+        provider: resolved.value.provider,
+        model: resolved.value.model,
+        modelProfileId: resolved.value.modelProfileId,
+        contextWindow: resolved.value.contextWindow,
+        facadeVersion: "v2",
+        schemaVersion: "2.0",
+        catalogRevision
+      })
+    ).toEqual({
+      ok: true,
+      value: {
+        contextWindow: snapshot.value.contextWindow,
+        safeInputBudget: snapshot.value.safeInputBudget
+      }
     });
   });
 });

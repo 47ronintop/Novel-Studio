@@ -72,4 +72,247 @@ describe("Agent run tool catalog snapshots", () => {
       ok: false
     });
   });
+
+  test("strictly round-trips Catalog 2.0 and rejects envelope, rule, and revision tampering", () => {
+    const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
+      input: Record<string, unknown>
+    ) => readonly Record<string, unknown>[];
+    const create = (engineExports as unknown as Record<string, unknown>)[
+      "createAgentRunToolCatalogSnapshotV2"
+    ] as (input: Record<string, unknown>) => Record<string, unknown>;
+    const validate = (engineExports as unknown as Record<string, unknown>)[
+      "validateAgentRunToolCatalogSnapshot"
+    ] as (value: Record<string, unknown>) => { readonly ok: boolean; readonly value?: unknown };
+    const catalog = create({
+      runId: "run_catalog_v2_01",
+      descriptors: listTools({
+        facadeVersion: "v2",
+        catalogSchemaVersion: "2.0",
+        operationMode: "execution",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: {
+          workspaceKind: "creativeProject",
+          searchEnabled: false,
+          fileLifecycleEnabled: false,
+          writingOperations: ["chapter_replace", "chapter_create", "story_bible_create"],
+          workspaceFileOperations: [],
+          storyBibleStructuredToolsEnabled: true,
+          controlledExecutionEnabled: false,
+          gitReadEnabled: false,
+          networkReadEnabled: false,
+          pluginToolsEnabled: false,
+          mcpToolsEnabled: false,
+          featureFlagRevision: "catalog_v2_rules"
+        }
+      }),
+      createdAt: "2026-08-02T00:00:00.000Z"
+    });
+    const persisted = JSON.parse(JSON.stringify(catalog)) as Record<string, unknown>;
+
+    expect(catalog).toMatchObject({ schemaVersion: "2.0", facadeVersion: "v2" });
+    expect(validate(persisted)).toMatchObject({ ok: true, value: catalog });
+    expect(validate({ ...persisted, unexpected: true })).toMatchObject({ ok: false });
+    expect(validate({ ...persisted, catalogRevision: "0".repeat(64) })).toMatchObject({
+      ok: false
+    });
+    expect(validate({ ...persisted, approvalRuleSetChecksum: "0".repeat(64) })).toMatchObject({
+      ok: false
+    });
+
+    const persistedDescriptors = persisted["descriptors"] as readonly Record<string, unknown>[];
+    expect(
+      validate({
+        ...persisted,
+        descriptors: [
+          { ...persistedDescriptors[0], unexpectedDescriptorField: true },
+          ...persistedDescriptors.slice(1)
+        ]
+      })
+    ).toMatchObject({ ok: false });
+    const computeDigest = (engineExports as unknown as Record<string, unknown>)[
+      "computeAgentToolDescriptorDigest"
+    ] as (descriptor: Record<string, unknown>) => string;
+    const invalidKindDescriptor = {
+      ...persistedDescriptors[0],
+      kind: "unknown_kind"
+    };
+    expect(() =>
+      create({
+        runId: "run_catalog_v2_invalid_descriptor",
+        descriptors: [
+          {
+            ...invalidKindDescriptor,
+            descriptorDigest: computeDigest(invalidKindDescriptor)
+          },
+          ...persistedDescriptors.slice(1)
+        ],
+        createdAt: "2026-08-02T00:00:00.000Z"
+      })
+    ).toThrow("AGENT_TOOL_CATALOG_V2_INVALID");
+
+    const rules = persisted["approvalRules"] as readonly Record<string, unknown>[];
+    expect(
+      validate({
+        ...persisted,
+        approvalRules: rules.map((rule) =>
+          rule["operation"] === "chapter_replace"
+            ? { operation: "chapter_replace", reviewMode: "always_human" }
+            : rule
+        )
+      })
+    ).toMatchObject({ ok: false });
+  });
+
+  test("binds every Catalog 2.0 mutation descriptor to exactly one approval rule", () => {
+    const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
+      input: Record<string, unknown>
+    ) => readonly Record<string, unknown>[];
+    const create = (engineExports as unknown as Record<string, unknown>)[
+      "createAgentRunToolCatalogSnapshotV2"
+    ] as (input: Record<string, unknown>) => Record<string, unknown>;
+    const catalog = create({
+      runId: "run_catalog_v2_rules",
+      descriptors: listTools({
+        facadeVersion: "v2",
+        catalogSchemaVersion: "2.0",
+        operationMode: "execution",
+        contextMode: "general_file",
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: {
+          workspaceKind: "engineeringWorkspace",
+          searchEnabled: false,
+          fileLifecycleEnabled: false,
+          writingOperations: [],
+          workspaceFileOperations: ["replace_file", "create_file", "delete_file"],
+          controlledExecutionEnabled: false,
+          gitReadEnabled: false,
+          networkReadEnabled: false,
+          pluginToolsEnabled: false,
+          mcpToolsEnabled: false,
+          featureFlagRevision: "catalog_v2_mutations"
+        }
+      }),
+      createdAt: "2026-08-02T00:01:00.000Z"
+    });
+    const descriptors = catalog["descriptors"] as readonly Record<string, unknown>[];
+    const mutationOperations = descriptors
+      .filter((descriptor) => descriptor["effect"] === "propose")
+      .map((descriptor) => descriptor["writeOperation"]);
+    const approvalRules = catalog["approvalRules"] as readonly Record<string, unknown>[];
+
+    expect(mutationOperations).toEqual(["replace_file", "create_file", "delete_file"]);
+    expect(approvalRules.map((rule) => rule["operation"])).toEqual(mutationOperations);
+    for (const operation of mutationOperations) {
+      expect(approvalRules.filter((rule) => rule["operation"] === operation)).toHaveLength(1);
+    }
+  });
+
+  test("normalizes no-mutation Catalog 2.0 runs to a not-applicable approval projection", () => {
+    const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
+      input: Record<string, unknown>
+    ) => readonly Record<string, unknown>[];
+    const create = (engineExports as unknown as Record<string, unknown>)[
+      "createAgentRunToolCatalogSnapshotV2"
+    ] as (input: Record<string, unknown>) => Record<string, unknown>;
+    const validate = (engineExports as unknown as Record<string, unknown>)[
+      "validateAgentRunToolCatalogSnapshot"
+    ] as (value: Record<string, unknown>) => { readonly ok: boolean };
+    const catalog = create({
+      runId: "run_catalog_v2_planning",
+      descriptors: listTools({
+        facadeVersion: "v2",
+        catalogSchemaVersion: "2.0",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: {
+          workspaceKind: "creativeProject",
+          searchEnabled: false,
+          fileLifecycleEnabled: false,
+          writingOperations: ["chapter_replace"],
+          workspaceFileOperations: [],
+          controlledExecutionEnabled: false,
+          gitReadEnabled: false,
+          networkReadEnabled: false,
+          pluginToolsEnabled: false,
+          mcpToolsEnabled: false,
+          featureFlagRevision: "catalog_v2_planning"
+        }
+      }),
+      createdAt: "2026-08-02T00:02:00.000Z"
+    });
+
+    expect(catalog).toMatchObject({
+      approvalRuleSetVersion: "not_applicable",
+      approvalRuleSetChecksum: "not_applicable",
+      approvalRules: []
+    });
+    expect(
+      validate({
+        ...catalog,
+        approvalRuleSetVersion: "novel-studio-core@1.0"
+      })
+    ).toMatchObject({ ok: false });
+  });
+
+  test("keeps Catalog 1.0 v2 descriptors frozen as legacy data", () => {
+    const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
+      input: Record<string, unknown>
+    ) => readonly Record<string, unknown>[];
+    const createLegacy = (engineExports as unknown as Record<string, unknown>)[
+      "createAgentRunToolCatalogSnapshot"
+    ] as (input: Record<string, unknown>) => Record<string, unknown>;
+    const validate = (engineExports as unknown as Record<string, unknown>)[
+      "validateAgentRunToolCatalogSnapshot"
+    ] as (value: Record<string, unknown>) => { readonly ok: boolean; readonly value?: unknown };
+    const capabilitySnapshot = {
+      workspaceKind: "creativeProject",
+      searchEnabled: false,
+      fileLifecycleEnabled: true,
+      controlledExecutionEnabled: false,
+      gitReadEnabled: false,
+      networkReadEnabled: false,
+      pluginToolsEnabled: false,
+      mcpToolsEnabled: false,
+      featureFlagRevision: "legacy_catalog"
+    };
+    const legacy = createLegacy({
+      runId: "run_catalog_legacy_v2",
+      facadeVersion: "v2",
+      descriptors: listTools({
+        facadeVersion: "v2",
+        operationMode: "execution",
+        contextMode: "general_file",
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot
+      }),
+      createdAt: "2026-08-02T00:03:00.000Z"
+    });
+    const legacyNames = (legacy["descriptors"] as readonly Record<string, unknown>[]).map(
+      (descriptor) => descriptor["name"]
+    );
+
+    expect(legacy).toMatchObject({ schemaVersion: "1.0", facadeVersion: "v2" });
+    expect(legacyNames).toContain("manage_path");
+    expect(
+      (legacy["descriptors"] as readonly Record<string, unknown>[]).every(
+        (descriptor) => descriptor["writeOperation"] === undefined
+      )
+    ).toBe(true);
+    expect(validate(JSON.parse(JSON.stringify(legacy)))).toMatchObject({ ok: true, value: legacy });
+
+    const currentNames = listTools({
+      facadeVersion: "v2",
+      catalogSchemaVersion: "2.0",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: {
+        ...capabilitySnapshot,
+        workspaceFileOperations: ["replace_file", "create_file"]
+      }
+    }).map((descriptor) => descriptor["name"]);
+    expect(currentNames).not.toContain("manage_path");
+  });
 });

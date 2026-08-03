@@ -93,13 +93,18 @@ import type {
   AgentToolCapabilitySnapshot,
   AgentToolDescriptor,
   AgentWriteMutationTrust,
+  ProviderVisibleWorkspaceFileOperation,
+  ProviderVisibleWritingOperation,
+  ProviderVisibleWriteOperation,
   ChangeSet,
   StartAgentRunCommand,
   VersionGroup
 } from "@novel-studio/agent-engine";
 import {
   agentContextScopeKey,
+  computeAgentRunToolCatalogRevisionV2,
   computeAgentRunToolCatalogRevision,
+  createApprovalRuleSetProjection,
   createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
   freezeAgentToolCapabilitySnapshot,
@@ -107,6 +112,7 @@ import {
   listAgentTools,
   normalizeAgentRunSnapshot,
   revokeCapability,
+  validateAgentRunToolCatalogSnapshot,
   type EffectiveCapabilityState
 } from "@novel-studio/agent-engine";
 import type { AgentRunDraftSession } from "@novel-studio/application";
@@ -120,6 +126,7 @@ import {
 } from "@novel-studio/shared";
 import {
   AgentConversationFileRepository,
+  ApprovalDecisionProofFileRepository,
   AgentWriteTransaction,
   CreativeProjectFileRepository,
   DEFAULT_CREATIVE_PROJECT_FILE_POLICY,
@@ -514,8 +521,10 @@ function requestedCapabilitySnapshot(
   });
 }
 
-function buildRuntimeCapabilitySnapshot(input: {
+/** @internal Main-composition qualification intersection; exported for boundary tests only. */
+export function buildRuntimeCapabilitySnapshot(input: {
   readonly requested: AgentToolCapabilitySnapshot;
+  readonly featureFlags: AgentFeatureFlags;
   readonly searchToolExecutor?: AgentSearchToolExecutor;
   readonly networkToolExecutor?: AgentNetworkToolExecutor;
   readonly fileOperationSession?: AgentFileOperationSessionPort;
@@ -528,6 +537,43 @@ function buildRuntimeCapabilitySnapshot(input: {
 }): AgentToolCapabilitySnapshot {
   const descriptors = input.externalToolDescriptors ?? [];
   const hasMcpDescriptor = descriptors.some((descriptor) => descriptor.id?.startsWith("mcp:"));
+  const canCommitMutation = input.hasVersionGroupExecutor;
+  const hasReplaceBackend =
+    input.lifecycleOperations !== undefined || input.trustedCreativeMutations !== undefined;
+  const hasLifecycleBackend =
+    input.lifecycleOperations !== undefined || input.trustedCreativeMutations?.mutate !== undefined;
+  const writingOperations = (input.requested.writingOperations ?? []).filter((operation) => {
+    if (
+      input.requested.workspaceKind !== "creativeProject" ||
+      !canCommitMutation ||
+      !operationFeatureEnabled(operation, input.requested.workspaceKind, input.featureFlags)
+    ) {
+      return false;
+    }
+    if (operation === "chapter_replace") return hasReplaceBackend;
+    if (operation === "chapter_create") {
+      return input.fileOperationSession !== undefined && hasLifecycleBackend;
+    }
+    if (operation === "story_bible_patch" || operation === "story_bible_status") {
+      return input.storyBibleToolExecutor !== undefined && hasReplaceBackend;
+    }
+    if (operation === "story_bible_create" || operation === "story_bible_restore") {
+      return input.storyBibleToolExecutor !== undefined && hasLifecycleBackend;
+    }
+    return false;
+  }) satisfies readonly ProviderVisibleWritingOperation[];
+  const workspaceFileOperations = (input.requested.workspaceFileOperations ?? []).filter(
+    (operation) => {
+      if (
+        !canCommitMutation ||
+        !operationFeatureEnabled(operation, input.requested.workspaceKind, input.featureFlags)
+      ) {
+        return false;
+      }
+      if (operation === "replace_file") return hasReplaceBackend;
+      return input.fileOperationSession !== undefined && hasLifecycleBackend;
+    }
+  ) satisfies readonly ProviderVisibleWorkspaceFileOperation[];
   return freezeAgentToolCapabilitySnapshot({
     workspaceKind: input.requested.workspaceKind,
     searchEnabled: input.requested.searchEnabled && input.searchToolExecutor !== undefined,
@@ -539,6 +585,8 @@ function buildRuntimeCapabilitySnapshot(input: {
         : input.lifecycleOperations !== undefined ||
           input.trustedCreativeMutations?.mutate !== undefined) &&
       input.hasVersionGroupExecutor,
+    writingOperations,
+    workspaceFileOperations,
     storyBibleStructuredToolsEnabled:
       input.requested.storyBibleStructuredToolsEnabled === true &&
       input.requested.workspaceKind === "creativeProject" &&
@@ -554,6 +602,38 @@ function buildRuntimeCapabilitySnapshot(input: {
       hasMcpDescriptor,
     featureFlagRevision: input.requested.featureFlagRevision
   });
+}
+
+function operationFeatureEnabled(
+  operation: ProviderVisibleWriteOperation,
+  workspaceKind: AgentToolCapabilitySnapshot["workspaceKind"],
+  flags: AgentFeatureFlags
+): boolean {
+  if (!flags.agentGuidanceV3) return false;
+  if (workspaceKind === "creativeProject") {
+    return operation === "chapter_create" ||
+      operation === "create_file" ||
+      operation === "move_file" ||
+      operation === "delete_file" ||
+      operation === "create_directory"
+      ? flags.phaseB_fileLifecycleEnabled
+      : true;
+  }
+  if (!flags.engineeringHardenedAccessV1) return false;
+  switch (operation) {
+    case "replace_file":
+      return flags.engineeringReplaceV2;
+    case "create_file":
+      return flags.engineeringCreateV2;
+    case "move_file":
+      return flags.engineeringMoveV2;
+    case "delete_file":
+      return flags.engineeringDeleteV2;
+    case "create_directory":
+      return flags.engineeringDirectoryCreateV1;
+    default:
+      return false;
+  }
 }
 
 function buildRuntimeProviderNameMapping(
@@ -591,6 +671,29 @@ function buildRuntimeProviderNameMapping(
       };
     })
   );
+}
+
+function computeCatalogV2RevisionForDescriptors(
+  descriptors: readonly AgentToolDescriptor[]
+): string {
+  const operations: ProviderVisibleWriteOperation[] = [];
+  for (const descriptor of descriptors) {
+    if (descriptor.effect !== "propose") continue;
+    if (descriptor.writeOperation === undefined) {
+      throw new Error("AGENT_TOOL_OPERATION_UNMAPPED");
+    }
+    operations.push(descriptor.writeOperation);
+  }
+  const projection =
+    operations.length === 0
+      ? { version: "not_applicable", checksum: "not_applicable", rules: [] as const }
+      : createApprovalRuleSetProjection(operations);
+  return computeAgentRunToolCatalogRevisionV2({
+    descriptors,
+    approvalRuleSetVersion: projection.version,
+    approvalRuleSetChecksum: projection.checksum,
+    approvalRules: projection.rules
+  });
 }
 
 function createDesktopAgentRuntimeServices(
@@ -733,6 +836,13 @@ function createDesktopAgentRuntimeServices(
     repository,
     ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState })
   });
+  const proofRepositoryBound = changeSetSession.bindApprovalDecisionProofRepository(
+    new ApprovalDecisionProofFileRepository({
+      projectRoot: options.stateRoot,
+      traceId: "desktop-agent-approval-decision-proof-repository"
+    })
+  );
+  if (!proofRepositoryBound.ok) throw new Error(proofRepositoryBound.error.message);
   const versionGroupServices =
     options.projectLockOwnerId === undefined
       ? undefined
@@ -783,9 +893,9 @@ function createDesktopAgentRuntimeServices(
           : trustedCreativeMutations !== undefined
             ? "standard_trusted_creative"
             : "unavailable";
-
   const capabilitySnapshot = buildRuntimeCapabilitySnapshot({
     requested: requestedCapabilities,
+    featureFlags: options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS,
     ...(searchToolExecutor === undefined ? {} : { searchToolExecutor }),
     ...(options.networkToolExecutor === undefined
       ? {}
@@ -958,6 +1068,11 @@ function createDesktopAgentRuntimeServices(
       }
     },
     writeMutationTrust,
+    catalogSchemaVersion:
+      (options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS).agentGuidanceV3 === true
+        ? "2.0"
+        : "1.0",
+    limitedRunPreapprovalQualified: false,
     defaultCapabilitySnapshot: capabilitySnapshot,
     ...(options.externalToolDescriptors === undefined
       ? {}
@@ -980,6 +1095,10 @@ function createDesktopAgentRuntimeServices(
       ? {}
       : { contextSourcePreferences: options.contextSourcePreferences }),
     capabilitySnapshot,
+    catalogSchemaVersion:
+      (options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS).agentGuidanceV3 === true
+        ? "2.0"
+        : "1.0",
     ...(options.externalToolDescriptors === undefined
       ? {}
       : { externalToolDescriptors: options.externalToolDescriptors }),
@@ -1298,13 +1417,29 @@ async function resolveDesktopUsageBudget(
   snapshot: AgentRunSnapshot
 ) {
   const budgetId = snapshot.contextBudgetSnapshotId;
+  const catalogSnapshotId = snapshot.toolCatalogSnapshotId;
   const catalogRevision = snapshot.toolCatalogRevision;
   const facadeVersion = snapshot.toolFacadeVersion;
   if (
     budgetId === null ||
+    typeof catalogSnapshotId !== "string" ||
     catalogRevision === null ||
     catalogRevision === undefined ||
     (facadeVersion !== "v1" && facadeVersion !== "v2")
+  ) {
+    return err(runtimeError("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
+  }
+  const storedCatalog = await repository.readToolCatalog(snapshot.runId, catalogSnapshotId);
+  if (!storedCatalog.ok || storedCatalog.value === undefined) {
+    return err(runtimeError("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
+  }
+  const catalog = validateAgentRunToolCatalogSnapshot(storedCatalog.value);
+  if (
+    !catalog.ok ||
+    catalog.value.runId !== snapshot.runId ||
+    catalog.value.toolCatalogSnapshotId !== catalogSnapshotId ||
+    catalog.value.catalogRevision !== catalogRevision ||
+    catalog.value.facadeVersion !== facadeVersion
   ) {
     return err(runtimeError("AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID"));
   }
@@ -1320,6 +1455,7 @@ async function resolveDesktopUsageBudget(
     modelProfileId: snapshot.providerCapabilitySnapshot.profileId,
     contextWindow: snapshot.providerCapabilitySnapshot.contextWindow,
     facadeVersion,
+    ...(catalog.value.schemaVersion === "2.0" ? { schemaVersion: "2.0" as const } : {}),
     catalogRevision
   });
 }
@@ -1369,6 +1505,7 @@ function createDesktopAgentContextSession(input: {
   readonly resolveWorkspaceProjectContext: DesktopWorkspaceProjectContextServices["resolve"];
   readonly contextSourcePreferences?: readonly WorkspaceContextSourcePreference[];
   readonly capabilitySnapshot: AgentToolCapabilitySnapshot;
+  readonly catalogSchemaVersion: "1.0" | "2.0";
   readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
   readonly loadConversationContext: (
     conversationId: string
@@ -1466,6 +1603,7 @@ function createDesktopAgentContextSession(input: {
       );
       const toolDescriptors = listAgentTools({
         facadeVersion: "v2",
+        ...(input.catalogSchemaVersion === "2.0" ? { catalogSchemaVersion: "2.0" as const } : {}),
         operationMode: draft.operationMode,
         contextMode: draft.contextMode,
         writePolicy: draft.writePolicy,
@@ -1474,7 +1612,10 @@ function createDesktopAgentContextSession(input: {
           ? {}
           : { externalToolDescriptors: input.externalToolDescriptors })
       });
-      const catalogRevision = computeAgentRunToolCatalogRevision("v2", toolDescriptors);
+      const catalogRevision =
+        input.catalogSchemaVersion === "2.0"
+          ? computeCatalogV2RevisionForDescriptors(toolDescriptors)
+          : computeAgentRunToolCatalogRevision("v2", toolDescriptors);
       const conversation = await input.loadConversationContext(conversationId);
       if (!conversation.ok) return err(conversation.error);
       const systemPrompt = buildAgentSystemPrompt(profile);
@@ -1499,6 +1640,7 @@ function createDesktopAgentContextSession(input: {
         contextSources: selectedSources.active,
         toolCatalog: {
           facadeVersion: "v2",
+          ...(input.catalogSchemaVersion === "2.0" ? { schemaVersion: "2.0" as const } : {}),
           catalogRevision,
           descriptors: toolDescriptors
         }
@@ -2868,6 +3010,8 @@ async function resolveStartFromDraft(
   ) {
     return err(runtimeError("AGENT_CONTEXT_SCOPE_INVALID"));
   }
+  const commandBinding = validatePackedContextCommandBinding(command, input.packedContextCache);
+  if (!commandBinding.ok) return commandBinding;
   const resolved = await input.draftSession.resolveStartDraft({
     projectId: workspaceId,
     scope: {
@@ -2969,6 +3113,47 @@ async function resolveStartFromDraft(
     excludedContextSourceIds: packedBinding.value.excludedSources.map((source) => source.refId),
     packedContext: packedBinding.value.packedContext
   });
+}
+
+function validatePackedContextCommandBinding(
+  command: StartAgentRunCommand,
+  cache: DesktopPackedContextCache
+): Result<void, UnifiedError> {
+  if (
+    typeof command.packedContextId !== "string" ||
+    command.packedContextId.length === 0 ||
+    typeof command.packedContextPayloadChecksum !== "string" ||
+    command.packedContextPayloadChecksum.length === 0
+  ) {
+    return err(
+      runtimeError("AGENT_CONTEXT_PREVIEW_REQUIRED", {
+        reason: "packed_context_binding_missing"
+      })
+    );
+  }
+  const binding = cache.read(command.packedContextId, command.runDraftId);
+  if (binding === undefined) {
+    return err(
+      runtimeError(
+        cache.has(command.packedContextId)
+          ? "AGENT_CONTEXT_PREVIEW_STALE"
+          : "AGENT_CONTEXT_PREVIEW_REQUIRED",
+        { reason: "packed_context_binding_not_found" }
+      )
+    );
+  }
+  if (
+    binding.packedContext.payloadChecksum !== command.packedContextPayloadChecksum ||
+    binding.runDraft.revision !== command.runDraftRevision ||
+    binding.runDraft.checksum !== command.runDraftChecksum
+  ) {
+    return err(
+      runtimeError("AGENT_CONTEXT_PREVIEW_STALE", {
+        reason: "draft_binding_mismatch"
+      })
+    );
+  }
+  return ok(undefined);
 }
 
 function resolvePackedContextBinding(input: {

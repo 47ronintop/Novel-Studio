@@ -304,3 +304,5 @@ export type {
   TrustedCreativeFileSystem,
   TrustedCreativePathStats
 } from "./trusted-creative-file-operations.js";
+export { ApprovalDecisionProofFileRepository } from "./approval-decision-proof-repository.js";
+export type { ApprovalDecisionProofFileRepositoryOptions } from "./approval-decision-proof-repository.js";

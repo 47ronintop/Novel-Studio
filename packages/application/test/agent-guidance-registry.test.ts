@@ -12,8 +12,6 @@ import {
 import { describe, expect, test } from "vitest";
 
 import {
-  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
-  ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
   CURRENT_AGENT_SYSTEM_GUIDANCE_VERSION,
   HISTORICAL_AGENT_GUIDANCE_RENDERER_VERSION,
   HISTORICAL_AGENT_SYSTEM_GUIDANCE_VERSION,
@@ -284,12 +282,23 @@ function v3Input(
 ): RegisteredGuidanceBuildInputV3 {
   const capability =
     profile.scope.kind === "workspace"
-      ? createDefaultCapabilitySnapshot(profile.scope.workspaceKind)
+      ? {
+          ...createDefaultCapabilitySnapshot(profile.scope.workspaceKind),
+          writingOperations:
+            profile.operationMode === "execution" && profile.contextMode === "writing"
+              ? (["chapter_replace"] as const)
+              : [],
+          workspaceFileOperations:
+            profile.operationMode === "execution" && profile.contextMode === "general_file"
+              ? (["replace_file"] as const)
+              : []
+        }
       : undefined;
   const tools =
     profile.scope.kind === "workspace"
       ? listAgentTools({
           facadeVersion: "v2",
+          catalogSchemaVersion: "2.0",
           operationMode: profile.operationMode,
           contextMode: profile.contextMode,
           writePolicy: "write_before_confirmation",
@@ -323,11 +332,11 @@ function v3Input(
       approvalRuleSetVersion:
         runtimeFacts.writeCapability === "none"
           ? "not_applicable"
-          : ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+          : runtimeFacts.approvalRuleSetVersion,
       approvalRuleSetChecksum:
         runtimeFacts.writeCapability === "none"
           ? "not_applicable"
-          : ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM
+          : runtimeFacts.approvalRuleSetChecksum
     })
   };
 }

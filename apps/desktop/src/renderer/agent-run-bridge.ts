@@ -33,7 +33,8 @@ import type {
   NovelStudioApi,
   PlanArtifact,
   ProjectConventionsCreateResult,
-  PackedAgentContextPreview
+  PackedAgentContextPreview,
+  SyncStartDraftCommand
 } from "@novel-studio/application";
 import {
   findStoryBibleMentionSuggestions,
@@ -330,6 +331,39 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     }
   });
 
+  function buildStartDraftCommand(
+    currentContext: ResolvedAgentRunBridgeContext,
+    profileId: string,
+    request: string,
+    commandName: string
+  ): SyncStartDraftCommand {
+    const standalone = isStandaloneScope(currentContext.scope);
+    const operationMode = standalone ? "conversation" : state.operationMode;
+    const contextMode = standalone ? "standalone_chat" : state.contextMode;
+    const writePolicy =
+      operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
+    const reasoningEffort = safeReasoningEffortForDraft(state.runDraft, currentContext.settings);
+    const modelName = selectedModelName(state.runDraft, currentContext.settings, profileId);
+    return {
+      ...scopeIdentity(currentContext.scope),
+      conversationId: currentContext.conversationId as string,
+      commandId: createCommandId(commandName),
+      userRequest: request,
+      operationMode,
+      contextMode,
+      writePolicy,
+      writePolicyAcknowledged:
+        operationMode === "execution" &&
+        state.writePolicy === "user_preapproved_run" &&
+        state.writePolicyAcknowledged,
+      modelProfileId: profileId,
+      ...(modelName === undefined ? {} : { modelName }),
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      contextRefs: standalone ? [] : (state.contextDraft?.refs ?? contextDraftRefs(currentContext)),
+      activeResourceRef: standalone ? null : (currentContext.activeResourceRef ?? null)
+    };
+  }
+
   async function sendRun(request: string): Promise<AgentRunPanelProps> {
     if (state.startPending) return toProps();
     if (context?.beforeStart !== undefined) {
@@ -406,33 +440,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       // Server-authoritative start: persist the user's intent as a draft, then start by reference.
       // The renderer authors only choices (mode, model, request, context refs) — never provider,
       // capabilities, context window, or resolved document content.
-      const standalone = isStandaloneScope(context.scope);
-      const operationMode = standalone ? "conversation" : state.operationMode;
-      const contextMode = standalone ? "standalone_chat" : state.contextMode;
-      const writePolicy =
-        operationMode === "planning" ? "write_before_confirmation" : state.writePolicy;
-      const reasoningEffort = safeReasoningEffortForDraft(state.runDraft, context.settings);
-      const modelName = selectedModelName(state.runDraft, context.settings, profileId);
-      const contextRefs = standalone ? [] : (state.contextDraft?.refs ?? contextDraftRefs(context));
-      const activeResourceRef = standalone ? null : (context.activeResourceRef ?? null);
-      const prepared = await api.agentRuns.prepareStart({
-        ...scopeIdentity(context.scope),
-        conversationId: context.conversationId,
-        commandId: createCommandId("prepare"),
-        userRequest: request,
-        operationMode,
-        contextMode,
-        writePolicy,
-        writePolicyAcknowledged:
-          operationMode === "execution" &&
-          state.writePolicy === "user_preapproved_run" &&
-          state.writePolicyAcknowledged,
-        modelProfileId: profileId,
-        ...(modelName === undefined ? {} : { modelName }),
-        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-        contextRefs,
-        activeResourceRef
-      });
+      const prepared = await api.agentRuns.prepareStart(
+        buildStartDraftCommand(context, profileId, request, "prepare")
+      );
       if (!prepared.ok) {
         state = { ...state, errorMessage: formatAgentStartError(prepared.error) };
         return toProps();
@@ -2262,11 +2272,46 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     }
     if (draftInFlight !== undefined) await draftInFlight;
     if (state.permissionPending) return;
-    const draft = state.runDraft;
     const ctx = context;
-    if (draft === undefined || ctx?.conversationId === undefined) return;
+    if (ctx?.conversationId === undefined) return;
+    const profileId = selectedRunModelProfileId(state.runDraft, ctx.settings);
+    if (profileId === undefined) {
+      state = {
+        ...state,
+        permissionError: "未选择可用的模型配置，无法生成本次权限摘要。"
+      };
+      notify();
+      return;
+    }
     state = { ...state, permissionPending: true, permissionError: undefined };
     notify();
+    const prepared = await api.agentRuns.prepareStart(
+      buildStartDraftCommand(ctx, profileId, state.userRequest, "prepare-permission")
+    );
+    if (!prepared.ok) {
+      state = {
+        ...state,
+        permissionPending: false,
+        permissionSummary: undefined,
+        permissionError: formatAgentStartError(prepared.error)
+      };
+      notify();
+      return;
+    }
+    if (
+      context?.conversationId !== ctx.conversationId ||
+      !sameAgentScope(context.scope, ctx.scope)
+    ) {
+      return;
+    }
+    const draft = prepared.value.runDraft;
+    state = {
+      ...state,
+      runDraft: draft,
+      contextDraft: prepared.value.contextDraft,
+      packedPreview: undefined,
+      budgetPreview: undefined
+    };
     const result = await readPermissionSummary({
       kind: "draft",
       ...scopeIdentity(ctx.scope),

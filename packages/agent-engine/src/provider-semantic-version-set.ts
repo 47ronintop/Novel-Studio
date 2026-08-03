@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { resolveRegisteredApprovalRuleSet } from "./approval-rule-registry.js";
+
 export const PROVIDER_SEMANTIC_VERSION_SET_SCHEMA_VERSION = "1.0" as const;
 
 export interface ProviderSemanticVersionSetV1 {
@@ -49,9 +51,6 @@ const FIELD_NAMES = Object.freeze([
 
 const CHECKSUM = /^[a-f0-9]{64}$/u;
 const VERSION = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/u;
-const KNOWN_APPROVAL_RULE_SET_CHECKSUMS = Object.freeze({
-  "all-human@1.0": "07bb0f73b5a5dc515373220f62960be604bae0f4bb141572b45d6cbf336e6664"
-} as const satisfies Readonly<Record<string, string>>);
 
 export function createProviderSemanticVersionSetV1(
   input: CreateProviderSemanticVersionSetV1Input
@@ -142,12 +141,12 @@ function assertApprovalRuleSetIdentity(version: string, checksum: string): void 
   if ((version === "not_applicable") !== (checksum === "not_applicable")) {
     throw new Error("PROVIDER_SEMANTIC_VERSION_SET_INVALID");
   }
-  if (
-    !notApplicable &&
-    KNOWN_APPROVAL_RULE_SET_CHECKSUMS[version as keyof typeof KNOWN_APPROVAL_RULE_SET_CHECKSUMS] !==
-      checksum
-  ) {
-    throw new Error("PROVIDER_SEMANTIC_VERSION_SET_INVALID");
+  if (!notApplicable) {
+    try {
+      resolveRegisteredApprovalRuleSet(version, checksum);
+    } catch {
+      throw new Error("PROVIDER_SEMANTIC_VERSION_SET_INVALID");
+    }
   }
 }
 

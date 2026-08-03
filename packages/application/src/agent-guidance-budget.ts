@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  createApprovalRuleSetProjection,
   createProviderSemanticVersionSetV1,
   providerSemanticVersionSetChecksum,
   type AgentContextPrecision,
@@ -14,9 +15,6 @@ import {
   type AgentContextProfileId
 } from "./agent-context-profile.js";
 import {
-  ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
-  ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
-  createAllHumanApprovalRuleSetProjection,
   parseProviderVisibleAgentRuntimeFacts,
   type ProviderVisibleAgentRuntimeFacts,
   type ProviderVisibleWorkspaceFileOperation,
@@ -408,7 +406,7 @@ function maximalRuntimeFacts(profile: AgentContextProfile): ProviderVisibleAgent
       : [];
   const allOperations = [...workspaceFileOperations, ...writingOperations];
   const approvalRuleSet =
-    allOperations.length === 0 ? null : createAllHumanApprovalRuleSetProjection(allOperations);
+    allOperations.length === 0 ? null : createApprovalRuleSetProjection(allOperations);
   return parseProviderVisibleAgentRuntimeFacts({
     schemaVersion: "1.0",
     profileId: profile.profileId,
@@ -419,10 +417,8 @@ function maximalRuntimeFacts(profile: AgentContextProfile): ProviderVisibleAgent
     writingOperations,
     workspaceFileOperations,
     writeApprovalPolicy: allOperations.length === 0 ? "not_applicable" : "confirm_each_change_set",
-    approvalRuleSetVersion:
-      approvalRuleSet === null ? "not_applicable" : ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
-    approvalRuleSetChecksum:
-      approvalRuleSet === null ? "not_applicable" : ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+    approvalRuleSetVersion: approvalRuleSet === null ? "not_applicable" : approvalRuleSet.version,
+    approvalRuleSetChecksum: approvalRuleSet === null ? "not_applicable" : approvalRuleSet.checksum,
     approvalRules: approvalRuleSet === null ? [] : approvalRuleSet.rules,
     networkRead: profile.profileId !== "standalone",
     externalTools: profile.profileId === "standalone" ? "none" : "remote_mcp",

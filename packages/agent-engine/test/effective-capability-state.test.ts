@@ -3,7 +3,11 @@ import {
   createEffectiveCapabilityState,
   revokeCapability,
   deactivateCapabilityState,
-  isCapabilityEffective
+  effectiveWorkspaceFileOperations,
+  effectiveWritingOperations,
+  isCapabilityEffective,
+  workspaceFileOperationCapabilityKey,
+  writingOperationCapabilityKey
 } from "../src/effective-capability-state.js";
 import { createDefaultCapabilitySnapshot } from "../src/agent-tool-capabilities.js";
 
@@ -69,5 +73,58 @@ describe("EffectiveCapabilityState", () => {
     const s2 = revokeCapability(s1, "network", "attestation_expired", "2026-07-24T00:00:00Z");
     expect(s2.revision).toBe(3);
     expect(s2.revokedCapabilities).toHaveLength(2);
+  });
+
+  test("projects qualified operations canonically and revokes each operation independently", () => {
+    const writingState = createEffectiveCapabilityState({
+      ...createDefaultCapabilitySnapshot("creativeProject"),
+      fileLifecycleEnabled: true,
+      writingOperations: ["chapter_create", "chapter_replace"]
+    });
+    expect(effectiveWritingOperations(writingState)).toEqual(["chapter_replace", "chapter_create"]);
+
+    const afterChapterCreateRevocation = revokeCapability(
+      writingState,
+      writingOperationCapabilityKey("chapter_create"),
+      "policy_drift",
+      "2026-08-02T00:00:00.000Z"
+    );
+    expect(effectiveWritingOperations(afterChapterCreateRevocation)).toEqual(["chapter_replace"]);
+    expect(
+      isCapabilityEffective(
+        afterChapterCreateRevocation,
+        writingOperationCapabilityKey("chapter_replace")
+      )
+    ).toBe(true);
+
+    const afterWritingMutationRevocation = revokeCapability(
+      afterChapterCreateRevocation,
+      "writing_mutation",
+      "feature_flag_disabled",
+      "2026-08-02T00:01:00.000Z"
+    );
+    expect(effectiveWritingOperations(afterWritingMutationRevocation)).toEqual([]);
+
+    const workspaceState = createEffectiveCapabilityState({
+      ...createDefaultCapabilitySnapshot("engineeringWorkspace"),
+      fileLifecycleEnabled: true,
+      workspaceFileOperations: ["delete_file", "replace_file", "create_file"]
+    });
+    expect(effectiveWorkspaceFileOperations(workspaceState)).toEqual([
+      "replace_file",
+      "create_file",
+      "delete_file"
+    ]);
+
+    const afterDeleteRevocation = revokeCapability(
+      workspaceState,
+      workspaceFileOperationCapabilityKey("delete_file"),
+      "user_revoked",
+      "2026-08-02T00:02:00.000Z"
+    );
+    expect(effectiveWorkspaceFileOperations(afterDeleteRevocation)).toEqual([
+      "replace_file",
+      "create_file"
+    ]);
   });
 });
