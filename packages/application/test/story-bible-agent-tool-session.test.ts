@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { ok, type ChapterSummary, type JsonObject } from "@novel-studio/shared";
+import {
+  FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING,
+  ok,
+  type ChapterSummary,
+  type JsonObject
+} from "@novel-studio/shared";
 
 import {
   createStoryBibleAgentToolSession,
@@ -188,7 +193,12 @@ describe("Story Bible Agent tool session", () => {
     await expect(
       session.prepare({
         toolName: "set_story_bible_status",
-        arguments: { assetId: asset.id, baseRevision: asset.revision, status: "archived" }
+        arguments: {
+          assetId: asset.id,
+          baseRevision: asset.revision,
+          baseChecksum: checksum,
+          status: "archived"
+        }
       })
     ).resolves.toMatchObject({
       ok: false,
@@ -268,7 +278,7 @@ describe("Story Bible Agent tool session", () => {
 
     const prepared = await session.prepare({
       toolName: "set_story_bible_status",
-      arguments: { assetId: asset.id, baseRevision: 1, status: "deleted" }
+      arguments: { assetId: asset.id, baseRevision: 1, baseChecksum: checksum, status: "deleted" }
     });
 
     expect(prepared).toMatchObject({
@@ -312,6 +322,7 @@ describe("Story Bible Agent tool session", () => {
       arguments: {
         assetId: active.id,
         baseRevision: active.revision,
+        baseChecksum: checksum,
         operations: [{ op: "replace", path: "/status", value: "deleted" }]
       }
     });
@@ -326,11 +337,125 @@ describe("Story Bible Agent tool session", () => {
     });
     const statusRestore = await deletedSession.prepare({
       toolName: "set_story_bible_status",
-      arguments: { assetId: deleted.id, baseRevision: deleted.revision, status: "active" }
+      arguments: {
+        assetId: deleted.id,
+        baseRevision: deleted.revision,
+        baseChecksum: checksum,
+        status: "active"
+      }
     });
     expect(statusRestore).toMatchObject({
       ok: false,
       error: { code: "STORY_BIBLE_RESTORE_COMMAND_REQUIRED" }
+    });
+  });
+
+  test("requires and rechecks a fresh checksum for patch, status, and restore", async () => {
+    const active = characterAsset();
+    const activeSession = createStoryBibleAgentToolSession({ repository: repositoryFor(active) });
+    await expect(
+      activeSession.prepare({
+        toolName: "patch_story_bible",
+        arguments: {
+          assetId: active.id,
+          baseRevision: active.revision,
+          operations: [{ op: "replace", path: "/summary", value: "Updated" }]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_TOOL_ARGUMENTS_INVALID" }
+    });
+    await expect(
+      activeSession.prepare({
+        toolName: "set_story_bible_status",
+        arguments: { assetId: active.id, baseRevision: active.revision, status: "archived" }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_TOOL_ARGUMENTS_INVALID" }
+    });
+    await expect(
+      activeSession.prepare({
+        toolName: "patch_story_bible",
+        arguments: {
+          assetId: active.id,
+          baseRevision: active.revision,
+          baseChecksum: "c".repeat(64),
+          operations: [{ op: "replace", path: "/summary", value: "Updated" }]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_CHECKSUM_CONFLICT" }
+    });
+
+    const deleted = { ...active, status: "deleted" as const, revision: 2 };
+    const deletedSession = createStoryBibleAgentToolSession({
+      repository: repositoryFor(deleted),
+      resolveRestoreAuthorization: async () =>
+        ok({ status: "active", historyAuthorizationChecksum })
+    });
+    await expect(
+      deletedSession.prepare({
+        toolName: "restore_story_bible",
+        arguments: { assetId: deleted.id, baseRevision: deleted.revision }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_TOOL_ARGUMENTS_INVALID" }
+    });
+  });
+
+  test("freezes reference impact for reference-bearing patches", async () => {
+    const asset = characterAsset();
+    const session = createStoryBibleAgentToolSession({ repository: repositoryFor(asset) });
+
+    await expect(
+      session.prepare({
+        toolName: "patch_story_bible",
+        arguments: {
+          assetId: asset.id,
+          baseRevision: asset.revision,
+          baseChecksum: checksum,
+          operations: [{ op: "replace", path: "/relations", value: [] }]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        referenceImpact: {
+          assetId: asset.id,
+          deletionImpactChecksum
+        }
+      }
+    });
+  });
+
+  test("carries the shared paid-off warning in structured proposals", async () => {
+    const asset = foreshadowAsset();
+    const session = createStoryBibleAgentToolSession({ repository: repositoryFor(asset) });
+
+    await expect(
+      session.prepare({
+        toolName: "patch_story_bible",
+        arguments: {
+          assetId: asset.id,
+          baseRevision: asset.revision,
+          baseChecksum: checksum,
+          operations: [{ op: "replace", path: "/summary", value: "Updated" }]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        warnings: [
+          {
+            code: FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING,
+            severity: "warning"
+          }
+        ]
+      }
     });
   });
 });
@@ -412,6 +537,28 @@ function outlineAsset(): StoryBibleAgentToolAsset {
     type: "outline",
     title: "主大纲",
     details: { volumes: [], chapterOutlines: [] }
+  };
+}
+
+function foreshadowAsset(): StoryBibleAgentToolAsset {
+  return {
+    ...characterAsset(),
+    id: "fsh_11111111111111111111111111111111",
+    type: "foreshadow",
+    title: "Unresolved signal",
+    details: {
+      trackingStatus: "paid-off",
+      milestones: [
+        {
+          milestoneId: "fsm_11111111111111111111111111111111",
+          entryRevision: 1,
+          kind: "payoff",
+          chapterId: "ch_01",
+          evidence: { start: 0, end: 1, excerptHash: "e".repeat(64) },
+          note: ""
+        }
+      ]
+    }
   };
 }
 

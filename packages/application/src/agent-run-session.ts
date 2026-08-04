@@ -13,22 +13,31 @@ import {
   createEffectiveCapabilityState,
   effectiveWorkspaceFileOperations,
   effectiveWritingOperations,
+  formatCompletionEvidenceRef,
+  formatToolCompletionEvidenceRef,
+  formatWriteAppliedEvidenceRef,
   isCapabilityEffective,
   isProviderVisibleWritingOperation,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord,
   resolveLegacyRetryTarget,
+  createPlanActHandoffV20,
+  createPlanExecutionRecordV20,
   createPlanExecutionRecord,
   createPlanArtifactRevision,
+  createPlanArtifactRevisionV20,
   canExecutePlanArtifact,
   findStaleContextSources,
   listAgentTools,
   normalizeAgentContextSnapshot,
   normalizeAgentRunEvent,
   normalizeAgentRunSnapshot,
+  parseAgentRunEventV20,
+  parseAgentRunSnapshotV20,
   NO_AGENT_PROMPT_CACHE_CAPABILITY,
   rebuildPackedAgentContextFromManifest,
   validateAgentRunToolCatalogSnapshot,
+  validatePlanArtifactV20,
   validateExternalToolDescriptors,
   validateAgentToolArguments,
   type ChangeSet,
@@ -46,7 +55,9 @@ import {
   type AgentRunCoordinator,
   type AgentRunErrorRecord,
   type AgentRunEvent,
+  type AgentRunEventV20,
   type AgentRunSnapshot,
+  type AgentRunSnapshotV20,
   type AgentRunUsageSummary,
   type AgentUsageRecord,
   type AgentUsageSink,
@@ -62,6 +73,7 @@ import {
   type CompactContextCommand,
   type CreatePlanArtifactInput,
   type PlanArtifact,
+  type PlanArtifactV20,
   type PermissionSummary,
   type PackedAgentContext,
   type PackedAgentContextRebuildResult,
@@ -75,6 +87,7 @@ import {
   type DecidePlanRevisionCommand,
   type PlanDeviationChange,
   type PlanExecutionRecord,
+  type PlanExecutionRecordV20,
   type RefreshAgentContextCommand,
   type ResolvedAgentRunStartInput,
   type ResumeAgentRunCommand,
@@ -84,7 +97,8 @@ import {
   type StopAgentRunCommand,
   type UndoAgentRunCommand,
   type PendingToolApproval,
-  type ToolApprovalBinding
+  type ToolApprovalBinding,
+  type FinishInputV2
 } from "@novel-studio/agent-engine";
 import { createHash } from "node:crypto";
 import type {
@@ -190,6 +204,7 @@ import {
   createToolCallAssembler,
   dispatchAssembledToolCalls,
   parseToolCallArguments,
+  validateFinishToolCall,
   type AssembledToolCall,
   type ToolCallDispatchFailure
 } from "./agent-tool-call-pipeline.js";
@@ -464,6 +479,8 @@ export interface AgentRunStartFacts {
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
+  /** App-owned future Act choice. Planning never projects this value into Provider runtime facts. */
+  readonly executionWritePolicyDraft?: AgentWritePolicy;
   readonly userRequest: string;
   /** Main-owned intent resolved from the matching Run Draft; null for non-writing profiles. */
   readonly writingTaskIntent?: WritingTaskIntent | null;
@@ -506,6 +523,10 @@ export interface RecordAgentPlanDeviationCommand {
 
 export interface AgentRunPersistencePort {
   writeSnapshot(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
+  commitRunStateV20?(input: {
+    readonly snapshot: AgentRunSnapshotV20;
+    readonly event: AgentRunEventV20;
+  }): Promise<Result<AgentRunSnapshotV20, UnifiedError>>;
   writeToolCatalog?(runId: string, catalog: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   readToolCatalog?(
     runId: string,
@@ -519,6 +540,8 @@ export interface AgentRunPersistencePort {
   ): Promise<Result<JsonObject, UnifiedError>>;
   readSnapshot(runId: string): Promise<Result<JsonObject | undefined, UnifiedError>>;
   readEvents(runId: string): Promise<Result<JsonObject[], UnifiedError>>;
+  readSnapshotV20?(runId: string): Promise<Result<AgentRunSnapshotV20 | undefined, UnifiedError>>;
+  readEventsV20?(runId: string): Promise<Result<AgentRunEventV20[], UnifiedError>>;
   readCommandReceipt?(
     runId: string,
     commandId: string
@@ -627,8 +650,8 @@ export interface AgentRunReadResult {
   readonly events: readonly AgentRunEvent[];
   readonly packedContextHistory: AgentRunPackedContextHistory;
   readonly pendingUserInput?: AgentUserInputRequest;
-  readonly planArtifact?: PlanArtifact;
-  readonly planExecution?: PlanExecutionRecord;
+  readonly planArtifact?: PlanArtifact | PlanArtifactV20;
+  readonly planExecution?: PlanExecutionRecord | PlanExecutionRecordV20;
   readonly changeSet?: ChangeSet;
   readonly rollbackReview?: JsonObject;
   readonly diagnostic?: AgentRunErrorRecord;
@@ -861,7 +884,9 @@ interface RunRuntime {
   pendingUserInput?: AgentUserInputRequest;
   readonly contextSources: AgentContextSourceInput[];
   contextSnapshot?: AgentContextSnapshot;
-  planArtifact?: PlanArtifact;
+  /** Main-owned future Act policy retained independently from the read-only planning authority. */
+  executionWritePolicyDraft: AgentWritePolicy;
+  planArtifact?: PlanArtifact | PlanArtifactV20;
   changeSet?: ChangeSet;
   pendingToolApproval?: PendingToolApproval;
   /** Task bindings that have crossed the durable launch boundary in this process. */
@@ -1376,11 +1401,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
   const knownRunIdsByProject = new Map<string, Set<string>>();
 
   function normalizeSnapshotForSession(value: JsonObject): AgentRunSnapshot {
-    return normalizeAgentRunSnapshot(value, legacyWorkspaceKind);
+    return value["schemaVersion"] === "2.0"
+      ? parseAgentRunSnapshotV20(value)
+      : normalizeAgentRunSnapshot(value, legacyWorkspaceKind);
   }
 
   function normalizeEventForSession(value: JsonObject): AgentRunEvent {
-    return normalizeAgentRunEvent(value, legacyWorkspaceKind);
+    return value["schemaVersion"] === "2.0"
+      ? parseAgentRunEventV20(value)
+      : normalizeAgentRunEvent(value, legacyWorkspaceKind);
   }
   const boundScope = options.scope;
 
@@ -1534,10 +1563,51 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return descriptors.filter((descriptor) => isToolDescriptorEffective(descriptor, state));
   }
 
-  function catalogCapabilityChanged(snapshot: AgentRunSnapshot): boolean {
+  /**
+   * Add the canonical, app-authored event reference to each tool result immediately before the
+   * Provider boundary. Tool data remains untrusted, while the reference is derived only from the
+   * coordinator's durable event sequence. This lets a later strict `finish` cite evidence without
+   * guessing a local sequence number.
+   */
+  function messagesWithFinishEvidence(
+    runId: string,
+    messages: readonly AgentModelMessage[]
+  ): AgentModelMessage[] {
+    const evidenceByToolCallId = new Map<string, string>();
+    for (const event of coordinator.readEvents(runId)) {
+      if (event.type !== "tool_completed" && event.type !== "tool_failed") continue;
+      const toolCallId = event.detail?.["toolCallId"];
+      if (typeof toolCallId !== "string" || toolCallId.length === 0) continue;
+      evidenceByToolCallId.set(
+        toolCallId,
+        event.type === "tool_completed"
+          ? formatToolCompletionEvidenceRef({ sequence: event.sequence, toolCallId })
+          : `run-event/${String(event.sequence)}/tool_failed/${toolCallId}`
+      );
+    }
+    return messages.map((message) => {
+      if (message.role !== "tool" || message.toolCallId === undefined) return message;
+      const evidenceRef = evidenceByToolCallId.get(message.toolCallId);
+      if (evidenceRef === undefined) return message;
+      try {
+        const payload = JSON.parse(message.content) as unknown;
+        if (!isJsonObject(payload)) return message;
+        return {
+          ...message,
+          content: JSON.stringify({ ...payload, evidenceRefs: [evidenceRef] })
+        };
+      } catch {
+        return message;
+      }
+    });
+  }
+
+  function catalogCapabilityChanged(
+    snapshot: AgentRunSnapshot,
+    state: EffectiveCapabilityState = effectiveCapabilityState()
+  ): boolean {
     const catalog = toolCatalogs.get(snapshot.runId);
     if (catalog?.schemaVersion !== "2.0") return false;
-    const state = effectiveCapabilityState();
     return catalog.descriptors.some((descriptor) => !isToolDescriptorEffective(descriptor, state));
   }
 
@@ -2521,22 +2591,51 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
 
   async function hydrateRunOnce(runId: string): Promise<AgentRunCommandResult> {
     const existing = coordinator.readSnapshot(runId);
-    if (existing !== undefined) return { ok: true, value: existing };
-    const [snapshotResult, eventsResult, retryCheckpointResult] = await Promise.all([
-      options.repository.readSnapshot(runId),
-      options.repository.readEvents(runId),
-      options.repository.readRetryCheckpoint?.(runId) ?? Promise.resolve(ok(undefined))
-    ]);
-    if (!snapshotResult.ok) return { ok: false, error: snapshotResult.error };
-    if (!eventsResult.ok) return { ok: false, error: eventsResult.error };
-    if (!retryCheckpointResult.ok) return { ok: false, error: retryCheckpointResult.error };
-    if (snapshotResult.value === undefined) {
-      return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+    if (existing !== undefined) {
+      if (existing.schemaVersion === "2.0" && existing.status === "capability_changed") {
+        runtimes.delete(runId);
+      }
+      return { ok: true, value: existing };
     }
-    const persistedSnapshot = normalizeSnapshotForSession(snapshotResult.value);
+    let persistedSnapshot: AgentRunSnapshot | undefined;
+    let events: AgentRunEvent[] | undefined;
+    if (
+      options.repository.readSnapshotV20 !== undefined &&
+      options.repository.readEventsV20 !== undefined
+    ) {
+      const strictSnapshot = await options.repository.readSnapshotV20(runId);
+      if (strictSnapshot.ok && strictSnapshot.value !== undefined) {
+        const strictEvents = await options.repository.readEventsV20(runId);
+        if (!strictEvents.ok) return { ok: false, error: strictEvents.error };
+        persistedSnapshot = strictSnapshot.value;
+        events = [...strictEvents.value];
+      } else if (
+        !strictSnapshot.ok &&
+        strictSnapshot.error.code !== "AGENT_RUN_SNAPSHOT_V20_LEGACY_RECORD"
+      ) {
+        return { ok: false, error: strictSnapshot.error };
+      } else if (strictSnapshot.ok) {
+        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+      }
+    }
+    if (persistedSnapshot === undefined || events === undefined) {
+      const [snapshotResult, eventsResult] = await Promise.all([
+        options.repository.readSnapshot(runId),
+        options.repository.readEvents(runId)
+      ]);
+      if (!snapshotResult.ok) return { ok: false, error: snapshotResult.error };
+      if (!eventsResult.ok) return { ok: false, error: eventsResult.error };
+      if (snapshotResult.value === undefined) {
+        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+      }
+      persistedSnapshot = normalizeSnapshotForSession(snapshotResult.value);
+      events = eventsResult.value.map(normalizeEventForSession);
+    }
+    const retryCheckpointResult =
+      (await options.repository.readRetryCheckpoint?.(runId)) ?? ok(undefined);
+    if (!retryCheckpointResult.ok) return { ok: false, error: retryCheckpointResult.error };
     const catalog = await hydrateToolCatalog(persistedSnapshot);
     if (!catalog.ok) return { ok: false, error: catalog.error };
-    const events = eventsResult.value.map(normalizeEventForSession);
     const frozenPromptRequired =
       persistedSnapshot.toolFacadeVersion === "v2" && persistedSnapshot.profileVersion !== "legacy";
     if (frozenPromptRequired && persistedSnapshot.contextSnapshotId === null) {
@@ -2607,6 +2706,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (!restored.ok) return restored;
     const snapshot = restored.value;
     rememberRun(snapshot);
+    if (snapshot.schemaVersion === "2.0" && snapshot.status === "capability_changed") {
+      // A capability boundary is absorbing. Keep the strict durable history available for view and
+      // export, but do not recreate live Provider/tool/pending state after restart.
+      runtimes.delete(runId);
+      await noteConversationTerminal(snapshot);
+      return restored;
+    }
 
     const pendingEvent = [...events]
       .reverse()
@@ -2633,7 +2739,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (!persistedPlanResult.ok) {
       return { ok: false, error: persistedPlanResult.error };
     }
-    const restoredPlanArtifact = planEvent?.detail ?? persistedPlanResult.value;
+    const restoredPlanArtifactResult = restorePlanArtifact(
+      planEvent?.detail === undefined
+        ? persistedPlanResult.value
+        : planArtifactFromEventDetail(planEvent.detail)
+    );
+    if (!restoredPlanArtifactResult.ok) {
+      return { ok: false, error: restoredPlanArtifactResult.error };
+    }
+    const restoredPlanArtifact = restoredPlanArtifactResult.value;
     const changeSetEvent = [...events].reverse().find((event) => event.type === "change_set_ready");
     const restoredChangeSet = isJsonObject(changeSetEvent?.detail?.["changeSet"])
       ? (changeSetEvent?.detail?.["changeSet"] as unknown as ChangeSet)
@@ -2682,9 +2796,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     });
     const restoredRollbackReview =
       durableRollbackReview?.ok === true ? durableRollbackReview.value : eventRollbackReview;
+    const restoredCounters = restoreRunCounters(events);
     const runtime: RunRuntime = {
       messages,
       promptBaseMessageCount,
+      executionWritePolicyDraft: restoredExecutionWritePolicyDraft(
+        restoredPlanArtifact,
+        persistedSnapshot
+      ),
       ...(restoredPromptArtifact === undefined ? {} : { promptArtifact: restoredPromptArtifact }),
       ...(restoredPromptCacheArtifact === undefined
         ? {}
@@ -2734,11 +2853,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       ...(restoredContextSnapshot === undefined
         ? {}
         : { contextSnapshot: restoredContextSnapshot }),
-      modelRounds: 0,
+      modelRounds: restoredCounters.modelRounds,
       hasRecordedFinalUsage: hasPersistedFinalUsage(events),
       budgetPressureResumeScheduled: false,
-      toolCalls: 0,
-      consecutiveToolFailures: 0,
+      toolCalls: restoredCounters.toolCalls,
+      consecutiveToolFailures: restoredCounters.consecutiveToolFailures,
       stopRequested: false,
       launchedTaskBindingIds: new Set(),
       ...(restoredRetryCall === undefined ? {} : { lastFailedToolCall: restoredRetryCall }),
@@ -2746,9 +2865,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       ...(snapshot.pendingToolApproval === undefined || snapshot.pendingToolApproval === null
         ? {}
         : { pendingToolApproval: snapshot.pendingToolApproval }),
-      ...(restoredPlanArtifact === undefined
-        ? {}
-        : { planArtifact: restoredPlanArtifact as unknown as PlanArtifact }),
+      ...(restoredPlanArtifact === undefined ? {} : { planArtifact: restoredPlanArtifact }),
       ...(restoredFinalChangeSet === undefined ? {} : { changeSet: restoredFinalChangeSet }),
       ...(restoredRollbackReview === undefined ? {} : { rollbackReview: restoredRollbackReview })
     };
@@ -2824,7 +2941,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       return recordEvent(snapshot.runId, {
         runId: snapshot.runId,
-        status: "completed",
+        status: snapshot.finishContractVersion === "2.0" ? "executing_model" : "completed",
         type: "write_applied",
         snapshotPatch: {
           pendingChangeSetId: null,
@@ -2924,10 +3041,33 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     snapshot: AgentRunSnapshot,
     event: AgentRunEvent
   ): Promise<void> {
+    if (snapshot.schemaVersion === "2.0") {
+      if (event.schemaVersion !== "2.0" || options.repository.commitRunStateV20 === undefined) {
+        throw applicationError(
+          "AGENT_RUN_V20_PERSISTENCE_UNAVAILABLE",
+          "The strict Agent run persistence boundary is unavailable."
+        );
+      }
+      let committed = await options.repository.commitRunStateV20({ snapshot, event });
+      if (!committed.ok) {
+        // The strict repository journals a deterministic pair. Repeating the same pair is
+        // idempotent and completes an interrupted event/snapshot replacement.
+        committed = await options.repository.commitRunStateV20({ snapshot, event });
+      }
+      if (!committed.ok) throw committed.error;
+      for (const listener of listeners) listener(event);
+      return;
+    }
     const eventResult = await options.repository.appendEvent(asJsonObject(event));
     if (!eventResult.ok) throw eventResult.error;
-    const snapshotResult = await options.repository.writeSnapshot(asJsonObject(snapshot));
-    if (!snapshotResult.ok) throw snapshotResult.error;
+    const snapshotJson = asJsonObject(snapshot);
+    const snapshotResult = await options.repository.writeSnapshot(snapshotJson);
+    if (!snapshotResult.ok) {
+      // The event is already durable. Retry only its matching snapshot once so a transient write
+      // failure cannot leave an event-only tail that a later hydrate must reject.
+      const reconciled = await options.repository.writeSnapshot(snapshotJson);
+      if (!reconciled.ok) throw reconciled.error;
+    }
     for (const listener of listeners) listener(event);
   }
 
@@ -2952,8 +3092,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     runId: string,
     input: Parameters<AgentRunCoordinator["recordRunEvent"]>[0]
   ): Promise<AgentRunCommandResult> {
+    const initialSnapshot = coordinator.readSnapshot(runId);
     const initialEvent = coordinator.readEvents(runId).at(-1);
-    if (initialEvent === undefined) {
+    if (initialSnapshot === undefined || initialEvent === undefined) {
       return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
     }
     const recorded = coordinator.recordRunEvent(input);
@@ -2963,6 +3104,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
     }
     try {
+      if (initialSnapshot.schemaVersion === "2.0") {
+        await persistAndPublish(initialSnapshot, initialEvent);
+        await persistAndPublish(recorded.value, contextEvent);
+        return recorded;
+      }
       const initialPersisted = await options.repository.appendEvent(asJsonObject(initialEvent));
       if (!initialPersisted.ok) throw initialPersisted.error;
       for (const listener of listeners) listener(initialEvent);
@@ -3009,6 +3155,31 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (!result.ok) return result;
     const persisted = await persistLatest(runId);
     if (persisted.ok && isTerminal(persisted.value.status) && isTerminalRunEvent(input.type)) {
+      await noteConversationTerminal(persisted.value);
+    }
+    return persisted;
+  }
+
+  async function recordFinish(
+    runId: string,
+    commandId: string,
+    finishReport: FinishInputV2
+  ): Promise<AgentRunCommandResult> {
+    const snapshot = coordinator.readSnapshot(runId);
+    if (snapshot === undefined) {
+      return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+    }
+    const recorded = coordinator.recordFinish({
+      runId,
+      scope: snapshot.scope,
+      projectId: snapshot.projectId,
+      commandId,
+      expectedRunRevision: snapshot.runRevision,
+      finishReport
+    });
+    if (!recorded.ok) return recorded;
+    const persisted = await persistLatest(runId);
+    if (persisted.ok && isTerminal(persisted.value.status)) {
       await noteConversationTerminal(persisted.value);
     }
     return persisted;
@@ -3334,16 +3505,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       // Re-check after every pre-provider await. Revocation must terminate the frozen authority,
       // never silently shrink the tool list under an already-materialized system prompt.
-      if (catalogCapabilityChanged(roundSnapshot)) {
+      if (await stopForCatalogCapabilityChange(runId, roundSnapshot, runtime)) {
         runtime.modelRounds -= 1;
-        await stopForCatalogCapabilityChange(runId, roundSnapshot, runtime);
         return;
       }
       const availableTools = toolsFor(roundSnapshot);
       for await (const modelEvent of options.modelDriver.streamRound({
         runId,
         snapshot: roundSnapshot,
-        messages: [...runtime.messages],
+        messages: messagesWithFinishEvidence(runId, runtime.messages),
         tools: availableTools.flatMap((tool) => {
           const providerName = providerToolNameFor(roundSnapshot, tool);
           return providerName === undefined
@@ -3507,12 +3677,48 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           });
           return;
         }
-        await recordEvent(runId, {
-          runId,
-          status: "completed",
-          type: "run_completed",
-          detail: { summary: assistantText }
-        });
+        if (toolCatalogs.get(runId)?.schemaVersion === "2.0") {
+          const completionEvidence = await recordEvent(runId, {
+            runId,
+            status: modelStatusFor(snapshot),
+            type: "completion_evidence_recorded",
+            detail: { kind: "model_stop_without_finish" }
+          });
+          if (!completionEvidence.ok) return;
+          const blockedReport: FinishInputV2 = {
+            schemaVersion: "2.0",
+            outcome: "blocked",
+            report: {
+              result:
+                assistantText.trim().length > 0
+                  ? assistantText
+                  : "The model stopped without providing a completion report.",
+              appliedChanges: [],
+              verification: ["not-run: the model stopped without a finish tool call"],
+              residualRisks: ["Completion evidence was not provided by the model."],
+              nextStep: "Resume the run and provide a strict completed or blocked finish report."
+            },
+            evidenceRefs: [
+              formatCompletionEvidenceRef({
+                sequence: completionEvidence.value.lastSequence,
+                evidenceKind: "model_stop_without_finish"
+              })
+            ]
+          };
+          const blocked = await recordFinish(
+            runId,
+            `finish:model-stop:${String(runtime.modelRounds)}`,
+            blockedReport
+          );
+          if (!blocked.ok) return;
+        } else {
+          await recordEvent(runId, {
+            runId,
+            status: "completed",
+            type: "run_completed",
+            detail: { summary: assistantText }
+          });
+        }
         return;
       }
       const dispatchSnapshot = coordinator.readSnapshot(runId);
@@ -3527,7 +3733,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         },
         skip: (call, failure) => recordSkippedToolCall(runtime, runId, call, failure),
         dispatch: (call) => handleToolCall(runId, runtime, call),
-        mayContinue: (outcome) => outcome === "continue" || outcome === "staged",
+        ...(toolCatalogs.get(dispatchSnapshot.runId)?.schemaVersion === "2.0"
+          ? { validateCall: validateFinishToolCall }
+          : {}),
+        // A staged proposal is the approval boundary for this model batch. Later calls must not
+        // execute before the user resolves that frozen Change Set.
+        mayContinue: (outcome) => outcome === "continue",
         isActive: () => isCurrent(runId, generation)
       });
       if (dispatchResult.kind === "interrupted") return;
@@ -3641,18 +3852,43 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     snapshot: AgentRunSnapshot,
     runtime: RunRuntime
   ): Promise<boolean> {
-    if (!catalogCapabilityChanged(snapshot)) return false;
+    const currentState = effectiveCapabilityState();
+    if (!catalogCapabilityChanged(snapshot, currentState)) return false;
     runtime.providerRoundsAllowed = false;
-    await recordEvent(runId, {
-      runId,
-      status: "failed",
-      type: "run_failed",
-      detail: {
-        code: "AGENT_CAPABILITY_CHANGED",
-        message:
-          "The frozen Agent tool catalog is no longer authorized by the effective capability state."
-      }
-    });
+    try {
+      await recordEvent(
+        runId,
+        snapshot.schemaVersion === "2.0"
+          ? {
+              runId,
+              status: "capability_changed",
+              type: "capability_changed",
+              detail: {
+                effectiveCapabilityRevision: currentState.revision,
+                reason: "frozen_catalog_operation_revoked"
+              }
+            }
+          : {
+              runId,
+              status: "failed",
+              type: "run_failed",
+              detail: {
+                code: "AGENT_CAPABILITY_CHANGED",
+                message:
+                  "The frozen Agent tool catalog is no longer authorized by the effective capability state."
+              }
+            }
+      );
+    } finally {
+      // Invalidate every in-process continuation even if durable persistence itself fails. The
+      // coordinator has already released the active scope when the boundary transition succeeds.
+      runtime.stopRequested = true;
+      runtime.controller.abort();
+      runtime.generation += 1;
+      delete runtime.pendingUserInput;
+      delete runtime.pendingToolApproval;
+      if (runtimes.get(runId) === runtime) runtimes.delete(runId);
+    }
     return true;
   }
 
@@ -4726,6 +4962,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             changedPaths: prepared.value.changedPaths,
             fieldDiffs: prepared.value.fieldDiffs,
             rebased: prepared.value.rebased,
+            warnings: prepared.value.warnings,
             ...(prepared.value.referenceImpact === undefined
               ? {}
               : { referenceImpact: prepared.value.referenceImpact })
@@ -5436,6 +5673,36 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
 
     if (descriptor.name === "finish") {
+      if (toolCatalogs.get(runId)?.schemaVersion === "2.0") {
+        const finished = await recordFinish(
+          runId,
+          `finish:${call.toolCallId}`,
+          parsedArguments.value as unknown as FinishInputV2
+        );
+        if (!finished.ok) {
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            finished.error.code,
+            finished.error.message,
+            finished.error
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        runtime.messages.push({
+          role: "tool",
+          toolCallId: call.toolCallId,
+          content: JSON.stringify({
+            ok: true,
+            status: finished.value.status,
+            outcome: parsedArguments.value["outcome"]
+          })
+        });
+        delete runtime.lastFailedToolCall;
+        return "terminal";
+      }
       runtime.messages.push({
         role: "tool",
         toolCallId: call.toolCallId,
@@ -5453,7 +5720,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
 
     if (descriptor.name === "finish_plan") {
-      const plan = parsePlanArtifact(snapshot, parsedArguments.value);
+      const plan = parsePlanArtifact(snapshot, runtime, parsedArguments.value);
       if (!plan.ok) {
         return (await toolFailure(runtime, runId, call, plan.error.code, plan.error.message))
           ? "terminal"
@@ -5502,6 +5769,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
   ): Promise<boolean> {
     const snapshot = coordinator.readSnapshot(runId);
     if (snapshot === undefined) return true;
+    const retryableRead = isSafeReadRetry(snapshot, call);
     const failed = await recordEvent(runId, {
       runId,
       status: modelStatusFor(snapshot),
@@ -5532,7 +5800,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ? {}
         : { checkpointId: runtime.currentCheckpointId }),
       toolCallId: call.toolCallId,
-      retryTargets: [{ kind: "tool_call", id: call.toolCallId }]
+      retryTargets: retryableRead ? [{ kind: "tool_call", id: call.toolCallId }] : []
     });
     if (recorded?.ok === false) return true;
     runtime.consecutiveToolFailures += 1;
@@ -5549,6 +5817,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
     });
     return true;
+  }
+
+  function isSafeReadRetry(snapshot: AgentRunSnapshot, call: AssembledToolCall): boolean {
+    const descriptor = resolveToolDescriptor(snapshot, call.name);
+    return descriptor?.effect === "read" && (descriptor.retrySemantics ?? "safe") === "safe";
   }
 
   async function recordSkippedToolCall(
@@ -5638,6 +5911,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         return failure(
           "AGENT_RETRY_TARGET_STALE",
           "The failed tool call is no longer available for retry."
+        );
+      }
+      if (!isSafeReadRetry(snapshot, failedCall)) {
+        return failure(
+          "AGENT_RETRY_EFFECT_NOT_SAFE",
+          "Only a tool proven to be a side-effect-free read can be retried automatically."
         );
       }
       const requested = await recordEvent(command.runId, {
@@ -5790,6 +6069,20 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           )
         );
       }
+      if (
+        options.agentGuidanceV3 === true &&
+        (options.repository.commitRunStateV20 === undefined ||
+          options.repository.readSnapshotV20 === undefined ||
+          options.repository.readEventsV20 === undefined)
+      ) {
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_RUN_V20_PERSISTENCE_UNAVAILABLE",
+            "Guidance 3.0 requires the strict Agent Run 2.0 persistence boundary."
+          )
+        );
+      }
       if (newRunToolFacadeVersion === "v2" && options.repository.writeToolCatalog === undefined) {
         return recordPreflightFailure(
           command,
@@ -5828,6 +6121,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const startInput = resolvedStart.value;
       const useCatalogV2 = options.agentGuidanceV3 === true && newRunToolFacadeVersion === "v2";
+      if (startInput.writePolicy === "user_preapproved_run") {
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_WRITE_POLICY_TRUST_REQUIRED",
+            "Limited run preapproval is unavailable until a qualified Main-owned confirmation surface supplies human intent."
+          ),
+          preflight.value.model
+        );
+      }
       const newRunDescriptors = listAgentTools({
         facadeVersion: newRunToolFacadeVersion,
         ...(useCatalogV2 ? { catalogSchemaVersion: "2.0" as const } : {}),
@@ -6088,7 +6391,20 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...startInput,
         ...(initialGuidanceV3 === undefined
           ? {}
-          : { guidanceTemplateChecksum: initialGuidanceV3.proof.templateChecksum }),
+          : {
+              guidanceTemplateChecksum: initialGuidanceV3.proof.templateChecksum,
+              runV20: {
+                schemaVersion: "2.0" as const,
+                providerSemanticVersionSetChecksum:
+                  initialGuidanceV3.proof.providerSemanticVersionSetChecksum,
+                authorityRegistryKey: initialGuidanceV3.proof.registryKey,
+                materializedGuidanceChecksum: initialGuidanceV3.proof.materializedGuidanceChecksum,
+                toolCatalogChecksum: newRunCatalogRevision,
+                effectiveCapabilityRevision: initialEffectiveState.revision,
+                executionWritePolicyDraft:
+                  preflight.value.executionWritePolicyDraft ?? "write_before_confirmation"
+              }
+            }),
         providerCapabilitySnapshot: {
           ...startInput.providerCapabilitySnapshot,
           promptCache:
@@ -6106,7 +6422,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         promptCacheIdentityChecksum: promptCacheArtifact.identityChecksum,
         promptCacheStablePrefixMessageCount: promptCacheArtifact.stablePrefixMessageCount,
         toolFacadeVersion: newRunToolFacadeVersion,
-        toolCatalogRevision: newRunCatalogRevision
+        toolCatalogRevision: newRunCatalogRevision,
+        ...(useCatalogV2 ? { finishContractVersion: "2.0" as const } : {})
       };
       const result = coordinator.startRun(
         verifiedPermissionSummary === undefined
@@ -6173,6 +6490,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const runtime: RunRuntime = {
         messages: [...initialMaterialization.messages],
         promptBaseMessageCount: initialMaterialization.messages.length,
+        executionWritePolicyDraft:
+          preflight.value.executionWritePolicyDraft ?? "write_before_confirmation",
         systemPrompt: initialMaterialization.systemPrompt,
         providerRoundsAllowed: true,
         ...(options.repository.writePromptCacheArtifact === undefined
@@ -6869,7 +7188,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           "The plan's frozen Guidance contract does not match the active rollout gate; create an explicit handoff before execution."
         );
       }
-      if (command.decision === "approve" && !canExecutePlanArtifact(plan)) {
+      if (command.decision === "approve" && !canExecutePlanArtifact(plan as PlanArtifact)) {
         return failure(
           "AGENT_PLAN_BLOCKING_QUESTIONS",
           "Resolve every blocking plan question before execution."
@@ -6886,14 +7205,14 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           "The execution context mode is not supported."
         );
       }
+      const commandFields = command as unknown as Record<string, unknown>;
       if (
-        command.decision === "approve" &&
-        command.executionWritePolicy === "user_preapproved_run" &&
-        command.executionWritePolicyAcknowledged !== true
+        "executionWritePolicy" in commandFields ||
+        "executionWritePolicyAcknowledged" in commandFields
       ) {
         return failure(
-          "AGENT_WRITE_POLICY_ACK_REQUIRED",
-          "Automatic writes require an explicit acknowledgement for this execution run."
+          "AGENT_WRITE_POLICY_TRUST_REQUIRED",
+          "The public Plan-to-Act command cannot carry write authorization; a qualified Main-owned confirmation surface is required."
         );
       }
       if (
@@ -6916,7 +7235,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           "Changing the execution context mode requires a newly preflighted Agent run."
         );
       }
-      const executionWritePolicy = command.executionWritePolicy ?? "write_before_confirmation";
+      const executionWritePolicy = "write_before_confirmation" as const;
       const useExecutionCatalogV2 =
         options.agentGuidanceV3 === true && newRunToolFacadeVersion === "v2";
       let approvedExecutionProfile: AgentContextProfile | undefined;
@@ -7030,9 +7349,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           writePolicy: executionWritePolicy,
           ...(useExecutionCatalogV2 ? { catalogSchemaVersion: "2.0" as const } : {}),
           ...(useExecutionCatalogV2 ? { frozenToolDescriptors: executionProviderDescriptors } : {}),
-          ...(useExecutionCatalogV2
-            ? { writePolicyAcknowledged: command.executionWritePolicyAcknowledged === true }
-            : {}),
+          ...(useExecutionCatalogV2 ? { writePolicyAcknowledged: false } : {}),
           ...(useExecutionCatalogV2 ? { limitedRunPreapprovalQualified: false } : {}),
           capabilitySnapshot: frozenCapabilitySnapshot,
           ...(frozenExternalToolDescriptors === undefined
@@ -7048,7 +7365,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       }
       const decided = await recordEvent(command.runId, {
         runId: command.runId,
-        status: "plan_ready",
+        status: snapshot.schemaVersion === "2.0" ? "planning_model" : "plan_ready",
         type: "plan_decision_resolved",
         detail: {
           planId: plan.planId,
@@ -7057,7 +7374,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ...(command.decision === "approve"
             ? {
                 executionContextMode: command.executionContextMode ?? snapshot.contextMode,
-                executionWritePolicy: command.executionWritePolicy ?? "write_before_confirmation"
+                executionWritePolicy
               }
             : {})
         }
@@ -7070,12 +7387,49 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...plan,
         status: command.decision === "approve" ? "approved" : "rejected"
       });
-      const planningCompleted = await recordEvent(command.runId, {
-        runId: command.runId,
-        status: "completed",
-        type: "run_completed",
-        detail: { planId: plan.planId, planRevision: plan.revision, decision: command.decision }
-      });
+      let planningCompleted: AgentRunCommandResult;
+      if (snapshot.schemaVersion === "2.0") {
+        const completionEvidence = await recordEvent(command.runId, {
+          runId: command.runId,
+          status: "planning_model",
+          type: "completion_evidence_recorded",
+          detail: {
+            kind: "plan_decision_resolved",
+            planId: plan.planId,
+            planRevision: plan.revision,
+            decision: command.decision
+          }
+        });
+        if (!completionEvidence.ok) {
+          await cancelExecutionStart();
+          return completionEvidence;
+        }
+        const evidenceRef = formatCompletionEvidenceRef({
+          sequence: completionEvidence.value.lastSequence,
+          evidenceKind: "plan_decision_resolved"
+        });
+        planningCompleted = await recordFinish(command.runId, command.commandId, {
+          schemaVersion: "2.0",
+          outcome: "completed",
+          report: {
+            result:
+              command.decision === "approve"
+                ? "The plan was approved for an explicit execution handoff."
+                : "The plan was rejected without executing workspace changes.",
+            appliedChanges: [],
+            verification: ["not-run: a Plan decision does not execute workspace changes"],
+            residualRisks: []
+          },
+          evidenceRefs: [evidenceRef]
+        });
+      } else {
+        planningCompleted = await recordEvent(command.runId, {
+          runId: command.runId,
+          status: "completed",
+          type: "run_completed",
+          detail: { planId: plan.planId, planRevision: plan.revision, decision: command.decision }
+        });
+      }
       if (!planningCompleted.ok || command.decision === "reject") {
         if (!planningCompleted.ok) await cancelExecutionStart();
         return persistCommandReceipt(
@@ -7120,9 +7474,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             profile: executionProfile,
             toolDescriptors: executionProviderDescriptors,
             writePolicy: executionWritePolicy,
-            ...(command.executionWritePolicyAcknowledged === true
-              ? { writePolicyAcknowledged: true as const }
-              : {}),
             userRequest: executionUserRequest,
             writingTaskIntent: executionWritingTaskIntent,
             contextSources: runtime.contextSources
@@ -7187,6 +7538,17 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           "The execution prompt cache artifact is unavailable."
         );
       }
+      const executionPromptCacheIdentityBaseChecksum =
+        executionPromptCacheArtifact?.identityBaseChecksum ??
+        (executionGuidanceV3 === undefined ? "legacy" : snapshot.promptCacheIdentityBaseChecksum);
+      const executionPromptCacheIdentityChecksum =
+        executionPromptCacheArtifact?.identityChecksum ??
+        (executionGuidanceV3 === undefined
+          ? "legacy"
+          : deriveAgentPromptCacheIdentityChecksum(
+              executionPromptCacheIdentityBaseChecksum,
+              executionMaterialization.stablePrefixChecksum
+            ));
       const approvedPlanMessage: AgentModelMessage = {
         role: "user",
         content: JSON.stringify({
@@ -7226,9 +7588,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         operationMode: "execution",
         contextMode: executionContextMode,
         writePolicy: executionWritePolicy,
-        ...(command.executionWritePolicyAcknowledged === true
-          ? { writePolicyAcknowledged: true }
-          : {}),
         userRequest: executionUserRequest,
         providerCapabilitySnapshot: snapshot.providerCapabilitySnapshot,
         ...(snapshot.reasoningEffort === undefined
@@ -7249,13 +7608,28 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         promptCachePolicyVersion: snapshot.promptCachePolicyVersion,
         cachePrefixChecksum: executionMaterialization.stablePrefixChecksum,
         promptCacheArtifactId: executionPromptCacheArtifact?.artifactId ?? null,
-        promptCacheIdentityBaseChecksum:
-          executionPromptCacheArtifact?.identityBaseChecksum ?? "legacy",
-        promptCacheIdentityChecksum: executionPromptCacheArtifact?.identityChecksum ?? "legacy",
+        promptCacheIdentityBaseChecksum: executionPromptCacheIdentityBaseChecksum,
+        promptCacheIdentityChecksum: executionPromptCacheIdentityChecksum,
         promptCacheStablePrefixMessageCount:
           executionPromptCacheArtifact?.stablePrefixMessageCount ?? 0,
         toolFacadeVersion: newRunToolFacadeVersion,
         toolCatalogRevision: executionCatalogRevision,
+        ...(useExecutionCatalogV2 ? { finishContractVersion: "2.0" as const } : {}),
+        ...(executionGuidanceV3 === undefined
+          ? {}
+          : {
+              runV20: {
+                schemaVersion: "2.0" as const,
+                providerSemanticVersionSetChecksum:
+                  executionGuidanceV3.proof.providerSemanticVersionSetChecksum,
+                authorityRegistryKey: executionGuidanceV3.proof.registryKey,
+                materializedGuidanceChecksum:
+                  executionGuidanceV3.proof.materializedGuidanceChecksum,
+                toolCatalogChecksum: executionCatalogRevision,
+                effectiveCapabilityRevision: executionEffectiveState.revision,
+                executionWritePolicyDraft: executionWritePolicy
+              }
+            }),
         ...(executionPermissionSummary === undefined
           ? {}
           : {
@@ -7320,6 +7694,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const executionRuntime: RunRuntime = {
         messages: [...executionMaterialization.messages, approvedPlanMessage],
         promptBaseMessageCount: executionMaterialization.messages.length,
+        executionWritePolicyDraft: executionStart.writePolicy ?? "write_before_confirmation",
         systemPrompt: executionSystemPrompt,
         providerRoundsAllowed: true,
         ...(executionPromptCacheArtifact === undefined
@@ -7411,13 +7786,68 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           return rejectUnpersistedExecution(budgetPersisted.error);
         }
       }
-      const planExecution = createPlanExecutionRecord({
-        planExecutionId,
-        runId: executionStarted.value.runId,
-        plan,
-        handoffContextMode: executionStart.contextMode,
-        handoffWritePolicy: executionStart.writePolicy ?? "write_before_confirmation"
-      });
+      let planExecution: PlanExecutionRecord | PlanExecutionRecordV20 | undefined;
+      try {
+        if (useExecutionCatalogV2) {
+          const providerSemanticVersionSetChecksum =
+            executionGuidanceV3?.proof.providerSemanticVersionSetChecksum;
+          if (providerSemanticVersionSetChecksum === undefined) {
+            return rejectUnpersistedExecution(
+              applicationError(
+                "AGENT_GUIDANCE_V3_INVALID",
+                "The execution Guidance 3.0 semantic version set is missing."
+              )
+            );
+          }
+          const handoff = createPlanActHandoffV20(plan, {
+            handoffId: `handoff_${createHash("sha256")
+              .update(
+                `${executionStarted.value.runId}:${command.commandId}:${plan.revision}`,
+                "utf8"
+              )
+              .digest("hex")
+              .slice(0, 32)}`,
+            planId: plan.planId,
+            planRevision: plan.revision,
+            executionContextMode: executionStart.contextMode as "writing" | "general_file",
+            executionWritePolicy: executionStart.writePolicy ?? "write_before_confirmation",
+            providerSemanticVersionSetChecksum
+          });
+          planExecution = createPlanExecutionRecordV20({
+            plan: {
+              planId: plan.planId,
+              revision: plan.revision,
+              steps: plan.steps
+            },
+            planExecutionId,
+            runId: executionStarted.value.runId,
+            handoff
+          });
+        } else {
+          planExecution = createPlanExecutionRecord({
+            planExecutionId,
+            runId: executionStarted.value.runId,
+            plan,
+            handoffContextMode: executionStart.contextMode,
+            handoffWritePolicy: executionStart.writePolicy ?? "write_before_confirmation"
+          });
+        }
+      } catch {
+        return rejectUnpersistedExecution(
+          applicationError(
+            "AGENT_PLAN_EXECUTION_HANDOFF_INVALID",
+            "The execution handoff could not be created from the frozen plan."
+          )
+        );
+      }
+      if (planExecution === undefined) {
+        return rejectUnpersistedExecution(
+          applicationError(
+            "AGENT_GUIDANCE_V3_INVALID",
+            "The execution Guidance 3.0 semantic version set is missing."
+          )
+        );
+      }
       const planExecutionWritten = await planExecutionSession.startPlanExecution({
         record: planExecution
       });
@@ -8266,18 +8696,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               (hook): hook is string => typeof hook === "string"
             )
           : [];
-        runtime.messages.push({
-          role: "tool",
-          content: JSON.stringify({
-            ok: true,
-            decision:
-              resolvedApproval.approvalSource === "user_preapproved_run"
-                ? "applied_by_user_preapproval"
-                : "applied_by_human_confirmation",
-            approvalSource: resolvedApproval.approvalSource,
-            versionGroupId
-          })
-        });
         const postWriteSnapshot = coordinator.readSnapshot(command.runId) ?? snapshot;
         const contextRefresh = await refreshContextAfterOwnWrite({
           runId: command.runId,
@@ -8285,6 +8703,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           runtime,
           changeSet,
           versionGroup: applied.value
+        });
+        const writeEvidenceRef = formatWriteAppliedEvidenceRef({
+          sequence: postWriteSnapshot.lastSequence + 1,
+          changeSetId: changeSet.changeSetId,
+          revision: changeSet.revision,
+          checksum: changeSet.checksum
         });
         const writeApplied = await recordEvent(command.runId, {
           runId: command.runId,
@@ -8337,6 +8761,21 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                 })
           }
         });
+        if (writeApplied.ok) {
+          runtime.messages.push({
+            role: "tool",
+            content: JSON.stringify({
+              ok: true,
+              decision:
+                resolvedApproval.approvalSource === "user_preapproved_run"
+                  ? "applied_by_user_preapproval"
+                  : "applied_by_human_confirmation",
+              approvalSource: resolvedApproval.approvalSource,
+              versionGroupId,
+              evidenceRefs: [writeEvidenceRef]
+            })
+          });
+        }
         const finalResult =
           writeApplied.ok && !contextRefresh.ok
             ? await recordEvent(command.runId, {
@@ -8671,50 +9110,257 @@ function parseUserInputRequest(value: JsonObject): Result<AgentUserInputRequest,
 
 function parsePlanArtifact(
   snapshot: AgentRunSnapshot,
+  runtime: Pick<RunRuntime, "promptArtifact" | "executionWritePolicyDraft">,
   value: JsonObject
-): Result<ReturnType<typeof createPlanArtifactRevision>, UnifiedError> {
+): Result<PlanArtifact | PlanArtifactV20, UnifiedError> {
   if (snapshot.operationMode !== "planning")
     return err(applicationError("AGENT_PLAN_NOT_ALLOWED", "Only planning runs can finish a plan."));
-  const planId = readString(value, "planId");
-  const goal = readString(value, "goal");
-  if (planId === undefined || goal === undefined)
-    return err(applicationError("AGENT_PLAN_INVALID", "Plan Artifact is missing required fields."));
+  const fields = [
+    "planId",
+    "goal",
+    "successCriteria",
+    "nonGoals",
+    "facts",
+    "assumptions",
+    "openQuestions",
+    "targetRefs",
+    "steps",
+    "risks",
+    "verification",
+    "sourceRefs"
+  ] as const;
+  const planId = readBoundedPlanString(value, "planId", 256);
+  const goal = readBoundedPlanString(value, "goal", 10_000);
+  const successCriteria = readPlanStringArray(value, "successCriteria");
+  const nonGoals = readPlanStringArray(value, "nonGoals");
+  const facts = readPlanStringArray(value, "facts");
+  const assumptions = readPlanStringArray(value, "assumptions");
+  const openQuestions = readOpenQuestions(value);
+  const targetRefs = readTargetRefs(value);
+  const steps = readPlanSteps(value);
+  const risks = readPlanStringArray(value, "risks");
+  const verification = readPlanStringArray(value, "verification");
+  const sourceRefs = readPlanStringArray(value, "sourceRefs");
+  if (
+    Object.keys(value).length !== fields.length ||
+    Object.keys(value).some((key) => !fields.includes(key as (typeof fields)[number])) ||
+    planId === undefined ||
+    goal === undefined ||
+    successCriteria === undefined ||
+    successCriteria.length === 0 ||
+    nonGoals === undefined ||
+    facts === undefined ||
+    assumptions === undefined ||
+    !Array.isArray(value["openQuestions"]) ||
+    value["openQuestions"].length > 100 ||
+    openQuestions.length !== value["openQuestions"].length ||
+    !Array.isArray(value["targetRefs"]) ||
+    value["targetRefs"].length > 100 ||
+    targetRefs.length !== value["targetRefs"].length ||
+    !Array.isArray(value["steps"]) ||
+    value["steps"].length === 0 ||
+    value["steps"].length > 100 ||
+    steps.length !== value["steps"].length ||
+    risks === undefined ||
+    verification === undefined ||
+    verification.length === 0 ||
+    sourceRefs === undefined
+  )
+    return err(
+      applicationError(
+        "AGENT_PLAN_INVALID",
+        "Plan Artifact is missing required structured fields or contains invalid values."
+      )
+    );
   const input: CreatePlanArtifactInput = {
     planId,
     sourceRunId: snapshot.runId,
     operationMode: "planning",
     contextMode: snapshot.contextMode,
     goal,
-    successCriteria: readStringArray(value, "successCriteria"),
-    nonGoals: readStringArray(value, "nonGoals"),
-    facts: readStringArray(value, "facts"),
-    assumptions: readStringArray(value, "assumptions"),
-    openQuestions: readOpenQuestions(value),
-    targetRefs: readTargetRefs(value),
-    steps: readPlanSteps(value),
-    risks: readStringArray(value, "risks"),
-    verification: readStringArray(value, "verification"),
-    sourceRefs: readStringArray(value, "sourceRefs"),
+    successCriteria,
+    nonGoals,
+    facts,
+    assumptions,
+    openQuestions,
+    targetRefs,
+    steps,
+    risks,
+    verification,
+    sourceRefs,
     createdAt: new Date().toISOString()
   };
-  return ok(createPlanArtifactRevision(input));
+  return ok(
+    runtime.promptArtifact?.schemaVersion === "2.0"
+      ? createPlanArtifactRevisionV20({
+          ...input,
+          operationMode: "planning",
+          executionWritePolicyDraft: runtime.executionWritePolicyDraft
+        })
+      : createPlanArtifactRevision(input)
+  );
+}
+
+function restoredExecutionWritePolicyDraft(
+  value: PlanArtifact | PlanArtifactV20 | undefined,
+  snapshot: AgentRunSnapshot
+): AgentWritePolicy {
+  if (value?.schemaVersion === "2.0") return value.executionWritePolicyDraft;
+  return snapshot.schemaVersion === "2.0"
+    ? snapshot.executionWritePolicyDraft
+    : "write_before_confirmation";
+}
+
+function planArtifactFromEventDetail(detail: JsonObject): JsonObject {
+  const artifact = { ...detail };
+  delete artifact["toolCallId"];
+  delete artifact["toolName"];
+  return artifact;
+}
+
+function restorePlanArtifact(
+  value: JsonObject | undefined
+): Result<PlanArtifact | PlanArtifactV20 | undefined, UnifiedError> {
+  if (value === undefined) return ok(undefined);
+  if (value["schemaVersion"] === "2.0") {
+    const parsed = validatePlanArtifactV20(value);
+    return parsed.ok ? ok(parsed.value) : err(parsed.error);
+  }
+  const fields = [
+    "schemaVersion",
+    "planId",
+    "revision",
+    "sourceRunId",
+    "status",
+    "operationMode",
+    "contextMode",
+    "goal",
+    "successCriteria",
+    "nonGoals",
+    "facts",
+    "assumptions",
+    "openQuestions",
+    "targetRefs",
+    "steps",
+    "risks",
+    "verification",
+    "sourceRefs",
+    "createdAt"
+  ] as const;
+  const openQuestions = readOpenQuestions(value);
+  const targetRefs = readTargetRefs(value);
+  const steps = readPlanSteps(value);
+  const status = value["status"];
+  const contextMode = value["contextMode"];
+  if (
+    value["schemaVersion"] !== "1.0" ||
+    Object.keys(value).length !== fields.length ||
+    Object.keys(value).some((key) => !fields.includes(key as (typeof fields)[number])) ||
+    typeof value["planId"] !== "string" ||
+    value["planId"].trim().length === 0 ||
+    !Number.isSafeInteger(value["revision"]) ||
+    Number(value["revision"]) < 1 ||
+    typeof value["sourceRunId"] !== "string" ||
+    value["sourceRunId"].trim().length === 0 ||
+    (status !== "ready" &&
+      status !== "approved" &&
+      status !== "executing" &&
+      status !== "completed" &&
+      status !== "rejected" &&
+      status !== "superseded") ||
+    value["operationMode"] !== "planning" ||
+    (contextMode !== "standalone_chat" &&
+      contextMode !== "writing" &&
+      contextMode !== "general_file") ||
+    typeof value["goal"] !== "string" ||
+    value["goal"].trim().length === 0 ||
+    !isStringArrayValue(value["successCriteria"]) ||
+    !isStringArrayValue(value["nonGoals"]) ||
+    !isStringArrayValue(value["facts"]) ||
+    !isStringArrayValue(value["assumptions"]) ||
+    !Array.isArray(value["openQuestions"]) ||
+    openQuestions.length !== value["openQuestions"].length ||
+    !Array.isArray(value["targetRefs"]) ||
+    targetRefs.length !== value["targetRefs"].length ||
+    !Array.isArray(value["steps"]) ||
+    steps.length !== value["steps"].length ||
+    !isStringArrayValue(value["risks"]) ||
+    !isStringArrayValue(value["verification"]) ||
+    !isStringArrayValue(value["sourceRefs"]) ||
+    typeof value["createdAt"] !== "string" ||
+    value["createdAt"].trim().length === 0
+  ) {
+    return err(
+      applicationError(
+        "AGENT_PLAN_ARTIFACT_INVALID",
+        "The persisted Plan Artifact is invalid or uses an unsupported version."
+      )
+    );
+  }
+  return ok(
+    deepFreeze({
+      ...value,
+      openQuestions,
+      targetRefs,
+      steps
+    } as unknown as PlanArtifact)
+  );
+}
+
+function isStringArrayValue(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function readBoundedPlanString(
+  value: JsonObject,
+  key: string,
+  maxLength: number
+): string | undefined {
+  const candidate = value[key];
+  return typeof candidate === "string" &&
+    candidate.trim().length > 0 &&
+    candidate.length <= maxLength
+    ? candidate
+    : undefined;
+}
+
+function readPlanStringArray(value: JsonObject, key: string): string[] | undefined {
+  const candidate = value[key];
+  if (
+    !Array.isArray(candidate) ||
+    candidate.length > 100 ||
+    !candidate.every(
+      (item) => typeof item === "string" && item.trim().length > 0 && item.length <= 10_000
+    )
+  ) {
+    return undefined;
+  }
+  return candidate as string[];
 }
 
 function readOpenQuestions(value: JsonObject): PlanOpenQuestion[] {
   const candidate = value["openQuestions"];
-  if (!Array.isArray(candidate)) return [];
+  if (!Array.isArray(candidate) || candidate.length > 100) return [];
   return candidate.flatMap((item) => {
     if (!isJsonObject(item)) return [];
-    const questionId = readString(item, "questionId");
-    const prompt = readString(item, "prompt");
-    if (questionId === undefined || prompt === undefined || typeof item["blocking"] !== "boolean") {
-      return [];
-    }
-    const resolution = readString(item, "resolution");
+    const allowed = ["questionId", "prompt", "blocking", "resolution", "resolvedBy"];
+    const questionId = readBoundedPlanString(item, "questionId", 256);
+    const prompt = readBoundedPlanString(item, "prompt", 10_000);
+    const resolution = readBoundedPlanString(item, "resolution", 10_000);
     const resolvedBy =
       item["resolvedBy"] === "user" || item["resolvedBy"] === "system"
         ? item["resolvedBy"]
         : undefined;
+    if (
+      Object.keys(item).some((key) => !allowed.includes(key)) ||
+      questionId === undefined ||
+      prompt === undefined ||
+      typeof item["blocking"] !== "boolean" ||
+      ("resolution" in item && resolution === undefined) ||
+      ("resolvedBy" in item && resolvedBy === undefined)
+    ) {
+      return [];
+    }
     return [
       {
         questionId,
@@ -8729,23 +9375,23 @@ function readOpenQuestions(value: JsonObject): PlanOpenQuestion[] {
 
 function readTargetRefs(value: JsonObject): PlanTargetRef[] {
   const candidate = value["targetRefs"];
-  if (!Array.isArray(candidate)) return [];
+  if (!Array.isArray(candidate) || candidate.length > 100) return [];
   return candidate.flatMap((item) => {
-    if (!isJsonObject(item)) return [];
-    const refId = readString(item, "refId");
-    const intent = readString(item, "intent");
+    if (!isJsonObject(item) || Object.keys(item).length !== 2) return [];
+    const refId = readBoundedPlanString(item, "refId", 1_036);
+    const intent = readBoundedPlanString(item, "intent", 10_000);
     return refId === undefined || intent === undefined ? [] : [{ refId, intent }];
   });
 }
 
 function readPlanSteps(value: JsonObject): PlanStep[] {
   const candidate = value["steps"];
-  if (!Array.isArray(candidate)) return [];
+  if (!Array.isArray(candidate) || candidate.length > 100) return [];
   return candidate.flatMap((item) => {
-    if (!isJsonObject(item)) return [];
-    const stepId = readString(item, "stepId");
-    const title = readString(item, "title");
-    const verification = readString(item, "verification");
+    if (!isJsonObject(item) || Object.keys(item).length !== 3) return [];
+    const stepId = readBoundedPlanString(item, "stepId", 256);
+    const title = readBoundedPlanString(item, "title", 10_000);
+    const verification = readBoundedPlanString(item, "verification", 10_000);
     return stepId === undefined || title === undefined || verification === undefined
       ? []
       : [{ stepId, title, verification }];
@@ -9782,6 +10428,55 @@ function hasPersistedFinalUsage(events: readonly AgentRunEvent[]): boolean {
   });
 }
 
+function restoreRunCounters(events: readonly AgentRunEvent[]): {
+  readonly modelRounds: number;
+  readonly toolCalls: number;
+  readonly consecutiveToolFailures: number;
+} {
+  let modelRounds = 0;
+  let toolCalls = 0;
+  let consecutiveToolFailures = 0;
+  const startedToolCalls = new Set<string>();
+  for (const event of events) {
+    if (event.type === "assistant_text_completed") modelRounds += 1;
+    if (
+      event.type === "tool_failed" &&
+      event.detail?.["code"] === "AGENT_TOOL_CALL_SKIPPED_IN_EFFECTFUL_BATCH"
+    ) {
+      continue;
+    }
+    if (
+      event.type !== "tool_started" &&
+      event.type !== "tool_completed" &&
+      event.type !== "tool_failed" &&
+      event.type !== "tool_approval_requested" &&
+      event.type !== "tool_approval_resolved" &&
+      event.type !== "user_input_requested" &&
+      event.type !== "plan_ready"
+    ) {
+      continue;
+    }
+    const toolCallId = event.detail?.["toolCallId"];
+    if (typeof toolCallId !== "string" || toolCallId.length === 0) continue;
+    if (event.type === "tool_started" || event.type === "tool_approval_requested") {
+      if (!startedToolCalls.has(toolCallId)) toolCalls += 1;
+      startedToolCalls.add(toolCallId);
+      continue;
+    }
+    if (event.type === "tool_approval_resolved") {
+      if (event.detail?.["decision"] === "reject") startedToolCalls.delete(toolCallId);
+      continue;
+    }
+    if (event.type === "user_input_requested" || event.type === "plan_ready") {
+      toolCalls += 1;
+      continue;
+    }
+    if (!startedToolCalls.delete(toolCallId)) toolCalls += 1;
+    consecutiveToolFailures = event.type === "tool_failed" ? consecutiveToolFailures + 1 : 0;
+  }
+  return { modelRounds, toolCalls, consecutiveToolFailures };
+}
+
 function hasPendingBudgetPressureCompaction(events: readonly AgentRunEvent[]): boolean {
   for (const event of [...events].reverse()) {
     if (event.type === "context_compaction_completed") return false;
@@ -9888,27 +10583,33 @@ function applicationError(code: string, message: string): UnifiedError {
 function isTerminal(status: AgentRunSnapshot["status"]): boolean {
   return (
     status === "completed" ||
+    status === "blocked" ||
     status === "cancelled" ||
     status === "failed" ||
-    status === "limit_reached"
+    status === "limit_reached" ||
+    status === "capability_changed"
   );
 }
 
 function isTerminalRunEvent(type: AgentRunEvent["type"]): boolean {
   return (
     type === "run_completed" ||
+    type === "run_blocked" ||
     type === "run_cancelled" ||
     type === "run_failed" ||
-    type === "run_limit_reached"
+    type === "run_limit_reached" ||
+    type === "capability_changed"
   );
 }
 
 function isTerminalStatus(status: string): boolean {
   return (
     status === "completed" ||
+    status === "blocked" ||
     status === "cancelled" ||
     status === "failed" ||
-    status === "limit_reached"
+    status === "limit_reached" ||
+    status === "capability_changed"
   );
 }
 

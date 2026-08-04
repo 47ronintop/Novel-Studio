@@ -14,6 +14,7 @@ import {
   type AgentContextSourceKind,
   type AgentContextTruncationRange,
   type AgentRunDraft,
+  type AgentRunDraftV20,
   type AgentTokenEstimator,
   type CompactContextCommand,
   type CompactionInputManifest,
@@ -25,6 +26,7 @@ import {
   type PackedAgentContextSourceManifest,
   type PackedAgentContextTokenStats,
   type PlanExecutionRecord,
+  type PlanExecutionRecordV20,
   type PreviewContextBudgetCommand,
   type ProtectedContextFact
 } from "@novel-studio/agent-engine";
@@ -52,6 +54,12 @@ import {
   type CompactionSummaryResult
 } from "./agent-compaction-summary.js";
 import { packAgentContext } from "./agent-prompt-materializer.js";
+
+/** Drafts are read from the persisted store, which may contain either supported schema version. */
+type PersistedAgentRunDraft = AgentRunDraft | AgentRunDraftV20;
+
+/** Execution records are likewise readable across the legacy and strict handoff schemas. */
+type PersistedPlanExecutionRecord = PlanExecutionRecord | PlanExecutionRecordV20;
 
 /**
  * The provider-aware facts a budget is calculated from. Resolved server-side from the draft's
@@ -140,7 +148,7 @@ export interface AgentContextBudgetInputsPort {
     readonly projectId?: string;
     readonly scope?: AgentContextScope;
     readonly conversationId: string;
-    readonly draft: AgentRunDraft;
+    readonly draft: PersistedAgentRunDraft;
     readonly contextDraft: ContextDraft;
   }): Promise<Result<AgentContextBudgetInputs, UnifiedError>>;
 }
@@ -151,7 +159,7 @@ export interface CompactionInputs {
   readonly throughSequence: number;
   readonly nextRevision: number;
   readonly protectedFacts: readonly ProtectedContextFact[];
-  readonly planExecutionRecord?: PlanExecutionRecord;
+  readonly planExecutionRecord?: PersistedPlanExecutionRecord;
   readonly evictableSources: readonly EvictableContextSource[];
   readonly currentTokens: number;
   readonly targetTokens: number;
@@ -1373,9 +1381,9 @@ function deepFreeze<T>(value: T): T {
 
 function mergePlanExecutionFact(
   facts: readonly ProtectedContextFact[],
-  record: PlanExecutionRecord
+  record: PersistedPlanExecutionRecord
 ): readonly ProtectedContextFact[] {
-  const latest = createPlanExecutionProtectedFact(record);
+  const latest = createPlanExecutionProtectedFact(legacyPlanExecutionProjection(record));
   let replaced = false;
   const merged = facts.map((fact) => {
     if (fact.kind !== "plan_execution" || fact.sourceId !== latest.sourceId) return fact;
@@ -1383,6 +1391,22 @@ function mergePlanExecutionFact(
     return latest;
   });
   return replaced ? merged : [...merged, latest];
+}
+
+/** The existing protected-fact primitive is schema-1.0-shaped, but needs only common fields. */
+function legacyPlanExecutionProjection(record: PersistedPlanExecutionRecord): PlanExecutionRecord {
+  if (record.schemaVersion === "1.0") return record;
+  return {
+    schemaVersion: "1.0",
+    planExecutionId: record.planExecutionId,
+    runId: record.runId,
+    planId: record.planId,
+    planRevision: record.planRevision,
+    handoffContextMode: record.handoffContextMode,
+    handoffWritePolicy: record.handoffWritePolicy,
+    revision: record.revision,
+    steps: record.steps
+  };
 }
 
 function createDefaultBudgetSnapshotId(): string {

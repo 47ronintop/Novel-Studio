@@ -129,7 +129,11 @@ export async function createForeshadowConfirmationPlan(
         operation = await updateOperation(target, descriptor.candidates, chapterOrder, timestamp);
       }
 
-      if (validateStoryBibleForeshadow(operation.asset, workingForeshadows).length > 0) {
+      if (
+        validateStoryBibleForeshadow(operation.asset, workingForeshadows).some(
+          (issue) => issue.severity === "error"
+        )
+      ) {
         return {
           ok: false,
           message: "所选候选与现有伏笔包含重复或无效的原文证据，请返回候选重新选择。"

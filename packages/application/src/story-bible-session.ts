@@ -8,6 +8,8 @@ import {
   type ValidationIssue
 } from "@novel-studio/schemas";
 import {
+  FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING,
+  collectForeshadowContractWarnings,
   createUnifiedError,
   err,
   type ChapterCatalogRepositoryPort,
@@ -234,6 +236,7 @@ export interface StoryBibleConsistencyRef extends JsonObject {
 
 export interface StoryBibleConsistencyIssue extends JsonObject {
   readonly id: string;
+  readonly code?: string;
   readonly severity: StoryBibleConsistencySeverity;
   readonly title: string;
   readonly message: string;
@@ -849,17 +852,14 @@ function createForeshadowConsistencyIssues(
   issues.push(...duplicateForeshadowSourceIssues(orderedForeshadows));
 
   for (const foreshadow of orderedForeshadows) {
-    if (
-      foreshadow.details.trackingStatus !== "paid-off" ||
-      hasNonEmptyText(foreshadow.details.actualPayoffChapterId)
-    ) {
-      continue;
-    }
+    const warning = collectForeshadowContractWarnings(foreshadow.details)[0];
+    if (warning === undefined) continue;
 
     const ref = assetRef(foreshadow);
     issues.push({
       id: `story-consistency.foreshadow.${foreshadow.id}.paid-off-missing-actual-payoff-chapter`,
-      severity: "warning",
+      code: FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING,
+      severity: warning.severity,
       title: "Paid-off foreshadow has no payoff chapter",
       message: `${foreshadow.title} is marked paid off without an actual payoff chapter.`,
       sourceRef: ref,

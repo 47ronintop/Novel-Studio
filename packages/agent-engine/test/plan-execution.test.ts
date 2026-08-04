@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 
 import * as engineExports from "../src/index.js";
+import { createPlanActHandoffV20, createPlanArtifactRevisionV20 } from "../src/plan-artifact.js";
+import {
+  createPlanExecutionRecordV20,
+  parsePlanExecutionRecordV20,
+  validatePlanExecutionRecordV20
+} from "../src/plan-execution.js";
 
 type ExecutionRecord = {
   readonly revision: number;
@@ -88,6 +94,101 @@ function transition(record: ExecutionRecord, input: Record<string, unknown>): Ex
 }
 
 describe("Plan execution records", () => {
+  test("creates a strict 2.0 execution record only from a matching Act handoff", () => {
+    const planV20 = createPlanArtifactRevisionV20({
+      planId: "plan_v20",
+      sourceRunId: "run_v20",
+      operationMode: "planning",
+      contextMode: "writing",
+      goal: "Align chapter motivation.",
+      successCriteria: ["Motivation is consistent"],
+      nonGoals: [],
+      facts: [],
+      assumptions: [],
+      openQuestions: [],
+      targetRefs: [{ refId: "chapter_03", intent: "Correct motivation" }],
+      steps: [{ stepId: "step_01", title: "Read chapter 3", verification: "Re-read diff" }],
+      risks: [],
+      verification: ["Compare diff"],
+      sourceRefs: ["chapter_03"],
+      createdAt: "2026-08-04T00:00:00.000Z",
+      executionWritePolicyDraft: "write_before_confirmation"
+    });
+    const handoff = createPlanActHandoffV20(planV20, {
+      handoffId: "handoff_v20",
+      planId: planV20.planId,
+      planRevision: planV20.revision,
+      executionContextMode: "writing",
+      executionWritePolicy: "write_before_confirmation",
+      providerSemanticVersionSetChecksum: "b".repeat(64)
+    });
+    const record = createPlanExecutionRecordV20({
+      planExecutionId: "execution_v20",
+      runId: "run_v20_act",
+      plan: planV20,
+      handoff
+    });
+    expect(record).toMatchObject({
+      schemaVersion: "2.0",
+      planId: "plan_v20",
+      planRevision: 1,
+      handoffWritePolicy: "write_before_confirmation",
+      executionWritePolicyAcknowledged: false,
+      providerSemanticVersionSetChecksum: "b".repeat(64)
+    });
+    expect(parsePlanExecutionRecordV20(record)).toBe(record);
+    expect(Object.isFrozen(record)).toBe(true);
+  });
+
+  test("rejects record fields that drift from the exact handoff binding", () => {
+    const planV20 = createPlanArtifactRevisionV20({
+      planId: "plan_v20_drift",
+      sourceRunId: "run_v20",
+      operationMode: "planning",
+      contextMode: "writing",
+      goal: "Align chapter motivation.",
+      successCriteria: [],
+      nonGoals: [],
+      facts: [],
+      assumptions: [],
+      openQuestions: [],
+      targetRefs: [],
+      steps: [{ stepId: "step_01", title: "Read", verification: "Review" }],
+      risks: [],
+      verification: [],
+      sourceRefs: [],
+      createdAt: "2026-08-04T00:00:00.000Z",
+      executionWritePolicyDraft: "write_before_confirmation"
+    });
+    const handoff = createPlanActHandoffV20(planV20, {
+      handoffId: "handoff_v20_drift",
+      planId: planV20.planId,
+      planRevision: planV20.revision,
+      executionContextMode: "writing",
+      executionWritePolicy: "write_before_confirmation",
+      providerSemanticVersionSetChecksum: "b".repeat(64)
+    });
+    const record = createPlanExecutionRecordV20({
+      planExecutionId: "execution_v20_drift",
+      runId: "run_v20_act",
+      plan: planV20,
+      handoff
+    });
+    expect(
+      validatePlanExecutionRecordV20({
+        ...record,
+        providerSemanticVersionSetChecksum: "c".repeat(64)
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PLAN_EXECUTION_HANDOFF_MISMATCH" }
+    });
+    expect(validatePlanExecutionRecordV20({ ...record, unknown: true })).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PLAN_EXECUTION_V20_FIELDS_INVALID" }
+    });
+  });
+
   test("creates immutable revision 1 from stable plan step ids and treats handoff choices as facts", () => {
     const record = createRecord();
 

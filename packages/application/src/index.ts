@@ -14,6 +14,7 @@ export type { ApplicationIpcChannel, ApplicationIpcEventChannel } from "./ipc-co
 export {
   APPLICATION_IPC_CHANNELS,
   APPLICATION_IPC_EVENT_CHANNELS,
+  TRUSTED_APPROVAL_IPC_CHANNELS,
   isApplicationIpcChannel
 } from "./ipc-contract.js";
 export {

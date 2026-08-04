@@ -65,24 +65,34 @@ export function createAgentSearchToolSession(
         ...(input.signal !== undefined ? { signal: input.signal } : {})
       });
       if (!result.ok) return result;
-      return ok(buildToolResult(result.value));
+      return ok(buildToolResult(result.value, input.contextMode));
     },
 
     async findReferences(input) {
       const result = await searchRepository.findReferences({
-        stableRef: input.stableRef,
+        stableRef:
+          input.contextMode === "general_file" && input.stableRef.startsWith("file:")
+            ? input.stableRef.slice("file:".length)
+            : input.stableRef,
         signal: input.signal
       });
       if (!result.ok) return result;
-      return ok(buildToolResult(result.value));
+      return ok(buildToolResult(result.value, input.contextMode));
     }
   };
 }
 
-function buildToolResult(sr: SearchRepositoryResult): AgentSearchToolResult {
+function buildToolResult(
+  sr: SearchRepositoryResult,
+  contextMode: "standalone_chat" | "writing" | "general_file" | undefined
+): AgentSearchToolResult {
+  const visibleItems = sr.items.flatMap((item) => {
+    const stableRef = providerVisibleStableRef(item.stableRef, contextMode);
+    return stableRef === undefined ? [] : [{ ...item, stableRef }];
+  });
   return {
     kind: "untrusted_project_data",
-    items: sr.items.map((item) => ({
+    items: visibleItems.map((item) => ({
       relativePath: item.relativePath,
       stableRef: item.stableRef,
       rangeUnit: item.range.unit,
@@ -93,8 +103,24 @@ function buildToolResult(sr: SearchRepositoryResult): AgentSearchToolResult {
       resultDigest: item.resultDigest,
       truncated: item.truncated
     })),
-    totalHits: sr.totalHits,
-    truncated: sr.truncated,
+    totalHits: visibleItems.length,
+    truncated: sr.truncated || visibleItems.length !== sr.items.length,
     indexVersion: sr.indexVersion
   };
+}
+
+function providerVisibleStableRef(
+  stableRef: string,
+  contextMode: "standalone_chat" | "writing" | "general_file" | undefined
+): string | undefined {
+  if (contextMode === "writing") {
+    return stableRef.startsWith("chapter:") || stableRef.startsWith("story_bible:")
+      ? stableRef
+      : undefined;
+  }
+  if (stableRef.startsWith("file:")) {
+    return stableRef.length > "file:".length ? stableRef : undefined;
+  }
+  if (stableRef.includes(":")) return undefined;
+  return stableRef.length > 0 ? `file:${stableRef}` : undefined;
 }

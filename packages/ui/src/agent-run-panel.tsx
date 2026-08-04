@@ -398,6 +398,8 @@ function statusLabel(status: AgentRunPanelProps["status"]): string {
       return "计划待审阅";
     case "completed":
       return "已完成";
+    case "blocked":
+      return "已阻塞";
     case "cancelled":
       return "已停止";
     case "failed":

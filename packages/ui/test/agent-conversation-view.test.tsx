@@ -306,11 +306,13 @@ function composer(overrides: Partial<AgentComposerProps> = {}): AgentComposerPro
     contextMode: "writing",
     writePolicy: "write_before_confirmation",
     writePolicyAcknowledged: false,
+    executionWritePolicyDraft: "write_before_confirmation",
     active: false,
     onRequestChange: () => undefined,
     onOperationModeChange: () => undefined,
     onContextModeChange: () => undefined,
     onWritePolicyChange: () => undefined,
+    onExecutionWritePolicyDraftChange: () => undefined,
     onSend: () => undefined,
     onStop: () => undefined,
     ...overrides

@@ -147,6 +147,15 @@ export const APPLICATION_IPC_EVENT_CHANNELS = [
 
 export type ApplicationIpcEventChannel = (typeof APPLICATION_IPC_EVENT_CHANNELS)[number];
 
+/**
+ * Isolated approval-window channels. They are deliberately not members of the ordinary
+ * workbench Application IPC allowlist above.
+ */
+export const TRUSTED_APPROVAL_IPC_CHANNELS = {
+  getPreview: "novel-studio:trusted-approval:get-preview",
+  decide: "novel-studio:trusted-approval:decide"
+} as const;
+
 export function isApplicationIpcChannel(channel: string): channel is ApplicationIpcChannel {
   return APPLICATION_IPC_CHANNELS.includes(channel as ApplicationIpcChannel);
 }

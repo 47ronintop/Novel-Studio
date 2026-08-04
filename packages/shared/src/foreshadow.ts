@@ -5,6 +5,16 @@ export type ForeshadowTrackingStatus =
 
 export type ForeshadowOrigin = "manual" | "ai-confirmed";
 
+export const FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING =
+  "FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING" as const;
+
+export interface ForeshadowContractWarning extends JsonObject {
+  readonly code: typeof FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING;
+  readonly severity: "warning";
+  readonly path: "/details/actualPayoffChapterId";
+  readonly message: string;
+}
+
 export interface ForeshadowSourceRef extends JsonObject {
   readonly chapterId: string;
   readonly excerpt: string;
@@ -19,6 +29,26 @@ export interface ForeshadowDetails extends JsonObject {
   readonly sourceRefs?: ForeshadowSourceRef[];
   readonly origin?: ForeshadowOrigin;
   readonly notes?: string;
+}
+
+export function collectForeshadowContractWarnings(
+  details: Readonly<Record<string, unknown>>
+): readonly ForeshadowContractWarning[] {
+  if (
+    details["trackingStatus"] !== "paid-off" ||
+    (typeof details["actualPayoffChapterId"] === "string" &&
+      details["actualPayoffChapterId"].trim().length > 0)
+  ) {
+    return Object.freeze([]);
+  }
+  return Object.freeze([
+    Object.freeze({
+      code: FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING,
+      severity: "warning" as const,
+      path: "/details/actualPayoffChapterId" as const,
+      message: "A paid-off foreshadow has no actual payoff chapter."
+    })
+  ]);
 }
 
 export function normalizeForeshadowEvidence(excerpt: string): string {

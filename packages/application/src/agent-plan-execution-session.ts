@@ -1,11 +1,14 @@
 import {
+  parsePlanExecutionRecordV20,
   recordPlanExecutionDeviation,
   summarizePlanExecution,
   transitionPlanExecutionStep,
   type DecidePlanRevisionCommand,
   type PlanDeviationChange,
   type PlanExecutionRecord,
+  type PlanExecutionRecordV20,
   type PlanExecutionSummary,
+  type PlanActHandoffV20,
   type TransitionPlanExecutionStepInput
 } from "@novel-studio/agent-engine";
 import {
@@ -71,7 +74,8 @@ export interface PlanExecutionEvent {
 }
 
 export interface StartPlanExecutionInput {
-  readonly record: PlanExecutionRecord;
+  /** New execution records carry a strict, Main-owned Act handoff; legacy records remain readable. */
+  readonly record: PlanExecutionRecord | PlanExecutionRecordV20;
 }
 
 export interface ReadPlanExecutionInput {
@@ -98,13 +102,15 @@ export interface RecordPlanDeviationResult {
   readonly state: "active" | "awaiting_plan_revision";
   readonly kind: "minor" | "material";
   readonly requiresPlanRevision: boolean;
-  readonly record: PlanExecutionRecord;
+  readonly record: PersistedPlanExecutionRecord;
   readonly request?: PlanRevisionRequest;
 }
 
 export interface DecidePlanExecutionRevisionCommand extends DecidePlanRevisionCommand {
   readonly planExecutionId: string;
   readonly expectedPlanExecutionRevision?: number;
+  /** A fresh, Main-owned Act handoff is required whenever the approved plan revision changes. */
+  readonly handoff?: PlanActHandoffV20;
 }
 
 export interface PlanRevisionDecisionReceipt {
@@ -112,7 +118,7 @@ export interface PlanRevisionDecisionReceipt {
   readonly requestId: string;
   readonly decision: "approve" | "reject";
   readonly state: "active" | "stopped";
-  readonly record: PlanExecutionRecord;
+  readonly record: PersistedPlanExecutionRecord;
 }
 
 export interface PlanRevisionDecisionRecord {
@@ -131,13 +137,13 @@ export interface PlanRevisionDecisionRecord {
 export interface AgentPlanExecutionSession {
   startPlanExecution(
     input: StartPlanExecutionInput
-  ): Promise<Result<PlanExecutionRecord, UnifiedError>>;
+  ): Promise<Result<PlanExecutionRecord | PlanExecutionRecordV20, UnifiedError>>;
   readPlanExecution(
     input: ReadPlanExecutionInput
-  ): Promise<Result<PlanExecutionRecord | undefined, UnifiedError>>;
+  ): Promise<Result<PersistedPlanExecutionRecord | undefined, UnifiedError>>;
   transitionStep(
     input: TransitionPlanExecutionInput
-  ): Promise<Result<PlanExecutionRecord, UnifiedError>>;
+  ): Promise<Result<PersistedPlanExecutionRecord, UnifiedError>>;
   recordDeviation(
     input: RecordPlanDeviationInput
   ): Promise<Result<RecordPlanDeviationResult, UnifiedError>>;
@@ -146,6 +152,8 @@ export interface AgentPlanExecutionSession {
   ): Promise<Result<PlanRevisionDecisionReceipt, UnifiedError>>;
   summarize(input: ReadPlanExecutionInput): Promise<Result<PlanExecutionSummary, UnifiedError>>;
 }
+
+type PersistedPlanExecutionRecord = PlanExecutionRecord | PlanExecutionRecordV20;
 
 export interface CreateAgentPlanExecutionSessionOptions {
   readonly repository: AgentPlanExecutionRepositoryPort;
@@ -161,21 +169,26 @@ export function createAgentPlanExecutionSession(
 
   async function read(
     input: ReadPlanExecutionInput
-  ): Promise<Result<PlanExecutionRecord | undefined, UnifiedError>> {
+  ): Promise<Result<PersistedPlanExecutionRecord | undefined, UnifiedError>> {
     const result = await options.repository.readPlanExecutionRecord(
       input.runId,
       input.planExecutionId,
       input.revision
     );
     if (!result.ok || result.value === undefined) return result as Result<undefined, UnifiedError>;
-    return isPlanExecutionRecord(result.value)
-      ? ok(result.value as unknown as PlanExecutionRecord)
-      : err(planExecutionSessionError("AGENT_PLAN_EXECUTION_RECORD_INVALID"));
+    const record = readPersistedPlanExecutionRecord(result.value);
+    if (record === undefined) {
+      return err(planExecutionSessionError("AGENT_PLAN_EXECUTION_RECORD_INVALID"));
+    }
+    if (record.runId !== input.runId || record.planExecutionId !== input.planExecutionId) {
+      return err(planExecutionSessionError("AGENT_PLAN_EXECUTION_RECORD_IDENTITY_MISMATCH"));
+    }
+    return ok(record);
   }
 
   async function current(
     input: ReadPlanExecutionInput
-  ): Promise<Result<PlanExecutionRecord, UnifiedError>> {
+  ): Promise<Result<PersistedPlanExecutionRecord, UnifiedError>> {
     const result = await read({ runId: input.runId, planExecutionId: input.planExecutionId });
     return !result.ok
       ? result
@@ -185,8 +198,15 @@ export function createAgentPlanExecutionSession(
   }
 
   async function write(
-    record: PlanExecutionRecord
-  ): Promise<Result<PlanExecutionRecord, UnifiedError>> {
+    record: PersistedPlanExecutionRecord
+  ): Promise<Result<PersistedPlanExecutionRecord, UnifiedError>> {
+    if (record.schemaVersion === "2.0") {
+      try {
+        parsePlanExecutionRecordV20(record);
+      } catch {
+        return err(planExecutionSessionError("AGENT_PLAN_EXECUTION_V20_INVALID"));
+      }
+    }
     const written = await options.repository.writePlanExecutionRecord(asJsonObject(record));
     return written.ok ? ok(record) : err(written.error);
   }
@@ -197,7 +217,24 @@ export function createAgentPlanExecutionSession(
 
   return {
     async startPlanExecution(input) {
-      return write(input.record);
+      try {
+        const record =
+          input.record.schemaVersion === "2.0"
+            ? parsePlanExecutionRecordV20(input.record)
+            : readPersistedPlanExecutionRecord(asJsonObject(input.record));
+        if (record === undefined) {
+          return err(planExecutionSessionError("AGENT_PLAN_EXECUTION_RECORD_INVALID"));
+        }
+        return write(record);
+      } catch {
+        return err(
+          planExecutionSessionError(
+            input.record.schemaVersion === "2.0"
+              ? "AGENT_PLAN_EXECUTION_V20_INVALID"
+              : "AGENT_PLAN_EXECUTION_RECORD_INVALID"
+          )
+        );
+      }
     },
 
     readPlanExecution: read,
@@ -205,9 +242,17 @@ export function createAgentPlanExecutionSession(
     async transitionStep(input) {
       const loaded = await current(input);
       if (!loaded.ok) return loaded;
-      const transitioned = transitionPlanExecutionStep(loaded.value, input);
+      const transitioned = transitionPlanExecutionStep(
+        loaded.value as unknown as PlanExecutionRecord,
+        input
+      );
       if (!transitioned.ok) return transitioned;
-      const written = await write(transitioned.value);
+      const next =
+        loaded.value.schemaVersion === "2.0"
+          ? parseV20ExecutionRecord(transitioned.value)
+          : ok(transitioned.value as PersistedPlanExecutionRecord);
+      if (!next.ok) return next;
+      const written = await write(next.value);
       if (!written.ok) return written;
       const step = written.value.steps.find((candidate) => candidate.stepId === input.stepId);
       if (step === undefined) {
@@ -230,9 +275,17 @@ export function createAgentPlanExecutionSession(
     async recordDeviation(input) {
       const loaded = await current(input);
       if (!loaded.ok) return loaded;
-      const recorded = recordPlanExecutionDeviation(loaded.value, input);
+      const recorded = recordPlanExecutionDeviation(
+        loaded.value as unknown as PlanExecutionRecord,
+        input
+      );
       if (!recorded.ok) return recorded;
-      const written = await write(recorded.value.record);
+      const next =
+        loaded.value.schemaVersion === "2.0"
+          ? parseV20ExecutionRecord(recorded.value.record)
+          : ok(recorded.value.record as PersistedPlanExecutionRecord);
+      if (!next.ok) return next;
+      const written = await write(next.value);
       if (!written.ok) return written;
       await emit({
         type: "plan_deviation_recorded",
@@ -345,13 +398,34 @@ export function createAgentPlanExecutionSession(
       ) {
         return err(planExecutionSessionError("AGENT_PLAN_REVISION_REQUEST_CONFLICT"));
       }
-      let record = loaded.value;
+      let record: PersistedPlanExecutionRecord = loaded.value;
       if (command.decision === "approve") {
-        record = Object.freeze({
-          ...loaded.value,
-          planRevision: command.planRevision,
-          revision: loaded.value.revision + 1
-        });
+        if (record.schemaVersion === "2.0" && command.handoff === undefined) {
+          return err(
+            planExecutionSessionError("AGENT_PLAN_EXECUTION_HANDOFF_RECONFIRMATION_REQUIRED")
+          );
+        }
+        if (record.schemaVersion === "2.0") {
+          const revised = parseV20ExecutionRecord({
+            ...record,
+            planRevision: command.planRevision,
+            handoffContextMode: command.handoff?.executionContextMode,
+            handoffWritePolicy: command.handoff?.executionWritePolicy,
+            executionWritePolicyAcknowledged: command.handoff?.executionWritePolicyAcknowledged,
+            providerSemanticVersionSetChecksum: command.handoff?.providerSemanticVersionSetChecksum,
+            handoff: command.handoff,
+            revision: record.revision + 1
+          });
+          if (!revised.ok) return revised;
+          record = revised.value;
+        } else {
+          record = deepFreeze({
+            ...record,
+            planRevision: command.planRevision,
+            handoffWritePolicy: "write_before_confirmation" as const,
+            revision: record.revision + 1
+          });
+        }
         const written = await write(record);
         if (!written.ok) return written;
         record = written.value;
@@ -388,7 +462,9 @@ export function createAgentPlanExecutionSession(
 
     async summarize(input) {
       const loaded = await current(input);
-      return loaded.ok ? ok(summarizePlanExecution(loaded.value)) : loaded;
+      return loaded.ok
+        ? ok(summarizePlanExecution(loaded.value as unknown as PlanExecutionRecord))
+        : loaded;
     }
   };
 }
@@ -430,16 +506,128 @@ async function persistReceipt(
   return persisted.ok ? receipt : err(persisted.error);
 }
 
-function isPlanExecutionRecord(value: JsonObject): boolean {
+function readPersistedPlanExecutionRecord(
+  value: JsonObject
+): PersistedPlanExecutionRecord | undefined {
+  if (value["schemaVersion"] === "2.0") {
+    try {
+      return parsePlanExecutionRecordV20(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return isLegacyPlanExecutionRecord(value) ? normalizeLegacyPlanExecutionRecord(value) : undefined;
+}
+
+/** Legacy execution records are hydrated for display only and cannot inherit old preapproval. */
+function normalizeLegacyPlanExecutionRecord(value: JsonObject): PlanExecutionRecord {
+  return deepFreeze({
+    schemaVersion: "1.0" as const,
+    planExecutionId: value["planExecutionId"] as string,
+    runId: value["runId"] as string,
+    planId: value["planId"] as string,
+    planRevision: value["planRevision"] as number,
+    handoffContextMode: value["handoffContextMode"] as "writing" | "general_file",
+    handoffWritePolicy: "write_before_confirmation" as const,
+    revision: value["revision"] as number,
+    steps: (value["steps"] as JsonObject[]).map((step) => ({
+      stepId: step["stepId"] as string,
+      title: step["title"] as string,
+      status: step["status"] as PlanExecutionRecord["steps"][number]["status"],
+      startedAt: step["startedAt"] as string | null,
+      completedAt: step["completedAt"] as string | null,
+      verification: [...(step["verification"] as string[])],
+      deviationKind: step["deviationKind"] as PlanExecutionRecord["steps"][number]["deviationKind"],
+      blockedReason: step["blockedReason"] as string | null,
+      checkpointId: step["checkpointId"] as string | null,
+      eventSequence: step["eventSequence"] as number | null
+    }))
+  });
+}
+
+function parseV20ExecutionRecord(value: unknown): Result<PlanExecutionRecordV20, UnifiedError> {
+  try {
+    return ok(parsePlanExecutionRecordV20(value));
+  } catch {
+    return err(planExecutionSessionError("AGENT_PLAN_EXECUTION_V20_INVALID"));
+  }
+}
+
+function isLegacyPlanExecutionRecord(value: JsonObject): boolean {
+  const required = [
+    "schemaVersion",
+    "planExecutionId",
+    "runId",
+    "planId",
+    "planRevision",
+    "handoffContextMode",
+    "handoffWritePolicy",
+    "revision",
+    "steps"
+  ];
   return (
+    Object.keys(value).length === required.length &&
+    required.every((key) => key in value) &&
     value["schemaVersion"] === "1.0" &&
-    typeof value["planExecutionId"] === "string" &&
-    typeof value["runId"] === "string" &&
-    typeof value["planId"] === "string" &&
-    typeof value["planRevision"] === "number" &&
-    typeof value["revision"] === "number" &&
-    Array.isArray(value["steps"])
+    isNonEmpty(value["planExecutionId"] as string | undefined) &&
+    isNonEmpty(value["runId"] as string | undefined) &&
+    isNonEmpty(value["planId"] as string | undefined) &&
+    isSafePositiveInteger(value["planRevision"]) &&
+    (value["handoffContextMode"] === "writing" || value["handoffContextMode"] === "general_file") &&
+    (value["handoffWritePolicy"] === "write_before_confirmation" ||
+      value["handoffWritePolicy"] === "user_preapproved_run") &&
+    isSafePositiveInteger(value["revision"]) &&
+    Array.isArray(value["steps"]) &&
+    value["steps"].every(isLegacyPlanExecutionStep)
   );
+}
+
+function isSafePositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function isLegacyPlanExecutionStep(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const required = [
+    "stepId",
+    "title",
+    "status",
+    "startedAt",
+    "completedAt",
+    "verification",
+    "deviationKind",
+    "blockedReason",
+    "checkpointId",
+    "eventSequence"
+  ];
+  return (
+    Object.keys(value).length === required.length &&
+    required.every((key) => key in value) &&
+    isNonEmpty(value["stepId"] as string | undefined) &&
+    isNonEmpty(value["title"] as string | undefined) &&
+    (value["status"] === "pending" ||
+      value["status"] === "running" ||
+      value["status"] === "completed" ||
+      value["status"] === "blocked" ||
+      value["status"] === "skipped") &&
+    (value["startedAt"] === null || isNonEmpty(value["startedAt"] as string | undefined)) &&
+    (value["completedAt"] === null || isNonEmpty(value["completedAt"] as string | undefined)) &&
+    Array.isArray(value["verification"]) &&
+    value["verification"].every((entry) => isNonEmpty(entry as string | undefined)) &&
+    (value["deviationKind"] === "none" ||
+      value["deviationKind"] === "minor" ||
+      value["deviationKind"] === "material") &&
+    (value["blockedReason"] === null || isNonEmpty(value["blockedReason"] as string | undefined)) &&
+    (value["checkpointId"] === null || isNonEmpty(value["checkpointId"] as string | undefined)) &&
+    (value["eventSequence"] === null ||
+      (typeof value["eventSequence"] === "number" &&
+        Number.isSafeInteger(value["eventSequence"]) &&
+        value["eventSequence"] >= 0))
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNonEmpty(value: string | undefined): value is string {
@@ -448,6 +636,12 @@ function isNonEmpty(value: string | undefined): value is string {
 
 function asJsonObject(value: object): JsonObject {
   return value as unknown as JsonObject;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
 }
 
 function planExecutionSessionError(code: string): UnifiedError {

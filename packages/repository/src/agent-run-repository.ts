@@ -2,7 +2,16 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { createDeterministicTokenEstimator } from "@novel-studio/agent-engine";
+import {
+  createDeterministicTokenEstimator,
+  validateAgentRunEventV20,
+  validateAgentRunHistoryV20,
+  validateAgentRunSnapshotV20,
+  validateAgentRunStatePairV20,
+  type AgentRunEventV20,
+  type AgentRunSnapshotV20,
+  type AgentRunStateCommitV20
+} from "@novel-studio/agent-engine";
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import { writeTextAtomically } from "./atomic-write.js";
@@ -20,6 +29,7 @@ export class AgentRunFileRepository {
   private readonly preflightErrorMaxRecords: number;
   private readonly preflightErrorMaxBytes: number;
   private readonly immutableWriteQueues = new Map<string, Promise<unknown>>();
+  private readonly v20CommitQueues = new Map<string, Promise<unknown>>();
 
   public constructor(private readonly options: AgentRunFileRepositoryOptions) {
     this.traceId = options.traceId ?? "agent-run-file-repository";
@@ -28,10 +38,110 @@ export class AgentRunFileRepository {
   }
 
   public writeSnapshot(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
+    if (snapshot["schemaVersion"] === "2.0") {
+      return Promise.resolve(this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_REQUIRES_STRICT_WRITER"));
+    }
     const runId = readRunId(snapshot);
     return runId === undefined
       ? Promise.resolve(this.invalidRecord("AGENT_RUN_SNAPSHOT_INVALID"))
       : this.writeJson(this.runPath(runId, "run.json"), snapshot);
+  }
+
+  /** Write the strict 2.0 envelope. Legacy snapshots cannot be upgraded through this method. */
+  public async writeSnapshotV20(
+    snapshot: AgentRunSnapshotV20
+  ): Promise<Result<AgentRunSnapshotV20, UnifiedError>> {
+    const recovered = await this.recoverRunStateV20(snapshot.runId);
+    if (!recovered.ok) return recovered;
+    return this.writeSnapshotV20Direct(snapshot);
+  }
+
+  /**
+   * Durably coordinate the paired V20 event/snapshot write. The intent journal is written first,
+   * so a restart can complete an interrupted pair without trusting an event-only tail.
+   */
+  public commitRunStateV20(input: {
+    readonly snapshot: AgentRunSnapshotV20;
+    readonly event: AgentRunEventV20;
+  }): Promise<Result<AgentRunSnapshotV20, UnifiedError>> {
+    const runId = input.snapshot.runId;
+    const previous = this.v20CommitQueues.get(runId) ?? Promise.resolve();
+    const request = previous.then(
+      () => this.performV20Commit(input),
+      () => this.performV20Commit(input)
+    );
+    this.v20CommitQueues.set(runId, request);
+    const clear = () => {
+      if (this.v20CommitQueues.get(runId) === request) this.v20CommitQueues.delete(runId);
+    };
+    void request.then(clear, clear);
+    return request;
+  }
+
+  /** Recover a durable V20 pair left by a crash between the event and snapshot replacements. */
+  public async recoverRunStateV20(
+    runId: string
+  ): Promise<Result<AgentRunSnapshotV20 | undefined, UnifiedError>> {
+    if (!isSafeId(runId)) return this.invalidRecord("AGENT_RUN_V20_COMMIT_INVALID");
+    const journal = await this.readJson(this.v20CommitPath(runId));
+    if (!journal.ok || journal.value === undefined) {
+      return journal as Result<AgentRunSnapshotV20 | undefined, UnifiedError>;
+    }
+    const parsed = parseAgentRunStateCommitV20(journal.value);
+    if (parsed === undefined || parsed.runId !== runId) {
+      return this.invalidRecord("AGENT_RUN_V20_COMMIT_INVALID");
+    }
+    const transition = await this.validateV20CommitAgainstDisk(parsed.snapshot, parsed.event);
+    if (!transition.ok) return transition;
+    const applied = await this.applyV20Commit(parsed);
+    if (!applied.ok) return applied;
+    try {
+      await unlink(this.v20CommitPath(runId));
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        // The pair is durable and idempotent; retain the journal for a later cleanup attempt.
+      }
+    }
+    return ok(applied.value);
+  }
+
+  private async writeSnapshotV20Direct(
+    snapshot: AgentRunSnapshotV20
+  ): Promise<Result<AgentRunSnapshotV20, UnifiedError>> {
+    const validated = validateAgentRunSnapshotV20(snapshot);
+    if (!validated.ok) return validated;
+    const existing = await this.readJson(this.runPath(snapshot.runId, "run.json"));
+    if (!existing.ok) return existing as Result<AgentRunSnapshotV20, UnifiedError>;
+    if (existing.value !== undefined && existing.value["schemaVersion"] !== "2.0") {
+      return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_LEGACY_CONFLICT");
+    }
+    if (existing.value !== undefined) {
+      const prior = validateAgentRunSnapshotV20(existing.value);
+      if (!prior.ok) {
+        return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_REVISION_INVALID");
+      }
+      const sameRevision =
+        snapshot.runRevision === prior.value.runRevision &&
+        snapshot.lastSequence === prior.value.lastSequence;
+      if (sameRevision) {
+        if (JSON.stringify(snapshot) !== JSON.stringify(prior.value)) {
+          return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_REVISION_INVALID");
+        }
+      } else if (
+        snapshot.runRevision !== prior.value.runRevision + 1 ||
+        snapshot.lastSequence !== prior.value.lastSequence + 1 ||
+        !v20ImmutableFieldsMatch(prior.value, snapshot)
+      ) {
+        return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_REVISION_INVALID");
+      }
+    }
+    const written = await this.writeJson(
+      this.runPath(snapshot.runId, "run.json"),
+      snapshot as unknown as JsonObject
+    );
+    return written.ok
+      ? ok(validated.value)
+      : (written as Result<AgentRunSnapshotV20, UnifiedError>);
   }
 
   public writeToolCatalog(
@@ -521,6 +631,9 @@ export class AgentRunFileRepository {
   }
 
   public async appendEvent(event: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
+    if (event["schemaVersion"] === "2.0") {
+      return this.invalidRecord("AGENT_RUN_EVENT_V20_REQUIRES_STRICT_WRITER");
+    }
     const runId = readRunId(event);
     if (runId === undefined) {
       return this.invalidRecord("AGENT_RUN_EVENT_INVALID");
@@ -532,6 +645,63 @@ export class AgentRunFileRepository {
     }
     const written = await this.writeJson(path, [...existing.value, event]);
     return written.ok ? ok(event) : written;
+  }
+
+  /** Append a strict 2.0 event; the event list must not contain legacy records. */
+  public async appendEventV20(
+    event: AgentRunEventV20
+  ): Promise<Result<AgentRunEventV20, UnifiedError>> {
+    const recovered = await this.recoverRunStateV20(event.runId);
+    if (!recovered.ok) return recovered as Result<AgentRunEventV20, UnifiedError>;
+    return this.appendEventV20Direct(event);
+  }
+
+  private async appendEventV20Direct(
+    event: AgentRunEventV20
+  ): Promise<Result<AgentRunEventV20, UnifiedError>> {
+    const validated = validateAgentRunEventV20(event);
+    if (!validated.ok) return validated;
+    const path = this.runPath(event.runId, "events.json");
+    const existing = await this.readJsonArray(path);
+    if (!existing.ok) return existing as Result<AgentRunEventV20, UnifiedError>;
+    if (existing.value.some((record) => record["schemaVersion"] !== "2.0")) {
+      return this.invalidRecord("AGENT_RUN_EVENT_V20_LEGACY_CONFLICT");
+    }
+    const prior = existing.value.map((record) => {
+      const parsed = validateAgentRunEventV20(record);
+      return parsed.ok ? parsed.value : undefined;
+    });
+    if (prior.some((record) => record === undefined)) {
+      return this.invalidRecord("AGENT_RUN_EVENT_V20_INVALID");
+    }
+    if (
+      prior.some(
+        (record) =>
+          record !== undefined &&
+          (record.runId !== event.runId ||
+            record.runRevision > event.runRevision ||
+            JSON.stringify(record.scope) !== JSON.stringify(event.scope))
+      )
+    ) {
+      return this.invalidRecord("AGENT_RUN_EVENT_V20_SCOPE_INVALID");
+    }
+    const duplicate = prior.find((record) => record?.sequence === event.sequence);
+    if (duplicate !== undefined) {
+      return JSON.stringify(duplicate) === JSON.stringify(event)
+        ? ok(duplicate)
+        : this.invalidRecord("AGENT_RUN_EVENT_V20_SEQUENCE_INVALID");
+    }
+    const last = prior[prior.length - 1];
+    if (
+      (last === undefined &&
+        (event.sequence !== 1 || event.runRevision !== 1 || event.type !== "run_started")) ||
+      (last !== undefined &&
+        (event.sequence !== last.sequence + 1 || event.runRevision !== last.runRevision + 1))
+    ) {
+      return this.invalidRecord("AGENT_RUN_EVENT_V20_SEQUENCE_INVALID");
+    }
+    const written = await this.writeJson(path, [...existing.value, event as unknown as JsonObject]);
+    return written.ok ? ok(validated.value) : (written as Result<AgentRunEventV20, UnifiedError>);
   }
 
   public writeCommandReceipt(
@@ -584,6 +754,36 @@ export class AgentRunFileRepository {
       }
     }
     return read;
+  }
+
+  /** Read only a strict 2.0 snapshot. Legacy records are returned as a version conflict. */
+  public async readSnapshotV20(
+    runId: string
+  ): Promise<Result<AgentRunSnapshotV20 | undefined, UnifiedError>> {
+    if (!isSafeId(runId)) return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_INVALID");
+    const recovered = await this.recoverRunStateV20(runId);
+    if (!recovered.ok) return recovered;
+    const read = await this.readJson(this.runPath(runId, "run.json"));
+    if (!read.ok) return read as Result<AgentRunSnapshotV20 | undefined, UnifiedError>;
+    if (read.value === undefined) {
+      const orphanedEvents = await this.readJsonArray(this.runPath(runId, "events.json"));
+      if (!orphanedEvents.ok) {
+        return orphanedEvents as Result<AgentRunSnapshotV20 | undefined, UnifiedError>;
+      }
+      return orphanedEvents.value.length === 0
+        ? ok(undefined)
+        : this.invalidRecord("AGENT_RUN_V20_HISTORY_INVALID");
+    }
+    if (read.value["schemaVersion"] !== "2.0") {
+      return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_LEGACY_RECORD");
+    }
+    if (read.value["runId"] !== runId) return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_INVALID");
+    const parsed = validateAgentRunSnapshotV20(read.value);
+    if (!parsed.ok) return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_INVALID");
+    const records = await this.readJsonArray(this.runPath(runId, "events.json"));
+    if (!records.ok) return records as Result<AgentRunSnapshotV20 | undefined, UnifiedError>;
+    const history = validateAgentRunHistoryV20({ snapshot: parsed.value, events: records.value });
+    return history.ok ? ok(history.value.snapshot) : this.invalidRecord(history.error.code);
   }
 
   public writeCompactionManifest(manifest: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
@@ -825,7 +1025,33 @@ export class AgentRunFileRepository {
   }
 
   public readEvents(runId: string): Promise<Result<JsonObject[], UnifiedError>> {
-    return this.readJsonArray(this.runPath(runId, "events.json"));
+    return this.readLegacyEvents(runId);
+  }
+
+  private async readLegacyEvents(runId: string): Promise<Result<JsonObject[], UnifiedError>> {
+    const read = await this.readJsonArray(this.runPath(runId, "events.json"));
+    if (!read.ok) return read;
+    return read.value.every(isSupportedAgentSchemaVersion)
+      ? read
+      : this.invalidRecord("AGENT_RUN_EVENT_VERSION_UNSUPPORTED");
+  }
+
+  /** Read and validate only strict 2.0 events. Legacy event arrays are not normalized. */
+  public async readEventsV20(runId: string): Promise<Result<AgentRunEventV20[], UnifiedError>> {
+    if (!isSafeId(runId)) return this.invalidRecord("AGENT_RUN_EVENT_V20_INVALID");
+    const recovered = await this.recoverRunStateV20(runId);
+    if (!recovered.ok) return recovered as Result<AgentRunEventV20[], UnifiedError>;
+    const records = await this.readJsonArray(this.runPath(runId, "events.json"));
+    if (!records.ok) return records as Result<AgentRunEventV20[], UnifiedError>;
+    const snapshot = await this.readJson(this.runPath(runId, "run.json"));
+    if (!snapshot.ok) return snapshot as Result<AgentRunEventV20[], UnifiedError>;
+    if (snapshot.value === undefined) {
+      return records.value.length === 0
+        ? ok([])
+        : this.invalidRecord("AGENT_RUN_V20_HISTORY_INVALID");
+    }
+    const history = validateAgentRunHistoryV20({ snapshot: snapshot.value, events: records.value });
+    return history.ok ? ok([...history.value.events]) : this.invalidRecord(history.error.code);
   }
 
   public readCommandReceipt(
@@ -858,13 +1084,19 @@ export class AgentRunFileRepository {
       const snapshots: JsonObject[] = [];
       for (const entry of entries) {
         if (!entry.isDirectory() || !isSafeId(entry.name)) continue;
-        const snapshot = await this.readSnapshot(entry.name);
-        if (!snapshot.ok) return snapshot;
+        const envelope = await this.readJson(this.runPath(entry.name, "run.json"));
+        if (!envelope.ok) return envelope;
+        const snapshot =
+          envelope.value?.["schemaVersion"] === "2.0"
+            ? await this.readSnapshotV20(entry.name)
+            : await this.readSnapshot(entry.name);
+        if (!snapshot.ok) return snapshot as Result<JsonObject[], UnifiedError>;
+        const value = snapshot.value as JsonObject | undefined;
         if (
-          snapshot.value !== undefined &&
-          (projectId === undefined || snapshotWorkspaceId(snapshot.value) === projectId)
+          value !== undefined &&
+          (projectId === undefined || snapshotWorkspaceId(value) === projectId)
         ) {
-          snapshots.push(snapshot.value);
+          snapshots.push(value);
         }
       }
       snapshots.sort((left, right) =>
@@ -876,6 +1108,107 @@ export class AgentRunFileRepository {
         ? ok([])
         : err(this.storageFailure("AGENT_RUN_READ_FAILED", error));
     }
+  }
+
+  private async performV20Commit(input: {
+    readonly snapshot: AgentRunSnapshotV20;
+    readonly event: AgentRunEventV20;
+  }): Promise<Result<AgentRunSnapshotV20, UnifiedError>> {
+    const pair = validateAgentRunStatePairV20(input);
+    if (!pair.ok) return pair as Result<AgentRunSnapshotV20, UnifiedError>;
+    const snapshot = pair.value.snapshot;
+    const event = pair.value.event;
+    const recovered = await this.recoverRunStateV20(snapshot.runId);
+    if (!recovered.ok) return recovered as Result<AgentRunSnapshotV20, UnifiedError>;
+    const transition = await this.validateV20CommitAgainstDisk(snapshot, event);
+    if (!transition.ok) return transition;
+    const commit: AgentRunStateCommitV20 = {
+      schemaVersion: "2.0",
+      commitId: `commit_${createHash("sha256")
+        .update(`${snapshot.runId}:${String(event.sequence)}:${String(event.runRevision)}`)
+        .digest("hex")
+        .slice(0, 48)}`,
+      runId: snapshot.runId,
+      snapshot,
+      event,
+      createdAt: event.createdAt
+    };
+    const journal = await this.writeJson(
+      this.v20CommitPath(commit.runId),
+      commit as unknown as JsonObject
+    );
+    if (!journal.ok) return journal as Result<AgentRunSnapshotV20, UnifiedError>;
+    const applied = await this.applyV20Commit(commit);
+    if (!applied.ok) return applied;
+    try {
+      await unlink(this.v20CommitPath(commit.runId));
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        // The committed pair remains recoverable and idempotent if cleanup is interrupted.
+      }
+    }
+    return applied;
+  }
+
+  private async validateV20CommitAgainstDisk(
+    snapshot: AgentRunSnapshotV20,
+    event: AgentRunEventV20
+  ): Promise<Result<AgentRunSnapshotV20, UnifiedError>> {
+    const storedSnapshot = await this.readJson(this.runPath(snapshot.runId, "run.json"));
+    if (!storedSnapshot.ok) return storedSnapshot as Result<AgentRunSnapshotV20, UnifiedError>;
+    const storedEvents = await this.readJsonArray(this.runPath(snapshot.runId, "events.json"));
+    if (!storedEvents.ok) return storedEvents as Result<AgentRunSnapshotV20, UnifiedError>;
+
+    const parsedEvents: AgentRunEventV20[] = [];
+    for (const record of storedEvents.value) {
+      const parsed = validateAgentRunEventV20(record);
+      if (!parsed.ok) return this.invalidRecord("AGENT_RUN_EVENT_V20_INVALID");
+      parsedEvents.push(parsed.value);
+    }
+    const duplicate = parsedEvents.find((candidate) => candidate.sequence === event.sequence);
+    if (duplicate !== undefined && JSON.stringify(duplicate) !== JSON.stringify(event)) {
+      return this.invalidRecord("AGENT_RUN_EVENT_V20_SEQUENCE_INVALID");
+    }
+    const prospectiveEvents = duplicate === undefined ? [...parsedEvents, event] : parsedEvents;
+
+    if (storedSnapshot.value !== undefined) {
+      const previous = validateAgentRunSnapshotV20(storedSnapshot.value);
+      if (!previous.ok) return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_INVALID");
+      if (previous.value.runRevision === snapshot.runRevision) {
+        if (JSON.stringify(previous.value) !== JSON.stringify(snapshot)) {
+          return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_REVISION_INVALID");
+        }
+      } else {
+        if (
+          previous.value.runRevision + 1 !== snapshot.runRevision ||
+          previous.value.lastSequence + 1 !== snapshot.lastSequence ||
+          !v20ImmutableFieldsMatch(previous.value, snapshot)
+        ) {
+          return this.invalidRecord("AGENT_RUN_SNAPSHOT_V20_REVISION_INVALID");
+        }
+        const previousEvents = prospectiveEvents.filter(
+          (candidate) => candidate.sequence <= previous.value.lastSequence
+        );
+        if (!validateAgentRunHistoryV20({ snapshot: previous.value, events: previousEvents }).ok) {
+          return this.invalidRecord("AGENT_RUN_V20_HISTORY_INVALID");
+        }
+      }
+    }
+
+    const history = validateAgentRunHistoryV20({ snapshot, events: prospectiveEvents });
+    return history.ok ? ok(history.value.snapshot) : this.invalidRecord(history.error.code);
+  }
+
+  private async applyV20Commit(
+    commit: AgentRunStateCommitV20
+  ): Promise<Result<AgentRunSnapshotV20, UnifiedError>> {
+    const event = await this.appendEventV20Direct(commit.event);
+    if (!event.ok) return event as Result<AgentRunSnapshotV20, UnifiedError>;
+    return this.writeSnapshotV20Direct(commit.snapshot);
+  }
+
+  private v20CommitPath(runId: string): string {
+    return this.runPath(runId, "v20-state-commit.json");
   }
 
   private runPath(runId: string, suffix: string): string {
@@ -1111,6 +1444,81 @@ function readRunId(value: JsonObject): string | undefined {
   return typeof value["runId"] === "string" && isSafeId(value["runId"])
     ? value["runId"]
     : undefined;
+}
+
+function parseAgentRunStateCommitV20(value: JsonObject): AgentRunStateCommitV20 | undefined {
+  const commitId = typeof value["commitId"] === "string" ? value["commitId"] : undefined;
+  const runId = typeof value["runId"] === "string" ? value["runId"] : undefined;
+  const createdAt = typeof value["createdAt"] === "string" ? value["createdAt"] : undefined;
+  if (
+    Object.keys(value).length !== 6 ||
+    !["schemaVersion", "commitId", "runId", "snapshot", "event", "createdAt"].every(
+      (field) => field in value
+    ) ||
+    value["schemaVersion"] !== "2.0" ||
+    commitId === undefined ||
+    !isSafeId(commitId) ||
+    runId === undefined ||
+    !isSafeId(runId) ||
+    createdAt === undefined ||
+    !isJsonObject(value["snapshot"]) ||
+    !isJsonObject(value["event"])
+  ) {
+    return undefined;
+  }
+  const pair = validateAgentRunStatePairV20({
+    snapshot: value["snapshot"],
+    event: value["event"]
+  });
+  if (!pair.ok || runId !== pair.value.snapshot.runId || createdAt !== pair.value.event.createdAt) {
+    return undefined;
+  }
+  return runId === pair.value.event.runId
+    ? {
+        schemaVersion: "2.0",
+        commitId,
+        runId,
+        snapshot: pair.value.snapshot,
+        event: pair.value.event,
+        createdAt
+      }
+    : undefined;
+}
+
+function v20ImmutableFieldsMatch(
+  previous: AgentRunSnapshotV20,
+  next: AgentRunSnapshotV20
+): boolean {
+  return [
+    "runId",
+    "scope",
+    "conversationId",
+    "operationMode",
+    "contextMode",
+    "writePolicy",
+    "userRequest",
+    "startedAt",
+    "limits",
+    "providerCapabilitySnapshot",
+    "modelProfileId",
+    "reasoningEffort",
+    "toolFacadeVersion",
+    "toolCatalogSnapshotId",
+    "toolCatalogRevision",
+    "contextProfileId",
+    "profileVersion",
+    "guidanceTemplateChecksum",
+    "finishContractVersion",
+    "executionWritePolicyDraft",
+    "providerSemanticVersionSetChecksum",
+    "authority",
+    "protocol",
+    "catalog"
+  ].every(
+    (field) =>
+      JSON.stringify(previous[field as keyof AgentRunSnapshotV20]) ===
+      JSON.stringify(next[field as keyof AgentRunSnapshotV20])
+  );
 }
 
 /**

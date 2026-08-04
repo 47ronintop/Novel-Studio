@@ -6,6 +6,8 @@ import {
   createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
   revokeCapability,
+  type AgentRunEventV20,
+  type AgentRunSnapshotV20,
   type AgentToolCapabilitySnapshot,
   type AgentToolDescriptor
 } from "@novel-studio/agent-engine";
@@ -2010,7 +2012,7 @@ describe("AgentRunSession", () => {
     });
   });
 
-  test("planning exposes no proposal tools and persists a complete immutable Plan Artifact", async () => {
+  test("planning rejects malformed plans at the schema boundary and persists a complete immutable Plan Artifact", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
     ];
@@ -2025,6 +2027,33 @@ describe("AgentRunSession", () => {
         return { ok: true, value: plan };
       }
     };
+    const planArguments = {
+      planId: "plan-01",
+      goal: "统一第 3 至 5 章的人物动机。",
+      successCriteria: ["动机与 Story Bible 一致"],
+      nonGoals: ["不改结局"],
+      facts: ["第 3 章存在冲突"],
+      assumptions: ["保留现有揭示节奏"],
+      openQuestions: [
+        {
+          questionId: "plan-question-01",
+          prompt: "是否保留揭示时机？",
+          blocking: true
+        }
+      ],
+      targetRefs: [{ refId: "chapter-03", intent: "修正冲突触发点" }],
+      steps: [
+        {
+          stepId: "step-01",
+          title: "校正第 3 章动机",
+          verification: "重新核对 Story Bible"
+        }
+      ],
+      risks: ["连续性漂移"],
+      verification: ["运行一致性检查"],
+      sourceRefs: ["chapter-03", "story-bible:linxia"]
+    };
+    let planningRounds = 0;
     const session = (
       createSession as (options: Record<string, unknown>) => {
         startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -2035,6 +2064,7 @@ describe("AgentRunSession", () => {
       repository,
       modelDriver: {
         async *streamRound(input: { readonly tools: readonly { readonly name: string }[] }) {
+          planningRounds += 1;
           expect(input.tools.map((tool) => tool.name)).toEqual([
             "list_project_entries",
             "read_chapter",
@@ -2043,32 +2073,18 @@ describe("AgentRunSession", () => {
             "finish_plan",
             "request_user_input"
           ]);
-          yield toolCall("finish_plan_01", "finish_plan", {
-            planId: "plan-01",
-            goal: "统一第 3 至 5 章的人物动机。",
-            successCriteria: ["动机与 Story Bible 一致"],
-            nonGoals: ["不改结局"],
-            facts: ["第 3 章存在冲突"],
-            assumptions: ["保留现有揭示节奏"],
-            openQuestions: [
-              {
-                questionId: "plan-question-01",
-                prompt: "是否保留揭示时机？",
-                blocking: true
-              }
-            ],
-            targetRefs: [{ refId: "chapter-03", intent: "修正冲突触发点" }],
-            steps: [
-              {
-                stepId: "step-01",
-                title: "校正第 3 章动机",
-                verification: "重新核对 Story Bible"
-              }
-            ],
-            risks: ["连续性漂移"],
-            verification: ["运行一致性检查"],
-            sourceRefs: ["chapter-03", "story-bible:linxia"]
-          });
+          if (planningRounds === 1) {
+            yield toolCall("finish_plan_bad_nested", "finish_plan", {
+              ...planArguments,
+              targetRefs: ["chapter-03"]
+            });
+          } else if (planningRounds === 2) {
+            const { risks: _risks, ...missingRisks } = planArguments;
+            void _risks;
+            yield toolCall("finish_plan_missing_field", "finish_plan", missingRisks);
+          } else {
+            yield toolCall("finish_plan_01", "finish_plan", planArguments);
+          }
           yield { type: "round_completed", finishReason: "tool_calls" };
         }
       },
@@ -2080,12 +2096,37 @@ describe("AgentRunSession", () => {
       }
     });
 
-    await session.startAgentRun({ ...startCommand(), operationMode: "planning" });
+    await session.startAgentRun({
+      ...startCommand(),
+      operationMode: "planning",
+      limits: { maxModelRounds: 4, maxToolCalls: 4, maxConsecutiveToolFailures: 3 }
+    });
+    // Registered JSON Schema rejects malformed provider calls before the Application parser.
+    // The valid third call crosses that boundary and exercises parsing plus persistence; the
+    // parser's matching strict checks remain defense in depth for any future internal caller.
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run_plan")).toMatchObject({
         ok: true,
         value: {
           snapshot: { status: "plan_ready" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "finish_plan_bad_nested",
+                toolName: "finish_plan",
+                code: "AGENT_TOOL_ARGUMENTS_INVALID"
+              })
+            }),
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "finish_plan_missing_field",
+                toolName: "finish_plan",
+                code: "AGENT_TOOL_ARGUMENTS_INVALID"
+              })
+            })
+          ]),
           planArtifact: {
             planId: "plan-01",
             revision: 1,
@@ -2513,7 +2554,7 @@ describe("AgentRunSession", () => {
     });
   });
 
-  test("requires explicit acknowledgement before a per-run automatic write policy", async () => {
+  test("rejects per-run automatic write policy even when the caller supplies acknowledgement", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
     ];
@@ -2543,11 +2584,12 @@ describe("AgentRunSession", () => {
     expect(
       await session.startAgentRun({
         ...startCommand(),
-        writePolicy: "user_preapproved_run"
+        writePolicy: "user_preapproved_run",
+        writePolicyAcknowledged: true
       })
     ).toMatchObject({
       ok: false,
-      error: { code: "AGENT_WRITE_POLICY_ACK_REQUIRED" }
+      error: { code: "AGENT_WRITE_POLICY_TRUST_REQUIRED" }
     });
     expect(modelStarted).toBe(false);
   });
@@ -2919,7 +2961,7 @@ describe("AgentRunSession", () => {
     });
   });
 
-  test("approves a ready plan by creating a linked execution run", async () => {
+  test("approves a ready plan with manual writes and rejects public preapproval fields", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"
     ];
@@ -3096,7 +3138,7 @@ describe("AgentRunSession", () => {
     });
     expect(rejectedPolicy).toMatchObject({
       ok: false,
-      error: { code: "AGENT_WRITE_POLICY_ACK_REQUIRED" }
+      error: { code: "AGENT_WRITE_POLICY_TRUST_REQUIRED" }
     });
     const rejectedProfileTransition = await session.decidePlan({
       projectId: "project-01",
@@ -3123,9 +3165,7 @@ describe("AgentRunSession", () => {
       planId: "plan-01",
       planRevision: 1,
       decision: "approve",
-      executionContextMode: "writing",
-      executionWritePolicy: "user_preapproved_run",
-      executionWritePolicyAcknowledged: true
+      executionContextMode: "writing"
     });
     expect(decided).toMatchObject({
       ok: true,
@@ -3139,7 +3179,7 @@ describe("AgentRunSession", () => {
         permissionSummaryChecksum: "permission-execution".padEnd(64, "0").slice(0, 64),
         operationMode: "execution",
         contextMode: "writing",
-        writePolicy: "user_preapproved_run"
+        writePolicy: "write_before_confirmation"
       }
     });
     expect(planExecutionRecords).toHaveLength(1);
@@ -3164,7 +3204,7 @@ describe("AgentRunSession", () => {
         permissionSummaryId: "permission-execution",
         runDraftId: "draft_start-01",
         contextMode: "writing",
-        writePolicy: "user_preapproved_run"
+        writePolicy: "write_before_confirmation"
       })
     ]);
     await vi.waitFor(async () => {
@@ -3210,7 +3250,7 @@ describe("AgentRunSession", () => {
               targetRefs: [],
               steps: [{ stepId: "step-01", title: "Review", verification: "Check results" }],
               risks: [],
-              verification: [],
+              verification: ["Confirm the implementation was reviewed."],
               sourceRefs: []
             });
             yield { type: "round_completed", finishReason: "tool_calls" };
@@ -6513,6 +6553,7 @@ describe("AgentRunSession v2 tool facade", () => {
     "createAgentRunSession"
   ] as (options: Record<string, unknown>) => {
     startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    answerUserInput(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     readAgentRun(runId: string): Promise<Record<string, unknown>>;
     resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -6523,6 +6564,410 @@ describe("AgentRunSession v2 tool facade", () => {
       return { ok: true, value: { summary: "ok", data: {} } };
     }
   };
+
+  test("persists a strict completed finish report for a Guidance 3.0 run", async () => {
+    const repository = durableMemoryRepository();
+    let rounds = 0;
+    let verificationRef: string | undefined;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_finish_completed" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound(input: { readonly messages: readonly Record<string, unknown>[] }) {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("finish-evidence-read", "read_resource", { ref: "chapter:chapter-01" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          const toolMessage = [...input.messages]
+            .reverse()
+            .find(
+              (message) =>
+                message["role"] === "tool" && message["toolCallId"] === "finish-evidence-read"
+            );
+          const toolPayload = JSON.parse(String(toolMessage?.["content"] ?? "{}")) as {
+            readonly evidenceRefs?: readonly string[];
+          };
+          verificationRef = toolPayload.evidenceRefs?.[0];
+          if (verificationRef === undefined)
+            throw new Error("missing app-authored finish evidence");
+          yield toolCall("finish-completed", "finish", {
+            outcome: "completed",
+            report: {
+              result: "The requested checks are complete.",
+              appliedChanges: [],
+              verification: [verificationRef],
+              residualRisks: []
+            },
+            evidenceRefs: [verificationRef]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_v2_finish_completed")).toMatchObject({
+        value: {
+          snapshot: {
+            status: "completed",
+            finishReport: {
+              schemaVersion: "2.0",
+              outcome: "completed",
+              evidenceRefs: [verificationRef]
+            }
+          },
+          events: expect.arrayContaining([expect.objectContaining({ type: "run_completed" })])
+        }
+      });
+    });
+    expect(verificationRef).toMatch(
+      /^run-event\/[1-9][0-9]*\/tool_completed\/finish-evidence-read$/u
+    );
+  });
+
+  test("persists a blocked finish report and keeps the run terminal", async () => {
+    const repository = durableMemoryRepository();
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_finish_blocked" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_v2_finish_blocked")).toMatchObject({
+        value: {
+          snapshot: {
+            status: "blocked",
+            finishReport: {
+              schemaVersion: "2.0",
+              outcome: "blocked",
+              report: { nextStep: expect.any(String) }
+            }
+          },
+          events: expect.arrayContaining([expect.objectContaining({ type: "run_blocked" })])
+        }
+      });
+    });
+  });
+
+  test("allows a model to finish blocked with the canonical failed-tool evidence", async () => {
+    const repository = durableMemoryRepository();
+    let rounds = 0;
+    let failureRef: string | undefined;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_finish_blocked_after_failure" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound(input: { readonly messages: readonly Record<string, unknown>[] }) {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("blocked-read-failure", "read_resource", {
+              ref: "chapter:missing-chapter"
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          const toolMessage = [...input.messages]
+            .reverse()
+            .find(
+              (message) =>
+                message["role"] === "tool" && message["toolCallId"] === "blocked-read-failure"
+            );
+          const toolPayload = JSON.parse(String(toolMessage?.["content"] ?? "{}")) as {
+            readonly evidenceRefs?: readonly string[];
+          };
+          failureRef = toolPayload.evidenceRefs?.[0];
+          if (failureRef === undefined) throw new Error("missing failed-tool evidence reference");
+          yield toolCall("finish-blocked-after-failure", "finish", {
+            outcome: "blocked",
+            report: {
+              result: "The required chapter could not be read.",
+              appliedChanges: [],
+              verification: ["not-run: the required source read failed"],
+              residualRisks: ["The requested conclusion could not be verified."],
+              nextStep: "Restore the missing chapter and resume in a new run."
+            },
+            evidenceRefs: [failureRef]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return {
+            ok: false as const,
+            error: {
+              errorId: "error_blocked_read_failure",
+              code: "AGENT_READ_FAILED",
+              category: "StorageError",
+              message: "The chapter does not exist.",
+              recoverability: "retryable",
+              suggestedAction: "Restore the chapter.",
+              traceId: "test",
+              timestamp: "2026-08-04T00:00:00.000Z"
+            }
+          };
+        }
+      }
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_v2_finish_blocked_after_failure")).toMatchObject({
+        value: {
+          snapshot: { status: "blocked", finishReport: { outcome: "blocked" } },
+          events: expect.arrayContaining([
+            expect.objectContaining({ type: "tool_failed" }),
+            expect.objectContaining({ type: "run_blocked" })
+          ])
+        }
+      });
+    });
+    expect(failureRef).toMatch(/^run-event\/[1-9][0-9]*\/tool_failed\/blocked-read-failure$/u);
+  });
+
+  test("authors blocked completion when a v2 model round stops without finish", async () => {
+    const repository = durableMemoryRepository();
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_finish_missing" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          yield { type: "assistant_text_delta", delta: "Partial answer only." };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_v2_finish_missing")).toMatchObject({
+        value: {
+          snapshot: {
+            status: "blocked",
+            finishReport: {
+              schemaVersion: "2.0",
+              outcome: "blocked",
+              report: {
+                result: "Partial answer only.",
+                nextStep: expect.any(String)
+              }
+            }
+          },
+          events: expect.arrayContaining([expect.objectContaining({ type: "run_blocked" })])
+        }
+      });
+    });
+  });
+
+  test("reconciles a transient strict state commit failure before a run is hydrated", async () => {
+    const durable = durableMemoryRepository();
+    let rejectedTerminalSnapshot = false;
+    const repository = {
+      ...durable,
+      async commitRunStateV20(input: {
+        readonly snapshot: AgentRunSnapshotV20;
+        readonly event: AgentRunEventV20;
+      }) {
+        if (input.snapshot.status === "blocked" && !rejectedTerminalSnapshot) {
+          rejectedTerminalSnapshot = true;
+          return {
+            ok: false as const,
+            error: {
+              ...testRepositoryError("TEST_TERMINAL_STATE_COMMIT_FAILED"),
+              message: "transient terminal snapshot failure",
+              recoverability: "retryable" as const
+            }
+          };
+        }
+        return durable.commitRunStateV20(input);
+      }
+    };
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_v2_finish_reconcile" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_v2_finish_reconcile")).toMatchObject({
+        value: { snapshot: { status: "blocked" } }
+      });
+    });
+    expect(rejectedTerminalSnapshot).toBe(true);
+
+    const restored = createSession({
+      repository: durable,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        streamRound: () => unexpectedModelRound("A terminal run must not restart the model.")
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    await expect(restored.readAgentRun("run_v2_finish_reconcile")).resolves.toMatchObject({
+      ok: true,
+      value: { snapshot: { status: "blocked", finishReport: { outcome: "blocked" } } }
+    });
+  });
+
+  test.each([
+    {
+      name: "model-round",
+      limits: { maxModelRounds: 1, maxToolCalls: 4, maxConsecutiveToolFailures: 2 },
+      expectedLimit: "maxModelRounds",
+      expectedRestoredProviderCalls: 0
+    },
+    {
+      name: "tool-call",
+      limits: { maxModelRounds: 2, maxToolCalls: 1, maxConsecutiveToolFailures: 2 },
+      expectedLimit: "maxToolCalls",
+      expectedRestoredProviderCalls: 1
+    }
+  ])(
+    "restores strict V20 pending input and the $name counter before resuming",
+    async ({ name, limits, expectedLimit, expectedRestoredProviderCalls }) => {
+      const repository = durableMemoryRepository();
+      const runId = `run_v2_counter_${name.replace("-", "_")}`;
+      const original = createSession({
+        coordinatorOptions: { createRunId: () => runId },
+        repository,
+        newRunToolFacadeVersion: "v2",
+        agentGuidanceV3: true,
+        capabilitySnapshot: creativeV2Capabilities(),
+        modelDriver: {
+          async *streamRound() {
+            yield toolCall(`question-${name}`, "request_user_input", {
+              questionId: `question_${name.replace("-", "_")}`,
+              prompt: "Continue after restart?",
+              reason: "The durable pending boundary is under test.",
+              options: [
+                { id: "continue", label: "Continue" },
+                { id: "stop", label: "Stop" }
+              ]
+            });
+            yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+          }
+        },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: readExecutor
+      });
+      expect(
+        await original.startAgentRun({
+          ...startCommand(),
+          commandId: `start-v2-counter-${name}`,
+          limits
+        })
+      ).toMatchObject({ ok: true, value: { schemaVersion: "2.0", runId } });
+      await vi.waitFor(async () => {
+        expect(await original.readAgentRun(runId)).toMatchObject({
+          value: { snapshot: { status: "awaiting_user_input" } }
+        });
+      });
+
+      let restoredProviderCalls = 0;
+      let restoredReadCalls = 0;
+      const restored = createSession({
+        repository,
+        newRunToolFacadeVersion: "v2",
+        agentGuidanceV3: true,
+        capabilitySnapshot: creativeV2Capabilities(),
+        modelDriver: {
+          async *streamRound() {
+            restoredProviderCalls += 1;
+            yield toolCall(`read-after-${name}`, "read_resource", {
+              ref: "chapter:chapter-01"
+            });
+            yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+          }
+        },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: {
+          async execute() {
+            restoredReadCalls += 1;
+            return { ok: true, value: { summary: "unexpected", data: {} } };
+          }
+        }
+      });
+      const hydrated = (await restored.readAgentRun(runId)) as {
+        readonly value: {
+          readonly snapshot: { readonly runRevision: number };
+          readonly pendingUserInput: { readonly questionId: string };
+        };
+      };
+      expect(hydrated).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_user_input" },
+          pendingUserInput: { questionId: `question_${name.replace("-", "_")}` }
+        }
+      });
+      expect(
+        await restored.answerUserInput({
+          projectId: "project-01",
+          runId,
+          commandId: `answer-v2-counter-${name}`,
+          expectedRunRevision: hydrated.value.snapshot.runRevision,
+          questionId: hydrated.value.pendingUserInput.questionId,
+          answer: "Continue."
+        })
+      ).toMatchObject({ ok: true });
+      await vi.waitFor(async () => {
+        expect(await restored.readAgentRun(runId)).toMatchObject({
+          value: {
+            snapshot: { status: "limit_reached" },
+            events: expect.arrayContaining([
+              expect.objectContaining({
+                type: "run_limit_reached",
+                detail: expect.objectContaining({ limit: expectedLimit })
+              })
+            ])
+          }
+        });
+      });
+      expect(restoredProviderCalls).toBe(expectedRestoredProviderCalls);
+      expect(restoredReadCalls).toBe(0);
+    }
+  );
 
   test("persists frozen prompt and context before publishing the initial active snapshot", async () => {
     const durable = durableMemoryRepository();
@@ -6744,7 +7189,7 @@ describe("AgentRunSession v2 tool facade", () => {
             targetRefs: [],
             steps: [{ stepId: "step_v2_handoff", title: "Execute", verification: "Finish" }],
             risks: [],
-            verification: [],
+            verification: ["Confirm the execution run starts from the approved plan."],
             sourceRefs: []
           });
           yield { type: "round_completed", finishReason: "tool_calls" };
@@ -7269,9 +7714,7 @@ describe("AgentRunSession v2 tool facade", () => {
 
     await session.startAgentRun({
       ...startCommand(),
-      contextMode: "general_file",
-      writePolicy: "user_preapproved_run",
-      writePolicyAcknowledged: true
+      contextMode: "general_file"
     });
     await vi.waitFor(() => expect(moveProposals).toHaveLength(1));
     expect(moveProposals[0]).toMatchObject({
@@ -7418,6 +7861,7 @@ describe("AgentRunSession v2 tool facade", () => {
       writingOperations: ["chapter_replace"]
     };
     let effectiveCapabilityState = createEffectiveCapabilityState(capabilitySnapshot);
+    const runIds = ["run_guidance_v3_operation_revoked", "run_guidance_v3_operation_replacement"];
     let providerCalls = 0;
     let markReadStarted: () => void = () => undefined;
     let releaseRead: () => void = () => undefined;
@@ -7428,11 +7872,15 @@ describe("AgentRunSession v2 tool facade", () => {
       releaseRead = resolve;
     });
     const session = createSession({
-      coordinatorOptions: { createRunId: () => "run_guidance_v3_operation_revoked" },
+      coordinatorOptions: { createRunId: () => runIds.shift() ?? "run_guidance_v3_unexpected" },
       repository,
       modelDriver: {
-        async *streamRound() {
+        async *streamRound(input: { readonly runId: string }) {
           providerCalls += 1;
+          if (input.runId === "run_guidance_v3_operation_replacement") {
+            yield { type: "round_completed" as const, finishReason: "stop" as const };
+            return;
+          }
           yield toolCall("read-before-operation-revocation", "read_resource", {
             ref: "chapter:chapter-01"
           });
@@ -7465,17 +7913,50 @@ describe("AgentRunSession v2 tool facade", () => {
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run_guidance_v3_operation_revoked")).toMatchObject({
         value: {
-          snapshot: { status: "failed" },
+          snapshot: {
+            status: "capability_changed",
+            capabilities: {
+              revision: effectiveCapabilityState.revision,
+              state: "capability_changed",
+              changeReason: "frozen_catalog_operation_revoked"
+            }
+          },
           events: expect.arrayContaining([
             expect.objectContaining({
-              type: "run_failed",
-              detail: expect.objectContaining({ code: "AGENT_CAPABILITY_CHANGED" })
+              type: "capability_changed",
+              detail: {
+                effectiveCapabilityRevision: effectiveCapabilityState.revision,
+                reason: "frozen_catalog_operation_revoked"
+              }
             })
           ])
         }
       });
     });
     expect(providerCalls).toBe(1);
+    const changed = (await session.readAgentRun("run_guidance_v3_operation_revoked")) as {
+      readonly value: { readonly snapshot: { readonly runRevision: number } };
+    };
+    await expect(
+      session.resumeAgentRun({
+        projectId: "project-01",
+        runId: "run_guidance_v3_operation_revoked",
+        commandId: "resume-after-operation-revocation",
+        expectedRunRevision: changed.value.snapshot.runRevision
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_ALREADY_TERMINAL" }
+    });
+    await expect(
+      session.startAgentRun({
+        ...startCommand(),
+        commandId: "start-after-operation-revocation"
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { runId: "run_guidance_v3_operation_replacement" }
+    });
   });
 
   test("rechecks Catalog 2.0 authority after budget persistence and before the first Provider call", async () => {
@@ -7533,11 +8014,14 @@ describe("AgentRunSession v2 tool facade", () => {
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run_guidance_v3_pre_provider_revoked")).toMatchObject({
         value: {
-          snapshot: { status: "failed" },
+          snapshot: { status: "capability_changed" },
           events: expect.arrayContaining([
             expect.objectContaining({
-              type: "run_failed",
-              detail: expect.objectContaining({ code: "AGENT_CAPABILITY_CHANGED" })
+              type: "capability_changed",
+              detail: {
+                effectiveCapabilityRevision: effectiveCapabilityState.revision,
+                reason: "frozen_catalog_operation_revoked"
+              }
             })
           ])
         }
@@ -7589,7 +8073,7 @@ describe("AgentRunSession v2 tool facade", () => {
               }
             ],
             risks: [],
-            verification: [],
+            verification: ["Inspect the frozen execution catalog."],
             sourceRefs: []
           });
           yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
@@ -7606,6 +8090,15 @@ describe("AgentRunSession v2 tool facade", () => {
       expect(await session.readAgentRun("run_guidance_v3_filtered_1")).toMatchObject({
         value: { snapshot: { status: "plan_ready" } }
       });
+    });
+    await expect(
+      repository.readPlanArtifact("plan_guidance_v3_filtered", 1)
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        executionWritePolicyDraft: "write_before_confirmation"
+      }
     });
     effectiveCapabilityState = revokeCapability(
       effectiveCapabilityState,
@@ -7693,7 +8186,7 @@ describe("AgentRunSession v2 tool facade", () => {
               }
             ],
             risks: [],
-            verification: [],
+            verification: ["Review the preserved writing intent."],
             sourceRefs: []
           });
           yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
@@ -8066,6 +8559,9 @@ function echoStartPreflight() {
           contextMode: command["contextMode"] ?? "writing",
           writePolicy: command["writePolicy"] ?? "write_before_confirmation",
           writePolicyAcknowledged: command["writePolicyAcknowledged"] === true,
+          ...(command["executionWritePolicyDraft"] === undefined
+            ? {}
+            : { executionWritePolicyDraft: command["executionWritePolicyDraft"] }),
           userRequest: command["userRequest"] ?? "",
           ...(command["writingTaskIntent"] === undefined
             ? {}
@@ -8188,6 +8684,7 @@ function durableMemoryRepository() {
   const contextSourceMaterializations = new Map<string, Record<string, unknown>>();
   const budgetSnapshots = new Map<string, Record<string, unknown>>();
   const compactionSummaryArtifacts = new Map<string, Record<string, unknown>>();
+  const planArtifacts = new Map<string, Record<string, unknown>>();
   return {
     async writeSnapshot(snapshot: Record<string, unknown>) {
       snapshots.set(String(snapshot["runId"]), structuredClone(snapshot));
@@ -8197,6 +8694,23 @@ function durableMemoryRepository() {
       const runId = String(event["runId"]);
       events.set(runId, [...(events.get(runId) ?? []), structuredClone(event)]);
       return { ok: true, value: event };
+    },
+    async commitRunStateV20(input: {
+      readonly snapshot: AgentRunSnapshotV20;
+      readonly event: AgentRunEventV20;
+    }) {
+      const prior = events.get(input.snapshot.runId) ?? [];
+      if (!prior.some((event) => event["sequence"] === input.event.sequence)) {
+        events.set(input.snapshot.runId, [
+          ...prior,
+          structuredClone(input.event)
+        ] as unknown as Record<string, unknown>[]);
+      }
+      snapshots.set(
+        input.snapshot.runId,
+        structuredClone(input.snapshot) as unknown as Record<string, unknown>
+      );
+      return { ok: true as const, value: input.snapshot };
     },
     async writeCommandReceipt(runId: string, commandId: string, receipt: Record<string, unknown>) {
       commandReceipts.set(`${runId}:${commandId}`, structuredClone(receipt));
@@ -8210,6 +8724,23 @@ function durableMemoryRepository() {
     },
     async readEvents(runId: string) {
       return { ok: true, value: events.get(runId) ?? [] };
+    },
+    async readSnapshotV20(runId: string) {
+      const snapshot = snapshots.get(runId);
+      if (snapshot === undefined) return { ok: true as const, value: undefined };
+      if (snapshot["schemaVersion"] !== "2.0") {
+        return {
+          ok: false as const,
+          error: testRepositoryError("AGENT_RUN_SNAPSHOT_V20_LEGACY_RECORD")
+        };
+      }
+      return { ok: true as const, value: snapshot as unknown as AgentRunSnapshotV20 };
+    },
+    async readEventsV20(runId: string) {
+      return {
+        ok: true as const,
+        value: (events.get(runId) ?? []) as unknown as AgentRunEventV20[]
+      };
     },
     async writeToolCatalog(runId: string, catalog: Record<string, unknown>) {
       toolCatalogs.set(
@@ -8274,6 +8805,16 @@ function durableMemoryRepository() {
     async readContextSourceMaterialization(runId: string, artifactId: string) {
       return { ok: true, value: contextSourceMaterializations.get(`${runId}:${artifactId}`) };
     },
+    async writePlanArtifact(plan: Record<string, unknown>) {
+      planArtifacts.set(
+        `${String(plan["planId"])}:${String(plan["revision"])}`,
+        structuredClone(plan)
+      );
+      return { ok: true, value: plan };
+    },
+    async readPlanArtifact(planId: string, revision: number) {
+      return { ok: true, value: planArtifacts.get(`${planId}:${String(revision)}`) };
+    },
     async writeRetryCheckpoint(runId: string, checkpoint: Record<string, unknown>) {
       retryCheckpoints.set(runId, structuredClone(checkpoint));
       return { ok: true, value: checkpoint };
@@ -8310,6 +8851,20 @@ function durableMemoryRepository() {
     async readPreflightError(errorId: string) {
       return { ok: true, value: preflightErrors.get(errorId) };
     }
+  };
+}
+
+function testRepositoryError(code: string) {
+  return {
+    schemaVersion: "1.0" as const,
+    errorId: `test_${code.toLowerCase()}`,
+    code,
+    category: "StorageError" as const,
+    message: "The requested test repository record uses another schema version.",
+    recoverability: "fatal" as const,
+    suggestedAction: "Use the matching strict or legacy test reader.",
+    traceId: "agent-run-session-test",
+    createdAt: "2026-08-04T00:00:00.000Z"
   };
 }
 

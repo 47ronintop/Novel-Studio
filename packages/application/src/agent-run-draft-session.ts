@@ -1,11 +1,15 @@
 import {
   applyAgentRunDraftMutation,
+  applyAgentRunDraftV20Mutation,
   applyContextDraftMutation,
   bindContextDraft,
-  createAgentRunDraft,
+  checksumAgentRunDraft,
+  checksumAgentRunDraftV20,
+  createAgentRunDraftV20,
   createContextDraft,
   normalizeAgentRunDraft,
   normalizeContextDraft,
+  parseAgentRunDraftV20,
   refreshContextDraft,
   setContextDraftMode,
   type AgentContextMode,
@@ -14,6 +18,8 @@ import {
   type AgentReasoningEffort,
   type AgentRunDraft,
   type AgentRunDraftMutation,
+  type AgentRunDraftV20,
+  type AgentRunDraftV20Mutation,
   type AgentWritePolicy,
   type ContextDraft,
   type ContextDraftActiveResourceRef,
@@ -53,6 +59,8 @@ export interface AgentRunDraftInitialization {
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged?: boolean;
+  /** Future Act choice only; planning always persists a read-only current policy. */
+  readonly executionWritePolicyDraft?: AgentWritePolicy;
   readonly contextRefs?: readonly ContextDraftRef[];
   readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
 }
@@ -71,7 +79,7 @@ export interface UpdateAgentRunDraftCommand {
   readonly conversationId: string;
   readonly commandId: string;
   readonly expectedDraftRevision: number;
-  readonly mutation: AgentRunDraftMutation;
+  readonly mutation: AgentRunDraftV20Mutation;
 }
 
 export interface UpdateContextDraftCommand {
@@ -119,6 +127,8 @@ export interface SyncStartDraftCommand {
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
+  /** App-owned future Act policy; it does not authorize a planning run. */
+  readonly executionWritePolicyDraft?: AgentWritePolicy;
   readonly modelProfileId: string;
   readonly modelName?: string;
   readonly reasoningEffort?: AgentReasoningEffort;
@@ -131,7 +141,7 @@ export interface SyncStartDraftCommand {
 }
 
 export interface AgentRunDraftView {
-  readonly runDraft: AgentRunDraft;
+  readonly runDraft: PersistedAgentRunDraft;
   readonly contextDraft: ContextDraft;
 }
 
@@ -140,6 +150,8 @@ export interface AgentRunStartDraftView extends AgentRunDraftView {
 }
 
 export type AgentRunDraftResult = Result<AgentRunDraftView, UnifiedError>;
+
+type PersistedAgentRunDraft = AgentRunDraft | AgentRunDraftV20;
 
 export interface AgentRunDraftSession {
   readAgentRunDraft(command: ReadAgentRunDraftCommand): Promise<AgentRunDraftResult>;
@@ -189,7 +201,7 @@ export function createAgentRunDraftSession(
       );
     }
     try {
-      const normalizedRunDraft = normalizeAgentRunDraft(runDraft.value, legacyWorkspaceKind);
+      const normalizedRunDraft = readPersistedRunDraft(runDraft.value, legacyWorkspaceKind);
       const normalizedContextDraft = normalizeContextDraft(contextDraft.value, legacyWorkspaceKind);
       if (scopeKey(normalizedRunDraft.scope) !== scopeKey(normalizedContextDraft.scope)) {
         return err(
@@ -213,6 +225,25 @@ export function createAgentRunDraftSession(
   async function persist(
     view: AgentRunDraftView
   ): Promise<Result<AgentRunDraftView, UnifiedError>> {
+    if (!isAgentRunDraftV20(view.runDraft)) {
+      return err(
+        draftError(
+          "AGENT_RUN_DRAFT_LEGACY_READ_ONLY",
+          "A legacy Agent run draft must be handed off before it can be changed."
+        )
+      );
+    }
+    try {
+      // Verify the checksum and all strict invariants immediately before the repository boundary.
+      parseAgentRunDraftV20(view.runDraft);
+    } catch {
+      return err(
+        draftError(
+          "AGENT_RUN_DRAFT_V20_INVALID",
+          "The Agent run draft cannot be persisted because its strict contract is invalid."
+        )
+      );
+    }
     // Context draft first so a crash never leaves a run draft pointing at an unwritten context revision.
     const contextWritten = await options.repository.writeContextDraft(
       view.contextDraft as unknown as JsonObject
@@ -246,7 +277,7 @@ export function createAgentRunDraftSession(
       activeResourceRef: init.activeResourceRef ?? null,
       updatedAt: timestamp
     });
-    const runDraft = createAgentRunDraft({
+    const runDraft = createAgentRunDraftV20({
       runDraftId: createId(),
       scope: contextDraft.scope,
       conversationId: command.conversationId,
@@ -255,6 +286,7 @@ export function createAgentRunDraftSession(
       contextMode: init.contextMode,
       writePolicy: init.writePolicy,
       writePolicyAcknowledged: init.writePolicyAcknowledged ?? false,
+      executionWritePolicyDraft: init.executionWritePolicyDraft ?? init.writePolicy,
       modelProfileId: init.modelProfileId,
       ...(init.modelName === undefined ? {} : { modelName: init.modelName }),
       ...(init.reasoningEffort === undefined ? {} : { reasoningEffort: init.reasoningEffort }),
@@ -315,7 +347,7 @@ export function createAgentRunDraftSession(
         if (view.runDraft.revision !== command.expectedDraftRevision) {
           return err(revisionConflict(view));
         }
-        const mutated = applyAgentRunDraftMutation(view.runDraft, command.mutation, now());
+        const mutated = applyRunDraftMutation(view.runDraft, command.mutation, now());
         if (!mutated.ok) return err(mutated.error);
         // A context-mode switch must keep the context draft's mode in sync and re-point the run draft.
         if (command.mutation.kind === "set_context_mode") {
@@ -325,7 +357,7 @@ export function createAgentRunDraftSession(
             command.mutation.contextMode,
             timestamp
           );
-          const runDraft = bindContextDraft(
+          const runDraft = bindRunDraftContext(
             mutated.value,
             {
               contextDraftId: contextDraft.contextDraftId,
@@ -466,13 +498,14 @@ export function createAgentRunDraftSession(
                 contextMode: command.contextMode,
                 writePolicy: command.writePolicy,
                 writePolicyAcknowledged: command.writePolicyAcknowledged,
+                executionWritePolicyDraft: command.executionWritePolicyDraft ?? command.writePolicy,
                 contextRefs: command.contextRefs,
                 activeResourceRef: command.activeResourceRef ?? null
               }
             },
             scope.value
           );
-          const withRequest = applyAgentRunDraftMutation(
+          const withRequest = applyRunDraftMutation(
             view.runDraft,
             { kind: "set_request", request: command.userRequest },
             now()
@@ -547,24 +580,32 @@ function syncToIntent(
     if (updated.ok) contextDraft = updated.value;
   }
   let runDraft = view.runDraft;
-  const mutations: AgentRunDraftMutation[] = [
+  const mutations: AgentRunDraftV20Mutation[] = [
     { kind: "set_operation_mode", operationMode: command.operationMode },
     { kind: "set_context_mode", contextMode: command.contextMode },
+    {
+      kind: "set_execution_write_policy_draft",
+      policy: command.executionWritePolicyDraft ?? command.writePolicy
+    },
     {
       kind: "set_model",
       modelProfileId: command.modelProfileId,
       ...(command.modelName === undefined ? {} : { modelName: command.modelName }),
       ...(command.reasoningEffort === undefined ? {} : { reasoningEffort: command.reasoningEffort })
     },
-    {
-      kind: "set_write_policy",
-      writePolicy: command.writePolicy,
-      acknowledged: command.writePolicyAcknowledged
-    },
+    ...(command.operationMode === "execution"
+      ? [
+          {
+            kind: "set_write_policy" as const,
+            writePolicy: command.writePolicy,
+            acknowledged: command.writePolicyAcknowledged
+          }
+        ]
+      : []),
     { kind: "set_request", request: command.userRequest }
   ];
   for (const mutation of mutations) {
-    const next = applyAgentRunDraftMutation(runDraft, mutation, now());
+    const next = applyRunDraftMutation(runDraft, mutation, now());
     if (next.ok) runDraft = next.value;
   }
   return rebind(runDraft, contextDraft, now());
@@ -589,12 +630,12 @@ function sameActiveResource(
 }
 
 function rebind(
-  runDraft: AgentRunDraft,
+  runDraft: PersistedAgentRunDraft,
   contextDraft: ContextDraft,
   updatedAt: string
 ): AgentRunDraftView {
   return {
-    runDraft: bindContextDraft(
+    runDraft: bindRunDraftContext(
       runDraft,
       {
         contextDraftId: contextDraft.contextDraftId,
@@ -605,6 +646,99 @@ function rebind(
     ),
     contextDraft
   };
+}
+
+function readPersistedRunDraft(
+  value: JsonObject,
+  legacyWorkspaceKind: Parameters<typeof normalizeAgentRunDraft>[1]
+): PersistedAgentRunDraft {
+  if (value["schemaVersion"] === "2.0") return parseAgentRunDraftV20(value);
+  return normalizeLegacyRunDraft(value, legacyWorkspaceKind);
+}
+
+/** Legacy records are view-only and can never recover a previous preapproval acknowledgement. */
+function normalizeLegacyRunDraft(
+  value: JsonObject,
+  legacyWorkspaceKind: Parameters<typeof normalizeAgentRunDraft>[1]
+): AgentRunDraft {
+  const draft = normalizeAgentRunDraft(value, legacyWorkspaceKind);
+  const { checksum: _checksum, ...withoutChecksum } = draft;
+  void _checksum;
+  const safeDraft: Omit<AgentRunDraft, "checksum"> = {
+    ...withoutChecksum,
+    writePolicy: "write_before_confirmation",
+    writePolicyAcknowledged: false
+  };
+  return Object.freeze({ ...safeDraft, checksum: checksumAgentRunDraft(safeDraft) });
+}
+
+function isAgentRunDraftV20(draft: PersistedAgentRunDraft): draft is AgentRunDraftV20 {
+  return draft.schemaVersion === "2.0";
+}
+
+function applyRunDraftMutation(
+  draft: PersistedAgentRunDraft,
+  mutation: AgentRunDraftV20Mutation,
+  updatedAt: string
+): Result<PersistedAgentRunDraft, UnifiedError> {
+  if (!isAgentRunDraftV20(draft)) {
+    if (mutation.kind === "set_execution_write_policy_draft") {
+      return err(
+        draftError(
+          "AGENT_RUN_DRAFT_LEGACY_READ_ONLY",
+          "A legacy Agent run draft must be handed off before its execution policy can change."
+        )
+      );
+    }
+    return applyAgentRunDraftMutation(draft, mutation as AgentRunDraftMutation, updatedAt);
+  }
+  const mutated = applyAgentRunDraftV20Mutation(draft, mutation, updatedAt);
+  if (!mutated.ok) return mutated;
+  return ok(normalizeV20ReadOnlyPolicy(mutated.value));
+}
+
+function bindRunDraftContext(
+  draft: PersistedAgentRunDraft,
+  binding: {
+    readonly contextDraftId: string;
+    readonly contextDraftRevision: number;
+    readonly contextDraftChecksum: string;
+  },
+  updatedAt: string
+): PersistedAgentRunDraft {
+  if (!isAgentRunDraftV20(draft)) return bindContextDraft(draft, binding, updatedAt);
+  const { checksum: _checksum, ...withoutChecksum } = draft;
+  void _checksum;
+  const next: Omit<AgentRunDraftV20, "checksum"> = {
+    ...withoutChecksum,
+    ...binding,
+    revision: draft.revision + 1,
+    updatedAt
+  };
+  return parseAgentRunDraftV20({
+    ...next,
+    checksum: checksumAgentRunDraftV20(next)
+  });
+}
+
+function normalizeV20ReadOnlyPolicy(draft: AgentRunDraftV20): AgentRunDraftV20 {
+  if (
+    draft.operationMode === "execution" ||
+    (draft.writePolicy === "write_before_confirmation" && draft.writePolicyAcknowledged === false)
+  ) {
+    return draft;
+  }
+  const { checksum: _checksum, ...withoutChecksum } = draft;
+  void _checksum;
+  const safeDraft: Omit<AgentRunDraftV20, "checksum"> = {
+    ...withoutChecksum,
+    writePolicy: "write_before_confirmation",
+    writePolicyAcknowledged: false
+  };
+  return parseAgentRunDraftV20({
+    ...safeDraft,
+    checksum: checksumAgentRunDraftV20(safeDraft)
+  });
 }
 
 function revisionConflict(view: AgentRunDraftView): UnifiedError {

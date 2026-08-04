@@ -904,6 +904,16 @@ function validateSemantics(
   options: StoryBibleSemanticValidationOptions
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+  if ((type === "outline" || type === "timeline.events") && asset["status"] === "deleted") {
+    issues.push(
+      issue(
+        "/status",
+        "#/properties/status",
+        "singletonDelete",
+        "outline and timeline singleton assets cannot enter deleted status"
+      )
+    );
+  }
   const assetId = String(asset["id"]);
   const relations = recordArray(asset["relations"]);
   const relationIds = new Set<string>();

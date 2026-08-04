@@ -788,6 +788,8 @@ describe("StoryBibleSession", () => {
     expect(report.value.issues).toContainEqual(
       expect.objectContaining({
         id: "story-consistency.foreshadow.fsh_old_key.paid-off-missing-actual-payoff-chapter",
+        code: "FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING",
+        severity: "warning",
         sourceRef: expect.objectContaining({ kind: "foreshadow", id: "fsh_old_key" })
       })
     );

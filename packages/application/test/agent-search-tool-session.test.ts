@@ -64,20 +64,37 @@ describe("AgentSearchToolSession", () => {
     expect(value.kind).toBe("untrusted_project_data");
     expect(value.items.length).toBe(1);
     expect(value.items[0]?.relativePath).toBe("src/app.ts");
+    expect(value.items[0]?.stableRef).toBe("file:src/app.ts");
     expect(value.items[0]?.snippet).toBe("hello world");
     expect(value.totalHits).toBe(1);
     expect(value.truncated).toBe(false);
   });
 
   test("wraps findReferences and returns untrusted_project_data envelope", async () => {
+    const calls: unknown[] = [];
     const session = createAgentSearchToolSession({
-      searchRepository: makeMockSearchRepository()
+      searchRepository: makeMockSearchRepository({
+        findReferences: async (input) => {
+          calls.push(input);
+          return {
+            ok: true,
+            value: {
+              kind: "search_results",
+              items: [],
+              totalHits: 0,
+              truncated: false,
+              indexVersion: "1.1"
+            }
+          };
+        }
+      })
     });
 
     const result = await session.findReferences({
       runId: "run-01",
       projectId: "proj-01",
-      stableRef: "src/app.ts",
+      contextMode: "general_file",
+      stableRef: "file:src/app.ts",
       signal: new AbortController().signal
     });
 
@@ -85,6 +102,88 @@ describe("AgentSearchToolSession", () => {
     if (!result.ok) return;
     expect(result.value.kind).toBe("untrusted_project_data");
     expect(result.value.totalHits).toBe(0);
+    expect(calls).toEqual([
+      expect.objectContaining({
+        stableRef: "src/app.ts"
+      })
+    ]);
+  });
+
+  test("only exposes writing refs that a writing tool can continue reading", async () => {
+    const session = createAgentSearchToolSession({
+      searchRepository: makeMockSearchRepository({
+        searchText: async () => ({
+          ok: true,
+          value: {
+            kind: "search_results",
+            items: [
+              searchItem("chapters/one.md", "chapter:chapter-01"),
+              searchItem("story-bible/hero.json", "story_bible:hero"),
+              searchItem(".agent/memory.json", "memory:private-ranking"),
+              searchItem("notes/internal.md", "internal:ranking-only")
+            ],
+            totalHits: 4,
+            truncated: false,
+            indexVersion: "1.1"
+          }
+        })
+      })
+    });
+
+    const result = await session.searchText({
+      runId: "run-writing",
+      projectId: "proj-01",
+      contextMode: "writing",
+      query: "hero",
+      signal: new AbortController().signal
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items.map((item) => item.stableRef)).toEqual([
+      "chapter:chapter-01",
+      "story_bible:hero"
+    ]);
+    expect(result.value.totalHits).toBe(2);
+    expect(result.value.truncated).toBe(true);
+  });
+
+  test("normalizes general-file refs and filters non-file namespaces", async () => {
+    const session = createAgentSearchToolSession({
+      searchRepository: makeMockSearchRepository({
+        searchText: async () => ({
+          ok: true,
+          value: {
+            kind: "search_results",
+            items: [
+              searchItem("notes/one.md", "notes/one.md"),
+              searchItem("notes/two.md", "file:notes/two.md"),
+              searchItem("chapters/one.md", "chapter:chapter-01")
+            ],
+            totalHits: 3,
+            truncated: false,
+            indexVersion: "1.1"
+          }
+        })
+      })
+    });
+
+    const result = await session.searchText({
+      runId: "run-general-file",
+      projectId: "proj-01",
+      contextMode: "general_file",
+      query: "one",
+      signal: new AbortController().signal
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items.map((item) => item.stableRef)).toEqual([
+      "file:notes/one.md",
+      "file:notes/two.md"
+    ]);
+    expect(result.value.totalHits).toBe(2);
+    expect(result.value.truncated).toBe(true);
   });
 
   test("propagates errors from the search repository", async () => {
@@ -158,3 +257,15 @@ describe("AgentSearchToolSession", () => {
     expect(result.value.items[0]?.rangeEnd).toBe(20);
   });
 });
+
+function searchItem(relativePath: string, stableRef: string) {
+  return {
+    relativePath,
+    stableRef,
+    range: { unit: "line_column" as const, start: 1, end: 3 },
+    snippet: "match",
+    sourceChecksum: "a".repeat(64),
+    resultDigest: "b".repeat(64),
+    truncated: false
+  };
+}

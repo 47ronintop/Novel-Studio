@@ -3067,7 +3067,9 @@ function validateStoryBibleDraft(
       : `无法保存大纲：${issues.map(storyBibleOutlineValidationMessage).join(" ")}`;
   }
   if (draft.kind === "foreshadow") {
-    const issues = validateStoryBibleForeshadow(draft, snapshot.foreshadows);
+    const issues = validateStoryBibleForeshadow(draft, snapshot.foreshadows).filter(
+      (issue) => issue.severity === "error"
+    );
     return issues.length === 0
       ? undefined
       : `无法保存伏笔：${issues.map(storyBibleForeshadowValidationMessage).join(" ")}`;

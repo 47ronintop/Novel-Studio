@@ -1,6 +1,55 @@
 export { runAgent } from "./agent-engine.js";
 export { createAgentRunCoordinator } from "./agent-run-coordinator.js";
 export {
+  FINISH_REPORT_MAX_EVIDENCE_REFS,
+  FINISH_REPORT_MAX_ITEMS,
+  FINISH_REPORT_MAX_TEXT_BYTES,
+  FINISH_REPORT_SCHEMA_VERSION,
+  createFinishReport,
+  finishInputSchemaV2,
+  formatCompletionEvidenceRef,
+  formatToolCompletionEvidenceRef,
+  formatWriteAppliedEvidenceRef,
+  isFinishPendingState,
+  parseFinishEvidenceRef,
+  validateFinishForRun,
+  validateFinishInput,
+  validateFinishReport
+} from "./finish-report.js";
+export type {
+  FinishInputV2,
+  FinishEvidenceRef,
+  FinishOutcome,
+  FinishReportBodyV2,
+  FinishReportV2,
+  FinishRunState
+} from "./finish-report.js";
+export {
+  AGENT_RUN_EVENT_SCHEMA_VERSION_V20,
+  AGENT_RUN_SNAPSHOT_SCHEMA_VERSION_V20,
+  parseAgentRunEventV20,
+  parseAgentRunSnapshotV20,
+  validateAgentRunEventV20,
+  validateAgentRunHistoryV20,
+  validateAgentRunSnapshotV20,
+  validateAgentRunStatePairV20,
+  validateAgentRunV20StartFacts
+} from "./agent-run-v20.js";
+export type {
+  AgentRunAuthorityV20,
+  AgentRunCapabilitiesV20,
+  AgentRunCatalogV20,
+  AgentRunEventTypeV20,
+  AgentRunEventV20,
+  AgentRunFinishV20,
+  AgentRunPendingV20,
+  AgentRunProtocolV20,
+  AgentRunSnapshotV20,
+  AgentRunStateCommitV20,
+  AgentRunStatusV20,
+  AgentRunV20StartFacts
+} from "./agent-run-v20.js";
+export {
   computeAgentToolDescriptorDigest,
   listAgentTools,
   MAX_EXTERNAL_TOOL_DESCRIPTORS,
@@ -213,17 +262,28 @@ export type {
 } from "./permission-summary.js";
 export {
   applyAgentRunDraftMutation,
+  applyAgentRunDraftV20Mutation,
   bindContextDraft,
   checksumAgentRunDraft,
+  checksumAgentRunDraftV20,
   createAgentRunDraft,
-  normalizeAgentRunDraft
+  createAgentRunDraftV20,
+  normalizeAgentRunDraft,
+  parseAgentRunDraftV20,
+  parseExecutionWritePolicyDraft,
+  validateAgentRunDraftV20,
+  validateExecutionWritePolicyDraft
 } from "./agent-run-draft.js";
 export type {
   AgentRunDraft,
   AgentRunDraftV10,
   AgentRunDraftV11,
+  AgentRunDraftV20,
+  AgentRunDraftV20Mutation,
   AgentRunDraftMutation,
-  CreateAgentRunDraftInput
+  CreateAgentRunDraftInput,
+  CreateAgentRunDraftV20Input,
+  ExecutionWritePolicyDraft
 } from "./agent-run-draft.js";
 export {
   applyContextDraftMutation,
@@ -377,14 +437,24 @@ export type {
 export {
   canExecutePlanArtifact,
   createPlanArtifactRevision,
-  revisePlanArtifact
+  createPlanArtifactRevisionV20,
+  createPlanActHandoffV20,
+  parsePlanActHandoffV20,
+  parsePlanArtifactV20,
+  revisePlanArtifact,
+  validatePlanActHandoffV20,
+  validatePlanArtifactV20
 } from "./plan-artifact.js";
 export {
   classifyPlanDeviation,
   createPlanExecutionRecord,
+  createPlanExecutionRecordV20,
+  parsePlanExecutionRecordV20,
   recordPlanExecutionDeviation,
   summarizePlanExecution,
-  transitionPlanExecutionStep
+  transitionPlanExecutionStep,
+  validatePlanExecutionHandoffV20,
+  validatePlanExecutionRecordV20
 } from "./plan-execution.js";
 export {
   appendChangeSetProposal,
@@ -520,7 +590,11 @@ export type {
 } from "./transaction-journal.js";
 export type {
   CreatePlanArtifactInput,
+  CreatePlanActHandoffV20Input,
+  CreatePlanArtifactV20Input,
   PlanArtifact,
+  PlanArtifactV20,
+  PlanActHandoffV20,
   PlanOpenQuestion,
   PlanStep,
   PlanTargetRef,
@@ -529,10 +603,12 @@ export type {
 export type {
   ClassifyPlanDeviationInput,
   CreatePlanExecutionRecordInput,
+  CreatePlanExecutionRecordV20Input,
   PlanDeviationChange,
   PlanExecutionDeviationKind,
   PlanExecutionDeviationResult,
   PlanExecutionRecord,
+  PlanExecutionRecordV20,
   PlanExecutionStep,
   PlanExecutionStepStatus,
   PlanExecutionSummary,
@@ -592,6 +668,7 @@ export type {
   ToolApprovalBinding,
   PendingToolApproval,
   RecordAgentRunEventInput,
+  RecordAgentRunFinishInput,
   RecordTerminalAgentRunAuditEventInput,
   RefreshAgentContextCommand,
   ResolvedAgentRunStartInput,

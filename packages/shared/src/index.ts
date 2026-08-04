@@ -9,11 +9,14 @@ export type {
 export { createUnifiedError } from "./errors.js";
 export type {
   ForeshadowDetails,
+  ForeshadowContractWarning,
   ForeshadowOrigin,
   ForeshadowSourceRef,
   ForeshadowTrackingStatus
 } from "./foreshadow.js";
 export {
+  FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING,
+  collectForeshadowContractWarnings,
   createForeshadowEvidence,
   hashForeshadowEvidence,
   normalizeForeshadowEvidence

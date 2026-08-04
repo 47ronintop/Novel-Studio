@@ -9,6 +9,7 @@ type SessionApi = {
   transitionStep(input: JsonRecord): Promise<JsonRecord>;
   recordDeviation(input: JsonRecord): Promise<JsonRecord>;
   decidePlanRevision(input: JsonRecord): Promise<JsonRecord>;
+  summarize(input: JsonRecord): Promise<JsonRecord>;
 };
 
 function createMemoryRepository() {
@@ -63,14 +64,32 @@ function createMemoryRepository() {
   };
 }
 
+const providerSemanticVersionSetChecksum = "a".repeat(64);
+
+function handoffForPlanRevision(planRevision: number) {
+  return {
+    schemaVersion: "2.0",
+    handoffId: `handoff_${planRevision}`,
+    planId: "plan_01",
+    planRevision,
+    executionContextMode: "writing",
+    executionWritePolicy: "write_before_confirmation",
+    executionWritePolicyAcknowledged: false,
+    providerSemanticVersionSetChecksum
+  } as const;
+}
+
 const baseRecord = {
-  schemaVersion: "1.0",
+  schemaVersion: "2.0",
   planExecutionId: "execution_01",
   runId: "run_01",
   planId: "plan_01",
   planRevision: 1,
   handoffContextMode: "writing",
   handoffWritePolicy: "write_before_confirmation",
+  executionWritePolicyAcknowledged: false,
+  providerSemanticVersionSetChecksum,
+  handoff: handoffForPlanRevision(1),
   revision: 1,
   steps: [
     {
@@ -100,6 +119,31 @@ const baseRecord = {
   ]
 };
 
+const legacyRecord = {
+  schemaVersion: "1.0",
+  planExecutionId: "execution_legacy",
+  runId: "run_legacy",
+  planId: "plan_legacy",
+  planRevision: 1,
+  handoffContextMode: "writing",
+  handoffWritePolicy: "user_preapproved_run",
+  revision: 1,
+  steps: [
+    {
+      stepId: "step_legacy",
+      title: "Legacy execution",
+      status: "pending",
+      startedAt: null,
+      completedAt: null,
+      verification: [],
+      deviationKind: "none",
+      blockedReason: null,
+      checkpointId: null,
+      eventSequence: null
+    }
+  ]
+};
+
 function sessionApi(repository: ReturnType<typeof createMemoryRepository>) {
   const create = (applicationExports as unknown as Record<string, unknown>)[
     "createAgentPlanExecutionSession"
@@ -115,13 +159,13 @@ function sessionApi(repository: ReturnType<typeof createMemoryRepository>) {
 }
 
 describe("Agent plan execution session", () => {
-  test("persists immutable execution revisions and reloads the latest record", async () => {
+  test("persists strict 2.0 execution revisions and reloads the latest record", async () => {
     const repository = createMemoryRepository();
     const session = sessionApi(repository);
     const started = await session.startPlanExecution({ record: baseRecord });
     expect(started).toMatchObject({
       ok: true,
-      value: { revision: 1, planExecutionId: "execution_01" }
+      value: { schemaVersion: "2.0", revision: 1, planExecutionId: "execution_01" }
     });
 
     const transitioned = await session.transitionStep({
@@ -161,6 +205,108 @@ describe("Agent plan execution session", () => {
           expect.objectContaining({ stepId: "step_01", status: "pending" })
         ])
       }
+    });
+  });
+
+  test("keeps the flag-off legacy pipeline active while stripping inherited preapproval", async () => {
+    const repository = createMemoryRepository();
+    await repository.writePlanExecutionRecord(legacyRecord);
+    const session = sessionApi(repository);
+
+    const hydrated = await session.readPlanExecution({
+      runId: "run_legacy",
+      planExecutionId: "execution_legacy"
+    });
+    expect(hydrated).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.0",
+        handoffWritePolicy: "write_before_confirmation"
+      }
+    });
+    expect(Object.isFrozen(hydrated.value)).toBe(true);
+    expect(Object.isFrozen((hydrated.value as JsonRecord)["steps"])).toBe(true);
+    await expect(
+      session.summarize({ runId: "run_legacy", planExecutionId: "execution_legacy" })
+    ).resolves.toMatchObject({ ok: true, value: { status: "active" } });
+
+    await expect(
+      session.startPlanExecution({
+        record: {
+          ...legacyRecord,
+          runId: "run_legacy_fresh",
+          planExecutionId: "execution_legacy_fresh"
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.0",
+        handoffWritePolicy: "write_before_confirmation"
+      }
+    });
+    await expect(
+      session.transitionStep({
+        runId: "run_legacy",
+        planExecutionId: "execution_legacy",
+        stepId: "step_legacy",
+        status: "running",
+        at: "2026-08-04T00:00:00.000Z",
+        checkpointId: "checkpoint_legacy",
+        eventSequence: 1
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "1.0",
+        handoffWritePolicy: "write_before_confirmation",
+        steps: [expect.objectContaining({ stepId: "step_legacy", status: "running" })]
+      }
+    });
+  });
+
+  test("rejects legacy records with unknown top-level fields", async () => {
+    const repository = createMemoryRepository();
+    await repository.writePlanExecutionRecord({ ...legacyRecord, forgedAcknowledgement: true });
+    const session = sessionApi(repository);
+
+    await expect(
+      session.readPlanExecution({ runId: "run_legacy", planExecutionId: "execution_legacy" })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PLAN_EXECUTION_RECORD_INVALID" }
+    });
+  });
+
+  test("fails closed when a persisted 2.0 record has a malformed or mismatched handoff", async () => {
+    const repository = createMemoryRepository();
+    await repository.writePlanExecutionRecord({
+      ...baseRecord,
+      handoff: {
+        ...baseRecord.handoff,
+        executionWritePolicy: "user_preapproved_run"
+      }
+    });
+    const session = sessionApi(repository);
+
+    await expect(
+      session.readPlanExecution({ runId: "run_01", planExecutionId: "execution_01" })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PLAN_EXECUTION_RECORD_INVALID" }
+    });
+  });
+
+  test("rejects an unknown execution-record version instead of treating it as legacy", async () => {
+    const repository = createMemoryRepository();
+    await repository.writePlanExecutionRecord({ ...baseRecord, schemaVersion: "2.1" });
+    const session = sessionApi(repository);
+
+    await expect(
+      session.readPlanExecution({ runId: "run_01", planExecutionId: "execution_01" })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PLAN_EXECUTION_RECORD_INVALID" }
     });
   });
 
@@ -247,7 +393,8 @@ describe("Agent plan execution session", () => {
       requestId: "request_approve",
       planId: "plan_01",
       planRevision: 2,
-      decision: "approve"
+      decision: "approve",
+      handoff: handoffForPlanRevision(2)
     });
     expect(approved).toMatchObject({
       ok: true,
@@ -262,7 +409,8 @@ describe("Agent plan execution session", () => {
         requestId: "request_approve",
         planId: "plan_01",
         planRevision: 2,
-        decision: "approve"
+        decision: "approve",
+        handoff: handoffForPlanRevision(2)
       })
     ).toEqual(approved);
     const afterDecisionReload = sessionApi(repository);

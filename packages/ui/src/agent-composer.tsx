@@ -360,7 +360,7 @@ export function AgentComposer(props: AgentComposerProps) {
                 <AgentPopover
                   disabled={false}
                   onOpenChange={(open) => {
-                    if (open && props.operationMode === "execution") props.permission?.onOpen();
+                    if (open) props.permission?.onOpen();
                   }}
                   panelClassName="ns-agent-composer-add-popover"
                   panelLabel="添加引用与执行审批"
@@ -414,19 +414,29 @@ export function AgentComposer(props: AgentComposerProps) {
                           </button>
                         )}
                       </section>
-                      {props.operationMode === "planning" ? null : (
-                        <>
-                          <div className="ns-agent-composer-add-divider" role="separator" />
-                          <AgentPermissionMenu
-                            {...(props.permission === undefined
-                              ? {}
-                              : { control: props.permission })}
-                            onWritePolicyChange={props.onWritePolicyChange}
-                            policyDisabled={draftDisabled}
-                            writePolicy={props.writePolicy}
-                          />
-                        </>
-                      )}
+                      <>
+                        <div className="ns-agent-composer-add-divider" role="separator" />
+                        <AgentPermissionMenu
+                          {...(props.permission === undefined ? {} : { control: props.permission })}
+                          {...(props.operationMode === "planning"
+                            ? {
+                                title: "执行阶段审批策略",
+                                notice: "当前计划：只读，不会修改文件。"
+                              }
+                            : {})}
+                          onWritePolicyChange={
+                            props.operationMode === "planning"
+                              ? props.onExecutionWritePolicyDraftChange
+                              : props.onWritePolicyChange
+                          }
+                          policyDisabled={draftDisabled}
+                          writePolicy={
+                            props.operationMode === "planning"
+                              ? props.executionWritePolicyDraft
+                              : props.writePolicy
+                          }
+                        />
+                      </>
                     </div>
                   )}
                 </AgentPopover>

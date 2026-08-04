@@ -1,6 +1,8 @@
 import { ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 import { beforeEach, describe, expect, test } from "vitest";
 
+import { createAgentRunDraft, createContextDraft } from "@novel-studio/agent-engine";
+
 import {
   createAgentRunDraftSession,
   type AgentRunDraftInitialization,
@@ -82,6 +84,7 @@ describe("Agent Run Draft session", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.runDraft).toMatchObject({
+      schemaVersion: "2.0",
       revision: 1,
       operationMode: "planning",
       contextMode: "writing",
@@ -117,7 +120,7 @@ describe("Agent Run Draft session", () => {
       ok: true,
       value: {
         runDraft: {
-          schemaVersion: "1.1",
+          schemaVersion: "2.0",
           scope: { kind: "standalone", scopeId: "standalone" },
           operationMode: "conversation",
           contextMode: "standalone_chat"
@@ -141,6 +144,125 @@ describe("Agent Run Draft session", () => {
     if (!first.ok || !second.ok) return;
     expect(second.value.runDraft.runDraftId).toBe(first.value.runDraft.runDraftId);
     expect(second.value.runDraft.revision).toBe(1);
+  });
+
+  test("keeps a planning draft read-only while preserving its future Act policy separately", async () => {
+    const result = await session.readAgentRunDraft({
+      projectId: "project_01",
+      conversationId: "conv_plan_policy",
+      initialize: {
+        modelProfileId: "model_01",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "user_preapproved_run",
+        writePolicyAcknowledged: true,
+        executionWritePolicyDraft: "user_preapproved_run"
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        runDraft: {
+          schemaVersion: "2.0",
+          operationMode: "planning",
+          writePolicy: "write_before_confirmation",
+          writePolicyAcknowledged: false,
+          executionWritePolicyDraft: "user_preapproved_run"
+        }
+      }
+    });
+    if (!result.ok) return;
+
+    const updated = await session.updateAgentRunDraft({
+      projectId: "project_01",
+      conversationId: "conv_plan_policy",
+      commandId: "set_execution_policy_draft",
+      expectedDraftRevision: result.value.runDraft.revision,
+      mutation: {
+        kind: "set_execution_write_policy_draft",
+        policy: "write_before_confirmation"
+      }
+    });
+    expect(updated).toMatchObject({
+      ok: true,
+      value: {
+        runDraft: {
+          schemaVersion: "2.0",
+          operationMode: "planning",
+          writePolicy: "write_before_confirmation",
+          writePolicyAcknowledged: false,
+          executionWritePolicyDraft: "write_before_confirmation"
+        }
+      }
+    });
+  });
+
+  test("hydrates a legacy draft as unacknowledged confirmation-only state and refuses to rewrite it", async () => {
+    const repository = createMemoryRepository();
+    const scope = {
+      kind: "workspace" as const,
+      workspaceKind: "creativeProject" as const,
+      workspaceId: "project_01"
+    };
+    const contextDraft = createContextDraft({
+      contextDraftId: "context_legacy",
+      conversationId: "conv_legacy",
+      scope,
+      contextMode: "writing",
+      refs: [],
+      activeResourceRef: null,
+      updatedAt: "2026-07-16T00:00:00.000Z"
+    });
+    const legacyDraft = createAgentRunDraft({
+      runDraftId: "draft_legacy",
+      scope,
+      conversationId: "conv_legacy",
+      userRequest: "Continue the prior run.",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: true,
+      modelProfileId: "model_01",
+      contextDraftId: contextDraft.contextDraftId,
+      contextDraftRevision: contextDraft.revision,
+      contextDraftChecksum: contextDraft.checksum,
+      contextBudgetSnapshotId: null,
+      updatedAt: "2026-07-16T00:00:00.000Z"
+    });
+    await repository.writeContextDraft(contextDraft as unknown as JsonObject);
+    await repository.writeRunDraft(legacyDraft as unknown as JsonObject);
+    const legacySession = createAgentRunDraftSession({ repository, scope });
+
+    const hydrated = await legacySession.readAgentRunDraft({
+      scope,
+      conversationId: "conv_legacy",
+      initialize
+    });
+    expect(hydrated).toMatchObject({
+      ok: true,
+      value: {
+        runDraft: {
+          schemaVersion: "1.1",
+          writePolicy: "write_before_confirmation",
+          writePolicyAcknowledged: false
+        }
+      }
+    });
+    if (!hydrated.ok) return;
+
+    await expect(
+      legacySession.updateAgentRunDraft({
+        scope,
+        conversationId: "conv_legacy",
+        commandId: "legacy_rewrite",
+        expectedDraftRevision: hydrated.value.runDraft.revision,
+        mutation: { kind: "set_request", request: "Try to rewrite the legacy draft." }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_LEGACY_READ_ONLY" }
+    });
   });
 
   test("updates the request into a new revision", async () => {

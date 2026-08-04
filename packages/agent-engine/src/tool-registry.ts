@@ -9,6 +9,7 @@ import {
   type ProviderVisibleWriteOperation
 } from "./agent-tool-capabilities.js";
 import { validateStrictToolSchema, validateToolText } from "./agent-tool-schema.js";
+import { finishInputSchemaV2 } from "./finish-report.js";
 
 /** The 9 static tool names that exist in Stage 5 baseline (v1.0). */
 export type CoreAgentToolName =
@@ -410,7 +411,12 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
     cap?.searchEnabled === true ? [coreTool("search_project", "search_tool", "read")] : [];
   const reads = [
     coreTool("list_project_entries", "file_tool", "read"),
-    coreTool("read_resource", "file_tool", "read", { inputSchema: readResourceSchema }),
+    coreTool("read_resource", "file_tool", "read", {
+      description: writing
+        ? "按稳定 chapter: 引用读取章节正文和当前版本信息。"
+        : "按稳定 file: 引用读取当前 profile 允许的项目文本。",
+      inputSchema: readResourceSchema
+    }),
     ...storyBibleReadTools,
     ...searchTools
   ];
@@ -428,6 +434,7 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
     if (writingOperations.has("chapter_replace")) {
       mutations.push(
         coreTool("edit_text", "file_tool", "propose", {
+          description: "基于 chapter: 稳定引用、新鲜内容哈希和有界范围提案修改章节正文。",
           writeOperation: "chapter_replace",
           inputSchema: v2EditSchema("chapter")
         })
@@ -436,6 +443,8 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
     if (writingOperations.has("chapter_create")) {
       mutations.push(
         coreTool("create_resource", "file_tool", "propose", {
+          description:
+            "只提案创建章节；只提交标题和可选正文，ID、路径、状态、顺序与时间戳由应用生成。",
           writeOperation: "chapter_create",
           inputSchema: v2CreateSchema("chapter")
         })
@@ -448,7 +457,11 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
       ["chapter_restore", "restore_chapter"]
     ] as const) {
       if (writingOperations.has(operation)) {
-        mutations.push(coreTool(name, "file_tool", "propose", { writeOperation: operation }));
+        mutations.push(
+          coreTool(name, "file_tool", "propose", {
+            writeOperation: operation
+          })
+        );
       }
     }
     for (const [operation, name] of [
@@ -458,7 +471,12 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
       ["story_bible_restore", "restore_story_bible"]
     ] as const) {
       if (writingOperations.has(operation)) {
-        mutations.push(coreTool(name, "file_tool", "propose", { writeOperation: operation }));
+        mutations.push(
+          coreTool(name, "file_tool", "propose", {
+            description: catalogV2StoryBibleDescription(name),
+            writeOperation: operation
+          })
+        );
       }
     }
   } else {
@@ -466,6 +484,11 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
     if (workspaceOperations.has("replace_file")) {
       mutations.push(
         coreTool(engineering ? "propose_file_write" : "edit_text", "file_tool", "propose", {
+          ...(engineering
+            ? {}
+            : {
+                description: "基于 file: 稳定引用、新鲜内容哈希和有界范围提案修改普通创作文本。"
+              }),
           writeOperation: "replace_file",
           ...(engineering ? {} : { inputSchema: v2EditSchema("file") })
         })
@@ -474,6 +497,11 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
     if (workspaceOperations.has("create_file")) {
       mutations.push(
         coreTool(engineering ? "propose_file_create" : "create_resource", "file_tool", "propose", {
+          ...(engineering
+            ? {}
+            : {
+                description: "只提案创建当前 creative_general policy 允许的 UTF-8 普通文本文件。"
+              }),
           writeOperation: "create_file",
           ...(engineering ? {} : { inputSchema: v2CreateSchema("file") })
         })
@@ -507,9 +535,24 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
     ...mutations,
     ...networkTools,
     ...remoteExternalTools,
-    coreTool("finish", "protocol_action", "control"),
+    coreTool("finish", "protocol_action", "control", { inputSchema: finishInputSchemaV2() }),
     coreTool("request_user_input", "protocol_action", "control")
   ];
+}
+
+function catalogV2StoryBibleDescription(name: StoryBibleAgentToolName): string {
+  switch (name) {
+    case "create_story_bible":
+      return "必须先调用 describe_story_bible_type 取得当前类型合同，再仅用用户可写字段提案创建 Story Bible 资产；系统字段由应用生成。";
+    case "patch_story_bible":
+      return "读取当前资产及类型合同后，使用新鲜 revision、checksum 和必要引用影响提案执行受限结构化 patch。";
+    case "set_story_bible_status":
+      return "读取当前资产后，使用新鲜 revision 和 checksum 提案普通 archive/status 转换；进入 deleted 前同时冻结引用影响。";
+    case "restore_story_bible":
+      return "只对当前为 deleted 的资产，在读取恢复合同并校验新鲜 revision、checksum 后，按认证的删除前状态提案恢复。";
+    default:
+      return descriptionFor(name);
+  }
 }
 
 /** Build a fully-populated descriptor for a static core tool. */
@@ -518,6 +561,7 @@ function coreTool(
   kind: AgentToolKind,
   effect: AgentToolEffect,
   options?: {
+    readonly description?: string;
     readonly writeOperation?: ProviderVisibleWriteOperation;
     readonly inputSchema?: JsonObject;
   }
@@ -527,7 +571,7 @@ function coreTool(
     name,
     providerName: name,
     displayName: displayNameFor(name),
-    description: descriptionFor(name),
+    description: options?.description ?? descriptionFor(name),
     kind,
     effect,
     ...(options?.writeOperation === undefined ? {} : { writeOperation: options.writeOperation }),
@@ -782,6 +826,7 @@ export function validateAgentToolArguments(input: {
 }
 
 function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
+  if (name === "finish_plan") return finishPlanInputSchema();
   if (name === "read_resource") return strictStableRefObject("ref");
   if (name === "search_project") return v2SearchSchema();
   if (name === "edit_text") return v2EditSchema();
@@ -854,7 +899,7 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
     return {
       type: "object",
       additionalProperties: false,
-      required: ["assetId", "baseRevision", "operations"],
+      required: ["assetId", "baseRevision", "baseChecksum", "operations"],
       properties: {
         assetId: { type: "string", minLength: 1, maxLength: 128 },
         baseRevision: { type: "integer", minimum: 0 },
@@ -923,7 +968,7 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
     return {
       type: "object",
       additionalProperties: false,
-      required: ["assetId", "baseRevision", "status"],
+      required: ["assetId", "baseRevision", "baseChecksum", "status"],
       properties: {
         assetId: { type: "string", minLength: 1, maxLength: 128 },
         baseRevision: { type: "integer", minimum: 0 },
@@ -938,7 +983,7 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
     return {
       type: "object",
       additionalProperties: false,
-      required: ["assetId", "baseRevision"],
+      required: ["assetId", "baseRevision", "baseChecksum"],
       properties: {
         assetId: { type: "string", minLength: 1, maxLength: 128 },
         baseRevision: { type: "integer", minimum: 0 },
@@ -1139,6 +1184,88 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
     };
   }
   return { type: "object", additionalProperties: true };
+}
+
+function finishPlanInputSchema(): JsonObject {
+  const stringArray = (minItems = 0): JsonObject => ({
+    type: "array",
+    minItems,
+    maxItems: 100,
+    items: { type: "string", minLength: 1, maxLength: 10_000 }
+  });
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "planId",
+      "goal",
+      "successCriteria",
+      "nonGoals",
+      "facts",
+      "assumptions",
+      "openQuestions",
+      "targetRefs",
+      "steps",
+      "risks",
+      "verification",
+      "sourceRefs"
+    ],
+    properties: {
+      planId: { type: "string", minLength: 1, maxLength: 256 },
+      goal: { type: "string", minLength: 1, maxLength: 10_000 },
+      successCriteria: stringArray(1),
+      nonGoals: stringArray(),
+      facts: stringArray(),
+      assumptions: stringArray(),
+      openQuestions: {
+        type: "array",
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["questionId", "prompt", "blocking"],
+          properties: {
+            questionId: { type: "string", minLength: 1, maxLength: 256 },
+            prompt: { type: "string", minLength: 1, maxLength: 10_000 },
+            blocking: { type: "boolean" },
+            resolution: { type: "string", minLength: 1, maxLength: 10_000 },
+            resolvedBy: { type: "string", enum: ["user", "system"] }
+          }
+        }
+      },
+      targetRefs: {
+        type: "array",
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["refId", "intent"],
+          properties: {
+            refId: { type: "string", minLength: 1, maxLength: 1_036 },
+            intent: { type: "string", minLength: 1, maxLength: 10_000 }
+          }
+        }
+      },
+      steps: {
+        type: "array",
+        minItems: 1,
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["stepId", "title", "verification"],
+          properties: {
+            stepId: { type: "string", minLength: 1, maxLength: 256 },
+            title: { type: "string", minLength: 1, maxLength: 10_000 },
+            verification: { type: "string", minLength: 1, maxLength: 10_000 }
+          }
+        }
+      },
+      risks: stringArray(),
+      verification: stringArray(1),
+      sourceRefs: stringArray()
+    }
+  };
 }
 
 function proposalSchema(targetKey: "chapterId" | "path"): JsonObject {
@@ -1513,6 +1640,7 @@ function validateSchemaValue(schema: JsonObject, value: unknown): boolean {
   if (type === "boolean") return typeof value === "boolean";
   if (type === "array") {
     if (!Array.isArray(value)) return false;
+    if (typeof schema["minItems"] === "number" && value.length < schema["minItems"]) return false;
     if (typeof schema["maxItems"] === "number" && value.length > schema["maxItems"]) return false;
     const itemSchema = schema["items"];
     return !isObject(itemSchema) || value.every((item) => validateSchemaValue(itemSchema, item));

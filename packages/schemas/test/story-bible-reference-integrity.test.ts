@@ -7,6 +7,7 @@ import {
   inspectStoryBibleReferences,
   storyBibleChapterReferenceFingerprint,
   storyBibleReferenceFingerprint,
+  validateStoryBibleCreateValue,
   validateStoryBibleV11Asset,
   type StoryBibleReferenceTargetType
 } from "../src/index.js";
@@ -224,6 +225,23 @@ describe("Story Bible reference integrity schema", () => {
     );
     expect(validateStoryBibleV11Asset(anchorCycle).issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ keyword: "eventCycle" })])
+    );
+  });
+
+  test("keeps outline and timeline singleton assets outside the deleted boundary", () => {
+    const deletedTimeline = timelineAsset([]);
+    deletedTimeline["status"] = "deleted";
+    expect(validateStoryBibleV11Asset(deletedTimeline).issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "singletonDelete" })])
+    );
+
+    expect(
+      validateStoryBibleCreateValue("timeline.events", { title: "Timeline", status: "deleted" })
+    ).toEqual(
+      expect.objectContaining({
+        valid: false,
+        issues: expect.arrayContaining([expect.objectContaining({ keyword: "enum" })])
+      })
     );
   });
 

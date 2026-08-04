@@ -124,7 +124,7 @@ describe("Agent tool-call pipeline", () => {
     expect(handled).toEqual(["call-one", "call-two", "skipped:call-three"]);
   });
 
-  test("dispatches proposals first and records skipped results for the rest of a mixed batch", async () => {
+  test("preserves model source order and stops later calls at the first proposal boundary", async () => {
     const dispatched: string[] = [];
     const skipped: string[] = [];
     const proposal = { ...call("call-proposal"), name: "edit_text" };
@@ -141,15 +141,15 @@ describe("Agent tool-call pipeline", () => {
       },
       dispatch: async (current) => {
         dispatched.push(current.toolCallId);
-        return "staged" as const;
+        return current.name === "edit_text" ? ("staged" as const) : ("continue" as const);
       },
-      mayContinue: (outcome) => outcome === "continue" || outcome === "staged",
+      mayContinue: (outcome) => outcome === "continue",
       isActive: () => true
     });
 
-    expect(result).toEqual({ kind: "dispatched", outcomes: ["staged"] });
-    expect(dispatched).toEqual(["call-proposal"]);
-    expect(skipped).toEqual(["call-read", "call-finish"]);
+    expect(result).toEqual({ kind: "dispatched", outcomes: ["continue", "staged"] });
+    expect(dispatched).toEqual(["call-read", "call-proposal"]);
+    expect(skipped).toEqual(["call-finish"]);
   });
 
   test("does not launch another call after cancellation", async () => {

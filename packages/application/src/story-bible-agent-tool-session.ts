@@ -4,10 +4,12 @@ import {
   type StoryBibleV11AssetType
 } from "@novel-studio/schemas";
 import {
+  collectForeshadowContractWarnings,
   createUnifiedError,
   err,
   ok,
   type ChapterCatalogRepositoryPort,
+  type ForeshadowContractWarning,
   type JsonObject,
   type JsonValue,
   type Result,
@@ -58,6 +60,7 @@ export interface StoryBiblePreparedAgentProposal {
   readonly consistencyGroupId?: string;
   readonly referenceImpact?: JsonObject;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
+  readonly warnings: readonly ForeshadowContractWarning[];
 }
 
 export interface StoryBibleRestoreAuthorization {
@@ -215,6 +218,7 @@ export function createStoryBibleAgentToolSession(
         }
       ],
       rebased: false,
+      warnings: storyBibleContractWarnings(prepared.value.asset),
       ...(consistencyGroupId === undefined ? {} : { consistencyGroupId })
     });
   }
@@ -226,13 +230,19 @@ export function createStoryBibleAgentToolSession(
   ): Promise<Result<StoryBiblePreparedAgentProposal, UnifiedError>> {
     const assetId = readAssetId(argumentsValue);
     const baseRevision = readNonNegativeInteger(argumentsValue["baseRevision"]);
+    const baseChecksum = readChecksum(argumentsValue["baseChecksum"]);
     const operations = readPatchOperations(argumentsValue["operations"]);
-    if (assetId === undefined || baseRevision === undefined || operations === undefined) {
+    if (
+      assetId === undefined ||
+      baseRevision === undefined ||
+      baseChecksum === undefined ||
+      operations === undefined
+    ) {
       return err(
         toolError(
           traceId,
           "STORY_BIBLE_TOOL_ARGUMENTS_INVALID",
-          "patch_story_bible requires assetId, baseRevision, and valid patch operations."
+          "patch_story_bible requires assetId, fresh baseRevision/baseChecksum, and valid patch operations."
         )
       );
     }
@@ -265,15 +275,21 @@ export function createStoryBibleAgentToolSession(
         )
       );
     }
-    const baseChecksum = readChecksum(argumentsValue["baseChecksum"]);
+    let referenceImpact: JsonObject | undefined;
+    if (patchRequiresReferenceImpact(entryRef, operations)) {
+      const impact = await readReferenceImpact(assetId);
+      if (!impact.ok) return impact;
+      referenceImpact = impact.value;
+    }
     return prepareExisting({
       assetId,
       baseRevision,
-      ...(baseChecksum === undefined ? {} : { baseChecksum }),
+      baseChecksum,
       entryRef,
       operations,
       dependencies,
       action,
+      ...(referenceImpact === undefined ? {} : { referenceImpact }),
       ...(consistencyGroupId === undefined ? {} : { consistencyGroupId })
     });
   }
@@ -285,17 +301,19 @@ export function createStoryBibleAgentToolSession(
   ): Promise<Result<StoryBiblePreparedAgentProposal, UnifiedError>> {
     const assetId = readAssetId(argumentsValue);
     const baseRevision = readNonNegativeInteger(argumentsValue["baseRevision"]);
+    const baseChecksum = readChecksum(argumentsValue["baseChecksum"]);
     const status = argumentsValue["status"];
     if (
       assetId === undefined ||
       baseRevision === undefined ||
+      baseChecksum === undefined ||
       (status !== "active" && status !== "draft" && status !== "archived" && status !== "deleted")
     ) {
       return err(
         toolError(
           traceId,
           "STORY_BIBLE_TOOL_ARGUMENTS_INVALID",
-          "set_story_bible_status requires assetId, baseRevision, and a supported status."
+          "set_story_bible_status requires assetId, fresh baseRevision/baseChecksum, and a supported status."
         )
       );
     }
@@ -326,11 +344,10 @@ export function createStoryBibleAgentToolSession(
       referenceImpact = impact.value;
       storyBibleStatusProof = { action: "delete", deletionImpactChecksum };
     }
-    const baseChecksum = readChecksum(argumentsValue["baseChecksum"]);
     return prepareExisting({
       assetId,
       baseRevision,
-      ...(baseChecksum === undefined ? {} : { baseChecksum }),
+      baseChecksum,
       entryRef: null,
       operations: [{ op: "replace", path: "/status", value: status }],
       dependencies: [],
@@ -347,17 +364,27 @@ export function createStoryBibleAgentToolSession(
   ): Promise<Result<StoryBiblePreparedAgentProposal, UnifiedError>> {
     const assetId = readAssetId(argumentsValue);
     const baseRevision = readNonNegativeInteger(argumentsValue["baseRevision"]);
-    if (assetId === undefined || baseRevision === undefined) {
+    const baseChecksum = readChecksum(argumentsValue["baseChecksum"]);
+    if (assetId === undefined || baseRevision === undefined || baseChecksum === undefined) {
       return err(
         toolError(
           traceId,
           "STORY_BIBLE_TOOL_ARGUMENTS_INVALID",
-          "restore_story_bible requires assetId and baseRevision."
+          "restore_story_bible requires assetId and fresh baseRevision/baseChecksum."
         )
       );
     }
     const current = await options.repository.readCompatibleStoryAsset(assetId);
     if (!current.ok) return current;
+    if (current.value.checksum !== baseChecksum) {
+      return err(
+        toolError(
+          traceId,
+          "STORY_BIBLE_CHECKSUM_CONFLICT",
+          "The Story Bible asset changed after it was read."
+        )
+      );
+    }
     if (current.value.asset.status !== "deleted") {
       return err(
         toolError(
@@ -391,15 +418,17 @@ export function createStoryBibleAgentToolSession(
         )
       );
     }
-    const baseChecksum = readChecksum(argumentsValue["baseChecksum"]);
+    const impact = await readReferenceImpact(assetId);
+    if (!impact.ok) return impact;
     return prepareExisting({
       assetId,
       baseRevision,
-      ...(baseChecksum === undefined ? {} : { baseChecksum }),
+      baseChecksum,
       entryRef: null,
       operations: [{ op: "replace", path: "/status", value: authorization.value.status }],
       dependencies: [],
       action: "restore",
+      referenceImpact: impact.value,
       storyBibleStatusProof: {
         action: "restore",
         expectedStatus: authorization.value.status,
@@ -412,7 +441,7 @@ export function createStoryBibleAgentToolSession(
   async function prepareExisting(input: {
     readonly assetId: string;
     readonly baseRevision: number;
-    readonly baseChecksum?: string;
+    readonly baseChecksum: string;
     readonly entryRef: StoryBiblePatchEntryRef | null;
     readonly operations: readonly StoryBiblePatchOperation[];
     readonly dependencies: readonly StoryBiblePatchDependency[];
@@ -423,7 +452,7 @@ export function createStoryBibleAgentToolSession(
   }): Promise<Result<StoryBiblePreparedAgentProposal, UnifiedError>> {
     const read = await options.repository.readCompatibleStoryAsset(input.assetId);
     if (!read.ok) return read;
-    if (input.baseChecksum !== undefined && input.baseChecksum !== read.value.checksum) {
+    if (input.baseChecksum !== read.value.checksum) {
       return err(
         toolError(
           traceId,
@@ -511,6 +540,7 @@ export function createStoryBibleAgentToolSession(
       changedPaths: patched.value.changedPaths,
       fieldDiffs,
       rebased: patched.value.rebased,
+      warnings: storyBibleContractWarnings(prepared.value.asset),
       ...(input.consistencyGroupId === undefined
         ? {}
         : { consistencyGroupId: input.consistencyGroupId }),
@@ -543,6 +573,30 @@ export function createStoryBibleAgentToolSession(
     const chapters = await options.chapterCatalog.listChapters();
     return chapters.ok ? ok(chapters.value.map((chapter) => chapter.id)) : chapters;
   }
+}
+
+function storyBibleContractWarnings(
+  asset: StoryBibleAgentToolAsset
+): readonly ForeshadowContractWarning[] {
+  return asset.type === "foreshadow" && isRecord(asset.details)
+    ? collectForeshadowContractWarnings(asset.details)
+    : Object.freeze([]);
+}
+
+function patchRequiresReferenceImpact(
+  entryRef: StoryBiblePatchEntryRef | null,
+  operations: readonly StoryBiblePatchOperation[]
+): boolean {
+  return (
+    entryRef !== null ||
+    operations.some(
+      (operation) =>
+        operation.path === "/relations" ||
+        operation.path.startsWith("/relations/") ||
+        operation.path === "/details" ||
+        operation.path.startsWith("/details/")
+    )
+  );
 }
 
 function buildFieldDiffs(

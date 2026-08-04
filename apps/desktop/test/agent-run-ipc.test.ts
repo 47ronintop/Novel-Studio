@@ -418,6 +418,19 @@ describe("Agent Run IPC", () => {
       executionContextMode: "general_file" as const
     };
 
+    await expect(
+      decide({
+        ...command,
+        commandId: "plan-forged-preapproval-01",
+        executionWritePolicy: "user_preapproved_run",
+        executionWritePolicyAcknowledged: true
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_IPC_UNAVAILABLE" }
+    });
+    expect(decidePlan).not.toHaveBeenCalled();
+
     await expect(decide(command)).resolves.toMatchObject({
       ok: false,
       error: { code: "AGENT_CONTEXT_REPREFLIGHT_REQUIRED" }
@@ -1345,6 +1358,14 @@ describe("Agent Run IPC", () => {
         }
       },
       agentRunDraftSession: {
+        async syncStartDraft(command: Record<string, unknown>) {
+          calls.push(
+            `sync-start:${String(command["writePolicy"])}:${String(
+              command["executionWritePolicyDraft"]
+            )}`
+          );
+          return draftView;
+        },
         async readAgentRunDraft(command: Record<string, unknown>) {
           calls.push(`read-run-draft:${String(command["conversationId"])}`);
           return draftView;
@@ -1404,6 +1425,21 @@ describe("Agent Run IPC", () => {
       } as never
     ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
 
+    await handlers["application:agent-run:prepare-start"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "sync-draft-policy-01",
+      userRequest: "制定计划",
+      operationMode: "planning",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "user_preapproved_run",
+      modelProfileId: "profile-01",
+      contextRefs: [],
+      activeResourceRef: null
+    });
+
     const readDraft = await handlers["application:agent-run:read-run-draft"]?.({
       projectId: "project-01",
       conversationId: "conversation-01",
@@ -1421,6 +1457,13 @@ describe("Agent Run IPC", () => {
       commandId: "cmd-01",
       expectedDraftRevision: 1,
       mutation: { kind: "set_model", modelProfileId: "profile-02" }
+    });
+    await handlers["application:agent-run:update-run-draft"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "cmd-policy-draft-01",
+      expectedDraftRevision: 1,
+      mutation: { kind: "set_execution_write_policy_draft", policy: "user_preapproved_run" }
     });
     await handlers["application:agent-run:update-context-draft"]?.({
       projectId: "project-01",
@@ -1515,6 +1558,42 @@ describe("Agent Run IPC", () => {
         expectedDraftRevision: 1,
         mutation: { kind: "set_model" }
       }),
+      handlers["application:agent-run:update-run-draft"]?.({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        commandId: "cmd-forged-policy",
+        expectedDraftRevision: 1,
+        mutation: {
+          kind: "set_write_policy",
+          writePolicy: "user_preapproved_run",
+          acknowledged: true
+        }
+      }),
+      handlers["application:agent-run:read-run-draft"]?.({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        initialize: {
+          modelProfileId: "profile-01",
+          operationMode: "planning",
+          contextMode: "writing",
+          writePolicy: "write_before_confirmation",
+          forgedAcknowledgement: true
+        }
+      }),
+      handlers["application:agent-run:prepare-start"]?.({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        commandId: "sync-forged-policy-01",
+        userRequest: "制定计划",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "user_preapproved_run",
+        writePolicyAcknowledged: true,
+        executionWritePolicyDraft: "user_preapproved_run",
+        modelProfileId: "profile-01",
+        contextRefs: [],
+        activeResourceRef: null
+      }),
       handlers["application:agent-run:update-context-draft"]?.({
         projectId: "project-01",
         conversationId: "conversation-01",
@@ -1566,8 +1645,10 @@ describe("Agent Run IPC", () => {
     expect(rejected.every((result) => (result as { ok?: boolean }).ok === false)).toBe(true);
     expect(calls).toHaveLength(before);
     expect(calls).toEqual([
+      "sync-start:write_before_confirmation:user_preapproved_run",
       "read-run-draft:conversation-01",
       "update-run-draft:set_model",
+      "update-run-draft:set_execution_write_policy_draft",
       "update-context-draft:remove_ref",
       "update-context-draft:set_source_override",
       "update-context-draft:set_active_resource",

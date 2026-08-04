@@ -11,6 +11,14 @@ import type { AgentContextSourceInput } from "./context-snapshot.js";
 import type { PackedAgentContext } from "./packed-agent-context.js";
 import type { AgentToolFacadeVersion } from "./tool-registry.js";
 import type { AgentWorkspaceKind } from "./agent-tool-capabilities.js";
+import { validateFinishInput, type FinishInputV2 } from "./finish-report.js";
+import type {
+  AgentRunEventTypeV20,
+  AgentRunEventV20,
+  AgentRunSnapshotV20,
+  AgentRunStatusV20,
+  AgentRunV20StartFacts
+} from "./agent-run-v20.js";
 import {
   normalizeAgentContextScope,
   type AgentContextProfileId,
@@ -36,6 +44,7 @@ export type AgentRunStatus =
   | "plan_ready"
   | "awaiting_plan_decision"
   | "completed"
+  | "blocked"
   | "cancelled"
   | "failed"
   | "limit_reached";
@@ -215,13 +224,17 @@ export interface AgentRunSnapshotV13 extends Omit<
   readonly promptCacheIdentityChecksum: string;
   /** Leading provider messages, including the system message. */
   readonly promptCacheStablePrefixMessageCount: number;
+  /** New execution runs opt into the structured finish transition; legacy facades remain readable. */
+  readonly finishContractVersion?: "2.0";
+  /** Structured completion evidence. Absent on legacy snapshots and non-terminal runs. */
+  readonly finishReport?: FinishInputV2 | null;
 }
 
 /**
  * The active run snapshot type consumed across Application/IPC/renderer. Aliased to the v1.1 view:
  * new runs are authored as v1.1 and old v1.0 files are normalized on read.
  */
-export type AgentRunSnapshot = AgentRunSnapshotV13;
+export type AgentRunSnapshot = AgentRunSnapshotV13 | AgentRunSnapshotV20;
 
 /** The persisted v1.0 run event shape. Retained for read compatibility with pre-Stage-5 files. */
 export interface AgentRunEventV10 {
@@ -265,7 +278,7 @@ export interface AgentRunEventV13 extends Omit<
  * Task 0.4: v1.2 events are accepted here for new runs but written as v1.2 on disk.
  */
 export type AgentRunEvent =
-  AgentRunEventV10 | AgentRunEventV11 | AgentRunEventV12 | AgentRunEventV13;
+  AgentRunEventV10 | AgentRunEventV11 | AgentRunEventV12 | AgentRunEventV13 | AgentRunEventV20;
 
 export type AgentRunEventType =
   | "run_started"
@@ -296,6 +309,7 @@ export type AgentRunEventType =
   | "run_undone"
   | "run_undo_failed"
   | "run_completed"
+  | "run_blocked"
   | "run_cancelled"
   | "run_failed"
   | "run_limit_reached";
@@ -329,7 +343,11 @@ export type AgentRunEventTypeV12 =
   | "process_output"
   | "external_outcome_unknown";
 
-export type AgentRunEventTypeV13 = AgentRunEventTypeV12 | "conversation_model";
+export type AgentRunEventTypeV13 =
+  | AgentRunEventTypeV12
+  | "conversation_model"
+  /** App-authored proof used when a strict completion has no preceding tool result (for example model stop). */
+  | "completion_evidence_recorded";
 
 /**
  * Task C.2 — ToolApprovalBinding discriminated union.
@@ -415,14 +433,25 @@ export interface AgentRunSnapshotPatch {
   readonly cachePrefixChecksum?: string;
   readonly promptCacheIdentityChecksum?: string;
   readonly promptCacheStablePrefixMessageCount?: number;
+  readonly finishReport?: FinishInputV2 | null;
 }
 
 export interface RecordAgentRunEventInput {
   readonly runId: string;
-  readonly status: AgentRunStatusV13;
-  readonly type: AgentRunEventTypeV13;
+  readonly status: AgentRunStatusV13 | AgentRunStatusV20;
+  readonly type: AgentRunEventTypeV13 | AgentRunEventTypeV20;
   readonly detail?: JsonObject;
   readonly snapshotPatch?: AgentRunSnapshotPatch;
+}
+
+/** Main-owned terminal transition carrying the strict structured completion report. */
+export interface RecordAgentRunFinishInput {
+  readonly runId: string;
+  readonly scope?: AgentContextScope;
+  readonly projectId?: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly finishReport: FinishInputV2;
 }
 
 export type TerminalAgentRunAuditEventType =
@@ -496,6 +525,8 @@ export interface ResolvedAgentRunStartInput {
   readonly toolFacadeVersion?: AgentToolFacadeVersion;
   /** Revision of the immutable catalog that Application will persist before driving the run. */
   readonly toolCatalogRevision?: string;
+  /** Main-owned marker selecting the strict execution finish transition. */
+  readonly finishContractVersion?: "2.0";
   readonly contextProfileId?: AgentContextProfileId;
   readonly profileVersion?: string;
   readonly guidanceTemplateChecksum?: string;
@@ -509,6 +540,8 @@ export interface ResolvedAgentRunStartInput {
   readonly promptCacheIdentityBaseChecksum?: string;
   readonly promptCacheIdentityChecksum?: string;
   readonly promptCacheStablePrefixMessageCount?: number;
+  /** Presence selects the strict 2.0 run writer. Absence retains the registered legacy path. */
+  readonly runV20?: AgentRunV20StartFacts;
 }
 
 export interface StopAgentRunCommand {
@@ -553,8 +586,6 @@ export interface DecideAgentPlanCommand {
   readonly planRevision: number;
   readonly decision: "approve" | "reject";
   readonly executionContextMode?: AgentContextMode;
-  readonly executionWritePolicy?: AgentWritePolicy;
-  readonly executionWritePolicyAcknowledged?: true;
 }
 
 export interface DecidePlanRevisionCommand {
@@ -636,6 +667,7 @@ export interface AgentRunCoordinator {
   startRun(command: ResolvedAgentRunStartInput): AgentRunCommandResult;
   stopRun(command: StopAgentRunCommand): AgentRunCommandResult;
   recordRunEvent(input: RecordAgentRunEventInput): AgentRunCommandResult;
+  recordFinish(input: RecordAgentRunFinishInput): AgentRunCommandResult;
   recordTerminalAuditEvent(input: RecordTerminalAgentRunAuditEventInput): AgentRunCommandResult;
   restoreRun(snapshot: AgentRunSnapshot, events: readonly AgentRunEvent[]): AgentRunCommandResult;
   readSnapshot(runId: string): AgentRunSnapshot | undefined;
@@ -662,6 +694,7 @@ export function normalizeAgentRunSnapshot(
     if (!isV13PromptCacheState(value)) {
       throw new Error("AGENT_RUN_SNAPSHOT_INVALID");
     }
+    validateStrictFinishSnapshotEnvelope(value);
     return attachLegacyProjectId({
       ...withoutLegacyProjectId(value),
       scope,
@@ -746,6 +779,31 @@ export function normalizeAgentRunSnapshot(
     toolCatalogSnapshotId,
     toolCatalogRevision
   } as unknown as AgentRunSnapshotV13);
+}
+
+function validateStrictFinishSnapshotEnvelope(value: JsonObject): void {
+  const finishContractVersion = value["finishContractVersion"];
+  if (finishContractVersion !== undefined && finishContractVersion !== "2.0") {
+    throw new Error("AGENT_RUN_SNAPSHOT_INVALID");
+  }
+  const status = value["status"];
+  if (status === "blocked" && finishContractVersion !== "2.0") {
+    throw new Error("AGENT_RUN_SNAPSHOT_INVALID");
+  }
+  if (finishContractVersion !== "2.0" || value["operationMode"] !== "execution") return;
+  const report = value["finishReport"];
+  const terminal = status === "completed" || status === "blocked";
+  if (!terminal) {
+    if (report !== undefined && report !== null) throw new Error("AGENT_RUN_SNAPSHOT_INVALID");
+    return;
+  }
+  if (!isRecord(report) || report["schemaVersion"] !== "2.0") {
+    throw new Error("AGENT_RUN_SNAPSHOT_INVALID");
+  }
+  const parsed = validateFinishInput(report);
+  if (!parsed.ok || parsed.value.outcome !== status) {
+    throw new Error("AGENT_RUN_SNAPSHOT_INVALID");
+  }
 }
 
 function normalizeRunUsageSummary(value: unknown): AgentRunUsageSummary {

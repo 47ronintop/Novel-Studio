@@ -206,6 +206,12 @@ describe("Agent guidance 3.0 registry", () => {
     expect(body).toContain('"writeCapability":"none"');
     expect(body).toContain('"kind":"analysis"');
     expect(body).toContain("任务意图为 unknown/mixed");
+    expect(body).toContain("工具返回的 evidenceRefs");
+    expect(body).toContain("勿猜");
+    expect(body).toContain("request_user_input 仅限");
+    expect(body).toContain("tool_completed evidence ref");
+    expect(body).toContain("not-run:");
+    expect(body).toContain("blocked 须含原因和 nextStep");
     expect(buildAgentSystemPromptV3(materialized.normalizedInput)).toBe(body);
   });
 

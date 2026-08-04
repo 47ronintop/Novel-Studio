@@ -17,6 +17,15 @@ export interface AgentFeatureFlags {
   readonly phaseA_searchEnabled: boolean;
   /** Phase B: file lifecycle (create/move/delete/mkdir) + Change Set v1.1 */
   readonly phaseB_fileLifecycleEnabled: boolean;
+  /** Catalog 2.0 writing-domain mutations; each operation still requires its concrete backend. */
+  readonly writingDomainCrudV2: boolean;
+  /** Qualified existing-file replacement for creative_general. */
+  readonly creativeTrustedReplaceV2: boolean;
+  readonly creativeFileCreateV2: boolean;
+  readonly creativeFileMoveV2: boolean;
+  readonly creativeFileDeleteV2: boolean;
+  /** Main-owned Change Set 2.0 approval binding and confirmation boundary. */
+  readonly approvalBindingV2: boolean;
   /** Phase D: web_search + fetch_url */
   readonly phaseD_networkReadEnabled: boolean;
   /** Phase E: remote MCP (requires phaseD network gate) */
@@ -40,6 +49,12 @@ export const DEFAULT_AGENT_FEATURE_FLAGS: AgentFeatureFlags = Object.freeze<Agen
   agentGuidanceV3: false,
   phaseA_searchEnabled: false,
   phaseB_fileLifecycleEnabled: false,
+  writingDomainCrudV2: false,
+  creativeTrustedReplaceV2: false,
+  creativeFileCreateV2: false,
+  creativeFileMoveV2: false,
+  creativeFileDeleteV2: false,
+  approvalBindingV2: false,
   phaseD_networkReadEnabled: false,
   phaseE_remoteMcpEnabled: false,
   engineeringHardenedAccessV1: false,
@@ -57,6 +72,7 @@ export function createAgentFeatureFlags(
 ): AgentFeatureFlags {
   if (overrides === undefined) return DEFAULT_AGENT_FEATURE_FLAGS;
   const merged = { ...DEFAULT_AGENT_FEATURE_FLAGS, ...overrides };
+  const approvalBindingV2 = merged.agentGuidanceV3 && merged.approvalBindingV2;
   const engineeringRequested =
     merged.engineeringHardenedAccessV1 ||
     merged.engineeringReplaceV2 ||
@@ -75,13 +91,20 @@ export function createAgentFeatureFlags(
     hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery");
   const flags: AgentFeatureFlags = {
     ...merged,
+    approvalBindingV2,
+    writingDomainCrudV2: approvalBindingV2 && merged.writingDomainCrudV2,
+    creativeTrustedReplaceV2: approvalBindingV2 && merged.creativeTrustedReplaceV2,
+    creativeFileCreateV2: approvalBindingV2 && merged.creativeFileCreateV2,
+    creativeFileMoveV2: approvalBindingV2 && merged.creativeFileMoveV2,
+    creativeFileDeleteV2: approvalBindingV2 && merged.creativeFileDeleteV2,
     phaseE_remoteMcpEnabled: merged.phaseE_remoteMcpEnabled && merged.phaseD_networkReadEnabled,
     engineeringHardenedAccessV1: accessEnabled,
-    engineeringReplaceV2: merged.engineeringReplaceV2 && mutationEnabled,
-    engineeringCreateV2: merged.engineeringCreateV2 && mutationEnabled,
-    engineeringMoveV2: merged.engineeringMoveV2 && mutationEnabled,
-    engineeringDeleteV2: merged.engineeringDeleteV2 && recoveryEnabled,
-    engineeringDirectoryCreateV1: merged.engineeringDirectoryCreateV1 && mutationEnabled,
+    engineeringReplaceV2: approvalBindingV2 && merged.engineeringReplaceV2 && mutationEnabled,
+    engineeringCreateV2: approvalBindingV2 && merged.engineeringCreateV2 && mutationEnabled,
+    engineeringMoveV2: approvalBindingV2 && merged.engineeringMoveV2 && mutationEnabled,
+    engineeringDeleteV2: approvalBindingV2 && merged.engineeringDeleteV2 && recoveryEnabled,
+    engineeringDirectoryCreateV1:
+      approvalBindingV2 && merged.engineeringDirectoryCreateV1 && mutationEnabled,
     revision: engineeringRequested
       ? `${merged.revision}:engineering-native:${mainOwnedEngineeringFileQualificationRevision(
           engineeringQualification

@@ -41,6 +41,31 @@ export type {
 export { HistoryRepository } from "./history-repository.js";
 export { AgentRunFileRepository } from "./agent-run-repository.js";
 export type { AgentRunFileRepositoryOptions } from "./agent-run-repository.js";
+export {
+  AGENT_RUN_EVENT_SCHEMA_VERSION_V20,
+  AGENT_RUN_SNAPSHOT_SCHEMA_VERSION_V20,
+  parseAgentRunEventV20,
+  parseAgentRunSnapshotV20,
+  validateAgentRunEventV20,
+  validateAgentRunHistoryV20,
+  validateAgentRunSnapshotV20,
+  validateAgentRunStatePairV20,
+  validateAgentRunV20StartFacts
+} from "./agent-run-v20.js";
+export type {
+  AgentRunAuthorityV20,
+  AgentRunCapabilitiesV20,
+  AgentRunCatalogV20,
+  AgentRunEventTypeV20,
+  AgentRunEventV20,
+  AgentRunFinishV20,
+  AgentRunPendingV20,
+  AgentRunProtocolV20,
+  AgentRunSnapshotV20,
+  AgentRunStateCommitV20,
+  AgentRunStatusV20,
+  AgentRunV20StartFacts
+} from "./agent-run-v20.js";
 export { AgentUsageFileRepository } from "./agent-usage-repository.js";
 export type {
   AgentUsageFileRepositoryOptions,

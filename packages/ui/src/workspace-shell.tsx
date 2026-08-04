@@ -264,6 +264,7 @@ function WorkspaceShellContent({
                 contextMode: "writing",
                 writePolicy: "write_before_confirmation",
                 writePolicyAcknowledged: false,
+                executionWritePolicyDraft: "write_before_confirmation",
                 active: false,
                 disabled: true,
                 disabledReason: "打开创作项目或工程工作区后，Agent 会在这里保持可用。",
@@ -271,6 +272,7 @@ function WorkspaceShellContent({
                 onOperationModeChange: () => undefined,
                 onContextModeChange: () => undefined,
                 onWritePolicyChange: () => undefined,
+                onExecutionWritePolicyDraftChange: () => undefined,
                 onSend: () => undefined,
                 onStop: () => undefined
               }}
@@ -632,7 +634,9 @@ function WorkspaceEditorSurface({
       }
     >
       <EditorDocumentBar
-        chapterStatus={fileEditor === undefined ? chapterEditor?.chapter.frontmatter.status : undefined}
+        chapterStatus={
+          fileEditor === undefined ? chapterEditor?.chapter.frontmatter.status : undefined
+        }
         chapterStatusBusy={chapterEditor?.statusBusy}
         dirty={activeDirty}
         saving={activeSaving}

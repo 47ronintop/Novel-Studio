@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   checksumChangeSetSelection,
   checksumChangeSetText,
+  createAgentRunCoordinator,
   createChangeSetRevision,
   decideChangeSetApproval,
   type AgentToolCapabilitySnapshot,
@@ -14,6 +15,7 @@ import {
 } from "@novel-studio/agent-engine";
 import {
   AgentProjectReadRepository,
+  AgentRunFileRepository,
   AgentUsageFileRepository,
   ChapterFileRepository,
   HistoryRepository,
@@ -59,13 +61,16 @@ describe("desktop Agent Run runtime", () => {
     };
     const featureFlags = createAgentFeatureFlags({
       agentGuidanceV3: true,
+      approvalBindingV2: true,
+      writingDomainCrudV2: true,
       revision: "desktop-operation-feature"
     });
     const qualified = {
       requested,
       featureFlags,
       lifecycleOperations: createTestingReplaceLifecyclePort("unused-operation-root"),
-      hasVersionGroupExecutor: true
+      hasVersionGroupExecutor: true,
+      hasTrustedApprovalV2: true
     };
 
     expect(runtimeExports.buildRuntimeCapabilitySnapshot(qualified).writingOperations).toEqual([
@@ -81,7 +86,8 @@ describe("desktop Agent Run runtime", () => {
       runtimeExports.buildRuntimeCapabilitySnapshot({
         requested,
         featureFlags,
-        hasVersionGroupExecutor: true
+        hasVersionGroupExecutor: true,
+        hasTrustedApprovalV2: true
       }).writingOperations
     ).toEqual([]);
     expect(
@@ -93,12 +99,37 @@ describe("desktop Agent Run runtime", () => {
     expect(
       runtimeExports.buildRuntimeCapabilitySnapshot({
         ...qualified,
+        hasTrustedApprovalV2: false
+      }).writingOperations
+    ).toEqual([]);
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        ...qualified,
         featureFlags: createAgentFeatureFlags({
           agentGuidanceV3: false,
           revision: "desktop-operation-feature-disabled"
         })
       }).writingOperations
     ).toEqual([]);
+
+    const broadLegacyFlags = createAgentFeatureFlags({
+      agentGuidanceV3: true,
+      approvalBindingV2: true,
+      phaseB_fileLifecycleEnabled: true,
+      revision: "desktop-legacy-lifecycle-only"
+    });
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        ...qualified,
+        requested: {
+          ...requested,
+          fileLifecycleEnabled: true,
+          writingOperations: [],
+          workspaceFileOperations: []
+        },
+        featureFlags: broadLegacyFlags
+      })
+    ).toMatchObject({ writingOperations: [], workspaceFileOperations: [] });
   });
 
   test.each([
@@ -418,7 +449,10 @@ describe("desktop Agent Run runtime", () => {
         reasoningStrength: { status: "hidden", reason: "test model" }
       }),
       modelDriver: {
-        async *streamRound() {
+        async *streamRound(input) {
+          const verificationRef = `run-event/${String(
+            input.snapshot.lastSequence + 4
+          )}/tool_completed/catalog-v2-usage-read`;
           yield {
             type: "usage",
             usage: {
@@ -429,7 +463,18 @@ describe("desktop Agent Run runtime", () => {
               cost: { amount: 0.001, currency: "USD", status: "actual" }
             }
           };
-          yield { type: "round_completed", finishReason: "stop" };
+          yield runtimeToolCall("catalog-v2-usage-read", "list_project_entries", {});
+          yield runtimeToolCall("catalog-v2-usage-finish", "finish", {
+            outcome: "completed",
+            report: {
+              result: "The Catalog 2.0 usage check is complete.",
+              appliedChanges: [],
+              verification: [verificationRef],
+              residualRisks: []
+            },
+            evidenceRefs: [verificationRef]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
         }
       }
     });
@@ -478,6 +523,386 @@ describe("desktop Agent Run runtime", () => {
       contextWindow: 128000,
       safeInputBudget: expect.any(Number)
     });
+  });
+
+  test("strictly restores a Guidance 3.0 planning run and rejects tampered or mixed V20 history", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-v20-restart-"));
+    roots.push(projectRoot);
+    const runId = "run_desktop_v20_restart";
+    const planId = "plan_desktop_v20_restart";
+    const featureFlags = createAgentFeatureFlags({
+      agentGuidanceV3: true,
+      revision: "desktop-v20-restart"
+    });
+    const resolveModelStartFacts = async () => ({
+      profileId: "demo-agent",
+      provider: "demo",
+      modelName: "desktop-scripted-agent",
+      capabilities: {
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 128000
+      },
+      requiredContextTokens: 8000,
+      reasoningStrength: { status: "hidden" as const, reason: "test model" }
+    });
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => runId,
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
+      featureFlags,
+      resolveModelStartFacts,
+      modelDriver: {
+        async *streamRound() {
+          yield runtimeToolCall("finish-v20-restart-plan", "finish_plan", {
+            planId,
+            goal: "Verify strict planning persistence across restart.",
+            successCriteria: ["The strict plan can be restored without changing authority."],
+            nonGoals: ["Do not mutate project files."],
+            facts: [],
+            assumptions: [],
+            openQuestions: [],
+            targetRefs: [],
+            steps: [
+              {
+                stepId: "verify-v20-restart",
+                title: "Restore the strict run",
+                verification: "Read the persisted V20 snapshot, events, and Plan Artifact."
+              }
+            ],
+            risks: [],
+            verification: ["Restart the Application session and hydrate the run."],
+            sourceRefs: []
+          });
+          yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-v20-restart-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-v20-restart",
+      userRequest: "Prepare a restart-safe read-only plan.",
+      operationMode: "planning",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "user_preapproved_run",
+      modelProfileId: "demo-agent",
+      contextRefs: []
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const previewed = await previewDraftStart(runtime, prepared.value, "start-v20-restart");
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: true,
+      value: { schemaVersion: "2.0", runId }
+    });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { schemaVersion: "2.0", status: "plan_ready" },
+          planArtifact: {
+            schemaVersion: "2.0",
+            planId,
+            executionWritePolicyDraft: "user_preapproved_run"
+          }
+        }
+      });
+    });
+
+    const repository = new AgentRunFileRepository({ projectRoot });
+    await vi.waitFor(async () => {
+      const [snapshot, events, planArtifact] = await Promise.all([
+        repository.readSnapshotV20(runId),
+        repository.readEventsV20(runId),
+        repository.readPlanArtifact(planId, 1)
+      ]);
+      const persisted = { snapshot, events, planArtifact };
+      expect(persisted, JSON.stringify(persisted)).toMatchObject({
+        snapshot: {
+          ok: true,
+          value: { schemaVersion: "2.0", status: "plan_ready" }
+        },
+        events: {
+          ok: true,
+          value: expect.arrayContaining([
+            expect.objectContaining({ schemaVersion: "2.0", type: "run_started" }),
+            expect.objectContaining({ type: "plan_ready" })
+          ])
+        },
+        planArtifact: {
+          ok: true,
+          value: {
+            schemaVersion: "2.0",
+            executionWritePolicyDraft: "user_preapproved_run"
+          }
+        }
+      });
+    });
+
+    let restoredProviderCalls = 0;
+    const createRestoredRuntime = () =>
+      runtimeExports.createDesktopAgentRuntime({
+        workspaceKind: "creativeProject",
+        projectId: "project-01",
+        contentRoot: projectRoot,
+        stateRoot: projectRoot,
+        createRunId: () => "unused_restored_run",
+        verifyCreativeGeneralActiveResource: async () => ok(undefined),
+        featureFlags,
+        resolveModelStartFacts,
+        modelDriver: {
+          async *streamRound(input: { readonly runId: string }) {
+            if (input.runId === runId) {
+              restoredProviderCalls += 1;
+              throw new Error("A restored paused or terminal run must not call the Provider.");
+            }
+            yield { type: "round_completed" as const, finishReason: "stop" as const };
+          }
+        }
+      });
+    await expect(
+      createRestoredRuntime().agentRunSession.readAgentRun(runId)
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        snapshot: { schemaVersion: "2.0", status: "plan_ready" },
+        planArtifact: { executionWritePolicyDraft: "user_preapproved_run" }
+      }
+    });
+    expect(restoredProviderCalls).toBe(0);
+
+    const runPath = join(projectRoot, "history", "agent-runs", runId, "run.json");
+    const eventsPath = join(projectRoot, "history", "agent-runs", runId, "events.json");
+    const originalSnapshot = await readFile(runPath, "utf8");
+    const originalEvents = await readFile(eventsPath, "utf8");
+    const strictSnapshot = await repository.readSnapshotV20(runId);
+    const strictEvents = await repository.readEventsV20(runId);
+    expect(strictSnapshot).toMatchObject({ ok: true });
+    expect(strictEvents).toMatchObject({ ok: true });
+    if (!strictSnapshot.ok || strictSnapshot.value === undefined || !strictEvents.ok) return;
+    const boundaryCoordinator = createAgentRunCoordinator({
+      now: () => "2026-08-04T00:00:01.000Z"
+    });
+    expect(boundaryCoordinator.restoreRun(strictSnapshot.value, strictEvents.value)).toMatchObject({
+      ok: true
+    });
+    const capabilityBoundary = boundaryCoordinator.recordRunEvent({
+      runId,
+      status: "capability_changed",
+      type: "capability_changed",
+      detail: {
+        effectiveCapabilityRevision: strictSnapshot.value.capabilities.revision + 1,
+        reason: "desktop_restart_boundary_test"
+      }
+    });
+    expect(capabilityBoundary).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        status: "capability_changed",
+        pending: { kind: "none" },
+        pendingToolApproval: null
+      }
+    });
+    if (!capabilityBoundary.ok || capabilityBoundary.value.schemaVersion !== "2.0") return;
+    const capabilityEvent = boundaryCoordinator.readEvents(runId).at(-1);
+    if (capabilityEvent?.schemaVersion !== "2.0") {
+      throw new Error("Expected a strict capability boundary event.");
+    }
+    await expect(
+      repository.commitRunStateV20({
+        snapshot: capabilityBoundary.value,
+        event: capabilityEvent
+      })
+    ).resolves.toMatchObject({ ok: true });
+    const boundaryRuntime = createRestoredRuntime();
+    const boundaryRead = await boundaryRuntime.agentRunSession.readAgentRun(runId);
+    expect(boundaryRead).toMatchObject({
+      ok: true,
+      value: {
+        snapshot: {
+          schemaVersion: "2.0",
+          status: "capability_changed",
+          pending: { kind: "none" },
+          pendingToolApproval: null
+        }
+      }
+    });
+    if (!boundaryRead.ok) return;
+    expect(boundaryRead.value).not.toHaveProperty("pendingUserInput");
+    await expect(
+      boundaryRuntime.agentRunSession.resumeAgentRun({
+        projectId: "project-01",
+        runId,
+        commandId: "resume-v20-capability-boundary",
+        expectedRunRevision: boundaryRead.value.snapshot.runRevision
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_ALREADY_TERMINAL" }
+    });
+    expect(restoredProviderCalls).toBe(0);
+    const replacementConversation =
+      await boundaryRuntime.agentConversationSession.createConversation({
+        projectId: "project-01",
+        commandId: "create-after-v20-capability-boundary"
+      });
+    expect(replacementConversation).toMatchObject({ ok: true });
+    if (!replacementConversation.ok) return;
+    const replacementPrepared = await boundaryRuntime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: replacementConversation.value.conversationId,
+      commandId: "prepare-after-v20-capability-boundary",
+      userRequest: "Start a new read-only plan after the capability boundary.",
+      operationMode: "planning",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "write_before_confirmation",
+      modelProfileId: "demo-agent",
+      contextRefs: []
+    });
+    expect(replacementPrepared).toMatchObject({ ok: true });
+    if (!replacementPrepared.ok) return;
+    const replacementPreview = await previewDraftStart(
+      boundaryRuntime,
+      replacementPrepared.value,
+      "start-after-v20-capability-boundary"
+    );
+    await expect(
+      boundaryRuntime.agentRunSession.startAgentRun(replacementPreview.command)
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { schemaVersion: "2.0", runId: "unused_restored_run" }
+    });
+
+    // Restore the original strict pair before the independent tamper cases below.
+    await writeFile(runPath, originalSnapshot, "utf8");
+    await writeFile(eventsPath, originalEvents, "utf8");
+    const parsedSnapshot = JSON.parse(originalSnapshot) as Record<string, unknown>;
+    await writeFile(
+      runPath,
+      `${JSON.stringify({ ...parsedSnapshot, forgedAuthority: true })}\n`,
+      "utf8"
+    );
+    await expect(
+      createRestoredRuntime().agentRunSession.readAgentRun(runId)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_SNAPSHOT_V20_INVALID" }
+    });
+    await writeFile(runPath, originalSnapshot, "utf8");
+
+    const parsedEvents = JSON.parse(originalEvents) as Record<string, unknown>[];
+    const firstEvent = parsedEvents[0];
+    if (firstEvent === undefined) throw new Error("Expected a persisted V20 start event.");
+    parsedEvents[0] = { ...firstEvent, schemaVersion: "1.3" };
+    await writeFile(eventsPath, `${JSON.stringify(parsedEvents)}\n`, "utf8");
+    await expect(
+      createRestoredRuntime().agentRunSession.readAgentRun(runId)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: expect.stringMatching(/^AGENT_RUN_/u) }
+    });
+  });
+
+  test("restores a legacy planning run only through the legacy reader", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-legacy-restart-"));
+    roots.push(projectRoot);
+    const runId = "run_desktop_legacy_restart";
+    const planId = "plan_desktop_legacy_restart";
+    const createRuntime = (onProviderCall: () => void) =>
+      runtimeExports.createDesktopAgentRuntime({
+        workspaceKind: "creativeProject",
+        projectId: "project-01",
+        contentRoot: projectRoot,
+        stateRoot: projectRoot,
+        createRunId: () => runId,
+        modelDriver: {
+          async *streamRound() {
+            onProviderCall();
+            yield runtimeToolCall("finish-legacy-restart-plan", "finish_plan", {
+              planId,
+              goal: "Verify legacy planning persistence.",
+              successCriteria: ["The legacy plan remains readable as legacy data."],
+              nonGoals: [],
+              facts: [],
+              assumptions: [],
+              openQuestions: [],
+              targetRefs: [],
+              steps: [
+                {
+                  stepId: "verify-legacy-restart",
+                  title: "Restore the legacy run",
+                  verification: "Use the exact legacy reader."
+                }
+              ],
+              risks: [],
+              verification: ["Read the exact legacy artifact after restart."],
+              sourceRefs: []
+            });
+            yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+          }
+        }
+      });
+    let providerCalls = 0;
+    const runtime = createRuntime(() => {
+      providerCalls += 1;
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-legacy-restart-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    expect(
+      await runtime.agentRunSession.startAgentRun(
+        strictPlanningCommand(conversation.value.conversationId, "start-legacy-restart")
+      )
+    ).toMatchObject({ ok: true, value: { schemaVersion: "1.3", runId } });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { schemaVersion: "1.3", status: "plan_ready" } }
+      });
+    });
+    expect(providerCalls).toBe(1);
+
+    const repository = new AgentRunFileRepository({ projectRoot });
+    await expect(repository.readSnapshotV20(runId)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_SNAPSHOT_V20_LEGACY_RECORD" }
+    });
+    await expect(repository.readSnapshot(runId)).resolves.toMatchObject({
+      ok: true,
+      value: { schemaVersion: "1.3", status: "plan_ready" }
+    });
+
+    let restoredProviderCalls = 0;
+    const restored = createRuntime(() => {
+      restoredProviderCalls += 1;
+    });
+    await expect(restored.agentRunSession.readAgentRun(runId)).resolves.toMatchObject({
+      ok: true,
+      value: {
+        snapshot: { schemaVersion: "1.3", status: "plan_ready" },
+        planArtifact: { schemaVersion: "1.0", planId }
+      }
+    });
+    expect(restoredProviderCalls).toBe(0);
   });
 
   test("binds strict Conversation and Run persistence to the selected project root", async () => {
@@ -3787,7 +4212,7 @@ describe("desktop Agent Run runtime", () => {
     ]);
   });
 
-  test("applies allowed v2 file lifecycle proposals and rejects managed creative resources", async () => {
+  test("applies legacy v2-facade lifecycle proposals one approval boundary at a time", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-v2-lifecycle-"));
     roots.push(projectRoot);
     const sourcePath = join(projectRoot, "draft.md");
@@ -3814,6 +4239,8 @@ describe("desktop Agent Run runtime", () => {
       activeChapterId: "chapter-unused",
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-desktop-v2-lifecycle",
+      // This is the flag-off legacy compatibility path. Catalog 2.0 capability tests use the
+      // operation-specific flags and must never inherit this umbrella lifecycle flag.
       featureFlags: createAgentFeatureFlags({
         phaseB_fileLifecycleEnabled: true,
         revision: "desktop-v2-lifecycle-test"
@@ -3837,16 +4264,19 @@ describe("desktop Agent Run runtime", () => {
               path: "created.txt",
               content: created
             });
+          } else if (round === 2) {
             yield runtimeToolCall("create-v2-directory", "manage_path", {
               operation: "create_directory",
               path: "assets"
             });
+          } else if (round === 3) {
             yield runtimeToolCall("move-v2-file", "manage_path", {
               operation: "move_file",
               sourceRef: "file:draft.md",
               targetPath: "moved.md",
               baseHash: sha256(source)
             });
+          } else if (round === 4) {
             yield runtimeToolCall("delete-v2-file", "manage_path", {
               operation: "delete_file",
               ref: "file:obsolete.txt",
@@ -3866,69 +4296,100 @@ describe("desktop Agent Run runtime", () => {
     };
 
     await session.startAgentRun(executionCommand("general_file"));
-    let awaitingRevision = 0;
-    let changeSet: Record<string, unknown> | undefined;
-    await vi.waitFor(async () => {
-      const read = await session.readAgentRun("run-desktop-v2-lifecycle");
-      expect(read).toMatchObject({
-        ok: true,
-        value: {
-          snapshot: { status: "awaiting_write_approval" },
-          events: expect.arrayContaining([
-            expect.objectContaining({
-              type: "tool_failed",
-              detail: expect.objectContaining({
-                toolCallId: "create-v2-chapter",
-                code: "AGENT_CONTEXT_PROFILE_TOOL_REJECTED"
-              })
-            }),
-            expect.objectContaining({
-              type: "tool_failed",
-              detail: expect.objectContaining({
-                toolCallId: "create-v2-story-bible",
-                code: "AGENT_CONTEXT_PROFILE_TOOL_REJECTED"
-              })
-            })
-          ]),
-          changeSet: {
-            operations: expect.arrayContaining([
-              expect.objectContaining({ kind: "create_file", relativePath: "created.txt" }),
-              expect.objectContaining({ kind: "create_directory", relativePath: "assets" }),
-              expect.objectContaining({
-                kind: "move_file",
-                sourcePath: "draft.md",
-                targetPath: "moved.md"
-              }),
-              expect.objectContaining({ kind: "delete_file", relativePath: "obsolete.txt" })
-            ])
+    type PendingChangeSet = {
+      readonly runRevision: number;
+      readonly changeSet: Record<string, unknown>;
+    };
+    const waitForPendingChangeSet = async (
+      expectedOperation: Record<string, unknown>,
+      extraExpected: Record<string, unknown> = {}
+    ): Promise<PendingChangeSet> => {
+      let pending: PendingChangeSet | undefined;
+      await vi.waitFor(async () => {
+        const read = await session.readAgentRun("run-desktop-v2-lifecycle");
+        expect(read).toMatchObject({
+          ok: true,
+          value: {
+            snapshot: { status: "awaiting_write_approval" },
+            ...extraExpected,
+            changeSet: {
+              operations: expect.arrayContaining([expect.objectContaining(expectedOperation)])
+            }
           }
-        }
+        });
+        const value = read as {
+          value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
+        };
+        pending = {
+          runRevision: value.value.snapshot.runRevision,
+          changeSet: value.value.changeSet
+        };
       });
-      const value = read as {
-        value: { snapshot: { runRevision: number }; changeSet: Record<string, unknown> };
-      };
-      awaitingRevision = value.value.snapshot.runRevision;
-      changeSet = value.value.changeSet;
-    });
+      if (pending === undefined) throw new Error("Expected a staged lifecycle Change Set.");
+      return pending;
+    };
+    const applyPendingChangeSet = async (
+      pending: PendingChangeSet,
+      commandId: string
+    ): Promise<void> => {
+      const applied = await session.decideChangeSet({
+        runId: "run-desktop-v2-lifecycle",
+        projectId: "project-01",
+        commandId,
+        expectedRunRevision: pending.runRevision,
+        changeSetId: pending.changeSet["changeSetId"],
+        revision: pending.changeSet["revision"],
+        checksum: pending.changeSet["checksum"],
+        decision: "apply_selected"
+      });
+      expect(applied).toMatchObject({ ok: true, value: { status: "executing_model" } });
+    };
+
+    const createdFileChangeSet = await waitForPendingChangeSet(
+      { kind: "create_file", relativePath: "created.txt" },
+      {
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            type: "tool_failed",
+            detail: expect.objectContaining({
+              toolCallId: "create-v2-chapter",
+              code: "AGENT_CONTEXT_PROFILE_TOOL_REJECTED"
+            })
+          }),
+          expect.objectContaining({
+            type: "tool_failed",
+            detail: expect.objectContaining({
+              toolCallId: "create-v2-story-bible",
+              code: "AGENT_CONTEXT_PROFILE_TOOL_REJECTED"
+            })
+          })
+        ])
+      }
+    );
     expect(await readFile(sourcePath, "utf8")).toBe(source);
     expect(await readFile(obsoletePath, "utf8")).toBe(obsolete);
     expect(await readdir(projectRoot)).not.toContain("created.txt");
     expect(await readdir(projectRoot)).not.toContain("assets");
     expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
     await expect(readFile(storyBiblePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    if (changeSet === undefined) throw new Error("Expected a staged lifecycle Change Set.");
 
-    const applied = await session.decideChangeSet({
-      runId: "run-desktop-v2-lifecycle",
-      projectId: "project-01",
-      commandId: "apply-desktop-v2-lifecycle",
-      expectedRunRevision: awaitingRevision,
-      changeSetId: changeSet["changeSetId"],
-      revision: changeSet["revision"],
-      checksum: changeSet["checksum"],
-      decision: "apply_selected"
-    });
-    expect(applied).toMatchObject({ ok: true, value: { status: "executing_model" } });
+    await applyPendingChangeSet(createdFileChangeSet, "apply-desktop-v2-create-file");
+    await applyPendingChangeSet(
+      await waitForPendingChangeSet({ kind: "create_directory", relativePath: "assets" }),
+      "apply-desktop-v2-create-directory"
+    );
+    await applyPendingChangeSet(
+      await waitForPendingChangeSet({
+        kind: "move_file",
+        sourcePath: "draft.md",
+        targetPath: "moved.md"
+      }),
+      "apply-desktop-v2-move-file"
+    );
+    await applyPendingChangeSet(
+      await waitForPendingChangeSet({ kind: "delete_file", relativePath: "obsolete.txt" }),
+      "apply-desktop-v2-delete-file"
+    );
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run-desktop-v2-lifecycle")).toMatchObject({
         ok: true,
@@ -4598,7 +5059,7 @@ async function previewDraftStart(
     expectedDraftRevision: view.runDraft.revision,
     runDraftChecksum: view.runDraft.checksum
   });
-  expect(preview).toMatchObject({ ok: true });
+  expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true });
   if (!preview.ok) throw preview.error;
   return {
     preview: preview.value,

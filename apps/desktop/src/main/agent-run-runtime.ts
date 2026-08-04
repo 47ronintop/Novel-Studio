@@ -508,6 +508,31 @@ function requestedCapabilitySnapshot(
   }
 
   const flags = options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS;
+  const writingOperations: readonly ProviderVisibleWritingOperation[] = flags.writingDomainCrudV2
+    ? [
+        "chapter_replace",
+        "chapter_create",
+        "story_bible_create",
+        "story_bible_patch",
+        "story_bible_status",
+        "story_bible_restore"
+      ]
+    : [];
+  const workspaceFileOperations: readonly ProviderVisibleWorkspaceFileOperation[] =
+    options.workspaceKind === "creativeProject"
+      ? [
+          ...(flags.creativeTrustedReplaceV2 ? (["replace_file"] as const) : []),
+          ...(flags.creativeFileCreateV2 ? (["create_file"] as const) : []),
+          ...(flags.creativeFileMoveV2 ? (["move_file"] as const) : []),
+          ...(flags.creativeFileDeleteV2 ? (["delete_file"] as const) : [])
+        ]
+      : [
+          ...(flags.engineeringReplaceV2 ? (["replace_file"] as const) : []),
+          ...(flags.engineeringCreateV2 ? (["create_file"] as const) : []),
+          ...(flags.engineeringMoveV2 ? (["move_file"] as const) : []),
+          ...(flags.engineeringDeleteV2 ? (["delete_file"] as const) : []),
+          ...(flags.engineeringDirectoryCreateV1 ? (["create_directory"] as const) : [])
+        ];
   return freezeAgentToolCapabilitySnapshot({
     workspaceKind: options.workspaceKind,
     searchEnabled: flags.phaseA_searchEnabled,
@@ -515,6 +540,8 @@ function requestedCapabilitySnapshot(
     // wait for the operation-specific qualified backend introduced after Batch 0.
     fileLifecycleEnabled:
       options.workspaceKind === "engineeringWorkspace" ? false : flags.phaseB_fileLifecycleEnabled,
+    writingOperations: options.workspaceKind === "creativeProject" ? writingOperations : [],
+    workspaceFileOperations,
     storyBibleStructuredToolsEnabled: options.workspaceKind === "creativeProject",
     controlledExecutionEnabled: false,
     gitReadEnabled: false,
@@ -536,12 +563,15 @@ export function buildRuntimeCapabilitySnapshot(input: {
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
   readonly hasVersionGroupExecutor: boolean;
+  readonly hasTrustedApprovalV2: boolean;
   readonly externalToolExecutor?: AgentExternalToolExecutor;
   readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
 }): AgentToolCapabilitySnapshot {
   const descriptors = input.externalToolDescriptors ?? [];
   const hasMcpDescriptor = descriptors.some((descriptor) => descriptor.id?.startsWith("mcp:"));
-  const canCommitMutation = input.hasVersionGroupExecutor;
+  const canCommitMutation =
+    input.hasVersionGroupExecutor &&
+    (!input.featureFlags.agentGuidanceV3 || input.hasTrustedApprovalV2);
   const hasReplaceBackend =
     input.lifecycleOperations !== undefined || input.trustedCreativeMutations !== undefined;
   const hasLifecycleBackend =
@@ -615,13 +645,25 @@ function operationFeatureEnabled(
 ): boolean {
   if (!flags.agentGuidanceV3) return false;
   if (workspaceKind === "creativeProject") {
-    return operation === "chapter_create" ||
-      operation === "create_file" ||
-      operation === "move_file" ||
-      operation === "delete_file" ||
-      operation === "create_directory"
-      ? flags.phaseB_fileLifecycleEnabled
-      : true;
+    switch (operation) {
+      case "chapter_replace":
+      case "chapter_create":
+      case "story_bible_create":
+      case "story_bible_patch":
+      case "story_bible_status":
+      case "story_bible_restore":
+        return flags.writingDomainCrudV2;
+      case "replace_file":
+        return flags.creativeTrustedReplaceV2;
+      case "create_file":
+        return flags.creativeFileCreateV2;
+      case "move_file":
+        return flags.creativeFileMoveV2;
+      case "delete_file":
+        return flags.creativeFileDeleteV2;
+      default:
+        return false;
+    }
   }
   if (!flags.engineeringHardenedAccessV1) return false;
   switch (operation) {
@@ -923,6 +965,9 @@ function createDesktopAgentRuntimeServices(
       : { lifecycleOperations: options.lifecycleOperations }),
     ...(trustedCreativeMutations === undefined ? {} : { trustedCreativeMutations }),
     hasVersionGroupExecutor: versionGroupServices !== undefined,
+    hasTrustedApprovalV2:
+      resolvedFeatureFlags.approvalBindingV2 &&
+      options.providerSemanticVersionSetChecksum !== undefined,
     ...(options.externalToolExecutor === undefined
       ? {}
       : { externalToolExecutor: options.externalToolExecutor }),
@@ -3001,6 +3046,10 @@ function readResolvedIntent(
     writePolicy:
       (command["writePolicy"] as AgentRunStartFacts["writePolicy"]) ?? "write_before_confirmation",
     writePolicyAcknowledged: command["writePolicyAcknowledged"] === true,
+    executionWritePolicyDraft:
+      command["executionWritePolicyDraft"] === "user_preapproved_run"
+        ? "user_preapproved_run"
+        : "write_before_confirmation",
     userRequest: command["userRequest"],
     model: {
       profileId: String(snapshot["profileId"] ?? ""),
@@ -3145,6 +3194,10 @@ async function resolveStartFromDraft(
     contextMode: runDraft.contextMode,
     writePolicy: runDraft.writePolicy,
     writePolicyAcknowledged: runDraft.writePolicyAcknowledged,
+    executionWritePolicyDraft:
+      runDraft.schemaVersion === "2.0"
+        ? runDraft.executionWritePolicyDraft
+        : "write_before_confirmation",
     userRequest: runDraft.userRequest,
     writingTaskIntent: resolved.value.writingTaskIntent,
     ...(runDraft.reasoningEffort === undefined
@@ -4099,7 +4152,9 @@ function routeCreativeSearch(
         : input.stableRef;
       const allowed = normalizeCreativeProjectFilePath(path, "file");
       if (!allowed.ok) return allowed;
-      return filterCreativeSearchResult(await generalFileExecutor.findReferences(input));
+      return filterCreativeSearchResult(
+        await generalFileExecutor.findReferences({ ...input, stableRef: path })
+      );
     }
   };
 }

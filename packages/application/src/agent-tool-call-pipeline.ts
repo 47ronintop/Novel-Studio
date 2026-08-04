@@ -9,6 +9,7 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
+import { validateFinishInput } from "@novel-studio/agent-engine";
 
 export const MAX_TOOL_ARGUMENT_UTF8_BYTES = 1_048_576;
 
@@ -96,8 +97,9 @@ export type ToolCallDispatchResult<TOutcome> =
   | { readonly kind: "interrupted"; readonly outcomes: readonly TOutcome[] };
 
 /**
- * Enforces the round terminal-state gate before invoking any tool handler. Proposal batches keep
- * the existing all-proposals-first policy; every selected call is processed in model source order.
+ * Enforces the round terminal-state gate before invoking any tool handler. Calls are always
+ * processed in the model's source order. An effectful call therefore reaches its approval/pause
+ * boundary before any later call can run; the dispatcher never reorders proposals ahead of reads.
  */
 export async function dispatchAssembledToolCalls<TOutcome>(input: {
   readonly round: AssembledToolCallRound;
@@ -107,6 +109,8 @@ export async function dispatchAssembledToolCalls<TOutcome>(input: {
   readonly dispatch: (call: AssembledToolCall) => Promise<TOutcome>;
   readonly mayContinue: (outcome: TOutcome) => boolean;
   readonly isActive: () => boolean;
+  /** Optional strict per-tool argument gate. A failure is routed to `reject` before dispatch. */
+  readonly validateCall?: (call: AssembledToolCall) => ToolCallDispatchFailure | undefined;
 }): Promise<ToolCallDispatchResult<TOutcome>> {
   if (input.round.calls.length === 0) {
     return { kind: "empty", outcomes: [] };
@@ -124,20 +128,39 @@ export async function dispatchAssembledToolCalls<TOutcome>(input: {
     });
   }
 
-  const proposalCalls = input.round.calls.filter((call) => input.effectFor(call) === "propose");
-  const deferredCalls =
-    proposalCalls.length === 0
-      ? []
-      : input.round.calls.filter((call) => input.effectFor(call) !== "propose");
   return runCalls({
     kind: "dispatched",
-    calls: proposalCalls.length > 0 ? proposalCalls : input.round.calls,
-    deferredCalls,
-    invoke: input.dispatch,
+    calls: input.round.calls,
+    invoke: async (call) => {
+      const failure = input.validateCall?.(call);
+      return failure === undefined ? input.dispatch(call) : input.reject(call, failure);
+    },
     skip: input.skip,
     mayContinue: input.mayContinue,
     isActive: input.isActive
   });
+}
+
+/** Strictly validate the arguments of a `finish` protocol call before invoking its handler. */
+export function validateFinishToolCall(
+  call: AssembledToolCall
+): ToolCallDispatchFailure | undefined {
+  if (call.name !== "finish") return undefined;
+  const parsed = parseToolCallArguments(call.argumentsText);
+  if (!parsed.ok) {
+    return {
+      code: parsed.error.code,
+      message: parsed.error.message,
+      finishReason: "tool_calls"
+    };
+  }
+  const validated = validateFinishInput(parsed.value);
+  if (validated.ok) return undefined;
+  return {
+    code: validated.error.code,
+    message: validated.error.message,
+    finishReason: "tool_calls"
+  };
 }
 
 export function parseToolCallArguments(value: string): Result<JsonObject, UnifiedError> {
@@ -164,7 +187,6 @@ export function parseToolCallArguments(value: string): Result<JsonObject, Unifie
 async function runCalls<TOutcome>(input: {
   readonly kind: "rejected" | "dispatched";
   readonly calls: readonly AssembledToolCall[];
-  readonly deferredCalls?: readonly AssembledToolCall[];
   readonly invoke: (call: AssembledToolCall) => Promise<TOutcome>;
   readonly skip: (call: AssembledToolCall, failure: ToolCallDispatchFailure) => Promise<void>;
   readonly mayContinue: (outcome: TOutcome) => boolean;
@@ -178,12 +200,10 @@ async function runCalls<TOutcome>(input: {
     if (!input.mayContinue(outcome)) {
       if (input.isActive()) {
         await skipCalls(input.calls.slice(index + 1), input.skip);
-        await skipCalls(input.deferredCalls ?? [], input.skip);
       }
       return { kind: input.kind, outcomes };
     }
   }
-  await skipCalls(input.deferredCalls ?? [], input.skip);
   return { kind: input.kind, outcomes };
 }
 

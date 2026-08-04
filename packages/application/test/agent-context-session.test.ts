@@ -16,6 +16,7 @@ import {
 import type {
   AgentContextSourceInput,
   AgentRunDraft,
+  AgentRunDraftV20,
   PreviewContextBudgetCommand
 } from "@novel-studio/agent-engine";
 
@@ -139,7 +140,7 @@ async function seedDraft(draftSession: AgentRunDraftSession) {
 }
 
 function packingInputs(
-  draft: AgentRunDraft,
+  draft: AgentRunDraft | AgentRunDraftV20,
   options: {
     readonly activeSources?: readonly AgentContextSourceInput[];
     readonly excludedSources?: readonly AgentContextSourceInput[];

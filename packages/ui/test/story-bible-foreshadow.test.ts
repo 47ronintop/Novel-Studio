@@ -49,7 +49,7 @@ describe("Story Bible foreshadow tracking", () => {
     ).toBe(false);
   });
 
-  test("requires an actual payoff chapter and complete evidence before saving", () => {
+  test("warns for a missing actual payoff chapter while rejecting incomplete evidence", () => {
     const issues = validateStoryBibleForeshadow(
       {
         id: "fsh_current",
@@ -68,12 +68,13 @@ describe("Story Bible foreshadow tracking", () => {
     );
 
     expect(issues.map((issue) => issue.code)).toEqual([
-      "paid-off-missing-actual-chapter",
+      "FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING",
       "evidence-missing-chapter",
       "evidence-missing-excerpt"
     ]);
+    expect(issues.map((issue) => issue.severity)).toEqual(["warning", "error", "error"]);
     expect(issues.map(storyBibleForeshadowValidationMessage)).toEqual([
-      "状态设为“已回收”时，必须选择实际回收章节。",
+      "已回收伏笔尚未选择实际回收章节；这不会阻止保存。",
       "第 1 条原文证据缺少章节。",
       "第 2 条原文证据缺少原文片段。"
     ]);
@@ -143,12 +144,14 @@ describe("Story Bible foreshadow tracking", () => {
     expect(issues).toEqual([
       {
         code: "duplicate-evidence-in-draft",
+        severity: "error",
         sourceIndex: 1,
         duplicateSourceIndex: 0,
         chapterId: "ch_01"
       },
       {
         code: "duplicate-evidence-in-asset",
+        severity: "error",
         sourceIndex: 2,
         duplicateAssetId: "fsh_other",
         duplicateAssetTitle: "门后的人",

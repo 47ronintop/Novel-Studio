@@ -673,7 +673,7 @@ describe("AgentRunFileRepository", () => {
 
     // A future/unknown version is rejected on read rather than silently normalized as v1.0.
     const futureSnapshot = {
-      schemaVersion: "2.0",
+      schemaVersion: "9.9",
       runId: "run_future",
       projectId: "project_01",
       status: "planning_model",

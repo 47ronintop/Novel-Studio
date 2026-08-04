@@ -18,6 +18,12 @@ describe("AgentFeatureFlags", () => {
     expect(flags.agentGuidanceV3).toBe(false);
     expect(flags.phaseA_searchEnabled).toBe(false);
     expect(flags.phaseB_fileLifecycleEnabled).toBe(false);
+    expect(flags.writingDomainCrudV2).toBe(false);
+    expect(flags.creativeTrustedReplaceV2).toBe(false);
+    expect(flags.creativeFileCreateV2).toBe(false);
+    expect(flags.creativeFileMoveV2).toBe(false);
+    expect(flags.creativeFileDeleteV2).toBe(false);
+    expect(flags.approvalBindingV2).toBe(false);
     expect(flags.phaseD_networkReadEnabled).toBe(false);
     expect(flags.phaseE_remoteMcpEnabled).toBe(false);
     expect(flags.engineeringHardenedAccessV1).toBe(false);
@@ -49,6 +55,47 @@ describe("AgentFeatureFlags", () => {
     const flags = createAgentFeatureFlags({ phaseA_searchEnabled: true });
     expect(flags.phaseA_searchEnabled).toBe(true);
     expect(flags.phaseB_fileLifecycleEnabled).toBe(false);
+  });
+
+  test("normalizes Catalog 2.0 mutations off without Guidance 3.0 and approval binding", () => {
+    const requested = {
+      writingDomainCrudV2: true,
+      creativeTrustedReplaceV2: true,
+      creativeFileCreateV2: true,
+      creativeFileMoveV2: true,
+      creativeFileDeleteV2: true
+    };
+
+    expect(createAgentFeatureFlags({ ...requested, approvalBindingV2: true })).toMatchObject({
+      approvalBindingV2: false,
+      writingDomainCrudV2: false,
+      creativeTrustedReplaceV2: false,
+      creativeFileCreateV2: false,
+      creativeFileMoveV2: false,
+      creativeFileDeleteV2: false
+    });
+    expect(createAgentFeatureFlags({ ...requested, agentGuidanceV3: true })).toMatchObject({
+      approvalBindingV2: false,
+      writingDomainCrudV2: false,
+      creativeTrustedReplaceV2: false,
+      creativeFileCreateV2: false,
+      creativeFileMoveV2: false,
+      creativeFileDeleteV2: false
+    });
+    expect(
+      createAgentFeatureFlags({
+        ...requested,
+        agentGuidanceV3: true,
+        approvalBindingV2: true
+      })
+    ).toMatchObject({
+      approvalBindingV2: true,
+      writingDomainCrudV2: true,
+      creativeTrustedReplaceV2: true,
+      creativeFileCreateV2: true,
+      creativeFileMoveV2: true,
+      creativeFileDeleteV2: true
+    });
   });
 
   test("createAgentFeatureFlags result is frozen", () => {

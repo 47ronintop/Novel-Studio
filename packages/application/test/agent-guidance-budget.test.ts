@@ -176,8 +176,8 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "3e0aa9653f1ed914f3e19064addc788944f2d028118b4c78edb12884cf4f561e",
     normalizedInputChecksum: "fd29a6c78d2a989e69ab107f5386cbf53aeeded7f22b5e884d3fecea8d0b2912",
     materializedGuidanceChecksum:
-      "85ea83b24f874649128556861d100cac1fa5f6b5db3e167e1f4b86871e40800d",
-    tokenCount: 546,
+      "f90289dbd511c2ae721812334b9081ec89cff7eb32a6a6467634a27421783101",
+    tokenCount: 589,
     tokenLimit: 900,
     writingTaskIntent: null,
     writingOperations: [],
@@ -195,8 +195,8 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "f209e3d18c15d65b3806390cc461c08076d943c2c01ffee2bf8f5401a532cf02",
     normalizedInputChecksum: "85fe7ef758116f9f648ea9da1e96853fe7cadb5ae725fd43903e16c282dd18b7",
     materializedGuidanceChecksum:
-      "1addd8bf3282d464a3f8ba8d863e0c4554c76bce8f89228e11ca2ea237aa4b3c",
-    tokenCount: 761,
+      "efdcd945b409f58ec65563849805888c1bbe8b535a7361145b28825231d078ae",
+    tokenCount: 804,
     tokenLimit: 1200,
     writingTaskIntent: {
       schemaVersion: "1.0",
@@ -219,8 +219,8 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "5355b1561c4a34b11038e945ff08517b3fd1c2ce16319de31004557dc997db9d",
     normalizedInputChecksum: "f34c5a401ca264a515034f400fc4c95031dc6cafc63e43521d13aa194078fa07",
     materializedGuidanceChecksum:
-      "7ddb06c913755e0f0eb7b578c680db5e13289b61927dfe232e65a1f7d2a564be",
-    tokenCount: 1035,
+      "cc87910f4efeb43f65b7dee3fcab869ccd72717af1aab99770d858e9bcd4c632",
+    tokenCount: 1078,
     tokenLimit: 1200,
     writingTaskIntent: {
       schemaVersion: "1.0",
@@ -254,8 +254,8 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "3e0aa9653f1ed914f3e19064addc788944f2d028118b4c78edb12884cf4f561e",
     normalizedInputChecksum: "e6a520dc7bfb4e5d5ac8892e083bbd3ebd197170a351faf9686a85bddd2fb8e2",
     materializedGuidanceChecksum:
-      "5a38d44067df97f944a30f06ecd8411af2ff572d33e1825b1a6ccadbd4190d45",
-    tokenCount: 649,
+      "4aef6a40414c0acf4cb652340a9ab2c9b74447be2d46383b218dc8e6a807dc1d",
+    tokenCount: 692,
     tokenLimit: 900,
     writingTaskIntent: null,
     writingOperations: [],
@@ -273,8 +273,8 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "76136689cfd189b4d5398195625cf6475f5bfebfa98db1c6a4bcabe457409db6",
     normalizedInputChecksum: "bbad40da8b6943fa5ac160c3e634f68201766aa4fa90f8c1eb098caa87612d6b",
     materializedGuidanceChecksum:
-      "7f0a79c6f9a42429b967375e67eba169cf42b744a662592b06d8d24188a13961",
-    tokenCount: 783,
+      "5b5fdbd7395bcdd42e0b20c285bcc8c4c1d13fe3387a6830332070e2cd1d25ee",
+    tokenCount: 826,
     tokenLimit: 900,
     writingTaskIntent: null,
     writingOperations: [],
@@ -298,8 +298,8 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "3e0aa9653f1ed914f3e19064addc788944f2d028118b4c78edb12884cf4f561e",
     normalizedInputChecksum: "7cf11491b1bbdbf5a07685b24bf3c9e699cf8df880dee7dc3ec3bc80ded87981",
     materializedGuidanceChecksum:
-      "6c80ba39c56a5a63e9cc542d2bf4a0bf5cf2b48615ee4275f8097bbaa8ca94b6",
-    tokenCount: 709,
+      "2b6de35aa87eef1f3f44692c0f0f6c8143c9088c35b254b8d41366c81bc57e58",
+    tokenCount: 752,
     tokenLimit: 900,
     writingTaskIntent: null,
     writingOperations: [],
@@ -317,8 +317,8 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
       "76136689cfd189b4d5398195625cf6475f5bfebfa98db1c6a4bcabe457409db6",
     normalizedInputChecksum: "59f9550d5457e23356d131d7a2230fd2008afeb2a30e03574c7e72e14f94f50b",
     materializedGuidanceChecksum:
-      "c6b4b575881e2af54f9d2b47243f6d575dd0d35289251aa36bac7a076cd1787b",
-    tokenCount: 843,
+      "22f424d515348564931f0150367575fc8fe8445e208664e8359459490eeb7aea",
+    tokenCount: 886,
     tokenLimit: 900,
     writingTaskIntent: null,
     writingOperations: [],

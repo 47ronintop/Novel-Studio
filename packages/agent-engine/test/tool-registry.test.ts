@@ -75,6 +75,64 @@ describe("Agent tool registry", () => {
     );
   });
 
+  test("publishes and enforces the strict structured finish_plan contract", () => {
+    const descriptor = engineExports
+      .listAgentTools({
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation"
+      })
+      .find((tool) => tool.name === "finish_plan");
+    if (descriptor === undefined) throw new Error("Missing finish_plan descriptor.");
+    expect(descriptor.inputSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "planId",
+        "goal",
+        "successCriteria",
+        "nonGoals",
+        "facts",
+        "assumptions",
+        "openQuestions",
+        "targetRefs",
+        "steps",
+        "risks",
+        "verification",
+        "sourceRefs"
+      ]
+    });
+    const validArguments = {
+      planId: "plan-structured-01",
+      goal: "Produce an executable read-only plan.",
+      successCriteria: ["The target and verification path are explicit."],
+      nonGoals: [],
+      facts: [],
+      assumptions: [],
+      openQuestions: [],
+      targetRefs: [{ refId: "chapter:chapter-01", intent: "Inspect the target chapter." }],
+      steps: [{ stepId: "step-01", title: "Inspect", verification: "Read the chapter again." }],
+      risks: [],
+      verification: ["Confirm the cited chapter still exists."],
+      sourceRefs: ["chapter:chapter-01"]
+    };
+    const validates = (argumentsValue: JsonObject) =>
+      engineExports.validateAgentToolArguments({
+        descriptor,
+        arguments: argumentsValue,
+        argumentsText: JSON.stringify(argumentsValue)
+      }).ok;
+
+    expect(validates(validArguments)).toBe(true);
+    const { risks: _risks, ...missingRisks } = validArguments;
+    void _risks;
+    expect(validates(missingRisks)).toBe(false);
+    expect(validates({ ...validArguments, targetRefs: ["chapter:chapter-01"] })).toBe(false);
+    expect(validates({ ...validArguments, steps: [] })).toBe(false);
+    expect(validates({ ...validArguments, verification: [] })).toBe(false);
+    expect(validates({ ...validArguments, unexpected: true })).toBe(false);
+  });
+
   test("publishes and enforces bounded proposal argument schemas", () => {
     const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
       input: Record<string, unknown>
@@ -702,7 +760,14 @@ describe("Agent tool registry", () => {
       capabilitySnapshot: {
         ...baseCapabilities,
         workspaceKind: "creativeProject",
-        writingOperations: ["chapter_replace", "chapter_create", "story_bible_create"],
+        writingOperations: [
+          "chapter_replace",
+          "chapter_create",
+          "story_bible_create",
+          "story_bible_patch",
+          "story_bible_status",
+          "story_bible_restore"
+        ],
         workspaceFileOperations: []
       }
     });
@@ -710,6 +775,9 @@ describe("Agent tool registry", () => {
     expect(writingNames).toContain("edit_text");
     expect(writingNames).toContain("create_resource");
     expect(writingNames).toContain("create_story_bible");
+    expect(writingNames).toContain("patch_story_bible");
+    expect(writingNames).toContain("set_story_bible_status");
+    expect(writingNames).toContain("restore_story_bible");
     expect(writingNames).not.toContain("manage_path");
     expect(writingNames).not.toContain("propose_chapter_write");
     expect(writingNames).not.toContain("propose_chapter_create");
@@ -749,6 +817,30 @@ describe("Agent tool registry", () => {
         content: "Draft"
       })
     ).toBe(false);
+    expect(requireDescriptor(writing, "create_resource").description).toContain("章节");
+    expect(requireDescriptor(writing, "create_resource").description).not.toMatch(
+      /Story Bible|file:/u
+    );
+    expect(requireDescriptor(writing, "create_story_bible").description).toContain(
+      "describe_story_bible_type"
+    );
+
+    const patchStoryBible = requireDescriptor(writing, "patch_story_bible");
+    const statusStoryBible = requireDescriptor(writing, "set_story_bible_status");
+    const restoreStoryBible = requireDescriptor(writing, "restore_story_bible");
+    const patchArguments = {
+      assetId: "hero",
+      baseRevision: 1,
+      operations: [{ op: "replace", path: "/title", value: "Hero" }]
+    };
+    const statusArguments = { assetId: "hero", baseRevision: 1, status: "archived" };
+    const restoreArguments = { assetId: "hero", baseRevision: 2 };
+    expect(isValid(patchStoryBible, patchArguments)).toBe(false);
+    expect(isValid(patchStoryBible, { ...patchArguments, baseChecksum: baseHash })).toBe(true);
+    expect(isValid(statusStoryBible, statusArguments)).toBe(false);
+    expect(isValid(statusStoryBible, { ...statusArguments, baseChecksum: baseHash })).toBe(true);
+    expect(isValid(restoreStoryBible, restoreArguments)).toBe(false);
+    expect(isValid(restoreStoryBible, { ...restoreArguments, baseChecksum: baseHash })).toBe(true);
 
     const creative = engineExports.listAgentTools({
       ...options,

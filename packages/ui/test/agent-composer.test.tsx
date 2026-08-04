@@ -210,12 +210,26 @@ describe("AgentComposer", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  test("closes the mode popover with Escape and hides approval while planning", () => {
+  test("shows a read-only future execution policy while planning", () => {
     const { host } = renderComposer({ operationMode: "planning" });
     const trigger = host.querySelector<HTMLButtonElement>('[aria-label="计划"]');
-    expect(host.textContent).not.toContain("每次修改前确认");
-    expect(host.querySelector('[aria-label="添加引用与执行审批"]')).not.toBeNull();
+    const approvalTrigger = host.querySelector<HTMLButtonElement>(
+      '[aria-label="添加引用与执行审批"]'
+    );
+    expect(approvalTrigger).not.toBeNull();
 
+    act(() => approvalTrigger?.click());
+    const policy = document.querySelector('[aria-label="执行阶段审批策略"]');
+    expect(policy?.textContent).toContain("当前计划：只读，不会修改文件。");
+    expect(policy?.textContent).toContain("请求批准");
+    expect(policy?.textContent).toContain("替我审批");
+    expect(policy?.textContent).toContain("可信确认尚不可用");
+    const choices = policy?.querySelectorAll<HTMLInputElement>('[name="agent-write-policy"]');
+    expect(choices).toHaveLength(2);
+    expect(choices?.[0]?.checked).toBe(true);
+    expect(choices?.[1]?.disabled).toBe(true);
+
+    act(() => approvalTrigger?.click());
     act(() => trigger?.click());
     const popover = document.querySelector<HTMLElement>('[aria-label="计划或执行模式"]');
     act(() =>
@@ -270,7 +284,7 @@ describe("AgentComposer", () => {
     expect(summary?.textContent).not.toContain("不抵御同权限本地进程的路径竞争");
   });
 
-  test("treats choosing preapproval as the current-run acknowledgement", () => {
+  test("keeps preapproval disabled without a qualified confirmation surface", () => {
     const onWritePolicyChange = vi.fn();
     const { host } = renderComposer({
       permission: permissionControl(),
@@ -278,21 +292,14 @@ describe("AgentComposer", () => {
     });
 
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="添加引用与执行审批"]')?.click());
-    act(() => document.querySelectorAll<HTMLInputElement>('[type="radio"]')[1]?.click());
-    expect(onWritePolicyChange).toHaveBeenCalledWith("user_preapproved_run");
-    expect(document.querySelector('input[type="checkbox"]')).toBeNull();
-
-    const onSend = vi.fn();
-    const acknowledged = renderComposer({
-      writePolicy: "user_preapproved_run",
-      // The engine still records acknowledgement, but the Composer must never expose a second gate.
-      writePolicyAcknowledged: false,
-      onSend
-    });
-    act(() =>
-      acknowledged.host.querySelector<HTMLButtonElement>('[aria-label="启动 Agent 运行"]')?.click()
+    const preapproval = document.querySelectorAll<HTMLInputElement>('[type="radio"]')[1];
+    expect(preapproval?.disabled).toBe(true);
+    act(() => preapproval?.click());
+    expect(onWritePolicyChange).not.toHaveBeenCalled();
+    expect(document.querySelector('[aria-label="执行审批"]')?.textContent).toContain(
+      "可信确认尚不可用"
     );
-    expect(onSend).toHaveBeenCalledWith("检查当前章节");
+    expect(document.querySelector('input[type="checkbox"]')).toBeNull();
   });
 
   test("closes an open mode popover when the run becomes active", () => {
@@ -620,11 +627,13 @@ function renderComposer(overrides: Partial<AgentComposerProps> = {}) {
       contextMode: "writing",
       writePolicy: "write_before_confirmation",
       writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "write_before_confirmation",
       active: false,
       onRequestChange: () => undefined,
       onOperationModeChange: () => undefined,
       onContextModeChange: () => undefined,
       onWritePolicyChange: () => undefined,
+      onExecutionWritePolicyDraftChange: () => undefined,
       onSend: () => undefined,
       onStop: () => undefined,
       ...overrides,

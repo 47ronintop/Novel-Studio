@@ -7,6 +7,12 @@ import {
   type AgentRunDraft,
   type CreateAgentRunDraftInput
 } from "../src/index.js";
+import {
+  applyAgentRunDraftV20Mutation,
+  createAgentRunDraftV20,
+  parseAgentRunDraftV20,
+  validateExecutionWritePolicyDraft
+} from "../src/agent-run-draft.js";
 
 function baseDraft(overrides: Partial<CreateAgentRunDraftInput> = {}): AgentRunDraft {
   return createAgentRunDraft({
@@ -29,6 +35,121 @@ function baseDraft(overrides: Partial<CreateAgentRunDraftInput> = {}): AgentRunD
 }
 
 describe("Agent Run Draft value object", () => {
+  test("keeps the future execution policy app-owned and planning read-only in Draft 2.0", () => {
+    const draft = createAgentRunDraftV20({
+      runDraftId: "run_draft_v20",
+      scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+      conversationId: "conv_v20",
+      userRequest: "Plan an edit",
+      operationMode: "planning",
+      contextMode: "writing",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: true,
+      executionWritePolicyDraft: "user_preapproved_run",
+      modelProfileId: "model_01",
+      contextDraftId: "context_v20",
+      contextDraftRevision: 1,
+      contextDraftChecksum: "c".repeat(64),
+      contextBudgetSnapshotId: null,
+      updatedAt: "2026-08-04T00:00:00.000Z"
+    });
+
+    expect(draft).toMatchObject({
+      schemaVersion: "2.0",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "user_preapproved_run"
+    });
+    expect(parseAgentRunDraftV20(draft)).toBe(draft);
+
+    const changed = applyAgentRunDraftV20Mutation(
+      draft,
+      { kind: "set_execution_write_policy_draft", policy: "write_before_confirmation" },
+      "2026-08-04T00:01:00.000Z"
+    );
+    expect(changed).toMatchObject({
+      ok: true,
+      value: {
+        revision: 2,
+        executionWritePolicyDraft: "write_before_confirmation",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false
+      }
+    });
+  });
+
+  test("rejects invalid future policy drafts and tampered Draft 2.0 checksums", () => {
+    expect(validateExecutionWritePolicyDraft("limited_run_preapproval")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_EXECUTION_POLICY_DRAFT_INVALID" }
+    });
+    const draft = createAgentRunDraftV20({
+      runDraftId: "run_draft_v20_invalid",
+      scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+      conversationId: "conv_v20",
+      userRequest: "Plan an edit",
+      operationMode: "planning",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "write_before_confirmation",
+      modelProfileId: "model_01",
+      contextDraftId: "context_v20",
+      contextDraftRevision: 1,
+      contextDraftChecksum: "c".repeat(64),
+      contextBudgetSnapshotId: null,
+      updatedAt: "2026-08-04T00:00:00.000Z"
+    });
+    const tampered = { ...draft, executionWritePolicyDraft: "user_preapproved_run" };
+    expect(() => parseAgentRunDraftV20(tampered)).toThrow("AGENT_RUN_DRAFT_V20_CHECKSUM_INVALID");
+    expect(() => parseAgentRunDraftV20({ ...draft, untrusted: true })).toThrow(
+      "AGENT_RUN_DRAFT_V20_UNKNOWN_FIELD"
+    );
+  });
+
+  test("keeps current V20 execution authority manual until the Main surface is qualified", () => {
+    const draft = createAgentRunDraftV20({
+      runDraftId: "run_draft_v20_execution",
+      scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+      conversationId: "conv_v20_execution",
+      userRequest: "Apply the approved plan",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "user_preapproved_run",
+      writePolicyAcknowledged: true,
+      executionWritePolicyDraft: "user_preapproved_run",
+      modelProfileId: "model_01",
+      contextDraftId: "context_v20_execution",
+      contextDraftRevision: 1,
+      contextDraftChecksum: "c".repeat(64),
+      contextBudgetSnapshotId: null,
+      updatedAt: "2026-08-04T00:00:00.000Z"
+    });
+    expect(draft).toMatchObject({
+      operationMode: "execution",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "user_preapproved_run"
+    });
+    expect(
+      applyAgentRunDraftV20Mutation(
+        draft,
+        { kind: "set_write_policy", writePolicy: "user_preapproved_run", acknowledged: true },
+        "2026-08-04T00:01:00.000Z"
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUN_DRAFT_V20_PREAPPROVAL_UNAVAILABLE" }
+    });
+    expect(() =>
+      parseAgentRunDraftV20({
+        ...draft,
+        writePolicy: "user_preapproved_run",
+        writePolicyAcknowledged: true
+      })
+    ).toThrow("AGENT_RUN_DRAFT_V20_PREAPPROVAL_UNAVAILABLE");
+  });
+
   test("creates revision 1 with a checksum and is frozen", () => {
     const draft = baseDraft();
     expect(draft.schemaVersion).toBe("1.1");

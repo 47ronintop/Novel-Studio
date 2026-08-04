@@ -120,7 +120,11 @@ test("binds compact permissions to a persisted plan execution and restores revis
     await expect(permissionSummary).toContainText("Git");
     await expect(permissionSummary).toContainText("网络");
 
-    await permissionMenu.getByRole("radio", { name: "替我审批" }).check();
+    const requestApproval = permissionMenu.getByRole("radio", { name: "请求批准" });
+    const preapproveRun = permissionMenu.getByRole("radio", { name: "替我审批" });
+    await expect(requestApproval).toBeChecked();
+    await expect(requestApproval).toBeEnabled();
+    await expect(preapproveRun).toBeDisabled();
     await expect(permissionMenu.getByRole("checkbox")).toHaveCount(0);
     await expect(composer.getByLabel("启动 Agent 运行")).toBeEnabled();
     await expect(permissionSummary).toContainText("服务端事实");
@@ -131,7 +135,8 @@ test("binds compact permissions to a persisted plan execution and restores revis
     const planReview = page.getByLabel("Plan Artifact 审阅");
     await expect(planReview).toBeVisible();
     await expect(planReview).toContainText("每次修改前确认");
-    await planReview.getByRole("radio", { name: "本次运行自动修改" }).check();
+    await expect(planReview.getByRole("radio", { name: "每次修改前确认" })).toBeChecked();
+    await expect(planReview.getByRole("radio", { name: "本次运行自动修改" })).toBeDisabled();
     await expect(planReview.getByRole("checkbox")).toHaveCount(0);
     await planReview.getByRole("button", { name: "按此方案执行" }).click();
 

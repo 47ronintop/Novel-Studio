@@ -1,7 +1,13 @@
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import type { AgentContextMode, AgentWritePolicy } from "./agent-run-types.js";
-import type { PlanArtifact } from "./plan-artifact.js";
+import {
+  parsePlanActHandoffV20,
+  validatePlanActHandoffV20,
+  type PlanActHandoffV20,
+  type PlanArtifact,
+  type PlanArtifactV20
+} from "./plan-artifact.js";
 
 export type PlanExecutionStepStatus = "pending" | "running" | "completed" | "blocked" | "skipped";
 export type PlanExecutionDeviationKind = "none" | "minor" | "material";
@@ -41,6 +47,23 @@ export interface PlanExecutionRecord {
   readonly handoffWritePolicy: AgentWritePolicy;
   readonly revision: number;
   readonly steps: readonly PlanExecutionStep[];
+}
+
+export const PLAN_EXECUTION_SCHEMA_VERSION_V20 = "2.0" as const;
+
+/** Strict execution record. Its handoff is a Main-owned boundary fact, never a planning draft. */
+export interface PlanExecutionRecordV20 extends Omit<PlanExecutionRecord, "schemaVersion"> {
+  readonly schemaVersion: typeof PLAN_EXECUTION_SCHEMA_VERSION_V20;
+  readonly handoff: PlanActHandoffV20;
+  readonly executionWritePolicyAcknowledged: boolean;
+  readonly providerSemanticVersionSetChecksum: string;
+}
+
+export interface CreatePlanExecutionRecordV20Input {
+  readonly plan: Pick<PlanArtifactV20, "planId" | "revision" | "steps">;
+  readonly runId: string;
+  readonly planExecutionId: string;
+  readonly handoff: PlanActHandoffV20;
 }
 
 export interface CreatePlanExecutionRecordInput {
@@ -128,6 +151,107 @@ export function createPlanExecutionRecord(
       eventSequence: null
     }))
   });
+}
+
+export function createPlanExecutionRecordV20(
+  input: CreatePlanExecutionRecordV20Input
+): PlanExecutionRecordV20 {
+  const handoff = parsePlanActHandoffV20(input.handoff);
+  if (handoff.planId !== input.plan.planId || handoff.planRevision !== input.plan.revision) {
+    throw new Error("AGENT_PLAN_EXECUTION_HANDOFF_PLAN_REVISION_MISMATCH");
+  }
+  return deepFreeze({
+    schemaVersion: PLAN_EXECUTION_SCHEMA_VERSION_V20,
+    planExecutionId: input.planExecutionId,
+    runId: input.runId,
+    planId: input.plan.planId,
+    planRevision: input.plan.revision,
+    handoffContextMode: handoff.executionContextMode,
+    handoffWritePolicy: handoff.executionWritePolicy,
+    executionWritePolicyAcknowledged: handoff.executionWritePolicyAcknowledged,
+    providerSemanticVersionSetChecksum: handoff.providerSemanticVersionSetChecksum,
+    handoff,
+    revision: 1,
+    steps: input.plan.steps.map((step) => ({
+      stepId: step.stepId,
+      title: step.title,
+      status: "pending" as const,
+      startedAt: null,
+      completedAt: null,
+      verification: [],
+      deviationKind: "none" as const,
+      blockedReason: null,
+      checkpointId: null,
+      eventSequence: null
+    }))
+  });
+}
+
+export function parsePlanExecutionRecordV20(value: unknown): PlanExecutionRecordV20 {
+  const validation = validatePlanExecutionRecordV20(value);
+  if (!validation.ok) throw new Error(validation.error.code);
+  return validation.value;
+}
+
+export function validatePlanExecutionRecordV20(
+  value: unknown
+): Result<PlanExecutionRecordV20, UnifiedError> {
+  if (!isRecord(value)) return invalidPlanExecutionV20("AGENT_PLAN_EXECUTION_V20_INVALID");
+  const required = [
+    "schemaVersion",
+    "planExecutionId",
+    "runId",
+    "planId",
+    "planRevision",
+    "handoffContextMode",
+    "handoffWritePolicy",
+    "executionWritePolicyAcknowledged",
+    "providerSemanticVersionSetChecksum",
+    "handoff",
+    "revision",
+    "steps"
+  ] as const;
+  if (
+    Object.keys(value).some((key) => !required.includes(key as (typeof required)[number])) ||
+    required.some((key) => !(key in value))
+  ) {
+    return invalidPlanExecutionV20("AGENT_PLAN_EXECUTION_V20_FIELDS_INVALID");
+  }
+  if (
+    value["schemaVersion"] !== PLAN_EXECUTION_SCHEMA_VERSION_V20 ||
+    !isNonEmptyString(value["planExecutionId"]) ||
+    !isNonEmptyString(value["runId"]) ||
+    !isNonEmptyString(value["planId"]) ||
+    !isSafePositiveInteger(value["planRevision"]) ||
+    (value["handoffContextMode"] !== "writing" && value["handoffContextMode"] !== "general_file") ||
+    !isWritePolicy(value["handoffWritePolicy"]) ||
+    typeof value["executionWritePolicyAcknowledged"] !== "boolean" ||
+    !isSha256(value["providerSemanticVersionSetChecksum"]) ||
+    !isSafePositiveInteger(value["revision"]) ||
+    !isPlanExecutionStepArray(value["steps"])
+  ) {
+    return invalidPlanExecutionV20("AGENT_PLAN_EXECUTION_V20_INVALID");
+  }
+  const handoff = validatePlanActHandoffV20(value["handoff"]);
+  if (!handoff.ok) return invalidPlanExecutionV20(handoff.error.code);
+  if (
+    handoff.value.planId !== value["planId"] ||
+    handoff.value.planRevision !== value["planRevision"] ||
+    handoff.value.executionContextMode !== value["handoffContextMode"] ||
+    handoff.value.executionWritePolicy !== value["handoffWritePolicy"] ||
+    handoff.value.executionWritePolicyAcknowledged !== value["executionWritePolicyAcknowledged"] ||
+    handoff.value.providerSemanticVersionSetChecksum !== value["providerSemanticVersionSetChecksum"]
+  ) {
+    return invalidPlanExecutionV20("AGENT_PLAN_EXECUTION_HANDOFF_MISMATCH");
+  }
+  return ok(deepFreeze(value as unknown as PlanExecutionRecordV20));
+}
+
+/** Alias used by handoff callers that do not need to know the record schema name. */
+export function validatePlanExecutionHandoffV20(
+  value: unknown
+): Result<PlanActHandoffV20, UnifiedError> {
+  return validatePlanActHandoffV20(value);
 }
 
 export function transitionPlanExecutionStep(
@@ -290,6 +414,91 @@ function isNonEmpty(value: string): boolean {
 
 function isEventSequence(value: number): boolean {
   return Number.isInteger(value) && value >= 0;
+}
+
+function invalidPlanExecutionV20(code: string): Result<never, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code,
+      category: "ValidationError",
+      message: "The Plan Execution 2.0 record or handoff is invalid.",
+      recoverability: "user-action",
+      suggestedAction: "Reload the approved plan and create a fresh Act handoff.",
+      traceId: "plan-execution"
+    })
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isSafePositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function isWritePolicy(value: unknown): value is AgentWritePolicy {
+  return value === "write_before_confirmation" || value === "user_preapproved_run";
+}
+
+function isPlanExecutionStepArray(value: unknown): value is readonly PlanExecutionStep[] {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => {
+      if (!isRecord(item)) return false;
+      const allowed = new Set([
+        "stepId",
+        "title",
+        "status",
+        "startedAt",
+        "completedAt",
+        "verification",
+        "deviationKind",
+        "blockedReason",
+        "checkpointId",
+        "eventSequence"
+      ]);
+      if (Object.keys(item).some((key) => !allowed.has(key))) return false;
+      return (
+        isNonEmptyString(item["stepId"]) &&
+        isNonEmptyString(item["title"]) &&
+        isStepStatus(item["status"]) &&
+        (item["startedAt"] === null || isNonEmptyString(item["startedAt"])) &&
+        (item["completedAt"] === null || isNonEmptyString(item["completedAt"])) &&
+        Array.isArray(item["verification"]) &&
+        (item["verification"] as unknown[]).every((entry) => typeof entry === "string") &&
+        isDeviationKind(item["deviationKind"]) &&
+        (item["blockedReason"] === null || isNonEmptyString(item["blockedReason"])) &&
+        (item["checkpointId"] === null || isNonEmptyString(item["checkpointId"])) &&
+        (item["eventSequence"] === null ||
+          (typeof item["eventSequence"] === "number" &&
+            Number.isSafeInteger(item["eventSequence"]) &&
+            (item["eventSequence"] as number) >= 0))
+      );
+    })
+  );
+}
+
+function isStepStatus(value: unknown): value is PlanExecutionStepStatus {
+  return (
+    value === "pending" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "blocked" ||
+    value === "skipped"
+  );
+}
+
+function isDeviationKind(value: unknown): value is PlanExecutionDeviationKind {
+  return value === "none" || value === "minor" || value === "material";
 }
 
 function deepFreeze<T>(value: T): T {

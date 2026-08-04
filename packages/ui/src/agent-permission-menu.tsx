@@ -6,17 +6,21 @@ import type { AgentComposerPermissionControl } from "./workspace-shell-types.js"
 export interface AgentPermissionMenuProps {
   readonly writePolicy: AgentWritePolicy;
   readonly policyDisabled: boolean;
+  readonly title?: string;
+  readonly notice?: string;
   readonly control?: AgentComposerPermissionControl;
   readonly onWritePolicyChange: (policy: AgentWritePolicy) => void;
 }
 
 export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
   const automatic = props.writePolicy === "user_preapproved_run";
+  const title = props.title ?? "执行审批";
 
   return (
-    <section aria-label="执行审批" className="ns-agent-permission-menu">
+    <section aria-label={title} className="ns-agent-permission-menu">
       <fieldset className="ns-agent-permission-policy">
-        <legend>执行审批</legend>
+        <legend>{title}</legend>
+        {props.notice === undefined ? null : <p>{props.notice}</p>}
         <label>
           <input
             checked={!automatic}
@@ -37,7 +41,7 @@ export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
         <label>
           <input
             checked={automatic}
-            disabled={props.policyDisabled}
+            disabled
             name="agent-write-policy"
             onChange={() => props.onWritePolicyChange("user_preapproved_run")}
             type="radio"
@@ -45,7 +49,7 @@ export function AgentPermissionMenu(props: AgentPermissionMenuProps) {
           <ShieldCheck aria-hidden="true" className="ns-agent-permission-choice-icon" size={16} />
           <span>
             <strong>替我审批</strong>
-            <small>只预授权当前运行，不扩大工具或路径范围。</small>
+            <small>可信确认尚不可用。</small>
           </span>
           {automatic ? (
             <Check aria-hidden="true" className="ns-agent-permission-choice-check" size={15} />

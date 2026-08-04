@@ -313,6 +313,8 @@ export interface AgentComposerProps {
   readonly contextMode: AgentContextMode;
   readonly writePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
+  /** App-owned choice for a future Act handoff; it never authorizes the current Plan run. */
+  readonly executionWritePolicyDraft: AgentWritePolicy;
   readonly active: boolean;
   readonly disabled?: boolean;
   readonly disabledReason?: string;
@@ -334,6 +336,7 @@ export interface AgentComposerProps {
   readonly onOperationModeChange: (mode: AgentOperationMode) => void;
   readonly onContextModeChange: (mode: AgentContextMode) => void;
   readonly onWritePolicyChange: (policy: AgentWritePolicy) => void;
+  readonly onExecutionWritePolicyDraftChange: (policy: AgentWritePolicy) => void;
   readonly onSend: (request: string) => void;
   readonly onStop: () => void;
 }

@@ -628,7 +628,7 @@ describe("Agent Run renderer bridge", () => {
     expect(startCommand).not.toHaveProperty("providerCapabilitySnapshot");
   });
 
-  test("treats selecting execution auto-write as the per-run acknowledgement", async () => {
+  test("does not treat Renderer auto-write selection as a per-run acknowledgement", async () => {
     let received: Record<string, unknown> | undefined;
     const executionSnapshot = {
       ...snapshot,
@@ -657,8 +657,8 @@ describe("Agent Run renderer bridge", () => {
 
     expect(received).toMatchObject({
       operationMode: "execution",
-      writePolicy: "user_preapproved_run",
-      writePolicyAcknowledged: true
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false
     });
   });
 
@@ -788,7 +788,7 @@ describe("Agent Run renderer bridge", () => {
     expect(bridge.getProps()?.events.at(-1)?.type).toBe("run_completed");
   });
 
-  test("restores an active preapproved run as already acknowledged", async () => {
+  test("restores an active legacy preapproved run fail-closed", async () => {
     const activeAutomatic = {
       ...snapshot,
       operationMode: "execution" as const,
@@ -807,8 +807,9 @@ describe("Agent Run renderer bridge", () => {
 
     await bridge.load("project-01");
 
-    expect(bridge.getComposerProps()?.writePolicy).toBe("user_preapproved_run");
-    expect(bridge.getComposerProps()?.writePolicyAcknowledged).toBe(true);
+    expect(bridge.getComposerProps()?.writePolicy).toBe("write_before_confirmation");
+    expect(bridge.getComposerProps()?.executionWritePolicyDraft).toBe("write_before_confirmation");
+    expect(bridge.getComposerProps()?.writePolicyAcknowledged).toBe(false);
   });
 
   test.each([
@@ -856,7 +857,7 @@ describe("Agent Run renderer bridge", () => {
     }
   );
 
-  test("only passes execution policy for an acknowledged automatic plan approval", async () => {
+  test("does not pass Renderer-authored preapproval through plan approval", async () => {
     const commands: Record<string, unknown>[] = [];
     const planReadySnapshot = {
       ...snapshot,
@@ -901,10 +902,10 @@ describe("Agent Run renderer bridge", () => {
     expect(commands[0]).not.toHaveProperty("executionWritePolicyAcknowledged");
     expect(commands[1]).toMatchObject({
       decision: "approve",
-      executionContextMode: "general_file",
-      executionWritePolicy: "user_preapproved_run",
-      executionWritePolicyAcknowledged: true
+      executionContextMode: "general_file"
     });
+    expect(commands[1]).not.toHaveProperty("executionWritePolicy");
+    expect(commands[1]).not.toHaveProperty("executionWritePolicyAcknowledged");
   });
 
   test("projects the bound permission summary and persisted plan execution IDs, then decides a material deviation", async () => {
@@ -1278,7 +1279,7 @@ describe("Agent Run renderer bridge", () => {
     expect(bridge.getComposerProps()?.disabled).toBe(false);
   });
 
-  test("restores the Act preapproval choice without a second acknowledgement", () => {
+  test("keeps Renderer preapproval selection fail-closed across mode changes", () => {
     const bridge = createAgentRunBridge(createApi());
     bridge.syncContext({
       projectId: "project-01",
@@ -1291,15 +1292,15 @@ describe("Agent Run renderer bridge", () => {
     bridge.getComposerProps()?.onOperationModeChange("planning");
     expect(bridge.getComposerProps()).toMatchObject({
       operationMode: "planning",
-      writePolicy: "user_preapproved_run",
+      writePolicy: "write_before_confirmation",
       writePolicyAcknowledged: false
     });
 
     bridge.getComposerProps()?.onOperationModeChange("execution");
     expect(bridge.getComposerProps()).toMatchObject({
       operationMode: "execution",
-      writePolicy: "user_preapproved_run",
-      writePolicyAcknowledged: true
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false
     });
   });
 
@@ -2093,6 +2094,64 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     expect(composer?.contextStatus?.state).toBe("normal");
   });
 
+  test("persists a future Act policy draft without changing the planning authorization", async () => {
+    let preparedCommand: Record<string, unknown> | undefined;
+    const { api } = createDraftApi();
+    const originalPrepareStart = api.agentRuns.prepareStart;
+    api.agentRuns.prepareStart = async (command) => {
+      preparedCommand = structuredClone(command as Record<string, unknown>);
+      return originalPrepareStart(command);
+    };
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings: draftSettings
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.disabled).toBe(false));
+
+    bridge.getComposerProps()?.onExecutionWritePolicyDraftChange("user_preapproved_run");
+    expect(bridge.getComposerProps()).toMatchObject({
+      operationMode: "planning",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "user_preapproved_run"
+    });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.disabled).toBe(false));
+
+    const persisted = await api.agentRuns.readRunDraft?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      initialize: {
+        modelProfileId: "profile-01",
+        operationMode: "planning",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        writePolicyAcknowledged: false,
+        contextRefs: []
+      }
+    } as never);
+    expect(persisted).toMatchObject({
+      ok: true,
+      value: {
+        runDraft: {
+          schemaVersion: "2.0",
+          writePolicy: "write_before_confirmation",
+          writePolicyAcknowledged: false,
+          executionWritePolicyDraft: "user_preapproved_run"
+        }
+      }
+    });
+
+    await bridge.send("只制定计划");
+    expect(preparedCommand).toMatchObject({
+      operationMode: "planning",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "user_preapproved_run"
+    });
+  });
+
   test("replaces a stale unsupported reasoning effort before preparing a run", async () => {
     let preparedCommand: Record<string, unknown> | undefined;
     const { api } = createDraftApi();
@@ -2860,7 +2919,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     await vi.waitFor(() => expect(bridge.getComposerProps()?.reasoning?.current).toBe("high"));
   });
 
-  test("refreshes an opened server permission summary after the draft policy changes", async () => {
+  test("refreshes an opened server permission summary after Renderer preapproval is rejected", async () => {
     const { api, permissionCalls } = createDraftApi();
     const bridge = createAgentRunBridge(api);
     bridge.syncContext({
@@ -2893,7 +2952,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       Number(permissionCalls[0]?.["runDraftRevision"])
     );
     expect(bridge.getComposerProps()?.permission?.summary?.writePolicy).toBe(
-      "user_preapproved_run"
+      "write_before_confirmation"
     );
     expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false);
 
@@ -2932,7 +2991,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     await vi.waitFor(() => expect(permissionCalls).toHaveLength(1));
     bridge.getComposerProps()?.onWritePolicyChange("user_preapproved_run");
     await vi.waitFor(() =>
-      expect(bridge.getComposerProps()?.writePolicy).toBe("user_preapproved_run")
+      expect(bridge.getComposerProps()?.writePolicy).toBe("write_before_confirmation")
     );
     await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
     await vi.waitFor(() => expect(permissionCalls).toHaveLength(2));
@@ -2942,7 +3001,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     await vi.waitFor(() =>
       expect(bridge.getComposerProps()?.permission).toMatchObject({
         loading: false,
-        summary: { writePolicy: "user_preapproved_run" }
+        summary: { writePolicy: "write_before_confirmation" }
       })
     );
 
@@ -2951,7 +3010,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     await vi.waitFor(() => expect(permissionCalls).toHaveLength(2));
     expect(bridge.getComposerProps()?.permission).toMatchObject({
       loading: false,
-      summary: { writePolicy: "user_preapproved_run" }
+      summary: { writePolicy: "write_before_confirmation" }
     });
   });
 

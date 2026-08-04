@@ -1595,6 +1595,7 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
       "contextMode",
       "writePolicy",
       "writePolicyAcknowledged",
+      "executionWritePolicyDraft",
       "modelProfileId",
       "modelName",
       "reasoningEffort",
@@ -1613,9 +1614,11 @@ function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefi
     (value["contextMode"] !== "standalone_chat" &&
       value["contextMode"] !== "writing" &&
       value["contextMode"] !== "general_file") ||
-    (value["writePolicy"] !== "write_before_confirmation" &&
-      value["writePolicy"] !== "user_preapproved_run") ||
-    typeof value["writePolicyAcknowledged"] !== "boolean" ||
+    value["writePolicy"] !== "write_before_confirmation" ||
+    value["writePolicyAcknowledged"] !== false ||
+    (value["executionWritePolicyDraft"] !== undefined &&
+      value["executionWritePolicyDraft"] !== "write_before_confirmation" &&
+      value["executionWritePolicyDraft"] !== "user_preapproved_run") ||
     !isNonEmptyString(value["modelProfileId"]) ||
     (value["modelName"] !== undefined && !isNonEmptyString(value["modelName"])) ||
     (value["reasoningEffort"] !== undefined && !isNonEmptyString(value["reasoningEffort"])) ||
@@ -1656,6 +1659,18 @@ function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | 
   }
   const initialize = value["initialize"];
   if (
+    !hasOnlyKeys(initialize, [
+      "modelProfileId",
+      "modelName",
+      "reasoningEffort",
+      "operationMode",
+      "contextMode",
+      "writePolicy",
+      "writePolicyAcknowledged",
+      "executionWritePolicyDraft",
+      "contextRefs",
+      "activeResourceRef"
+    ]) ||
     !isNonEmptyString(initialize["modelProfileId"]) ||
     (initialize["modelName"] !== undefined && !isNonEmptyString(initialize["modelName"])) ||
     (initialize["reasoningEffort"] !== undefined &&
@@ -1666,10 +1681,12 @@ function toReadAgentRunDraftCommand(value: unknown): ReadAgentRunDraftCommand | 
     (initialize["contextMode"] !== "standalone_chat" &&
       initialize["contextMode"] !== "writing" &&
       initialize["contextMode"] !== "general_file") ||
-    (initialize["writePolicy"] !== "write_before_confirmation" &&
-      initialize["writePolicy"] !== "user_preapproved_run") ||
+    initialize["writePolicy"] !== "write_before_confirmation" ||
     (initialize["writePolicyAcknowledged"] !== undefined &&
-      typeof initialize["writePolicyAcknowledged"] !== "boolean") ||
+      initialize["writePolicyAcknowledged"] !== false) ||
+    (initialize["executionWritePolicyDraft"] !== undefined &&
+      initialize["executionWritePolicyDraft"] !== "write_before_confirmation" &&
+      initialize["executionWritePolicyDraft"] !== "user_preapproved_run") ||
     (initialize["contextRefs"] !== undefined && !Array.isArray(initialize["contextRefs"])) ||
     (initialize["activeResourceRef"] !== undefined &&
       initialize["activeResourceRef"] !== null &&
@@ -1818,10 +1835,15 @@ function isAgentRunDraftMutation(value: unknown): boolean {
       );
     case "set_write_policy":
       return (
-        (value["writePolicy"] === "write_before_confirmation" ||
-          value["writePolicy"] === "user_preapproved_run") &&
-        typeof value["acknowledged"] === "boolean" &&
+        value["writePolicy"] === "write_before_confirmation" &&
+        value["acknowledged"] === false &&
         hasOnlyKeys(value, ["kind", "writePolicy", "acknowledged"])
+      );
+    case "set_execution_write_policy_draft":
+      return (
+        (value["policy"] === "write_before_confirmation" ||
+          value["policy"] === "user_preapproved_run") &&
+        hasOnlyKeys(value, ["kind", "policy"])
       );
     case "set_model":
       return (
@@ -2102,7 +2124,50 @@ function toRetryRunTargetCommand(value: unknown): RetryRunTargetCommand | undefi
 }
 
 function toDecideAgentPlanCommand(value: unknown): DecideAgentPlanCommand | undefined {
-  return isRecord(value) ? (value as unknown as DecideAgentPlanCommand) : undefined;
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  const projectId =
+    identity?.projectId ??
+    (identity?.scope?.kind === "workspace" ? identity.scope.workspaceId : undefined);
+  if (
+    identity === undefined ||
+    projectId === undefined ||
+    !hasOnlyKeys(value, [
+      "scope",
+      "projectId",
+      "runId",
+      "commandId",
+      "expectedRunRevision",
+      "planId",
+      "planRevision",
+      "decision",
+      "executionContextMode"
+    ]) ||
+    !isSafeId(value["runId"]) ||
+    !isSafeId(value["commandId"]) ||
+    !isNonNegativeInteger(value["expectedRunRevision"]) ||
+    !isSafeId(value["planId"]) ||
+    !isPositiveInteger(value["planRevision"]) ||
+    (value["decision"] !== "approve" && value["decision"] !== "reject") ||
+    (value["executionContextMode"] !== undefined &&
+      value["executionContextMode"] !== "writing" &&
+      value["executionContextMode"] !== "general_file")
+  ) {
+    return undefined;
+  }
+  return {
+    ...(identity.scope === undefined ? {} : { scope: identity.scope }),
+    projectId,
+    runId: value["runId"],
+    commandId: value["commandId"],
+    expectedRunRevision: value["expectedRunRevision"],
+    planId: value["planId"],
+    planRevision: value["planRevision"],
+    decision: value["decision"],
+    ...(value["executionContextMode"] === undefined
+      ? {}
+      : { executionContextMode: value["executionContextMode"] })
+  } as DecideAgentPlanCommand;
 }
 
 function toReadAgentPermissionSummaryQuery(

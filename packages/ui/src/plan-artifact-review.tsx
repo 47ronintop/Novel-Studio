@@ -100,11 +100,12 @@ export function PlanArtifactReview({ contextMode, plan, onDecision }: PlanArtifa
               <label>
                 <input
                   checked={automaticWriteSelected}
+                  disabled
                   name={`agent-plan-write-policy-${plan.planId}-${plan.revision}`}
                   onChange={() => selectWritePolicy("user_preapproved_run")}
                   type="radio"
                 />
-                <span>本次运行自动修改</span>
+                <span>本次运行自动修改（可信确认尚不可用）</span>
               </label>
             </fieldset>
           </section>
@@ -125,8 +126,7 @@ export function PlanArtifactReview({ contextMode, plan, onDecision }: PlanArtifa
               onClick={() =>
                 onDecision("approve", {
                   executionContextMode,
-                  executionWritePolicy,
-                  ...(automaticWriteSelected ? { executionWritePolicyAcknowledged: true } : {})
+                  executionWritePolicy
                 })
               }
               type="button"

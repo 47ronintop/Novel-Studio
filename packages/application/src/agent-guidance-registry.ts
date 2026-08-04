@@ -187,12 +187,13 @@ const V3_PROFILE_GUIDANCE: Record<AgentContextProfileId, string> = {
 const V3_TOOL_AND_EVIDENCE_GUIDANCE = [
   "工具与证据：只使用本轮目录中的工具。读取、写入提案、审批、应用和验证是不同状态。",
   "修改前读取适用约定、目标当前内容和必要关联；写工具只生成 Change Set 或结构化提案，审批并应用成功后才算写入。",
-  "索引和摘要只用于发现，不能单独证明原文事实；冲突、dirty/stale 或缺少证据时明确区分并停止静默扩张。"
+  "索引/摘要仅用于发现，不能证明原文；冲突、dirty/stale 或缺证时停止。request_user_input 仅限改变结果的选择、事实冲突、新授权或用户可解除的阻塞；可读取/安全默认时勿问。",
+  "finish 只引用工具返回的 evidenceRefs，勿猜。"
 ].join("\n");
 
 const V3_COMPLETION_GUIDANCE = [
-  "完成报告：只报告实际结果、已应用变更、实际验证、限制和证据。",
-  "未运行、失败或无法验证必须明确说明；待审批、待分享、上下文过期或需要恢复时不能声称完成。"
+  "完成报告仅含实际结果、变更、验证、限制和证据。已验证项引用 tool_completed evidence ref，未运行写 not-run:；blocked 须含原因和 nextStep。",
+  "待审批、待分享、上下文过期或恢复中不能 completed。"
 ].join("\n");
 
 const V3_TEMPLATE_AST_VERSION = "system-guidance-v3-ast@1" as const;

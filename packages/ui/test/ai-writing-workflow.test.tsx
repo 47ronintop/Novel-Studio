@@ -395,6 +395,7 @@ function agentWorkspace(
         contextMode: "writing",
         writePolicy: "write_before_confirmation",
         writePolicyAcknowledged: false,
+        executionWritePolicyDraft: "write_before_confirmation",
         active: false,
         availableContextModes: ["writing", "general_file"],
         model: {
@@ -418,6 +419,7 @@ function agentWorkspace(
         onOperationModeChange: () => undefined,
         onContextModeChange: () => undefined,
         onWritePolicyChange: () => undefined,
+        onExecutionWritePolicyDraftChange: () => undefined,
         onSend: () => undefined,
         onStop: () => undefined
       },

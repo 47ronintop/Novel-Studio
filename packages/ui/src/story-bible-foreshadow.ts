@@ -3,7 +3,11 @@ import type {
   ForeshadowSourceRef,
   ForeshadowTrackingStatus
 } from "@novel-studio/shared";
-import { normalizeForeshadowEvidence } from "@novel-studio/shared";
+import {
+  FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING,
+  collectForeshadowContractWarnings,
+  normalizeForeshadowEvidence
+} from "@novel-studio/shared";
 
 export const STORY_BIBLE_FORESHADOW_STATUS_OPTIONS: ReadonlyArray<{
   readonly value: ForeshadowTrackingStatus;
@@ -30,17 +34,30 @@ export interface StoryBibleForeshadowRecord {
 }
 
 export type StoryBibleForeshadowValidationIssue =
-  | { readonly code: "paid-off-missing-actual-chapter" }
-  | { readonly code: "evidence-missing-chapter"; readonly sourceIndex: number }
-  | { readonly code: "evidence-missing-excerpt"; readonly sourceIndex: number }
+  | {
+      readonly code: typeof FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING;
+      readonly severity: "warning";
+    }
+  | {
+      readonly code: "evidence-missing-chapter";
+      readonly severity: "error";
+      readonly sourceIndex: number;
+    }
+  | {
+      readonly code: "evidence-missing-excerpt";
+      readonly severity: "error";
+      readonly sourceIndex: number;
+    }
   | {
       readonly code: "duplicate-evidence-in-draft";
+      readonly severity: "error";
       readonly sourceIndex: number;
       readonly duplicateSourceIndex: number;
       readonly chapterId: string;
     }
   | {
       readonly code: "duplicate-evidence-in-asset";
+      readonly severity: "error";
       readonly sourceIndex: number;
       readonly duplicateAssetId: string;
       readonly duplicateAssetTitle: string;
@@ -83,20 +100,20 @@ export function validateStoryBibleForeshadow(
   existing: readonly StoryBibleForeshadowRecord[]
 ): readonly StoryBibleForeshadowValidationIssue[] {
   const issues: StoryBibleForeshadowValidationIssue[] = [];
-  if (
-    current.details.trackingStatus === "paid-off" &&
-    (current.details.actualPayoffChapterId?.trim().length ?? 0) === 0
-  ) {
-    issues.push({ code: "paid-off-missing-actual-chapter" });
+  for (const warning of collectForeshadowContractWarnings(current.details)) {
+    issues.push({
+      code: warning.code,
+      severity: warning.severity
+    });
   }
 
   const sourceRefs = current.details.sourceRefs ?? [];
   for (const [sourceIndex, sourceRef] of sourceRefs.entries()) {
     if (sourceRef.chapterId.trim().length === 0) {
-      issues.push({ code: "evidence-missing-chapter", sourceIndex });
+      issues.push({ code: "evidence-missing-chapter", severity: "error", sourceIndex });
     }
     if (normalizeForeshadowEvidence(sourceRef.excerpt).length === 0) {
-      issues.push({ code: "evidence-missing-excerpt", sourceIndex });
+      issues.push({ code: "evidence-missing-excerpt", severity: "error", sourceIndex });
     }
   }
 
@@ -114,6 +131,7 @@ export function validateStoryBibleForeshadow(
     if (duplicateSourceIndex !== undefined) {
       issues.push({
         code: "duplicate-evidence-in-draft",
+        severity: "error",
         sourceIndex,
         duplicateSourceIndex,
         chapterId: sourceRef.chapterId.trim()
@@ -126,6 +144,7 @@ export function validateStoryBibleForeshadow(
     if (duplicateAsset !== undefined) {
       issues.push({
         code: "duplicate-evidence-in-asset",
+        severity: "error",
         sourceIndex,
         duplicateAssetId: duplicateAsset.id,
         duplicateAssetTitle: duplicateAsset.title,
@@ -141,8 +160,8 @@ export function storyBibleForeshadowValidationMessage(
   issue: StoryBibleForeshadowValidationIssue
 ): string {
   switch (issue.code) {
-    case "paid-off-missing-actual-chapter":
-      return "状态设为“已回收”时，必须选择实际回收章节。";
+    case FORESHADOW_PAID_OFF_ACTUAL_CHAPTER_MISSING:
+      return "已回收伏笔尚未选择实际回收章节；这不会阻止保存。";
     case "evidence-missing-chapter":
       return `第 ${issue.sourceIndex + 1} 条原文证据缺少章节。`;
     case "evidence-missing-excerpt":
