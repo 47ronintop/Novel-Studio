@@ -3,15 +3,19 @@ import { createHash } from "node:crypto";
 import {
   agentContextScopeKey,
   createAgentContextSnapshot,
+  createAgentContextSnapshotV2,
   createPackedAgentContextManifest,
   normalizeAgentContextSnapshot,
   normalizeAgentRunEvent,
   normalizeAgentRunSnapshot,
+  parseAgentContextSnapshotV2,
+  parseAgentRunSnapshotV20,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord,
   validateAgentRunToolCatalogSnapshot,
   type AgentContextLayer,
   type AgentContextSnapshot,
+  type AgentContextSnapshotV20,
   type AgentContextSource,
   type AgentRunSnapshot,
   type AgentRunToolCatalogSnapshot,
@@ -23,8 +27,11 @@ import {
 } from "@novel-studio/agent-engine";
 import {
   calculateResolvedContextBudget,
+  createAgentPromptMaterializationArtifact,
   deriveAgentPromptCacheIdentityChecksum,
+  deriveAgentPromptCacheIdentityChecksumV2,
   resolveBudgetInputs,
+  materializeCanonicalAgentRound,
   parseAgentPromptMaterializationArtifact,
   parseCompactionSummaryArtifact,
   materializeAgentRunHistory,
@@ -183,10 +190,11 @@ function compactionCommandMatchesRun(
 interface RunContext {
   readonly run: JsonObject;
   readonly normalizedRun: AgentRunSnapshot;
-  readonly snapshot: AgentContextSnapshot;
+  readonly snapshot: AgentContextSnapshot | AgentContextSnapshotV20;
+  readonly protocol: "legacy" | "v2";
 }
 
-/** Read the run.json and its live Context Snapshot, normalized to v1.1. */
+/** Read a legacy snapshot without upgrading it, or strictly parse a protocol-2 snapshot. */
 async function readRunContext(
   repository: AgentRunFileRepository,
   runId: string
@@ -204,21 +212,55 @@ async function readRunContext(
     return err(composerError("AGENT_CONTEXT_COMPACTION_NO_SNAPSHOT"));
   }
   try {
-    const normalizedRun = normalizeAgentRunSnapshot(run.value);
+    const runIsV2 = run.value["schemaVersion"] === "2.0";
+    const snapshotIsV2 = stored.value["schemaVersion"] === "2.0";
+    if (runIsV2 !== snapshotIsV2) {
+      throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
+    }
+    const normalizedRun = runIsV2
+      ? parseAgentRunSnapshotV20(run.value)
+      : normalizeAgentRunSnapshot(run.value);
+    const snapshot = snapshotIsV2
+      ? parseAgentContextSnapshotV2(stored.value)
+      : normalizeAgentContextSnapshot(stored.value, {
+          scope: normalizedRun.scope,
+          contextProfileId: normalizedRun.contextProfileId,
+          profileVersion: normalizedRun.profileVersion,
+          guidanceTemplateChecksum: normalizedRun.guidanceTemplateChecksum,
+          stablePrefixChecksum: normalizedRun.cachePrefixChecksum
+        });
+    if (!runContextBindingsMatch(normalizedRun, snapshot)) {
+      throw new Error("AGENT_CONTEXT_COMPACTION_SNAPSHOT_MISMATCH");
+    }
     return ok({
       run: run.value,
       normalizedRun,
-      snapshot: normalizeAgentContextSnapshot(stored.value, {
-        scope: normalizedRun.scope,
-        contextProfileId: normalizedRun.contextProfileId,
-        profileVersion: normalizedRun.profileVersion,
-        guidanceTemplateChecksum: normalizedRun.guidanceTemplateChecksum,
-        stablePrefixChecksum: normalizedRun.cachePrefixChecksum
-      })
+      snapshot,
+      protocol: snapshotIsV2 ? "v2" : "legacy"
     });
   } catch {
     return err(composerError("AGENT_CONTEXT_COMPACTION_SNAPSHOT_INVALID"));
   }
+}
+
+function runContextBindingsMatch(
+  run: AgentRunSnapshot,
+  snapshot: AgentContextSnapshot | AgentContextSnapshotV20
+): boolean {
+  if (
+    snapshot.runId !== run.runId ||
+    agentContextScopeKey(snapshot.scope) !== agentContextScopeKey(run.scope) ||
+    snapshot.contextProfileId !== run.contextProfileId ||
+    snapshot.materialization.profileVersion !== run.profileVersion ||
+    snapshot.materialization.guidanceTemplateChecksum !== run.guidanceTemplateChecksum ||
+    snapshot.materialization.stablePrefixChecksum !== run.cachePrefixChecksum
+  ) {
+    return false;
+  }
+  return snapshot.schemaVersion === "2.0"
+    ? run.schemaVersion === "2.0" &&
+        snapshot.providerSemanticVersionSetChecksum === run.providerSemanticVersionSetChecksum
+    : run.schemaVersion !== "2.0";
 }
 
 async function readPlanExecution(
@@ -329,6 +371,33 @@ async function loadFrozenBudgetMaterial(
     catalog.value.catalogRevision !== prompt.value.toolCatalogRevision
   ) {
     return err(composerError("AGENT_CONTEXT_COMPACTION_TOOL_CATALOG_INVALID"));
+  }
+  if (context.protocol === "v2") {
+    const run = context.normalizedRun;
+    const snapshot = context.snapshot;
+    if (
+      run.schemaVersion !== "2.0" ||
+      snapshot.schemaVersion !== "2.0" ||
+      prompt.value.schemaVersion !== "2.0" ||
+      catalog.value.schemaVersion !== "2.0" ||
+      run.catalog.snapshotId !== catalog.value.toolCatalogSnapshotId ||
+      run.catalog.revision !== catalog.value.catalogRevision ||
+      run.catalog.checksum !== catalog.value.catalogRevision ||
+      run.authority.registryKey !== prompt.value.guidanceRegistryKey ||
+      run.authority.guidanceChecksum !== checksumSha256(prompt.value.systemPrompt) ||
+      prompt.value.guidanceProof.providerSemanticVersionSetChecksum !==
+        snapshot.providerSemanticVersionSetChecksum ||
+      stableSerialize(prompt.value.providerSemanticVersionSet) !==
+        stableSerialize(snapshot.providerSemanticVersionSet) ||
+      snapshot.providerSemanticVersionSet.approvalRuleSetVersion !==
+        catalog.value.approvalRuleSetVersion ||
+      snapshot.providerSemanticVersionSet.approvalRuleSetChecksum !==
+        catalog.value.approvalRuleSetChecksum
+    ) {
+      return err(composerError("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH"));
+    }
+  } else if (prompt.value.schemaVersion === "2.0" || catalog.value.schemaVersion === "2.0") {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH"));
   }
   const storedEvents = await repository.readEvents(context.normalizedRun.runId);
   if (!storedEvents.ok) return err(storedEvents.error);
@@ -511,8 +580,11 @@ async function buildArtifacts(
       scope: snapshot.scope,
       contextProfileId: snapshot.contextProfileId,
       materialization: {
-        ...snapshot.materialization,
-        stablePrefixChecksum: nextPrompt.stablePrefixChecksum
+        schemaVersion: "1.0",
+        profileVersion: snapshot.materialization.profileVersion,
+        guidanceTemplateChecksum: snapshot.materialization.guidanceTemplateChecksum,
+        stablePrefixChecksum: nextPrompt.stablePrefixChecksum,
+        messageOrderVersion: "1.0"
       },
       createdAt,
       sources: [summarySource],
@@ -551,13 +623,17 @@ async function buildArtifacts(
     return err(composerError("AGENT_CONTEXT_COMPACTION_TARGET_UNREACHED"));
   }
   const retainedExcluded =
-    snapshot.packedContextManifest?.schemaVersion === "1.2"
+    snapshot.packedContextManifest?.schemaVersion === "1.2" ||
+    snapshot.packedContextManifest?.schemaVersion === "2.0"
       ? snapshot.packedContextManifest.sources.filter((source) => source.state === "excluded")
       : [];
   const canCreatePackedContext =
     snapshot.packedContextManifest?.schemaVersion === "1.2" ||
+    snapshot.packedContextManifest?.schemaVersion === "2.0" ||
     snapshot.excludedSources.length === 0;
-  let packedContextManifest: AgentContextSnapshot["packedContextManifest"] = null;
+  let packedContextManifest:
+    | AgentContextSnapshot["packedContextManifest"]
+    | AgentContextSnapshotV20["packedContextManifest"] = null;
   if (canCreatePackedContext) {
     try {
       const packedContext = packAgentContext({
@@ -574,31 +650,72 @@ async function buildArtifacts(
         precision: budget.value.precision,
         createdAt
       });
-      nextPrompt = rematerializeAgentPromptArtifact(nextPrompt, {
-        contextSnapshotId: resultSnapshotId,
-        contextSources: nextPrompt.contextSources,
-        packedContext
-      });
-      packedContextManifest = createPackedAgentContextManifest(packedContext);
+      if (context.protocol === "v2") {
+        if (snapshot.schemaVersion !== "2.0" || nextPrompt.schemaVersion !== "2.0") {
+          throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
+        }
+        const canonicalRound = materializeCanonicalAgentRound({
+          roundId: snapshot.roundId,
+          runId: snapshot.runId,
+          roundNumber: material.value.historyMessages.filter(
+            (message) => message.role === "assistant"
+          ).length,
+          profile: nextPrompt.profile,
+          systemPrompt: nextPrompt.systemPrompt,
+          toolCatalogRevision: nextPrompt.toolCatalogRevision,
+          projectedToolDescriptors: structuredClone(
+            material.value.toolCatalog.descriptors
+          ) as unknown as readonly JsonObject[],
+          sharing: snapshot.sharing,
+          providerSemanticVersionSet: snapshot.providerSemanticVersionSet,
+          userRequest: nextPrompt.userRequest,
+          contextSources: nextPrompt.contextSources,
+          conversationSummaryMessages: nextPrompt.conversationSummaryMessages,
+          historyMessages: summaryArtifact === undefined ? material.value.historyMessages : [],
+          packedContext
+        });
+        if (canonicalRound.packedContextManifest === null) {
+          throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
+        }
+        packedContextManifest = canonicalRound.packedContextManifest;
+        nextPrompt = bindV2PackedPromptManifest(
+          nextPrompt,
+          resultSnapshotId,
+          canonicalRound.packedContextManifest.manifestChecksum
+        );
+        if (
+          canonicalRound.prompt.stablePrefixChecksum !== nextPrompt.stablePrefixChecksum ||
+          stableSerialize(canonicalRound.prompt.messages.slice(0, nextPrompt.messages.length)) !==
+            stableSerialize(nextPrompt.messages)
+        ) {
+          throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
+        }
+      } else {
+        nextPrompt = rematerializeAgentPromptArtifact(nextPrompt, {
+          contextSnapshotId: resultSnapshotId,
+          contextSources: nextPrompt.contextSources,
+          packedContext
+        });
+        packedContextManifest = createPackedAgentContextManifest(packedContext);
+      }
     } catch {
       return err(composerError("AGENT_CONTEXT_COMPACTION_SNAPSHOT_INVALID"));
     }
   }
-  const resultSnapshot: JsonObject = {
-    ...(snapshot as unknown as JsonObject),
-    contextSnapshotId: resultSnapshotId,
-    compactionRevision: nextRevision,
+  const resultExcludedSources = [
+    ...new Set([...(snapshot.excludedSources ?? []), ...request.evictedSourceIds])
+  ];
+  const resultSnapshot = buildResultContextSnapshot({
+    context,
+    nextPrompt,
+    resultSnapshotId,
+    nextRevision,
     createdAt,
-    materialization: {
-      ...snapshot.materialization,
-      stablePrefixChecksum: nextPrompt.stablePrefixChecksum
-    },
-    sources: resultSources as unknown as JsonObject["sources"],
-    excludedSources: [
-      ...new Set([...(snapshot.excludedSources ?? []), ...request.evictedSourceIds])
-    ],
-    packedContextManifest: packedContextManifest as unknown as JsonObject
-  };
+    resultSources,
+    resultExcludedSources,
+    packedContextManifest
+  });
+  if (!resultSnapshot.ok) return err(resultSnapshot.error);
   const beforeTokens = beforeBudget.value.usedTokens;
   const afterTokens = budget.value.usedTokens;
 
@@ -612,6 +729,11 @@ async function buildArtifacts(
     usageTime
   });
   if (!usageRecord.ok) return err(usageRecord.error);
+  const promptCacheIdentity = deriveCompactedPromptCacheIdentity(
+    context,
+    nextPrompt.stablePrefixChecksum
+  );
+  if (!promptCacheIdentity.ok) return err(promptCacheIdentity.error);
 
   const runSnapshot: JsonObject = {
     ...run,
@@ -619,19 +741,13 @@ async function buildArtifacts(
     contextSnapshotId: resultSnapshotId,
     contextBudgetSnapshotId: budgetSnapshotId,
     cachePrefixChecksum: nextPrompt.stablePrefixChecksum,
-    promptCacheIdentityChecksum:
-      isChecksum(run.promptCacheIdentityBaseChecksum) && isChecksum(nextPrompt.stablePrefixChecksum)
-        ? deriveAgentPromptCacheIdentityChecksum(
-            run.promptCacheIdentityBaseChecksum,
-            nextPrompt.stablePrefixChecksum
-          )
-        : "legacy",
+    promptCacheIdentityChecksum: promptCacheIdentity.value,
     promptCacheStablePrefixMessageCount: 1 + nextPrompt.stablePrefixMessages.length,
     updatedAt: createdAt
   };
 
   return ok({
-    resultSnapshot,
+    resultSnapshot: resultSnapshot.value,
     promptMaterialization: nextPrompt as unknown as JsonObject,
     budgetSnapshot: budget.value as unknown as JsonObject,
     usageRecord: usageRecord.value as unknown as JsonObject,
@@ -639,12 +755,162 @@ async function buildArtifacts(
   });
 }
 
+function bindV2PackedPromptManifest(
+  prior: AgentPromptMaterializationArtifact,
+  contextSnapshotId: string,
+  packedContextManifestChecksum: string
+): AgentPromptMaterializationArtifact {
+  if (prior.schemaVersion !== "2.0") {
+    throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
+  }
+  return createAgentPromptMaterializationArtifact({
+    runId: prior.runId,
+    contextSnapshotId,
+    profile: prior.profile,
+    systemPrompt: prior.systemPrompt,
+    toolCatalogRevision: prior.toolCatalogRevision,
+    userRequest: prior.userRequest,
+    contextSources: prior.contextSources,
+    conversationSummaryMessages: prior.conversationSummaryMessages,
+    systemGuidanceRefId: prior.systemGuidanceRefId,
+    packedContextManifestChecksum,
+    guidanceMaterialization: {
+      normalizedInput: prior.normalizedGuidanceInput,
+      materializedGuidance: prior.systemPrompt,
+      proof: prior.guidanceProof
+    }
+  });
+}
+
+function buildResultContextSnapshot(input: {
+  readonly context: RunContext;
+  readonly nextPrompt: AgentPromptMaterializationArtifact;
+  readonly resultSnapshotId: string;
+  readonly nextRevision: number;
+  readonly createdAt: string;
+  readonly resultSources: readonly AgentContextSource[];
+  readonly resultExcludedSources: readonly string[];
+  readonly packedContextManifest:
+    | AgentContextSnapshot["packedContextManifest"]
+    | AgentContextSnapshotV20["packedContextManifest"];
+}): Result<JsonObject, UnifiedError> {
+  const { context, nextPrompt } = input;
+  if (context.protocol === "legacy") {
+    if (input.packedContextManifest?.schemaVersion === "2.0") {
+      return err(composerError("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH"));
+    }
+    return ok({
+      ...(context.snapshot as unknown as JsonObject),
+      contextSnapshotId: input.resultSnapshotId,
+      compactionRevision: input.nextRevision,
+      createdAt: input.createdAt,
+      materialization: {
+        ...context.snapshot.materialization,
+        stablePrefixChecksum: nextPrompt.stablePrefixChecksum
+      },
+      sources: input.resultSources as unknown as JsonObject["sources"],
+      excludedSources: input.resultExcludedSources as unknown as JsonObject["excludedSources"],
+      packedContextManifest: input.packedContextManifest as unknown as JsonObject
+    });
+  }
+  if (
+    context.snapshot.schemaVersion !== "2.0" ||
+    nextPrompt.schemaVersion !== "2.0" ||
+    input.packedContextManifest?.schemaVersion !== "2.0"
+  ) {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH"));
+  }
+  try {
+    const sourceByRef = new Map(input.resultSources.map((source) => [source.refId, source]));
+    const systemSources = input.resultSources.filter(
+      (source) => source.sourceKind === "system_guidance"
+    );
+    if (
+      systemSources.length !== 1 ||
+      systemSources[0]?.refId !== nextPrompt.systemGuidanceRefId ||
+      systemSources[0]?.checksum !== checksumSha256(nextPrompt.systemPrompt)
+    ) {
+      throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
+    }
+    const orderedSources = [
+      ...systemSources,
+      ...input.packedContextManifest.sources.map((source) => {
+        const matched = sourceByRef.get(source.refId);
+        if (matched === undefined || matched.sourceKind === "system_guidance") {
+          throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
+        }
+        return matched;
+      })
+    ].map((source, materializationOrder) => ({ ...source, materializationOrder }));
+    if (orderedSources.length !== input.resultSources.length) {
+      throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
+    }
+    // The strict writer validates the immutable protocol bindings. Compaction then re-signs the
+    // same writer output after carrying forward source audit fields (eviction pointers, precision,
+    // and excluded bodies are intentionally not reconstructed from content).
+    const shell = createAgentContextSnapshotV2({
+      contextSnapshotId: input.resultSnapshotId,
+      runId: context.snapshot.runId,
+      scope: context.snapshot.scope,
+      contextProfileId: context.snapshot.contextProfileId,
+      materialization: {
+        ...context.snapshot.materialization,
+        stablePrefixChecksum: nextPrompt.stablePrefixChecksum
+      },
+      createdAt: input.createdAt,
+      compactionRevision: input.nextRevision,
+      sources: [],
+      excludedSources: [],
+      roundId: context.snapshot.roundId,
+      sharing: context.snapshot.sharing,
+      providerSemanticVersionSet: context.snapshot.providerSemanticVersionSet,
+      packedContextManifest: null
+    });
+    const { snapshotChecksum: _shellChecksum, ...shellUnsigned } = shell;
+    void _shellChecksum;
+    const unsigned = {
+      ...shellUnsigned,
+      sources: orderedSources,
+      excludedSources: [...input.packedContextManifest.excludedSources],
+      packedContextManifest: input.packedContextManifest
+    };
+    const parsed = parseAgentContextSnapshotV2({
+      ...unsigned,
+      snapshotChecksum: checksumSha256(stableSerialize(unsigned))
+    });
+    return ok(parsed as unknown as JsonObject);
+  } catch {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_SNAPSHOT_INVALID"));
+  }
+}
+
+function deriveCompactedPromptCacheIdentity(
+  context: RunContext,
+  stablePrefixChecksum: string
+): Result<string, UnifiedError> {
+  const identityBaseChecksum = context.run["promptCacheIdentityBaseChecksum"];
+  if (!isChecksum(identityBaseChecksum) || !isChecksum(stablePrefixChecksum)) {
+    return context.protocol === "legacy"
+      ? ok("legacy")
+      : err(composerError("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH"));
+  }
+  try {
+    return ok(
+      context.protocol === "v2"
+        ? deriveAgentPromptCacheIdentityChecksumV2(identityBaseChecksum, stablePrefixChecksum)
+        : deriveAgentPromptCacheIdentityChecksum(identityBaseChecksum, stablePrefixChecksum)
+    );
+  } catch {
+    return err(composerError("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH"));
+  }
+}
+
 function isChecksum(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 function bindCompactionSummaryArtifact(
-  snapshot: AgentContextSnapshot,
+  snapshot: AgentContextSnapshot | AgentContextSnapshotV20,
   request: CompactionArtifactRequest
 ): Result<AgentCompactionSummaryArtifact | undefined, UnifiedError> {
   if (request.summaryArtifact === undefined) {
@@ -706,7 +972,7 @@ function workspaceOutlineEvictionPointer(source: AgentContextSource):
 
 function buildCompactedPromptMaterialization(
   prior: AgentPromptMaterializationArtifact,
-  snapshot: AgentContextSnapshot,
+  snapshot: AgentContextSnapshot | AgentContextSnapshotV20,
   resultSnapshotId: string,
   evicted: ReadonlySet<string>,
   summaryArtifact: AgentCompactionSummaryArtifact | undefined
@@ -749,7 +1015,7 @@ function buildCompactedPromptMaterialization(
 
 async function readPromptMaterialization(
   repository: AgentRunFileRepository,
-  snapshot: AgentContextSnapshot
+  snapshot: AgentContextSnapshot | AgentContextSnapshotV20
 ): Promise<Result<AgentPromptMaterializationArtifact, UnifiedError>> {
   const artifactIds = [
     ...new Set(
@@ -767,7 +1033,30 @@ async function readPromptMaterialization(
   }
   try {
     const prior = parseAgentPromptMaterializationArtifact(stored.value);
-    if (prior.runId !== snapshot.runId || prior.contextSnapshotId !== snapshot.contextSnapshotId) {
+    const guidanceSources = snapshot.sources.filter(
+      (source) => source.sourceKind === "system_guidance"
+    );
+    if (
+      prior.runId !== snapshot.runId ||
+      prior.contextSnapshotId !== snapshot.contextSnapshotId ||
+      prior.profile.profileId !== snapshot.contextProfileId ||
+      prior.profileVersion !== snapshot.materialization.profileVersion ||
+      prior.guidanceTemplateChecksum !== snapshot.materialization.guidanceTemplateChecksum ||
+      prior.stablePrefixChecksum !== snapshot.materialization.stablePrefixChecksum ||
+      guidanceSources.length !== 1 ||
+      guidanceSources[0]?.refId !== prior.systemGuidanceRefId ||
+      guidanceSources[0]?.checksum !== checksumSha256(prior.systemPrompt) ||
+      (snapshot.schemaVersion === "2.0") !== (prior.schemaVersion === "2.0") ||
+      (snapshot.schemaVersion === "2.0" &&
+        (prior.schemaVersion !== "2.0" ||
+          (snapshot.packedContextManifest !== null &&
+            prior.packedContextManifestChecksum !==
+              snapshot.packedContextManifest.manifestChecksum) ||
+          prior.guidanceProof.providerSemanticVersionSetChecksum !==
+            snapshot.providerSemanticVersionSetChecksum ||
+          stableSerialize(prior.providerSemanticVersionSet) !==
+            stableSerialize(snapshot.providerSemanticVersionSet)))
+    ) {
       return err(composerError("AGENT_PROMPT_MATERIALIZATION_INVALID"));
     }
     return ok(prior);

@@ -11,9 +11,100 @@ import type {
 import {
   isAgentContextScope,
   normalizeAgentContextScope,
+  type AgentContextProfileId,
   type AgentContextScope
 } from "./agent-context-scope.js";
 import type { AgentContextPrecision } from "./context-snapshot.js";
+
+export const AGENT_USAGE_RECORD_V20_SCHEMA_VERSION = "2.0" as const;
+
+export type AgentUsageRunOutcomeV20 =
+  | "completed"
+  | "blocked"
+  | "cancelled"
+  | "failed"
+  | "limit_reached"
+  | "awaiting_approval"
+  | "awaiting_input"
+  | "stale"
+  | "capability_changed";
+
+export type AgentUsagePendingOutcomeV20 =
+  "none" | "awaiting_approval" | "awaiting_input" | "change_set_pending" | "recovery_pending";
+
+export type AgentUsageRecoveryOutcomeV20 =
+  "not_required" | "pending" | "recovered" | "rolled_back" | "failed" | "outcome_unknown";
+
+export type AgentUsageChangeSetOutcomeV20 =
+  "none" | "generated" | "approved" | "rejected" | "applied" | "rolled_back" | "undone" | "stale";
+
+export type AgentUsageSourceKindV20 =
+  | "disk_file"
+  | "editor_buffer"
+  | "story_bible_asset"
+  | "project_conventions"
+  | "workspace_outline"
+  | "compaction_summary"
+  | "system_guidance"
+  | "conversation"
+  | "tool_result"
+  | "user_request";
+
+export type AgentUsageSourceExclusionReasonV20 =
+  "none" | "user_excluded" | "budget" | "policy" | "stale" | "unsupported";
+
+export interface AgentUsageSourceMetricV20 {
+  readonly sourceKind: AgentUsageSourceKindV20;
+  readonly tokenCount: number;
+  readonly truncated: boolean;
+  readonly exclusionReason: AgentUsageSourceExclusionReasonV20;
+}
+
+export interface AgentUsageStyleObservationV20 {
+  readonly rule: string;
+  readonly version: string;
+  readonly confidence: number;
+  readonly userOutcome: "accepted" | "ignored" | "dismissed" | "no_action";
+}
+
+/**
+ * Privacy-safe local observability for a run. This is deliberately separate from the legacy
+ * provider billing record above: it contains only bounded counters, registered versions, enums,
+ * checksums and opaque local refs. It has no extension bag in which request bodies can hide.
+ */
+export interface AgentUsageRecordV20 {
+  readonly schemaVersion: typeof AGENT_USAGE_RECORD_V20_SCHEMA_VERSION;
+  readonly storageScope: "local_only";
+  readonly usageId: string;
+  readonly runId: string;
+  readonly recordedAt: string;
+  readonly semanticVersionSetChecksum: string;
+  readonly guidanceVersion: "3.0";
+  readonly contextProfileId: AgentContextProfileId;
+  readonly messageOrderVersion: "2.0";
+  readonly toolCatalogVersion: "2.0";
+  readonly runOutcome: AgentUsageRunOutcomeV20;
+  readonly pendingOutcome: AgentUsagePendingOutcomeV20;
+  readonly recoveryOutcome: AgentUsageRecoveryOutcomeV20;
+  readonly modelRoundCount: number;
+  readonly toolCallCount: number;
+  readonly toolFailureCount: number;
+  readonly approvalWaitCount: number;
+  readonly approvalWaitMs: number;
+  readonly sources: readonly AgentUsageSourceMetricV20[];
+  readonly cacheOutcome: "hit" | "miss" | "bypass" | "unknown";
+  readonly cacheVerifiedInputTokens: number | null;
+  readonly changeSetOutcome: AgentUsageChangeSetOutcomeV20;
+  readonly styleObservations: readonly AgentUsageStyleObservationV20[];
+  readonly eventRefs: readonly string[];
+}
+
+export type CreateAgentUsageRecordV20Input = Omit<
+  AgentUsageRecordV20,
+  "schemaVersion" | "storageScope"
+>;
+
+export type VersionedAgentUsageRecord = AgentUsageRecord | AgentUsageRecordV20;
 
 /**
  * A per-currency unit-price snapshot captured into a usage record. Stage 5A always writes `null`
@@ -29,9 +120,9 @@ export interface AgentUsageUnitPriceSnapshot {
 }
 
 /**
- * The single, forward-compatible final usage record. Both normal model rounds and compaction write
- * this same shape so they never diverge. It carries only redacted token/budget facts — never prompt
- * text, file contents, paths, or credentials (the repository enforces that boundary on write).
+ * Legacy provider billing/token record. Normal model rounds and compaction still use this 1.x
+ * family; local run observability uses the separate strict 2.0 artifact above. It carries only
+ * redacted token/budget facts, never prompt text, file contents, paths, or credentials.
  */
 export interface AgentUsageRecord {
   readonly schemaVersion: "1.2";
@@ -305,6 +396,247 @@ export function normalizeAgentUsageRecord(value: unknown): AgentUsageRecord {
   const validated = validateAgentUsageRecord(candidate as unknown as AgentUsageRecord);
   if (!validated.ok) throw new Error(validated.error.code);
   return validated.value;
+}
+
+const V20_FIELDS = new Set([
+  "schemaVersion",
+  "storageScope",
+  "usageId",
+  "runId",
+  "recordedAt",
+  "semanticVersionSetChecksum",
+  "guidanceVersion",
+  "contextProfileId",
+  "messageOrderVersion",
+  "toolCatalogVersion",
+  "runOutcome",
+  "pendingOutcome",
+  "recoveryOutcome",
+  "modelRoundCount",
+  "toolCallCount",
+  "toolFailureCount",
+  "approvalWaitCount",
+  "approvalWaitMs",
+  "sources",
+  "cacheOutcome",
+  "cacheVerifiedInputTokens",
+  "changeSetOutcome",
+  "styleObservations",
+  "eventRefs"
+]);
+const V20_SOURCE_FIELDS = new Set(["sourceKind", "tokenCount", "truncated", "exclusionReason"]);
+const V20_STYLE_FIELDS = new Set(["rule", "version", "confidence", "userOutcome"]);
+const V20_PROFILES = new Set(["standalone", "writing", "creative_general", "engineering"]);
+const V20_RUN_OUTCOMES = new Set([
+  "completed",
+  "blocked",
+  "cancelled",
+  "failed",
+  "limit_reached",
+  "awaiting_approval",
+  "awaiting_input",
+  "stale",
+  "capability_changed"
+]);
+const V20_PENDING_OUTCOMES = new Set([
+  "none",
+  "awaiting_approval",
+  "awaiting_input",
+  "change_set_pending",
+  "recovery_pending"
+]);
+const V20_RECOVERY_OUTCOMES = new Set([
+  "not_required",
+  "pending",
+  "recovered",
+  "rolled_back",
+  "failed",
+  "outcome_unknown"
+]);
+const V20_CHANGE_SET_OUTCOMES = new Set([
+  "none",
+  "generated",
+  "approved",
+  "rejected",
+  "applied",
+  "rolled_back",
+  "undone",
+  "stale"
+]);
+const V20_SOURCE_KINDS = new Set([
+  "disk_file",
+  "editor_buffer",
+  "story_bible_asset",
+  "project_conventions",
+  "workspace_outline",
+  "compaction_summary",
+  "system_guidance",
+  "conversation",
+  "tool_result",
+  "user_request"
+]);
+const V20_EXCLUSION_REASONS = new Set([
+  "none",
+  "user_excluded",
+  "budget",
+  "policy",
+  "stale",
+  "unsupported"
+]);
+const V20_CACHE_OUTCOMES = new Set(["hit", "miss", "bypass", "unknown"]);
+const V20_STYLE_OUTCOMES = new Set(["accepted", "ignored", "dismissed", "no_action"]);
+const V20_SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/u;
+const V20_SAFE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/u;
+const V20_CHECKSUM = /^[a-f0-9]{64}$/u;
+
+/** Strict new-writer/new-reader contract for local-only 2.0 metrics. */
+export function createAgentUsageRecordV20(
+  input: CreateAgentUsageRecordV20Input
+): AgentUsageRecordV20 {
+  return parseAgentUsageRecordV20({
+    ...input,
+    schemaVersion: AGENT_USAGE_RECORD_V20_SCHEMA_VERSION,
+    storageScope: "local_only"
+  });
+}
+
+export function parseAgentUsageRecordV20(value: unknown): AgentUsageRecordV20 {
+  if (!isRecordValue(value) || !hasOnlyFields(value, V20_FIELDS) || value.schemaVersion !== "2.0") {
+    throw new Error("AGENT_USAGE_RECORD_V20_INVALID");
+  }
+  if (
+    value.storageScope !== "local_only" ||
+    !isPrivacySafeRef(value.usageId) ||
+    !isPrivacySafeRef(value.runId) ||
+    !isUtcTimestamp(value.recordedAt) ||
+    typeof value.semanticVersionSetChecksum !== "string" ||
+    !V20_CHECKSUM.test(value.semanticVersionSetChecksum) ||
+    value.guidanceVersion !== "3.0" ||
+    !V20_PROFILES.has(value.contextProfileId as string) ||
+    value.messageOrderVersion !== "2.0" ||
+    value.toolCatalogVersion !== "2.0" ||
+    !V20_RUN_OUTCOMES.has(value.runOutcome as string) ||
+    !V20_PENDING_OUTCOMES.has(value.pendingOutcome as string) ||
+    !V20_RECOVERY_OUTCOMES.has(value.recoveryOutcome as string) ||
+    !isTokenCount(value.modelRoundCount as number) ||
+    !isTokenCount(value.toolCallCount as number) ||
+    !isTokenCount(value.toolFailureCount as number) ||
+    !isTokenCount(value.approvalWaitCount as number) ||
+    !isTokenCount(value.approvalWaitMs as number) ||
+    (value.toolFailureCount as number) > (value.toolCallCount as number) ||
+    !Array.isArray(value.sources) ||
+    value.sources.length > 256 ||
+    !V20_CACHE_OUTCOMES.has(value.cacheOutcome as string) ||
+    (value.cacheVerifiedInputTokens !== null &&
+      !isTokenCount(value.cacheVerifiedInputTokens as number)) ||
+    !V20_CHANGE_SET_OUTCOMES.has(value.changeSetOutcome as string) ||
+    !Array.isArray(value.styleObservations) ||
+    value.styleObservations.length > 256 ||
+    !Array.isArray(value.eventRefs) ||
+    value.eventRefs.length > 1024
+  ) {
+    throw new Error("AGENT_USAGE_RECORD_V20_INVALID");
+  }
+  if (
+    (value.cacheOutcome === "unknown" || value.cacheOutcome === "bypass") &&
+    value.cacheVerifiedInputTokens !== null
+  ) {
+    throw new Error("AGENT_USAGE_RECORD_V20_INVALID");
+  }
+  for (const source of value.sources) {
+    if (
+      !isRecordValue(source) ||
+      !hasOnlyFields(source, V20_SOURCE_FIELDS) ||
+      !V20_SOURCE_KINDS.has(source.sourceKind as string) ||
+      !isTokenCount(source.tokenCount as number) ||
+      typeof source.truncated !== "boolean" ||
+      !V20_EXCLUSION_REASONS.has(source.exclusionReason as string) ||
+      (source.exclusionReason !== "none" && (source.tokenCount !== 0 || source.truncated !== false))
+    ) {
+      throw new Error("AGENT_USAGE_RECORD_V20_INVALID");
+    }
+  }
+  for (const observation of value.styleObservations) {
+    if (
+      !isRecordValue(observation) ||
+      !hasOnlyFields(observation, V20_STYLE_FIELDS) ||
+      !isPrivacySafeRef(observation.rule) ||
+      typeof observation.version !== "string" ||
+      !V20_SAFE_VERSION.test(observation.version) ||
+      typeof observation.confidence !== "number" ||
+      !Number.isFinite(observation.confidence) ||
+      observation.confidence < 0 ||
+      observation.confidence > 1 ||
+      !V20_STYLE_OUTCOMES.has(observation.userOutcome as string)
+    ) {
+      throw new Error("AGENT_USAGE_RECORD_V20_INVALID");
+    }
+  }
+  if (
+    !value.eventRefs.every(isPrivacySafeRef) ||
+    new Set(value.eventRefs).size !== value.eventRefs.length
+  ) {
+    throw new Error("AGENT_USAGE_RECORD_V20_INVALID");
+  }
+  return deepFreezeUsage(structuredClone(value) as unknown as AgentUsageRecordV20);
+}
+
+export function serializeAgentUsageRecordV20(value: AgentUsageRecordV20): string {
+  return JSON.stringify(parseAgentUsageRecordV20(value));
+}
+
+export function parseAgentUsageRecordV20Json(value: string): AgentUsageRecordV20 {
+  try {
+    return parseAgentUsageRecordV20(JSON.parse(value) as unknown);
+  } catch {
+    throw new Error("AGENT_USAGE_RECORD_V20_INVALID");
+  }
+}
+
+/**
+ * Dispatches persisted records to their own version reader. Legacy records are never enriched from
+ * newer artifacts, so old storage cannot acquire content-bearing or identity fields by inference.
+ */
+export function readVersionedAgentUsageRecord(value: unknown): VersionedAgentUsageRecord {
+  if (!isRecordValue(value)) throw new Error("AGENT_USAGE_RECORD_INVALID");
+  if (value.schemaVersion === AGENT_USAGE_RECORD_V20_SCHEMA_VERSION) {
+    return parseAgentUsageRecordV20(value);
+  }
+  if (
+    value.schemaVersion === "1.0" ||
+    value.schemaVersion === "1.1" ||
+    value.schemaVersion === "1.2"
+  ) {
+    return normalizeAgentUsageRecord(value);
+  }
+  throw new Error("AGENT_USAGE_RECORD_VERSION_UNSUPPORTED");
+}
+
+function isPrivacySafeRef(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    V20_SAFE_REF.test(value) &&
+    !/^sk-[A-Za-z0-9]/iu.test(value) &&
+    !/^bearer[._:@-]/iu.test(value)
+  );
+}
+
+function isUtcTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepFreezeUsage<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreezeUsage(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function normalizeLegacyCacheUsage(raw: Record<string, unknown>): Record<string, unknown> {

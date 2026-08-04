@@ -474,12 +474,72 @@ export type {
   AgentUsageCostTotal,
   AgentUsageDailyBucket,
   AgentUsageDateRange,
+  AgentUsageMetricProfile,
+  AgentUsageMetricRecord,
   AgentUsageModelTotal,
   AgentUsageQuery,
   AgentUsageReport,
   AgentUsageRunSummary,
+  AgentUsageSourceMetric,
+  AgentUsageStyleObservation,
   ClearAgentUsageCommand
 } from "./agent-usage-types.js";
+export {
+  AGENT_MODEL_SHARING_CONTRACT_VERSION,
+  RECOMMENDED_WORKSPACE_MODEL_SHARING_DEFAULTS,
+  decideContextShareApproval,
+  filterReadToolsBySharingPolicy,
+  filterSensitiveEngineeringOutline,
+  freezeRunModelSharingGrant,
+  freezeWorkspaceModelSharingDefaults,
+  parseAwaitingContextShareApproval,
+  parseFrozenRunModelSharingGrant,
+  parseFrozenWorkspaceModelSharingDefaults,
+  preflightContextShareRead
+} from "./agent-model-sharing.js";
+export type {
+  AgentModelReadResultClass,
+  AgentModelSharingProfileId,
+  AwaitingContextShareApproval,
+  ContextShareReadPreflight,
+  EngineeringOutlineEntry,
+  FilteredEngineeringOutline,
+  FrozenRunModelSharingGrant,
+  FrozenWorkspaceModelSharingDefaults,
+  RunModelSharingGrant,
+  WorkspaceModelSharingDefaults
+} from "./agent-model-sharing.js";
+export {
+  AGENT_SEND_PREVIEW_SCHEMA_VERSION,
+  canonicalAgentFirstRoundSemanticPayloadChecksumV2,
+  createAgentSendPreviewSession,
+  parseAgentFirstRoundSemanticPayloadV2,
+  parseAgentSendPreviewDisplayInputV2,
+  parseAgentSendPreviewValidationFactsV2,
+  serializeAgentFirstRoundSemanticPayloadV2
+} from "./agent-send-preview-session.js";
+export type {
+  AgentConfirmedFirstSendV2,
+  AgentFirstRoundSemanticPayloadV2,
+  AgentSendPreviewDisplayInputV2,
+  AgentSendPreviewDisplaySourceV2,
+  AgentSendPreviewDtoV2,
+  AgentSendPreviewLocalProvenanceKind,
+  AgentSendPreviewMaterializerPort,
+  AgentSendPreviewPreparedMaterialV2,
+  AgentSendPreviewSession,
+  AgentSendPreviewSourceBindingV2,
+  AgentSendPreviewSourceKind,
+  AgentSendPreviewTargetIdentityV2,
+  AgentSendPreviewValidationFactsV2,
+  AgentSendSemanticMessageV2,
+  AgentSendSemanticToolCallV2,
+  AgentSendSemanticToolV2,
+  ConfirmAgentSendPreviewCommandV2,
+  ConfirmedAgentSendResult,
+  CreateAgentSendPreviewSessionOptions,
+  PrepareAgentSendPreviewCommandV2
+} from "./agent-send-preview-session.js";
 export {
   createAgentRunSession,
   evaluateContextBudgetPressure,
@@ -597,6 +657,7 @@ export {
   createAgentPromptMaterializationArtifact,
   createHistoricalAgentPromptMaterializationArtifact,
   materializeAgentConversationContext,
+  materializeCanonicalAgentRound,
   materializeAgentRunHistory,
   materializeAgentPrompt,
   materializeProjectDataSource,
@@ -608,13 +669,19 @@ export {
 export {
   AGENT_PROMPT_CACHE_ADAPTER_VERSION,
   AGENT_PROMPT_CACHE_ARTIFACT_VERSION,
+  AGENT_PROMPT_CACHE_ARTIFACT_VERSION_V2,
   createAgentPromptCacheIdentityArtifact,
+  createAgentPromptCacheIdentityArtifactV2,
   deriveAgentPromptCacheIdentityChecksum,
+  deriveAgentPromptCacheIdentityChecksumV2,
   parseAgentPromptCacheIdentityArtifact
 } from "./agent-prompt-cache.js";
 export type {
   AgentPromptCacheIdentityArtifact,
-  CreateAgentPromptCacheIdentityArtifactInput
+  AgentPromptCacheIdentityArtifactV1,
+  AgentPromptCacheIdentityArtifactV2,
+  CreateAgentPromptCacheIdentityArtifactInput,
+  CreateAgentPromptCacheIdentityArtifactV2Input
 } from "./agent-prompt-cache.js";
 export type {
   AgentPromptMaterializationArtifact,
@@ -623,7 +690,9 @@ export type {
   CreateHistoricalAgentPromptMaterializationArtifactInput,
   LegacyAgentPromptMaterializationArtifactV11,
   AgentPromptMaterialization,
+  MaterializeCanonicalAgentRoundInput,
   MaterializeAgentPromptInput,
+  MaterializedCanonicalAgentRound,
   PackAgentContextInput,
   MaterializedAgentMessage,
   MaterializedAgentMessageRole
@@ -635,6 +704,8 @@ export type {
   AgentContextBudgetInputs,
   AgentContextBudgetInputsPort,
   AgentContextBudgetModelFacts,
+  AgentContextModelSharingInputs,
+  AgentCanonicalRoundInputs,
   AgentContextSession,
   CompactContextResult,
   CompactContextSourcesPort,

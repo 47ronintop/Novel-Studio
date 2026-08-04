@@ -5,13 +5,103 @@ import { describe, expect, test } from "vitest";
 import {
   createPackedAgentContext,
   createPackedAgentContextManifest,
+  createPackedAgentContextManifestV2,
+  createProviderSemanticVersionSetV1,
+  parsePackedAgentContextManifestV2,
+  readLegacyPackedAgentContextManifest,
   rebuildPackedAgentContextFromManifest,
+  serializePackedAgentContextManifestV2,
   validatePackedAgentContextManifest,
   type PackedAgentContextManifestV10,
   type PackedAgentContextManifestV11
 } from "../src/index.js";
 
 describe("Packed Agent Context history", () => {
+  test("writes and strictly reads a canonical 2.0 manifest bound to the full provider set", () => {
+    const packed = packedContext();
+    const manifest = createPackedAgentContextManifestV2(packed, {
+      roundId: "round_01",
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet: providerVersions("not_applicable")
+    });
+
+    expect(manifest).toMatchObject({
+      schemaVersion: "2.0",
+      messageOrderVersion: "2.0",
+      roundId: "round_01",
+      providerSemanticVersionSet: {
+        contextSnapshotSchemaVersion: "2.0",
+        packedContextManifestSchemaVersion: "2.0",
+        canonicalRoundManifestSchemaVersion: "2.0"
+      }
+    });
+    expect(parsePackedAgentContextManifestV2(manifest)).toEqual(manifest);
+    expect(serializePackedAgentContextManifestV2(manifest)).toBe(
+      serializePackedAgentContextManifestV2(
+        createPackedAgentContextManifestV2(packed, {
+          roundId: "round_01",
+          sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+          providerSemanticVersionSet: providerVersions("not_applicable")
+        })
+      )
+    );
+    expect(
+      rebuildPackedAgentContextFromManifest({
+        manifest,
+        sources: [
+          {
+            refId: "chapter:active",
+            sourceKind: "editor_buffer",
+            sourceRevision: 7,
+            sourceContent: "chapter source",
+            blockContent: "wrapped chapter source"
+          }
+        ]
+      })
+    ).toEqual({ status: "available", packedContext: packed });
+  });
+
+  test("rejects 2.0 unknown versions, extra fields, mismatches, and legacy upgrade", () => {
+    const manifest = createPackedAgentContextManifestV2(packedContext(), {
+      roundId: "round_01",
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet: providerVersions("not_applicable")
+    });
+    expect(() => parsePackedAgentContextManifestV2({ ...manifest, schemaVersion: "9.0" })).toThrow(
+      "PACKED_AGENT_CONTEXT_MANIFEST_INVALID"
+    );
+    expect(() => parsePackedAgentContextManifestV2({ ...manifest, extra: true })).toThrow(
+      "PACKED_AGENT_CONTEXT_MANIFEST_INVALID"
+    );
+    expect(() =>
+      parsePackedAgentContextManifestV2({
+        ...manifest,
+        providerSemanticVersionSetChecksum: "f".repeat(64)
+      })
+    ).toThrow("PACKED_AGENT_CONTEXT_MANIFEST_INVALID");
+    expect(() => readLegacyPackedAgentContextManifest(manifest)).toThrow(
+      "PACKED_AGENT_CONTEXT_MANIFEST_INVALID"
+    );
+  });
+
+  test("changes identity when any bound provider semantic contract changes", () => {
+    const packed = packedContext();
+    const first = createPackedAgentContextManifestV2(packed, {
+      roundId: "round_01",
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet: providerVersions("not_applicable")
+    });
+    const second = createPackedAgentContextManifestV2(packed, {
+      roundId: "round_01",
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet: providerVersions("1.0")
+    });
+    expect(second.providerSemanticVersionSetChecksum).not.toBe(
+      first.providerSemanticVersionSetChecksum
+    );
+    expect(second.manifestChecksum).not.toBe(first.manifestChecksum);
+  });
+
   test("rebuilds a complete manifest from frozen source and block material", () => {
     const packed = packedContext();
     const manifest = createPackedAgentContextManifest(packed);
@@ -271,4 +361,13 @@ function packedContext() {
 
 function checksum(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function providerVersions(writingTaskIntentSchemaVersion: "not_applicable" | "1.0") {
+  return createProviderSemanticVersionSetV1({
+    writingTaskIntentSchemaVersion,
+    writingGenerationGuidanceVersion: "not_applicable",
+    approvalRuleSetVersion: "not_applicable",
+    approvalRuleSetChecksum: "not_applicable"
+  });
 }

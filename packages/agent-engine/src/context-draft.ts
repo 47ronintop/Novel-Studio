@@ -94,6 +94,8 @@ export interface ContextDraftV12 extends Omit<ContextDraftV11, "schemaVersion"> 
 
 export type ContextDraft = ContextDraftV12;
 
+export type ContextDraftSourcePackingPriority = "active" | "pinned" | "automatic" | "excluded";
+
 export type ContextDraftMutation =
   | { readonly kind: "add_ref"; readonly ref: ContextDraftRef }
   | { readonly kind: "remove_ref"; readonly refId: string }
@@ -267,6 +269,24 @@ export function applyContextDraftMutation(
 /** Produce a fresh revision without changing refs — used to re-resolve refs (e.g. stale editor selection). */
 export function refreshContextDraft(draft: ContextDraft, updatedAt: string): ContextDraft {
   return nextRevision(draft, [...draft.refs], updatedAt);
+}
+
+/**
+ * Classify one source for deterministic packing. Explicit refs are pinned for this draft, while an
+ * explicit exclusion takes precedence over both the active resource and persisted/default sources.
+ */
+export function classifyContextDraftSource(
+  draft: ContextDraft,
+  refId: string
+): ContextDraftSourcePackingPriority {
+  if (draft.scope.kind === "standalone") return "excluded";
+  const override = draft.sourceOverrides.find((candidate) => candidate.refId === refId);
+  if (override?.decision === "excluded") return "excluded";
+  if (draft.activeResourceRef?.refId === refId) return "active";
+  if (override?.decision === "pinned" || draft.refs.some((ref) => ref.refId === refId)) {
+    return "pinned";
+  }
+  return "automatic";
 }
 
 /**

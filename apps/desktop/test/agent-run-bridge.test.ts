@@ -3584,6 +3584,148 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       trigger: "manual"
     });
   });
+
+  test("prepares an exact send preview, then confirms with only its opaque binding", async () => {
+    const prepareCalls: Record<string, unknown>[] = [];
+    const confirmCalls: Record<string, unknown>[] = [];
+    const ledger = [
+      {
+        entryId: "ledger-01",
+        roundNumber: 1,
+        roundKind: "first_send" as const,
+        canonicalPayloadChecksum: "p".repeat(64),
+        canonicalRoundManifestChecksum: "m".repeat(64),
+        previewId: "preview-01",
+        sentAt: "2026-08-04T20:00:00.000Z",
+        additions: [
+          {
+            additionId: "addition-01",
+            kind: "user_control" as const,
+            content: "检查当前章节",
+            contentChecksum: "a".repeat(64)
+          }
+        ]
+      }
+    ];
+    const preview = {
+      schemaVersion: "2.0" as const,
+      previewId: "preview-01",
+      createdAt: "2026-08-04T19:59:00.000Z",
+      expiresAt: "2026-08-04T20:04:00.000Z",
+      canonicalPayloadChecksum: "p".repeat(64),
+      target: {
+        providerLabel: "Local",
+        modelLabel: "local-model",
+        connectionLabel: "Local connection",
+        adapterPolicyLabel: "Adapter policy 1"
+      },
+      guidance: {
+        version: "3.0",
+        profileId: "writing",
+        runtimeFacts: {},
+        content: "guidance"
+      },
+      tools: [],
+      sources: [],
+      retainedLocalProvenanceKinds: [],
+      providerNativeSemanticChecksum: null
+    };
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        prepareStart: async (command: unknown) => ok(preparedDraftView(command)),
+        previewPackedContext: async () => ok(packedContextPreview()),
+        prepareSendPreview: async (command: unknown) => {
+          prepareCalls.push(structuredClone(command as Record<string, unknown>));
+          return ok(preview);
+        },
+        confirmSendPreview: async (command: unknown) => {
+          confirmCalls.push(structuredClone(command as Record<string, unknown>));
+          return ok(snapshot);
+        },
+        readSendLedger: async () => ok(ledger),
+        read: async () => ok({ snapshot, events: [] }),
+        list: async () => ok([])
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: { ...editor, dirty: false },
+      settings
+    });
+
+    const prepared = await bridge.send("检查当前章节");
+    expect(prepareCalls).toHaveLength(1);
+    expect(confirmCalls).toHaveLength(0);
+    expect(prepared.status).toBe("created");
+    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toEqual(preview);
+
+    const confirmed = await bridge.send("检查当前章节");
+    expect(confirmCalls).toEqual([
+      {
+        schemaVersion: "2.0",
+        previewId: "preview-01",
+        canonicalPayloadChecksum: "p".repeat(64)
+      }
+    ]);
+    expect(confirmed.sendLedger).toMatchObject([
+      { entryId: "ledger-01", sentAtLabel: "20:00", previewId: "preview-01" }
+    ]);
+    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeUndefined();
+  });
+
+  test("invalidates a prepared send preview when the request changes", async () => {
+    let prepareCount = 0;
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        prepareStart: async (command: unknown) => ok(preparedDraftView(command)),
+        previewPackedContext: async () => ok(packedContextPreview()),
+        prepareSendPreview: async () => {
+          prepareCount += 1;
+          return ok({
+            schemaVersion: "2.0" as const,
+            previewId: `preview-${prepareCount}`,
+            createdAt: "2026-08-04T19:59:00.000Z",
+            expiresAt: "2026-08-04T20:04:00.000Z",
+            canonicalPayloadChecksum: "p".repeat(64),
+            target: {
+              providerLabel: "Local",
+              modelLabel: "local-model",
+              connectionLabel: "Local connection",
+              adapterPolicyLabel: "Adapter policy 1"
+            },
+            guidance: { version: "3.0", profileId: "writing", runtimeFacts: {}, content: "guidance" },
+            tools: [],
+            sources: [],
+            retainedLocalProvenanceKinds: [],
+            providerNativeSemanticChecksum: null
+          });
+        },
+        confirmSendPreview: async () => ok(snapshot),
+        readSendLedger: async () => ok([]),
+        read: async () => ok({ snapshot, events: [] }),
+        list: async () => ok([])
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
+    await bridge.send("第一次请求");
+    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeDefined();
+
+    bridge.getComposerProps()?.onRequestChange("第二次请求");
+    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeUndefined();
+    await bridge.send("第二次请求");
+    expect(prepareCount).toBe(2);
+    expect(bridge.getComposerProps()?.contextStatus?.sendPreview?.previewId).toBe("preview-2");
+  });
 });
 
 /**

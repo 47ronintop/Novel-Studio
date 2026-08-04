@@ -90,3 +90,70 @@ export interface ClearAgentUsageCommand {
   readonly commandId: string;
   readonly range: AgentUsageDateRange;
 }
+
+export type AgentUsageMetricProfile = "standalone" | "writing" | "creative_general" | "engineering";
+
+export interface AgentUsageSourceMetric {
+  readonly sourceKind:
+    | "disk_file"
+    | "editor_buffer"
+    | "story_bible_asset"
+    | "project_conventions"
+    | "workspace_outline"
+    | "compaction_summary"
+    | "system_guidance"
+    | "conversation"
+    | "tool_result"
+    | "user_request";
+  readonly tokenCount: number;
+  readonly truncated: boolean;
+  readonly exclusionReason:
+    "none" | "user_excluded" | "budget" | "policy" | "stale" | "unsupported";
+}
+
+export interface AgentUsageStyleObservation {
+  readonly rule: string;
+  readonly version: string;
+  readonly confidence: number;
+  readonly userOutcome: "accepted" | "ignored" | "dismissed" | "no_action";
+}
+
+/** Local-only DTO matching the strict agent-engine 2.0 usage artifact. */
+export interface AgentUsageMetricRecord {
+  readonly schemaVersion: "2.0";
+  readonly storageScope: "local_only";
+  readonly usageId: string;
+  readonly runId: string;
+  readonly recordedAt: string;
+  readonly semanticVersionSetChecksum: string;
+  readonly guidanceVersion: "3.0";
+  readonly contextProfileId: AgentUsageMetricProfile;
+  readonly messageOrderVersion: "2.0";
+  readonly toolCatalogVersion: "2.0";
+  readonly runOutcome:
+    | "completed"
+    | "blocked"
+    | "cancelled"
+    | "failed"
+    | "limit_reached"
+    | "awaiting_approval"
+    | "awaiting_input"
+    | "stale"
+    | "capability_changed";
+  readonly pendingOutcome:
+    "none" | "awaiting_approval" | "awaiting_input" | "change_set_pending" | "recovery_pending";
+  readonly recoveryOutcome:
+    "not_required" | "pending" | "recovered" | "rolled_back" | "failed" | "outcome_unknown";
+  readonly modelRoundCount: number;
+  readonly toolCallCount: number;
+  readonly toolFailureCount: number;
+  readonly approvalWaitCount: number;
+  readonly approvalWaitMs: number;
+  readonly sources: readonly AgentUsageSourceMetric[];
+  readonly cacheOutcome: "hit" | "miss" | "bypass" | "unknown";
+  readonly cacheVerifiedInputTokens: number | null;
+  readonly changeSetOutcome:
+    "none" | "generated" | "approved" | "rejected" | "applied" | "rolled_back" | "undone" | "stale";
+  readonly styleObservations: readonly AgentUsageStyleObservation[];
+  readonly eventRefs: readonly string[];
+}

@@ -5,12 +5,17 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
-  AgentRunFileRepository,
+  agentRunEventRefV20,
   parseAgentRunEventV20,
   parseAgentRunSnapshotV20,
+  readAgentRunEventRef,
+  readAgentRunUsageId,
+  type AgentRunEvent,
+  type AgentRunSnapshot,
   type AgentRunEventV20,
   type AgentRunSnapshotV20
-} from "../src/index.js";
+} from "@novel-studio/agent-engine";
+import { AgentRunFileRepository } from "../src/index.js";
 
 const roots: string[] = [];
 
@@ -120,7 +125,8 @@ function snapshot(): AgentRunSnapshotV20 {
     },
     capabilities: { contractVersion: "2.0", revision: 1, state: "active", changeReason: null },
     pending: { kind: "none" },
-    finish: { state: "not_finished", report: null }
+    finish: { state: "not_finished", report: null },
+    usageId: null
   });
 }
 
@@ -136,11 +142,53 @@ function event(sequence = 1): AgentRunEventV20 {
     sequence,
     runRevision: 1,
     type: "run_started",
-    createdAt: "2026-08-04T00:00:00.000Z"
+    createdAt: "2026-08-04T00:00:00.000Z",
+    eventRef: agentRunEventRefV20("run_v20_01", sequence)
   });
 }
 
 describe("strict Agent run V20 persistence", () => {
+  test("persists explicit local usage bindings without inferring them for legacy records", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-run-v20-usage-"));
+    roots.push(projectRoot);
+    const repository = new AgentRunFileRepository({ projectRoot });
+    const bound = parseAgentRunSnapshotV20({ ...snapshot(), usageId: "usage_run_v20_01" });
+    const started = event();
+
+    expect(await repository.writeSnapshotV20(bound)).toMatchObject({ ok: true });
+    expect(await repository.appendEventV20(started)).toMatchObject({ ok: true });
+    const storedSnapshot = await repository.readSnapshotV20(bound.runId);
+    const storedEvents = await repository.readEventsV20(bound.runId);
+    const storedEvent = storedEvents.ok ? storedEvents.value.at(0) : undefined;
+    if (
+      !storedSnapshot.ok ||
+      storedSnapshot.value === undefined ||
+      !storedEvents.ok ||
+      storedEvent === undefined
+    ) {
+      throw new Error("Expected persisted V20 usage bindings.");
+    }
+    expect(readAgentRunUsageId(storedSnapshot.value)).toBe("usage_run_v20_01");
+    expect(readAgentRunEventRef(storedEvent)).toBe("run_v20_01:event:1");
+    expect(readAgentRunUsageId({ schemaVersion: "1.3" } as AgentRunSnapshot)).toBeNull();
+    expect(readAgentRunEventRef({ schemaVersion: "1.3" } as AgentRunEvent)).toBeNull();
+  });
+
+  test("rejects unsafe or inferred V20 usage bindings", () => {
+    expect(() =>
+      parseAgentRunSnapshotV20({ ...snapshot(), usageId: "sk-privateCredential" })
+    ).toThrow("AGENT_RUN_SNAPSHOT_V20_INVALID");
+    expect(() =>
+      parseAgentRunSnapshotV20({ ...snapshot(), usageId: "C:\\Users\\alice\\novel.md" })
+    ).toThrow("AGENT_RUN_SNAPSHOT_V20_INVALID");
+    expect(() => parseAgentRunEventV20({ ...event(), eventRef: "run_v20_01:event:2" })).toThrow(
+      "AGENT_RUN_EVENT_V20_INVALID"
+    );
+    const { eventRef: _eventRef, ...missingRef } = event();
+    void _eventRef;
+    expect(() => parseAgentRunEventV20(missingRef)).toThrow("AGENT_RUN_EVENT_V20_REQUIRED");
+  });
+
   test("round-trips V20 snapshots and events only through the strict APIs", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-agent-run-v20-"));
     roots.push(projectRoot);
@@ -289,6 +337,7 @@ describe("strict Agent run V20 persistence", () => {
       runRevision: 2,
       type: "completion_evidence_recorded",
       createdAt: updatedAt,
+      eventRef: agentRunEventRefV20(initial.runId, 2),
       detail: { kind: "read_only_complete" }
     });
     expect(await repository.commitRunStateV20({ snapshot: next, event: evidence })).toMatchObject({

@@ -2930,6 +2930,67 @@ textarea:focus-visible,
   margin: 0;
 }
 
+.ns-agent-send-ledger {
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.ns-agent-send-ledger h3,
+.ns-agent-send-ledger p {
+  margin: 0;
+}
+
+.ns-agent-send-ledger h3 {
+  font-size: 12px;
+}
+
+.ns-agent-send-ledger > ol,
+.ns-agent-send-ledger ul {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-agent-send-ledger > ol > li {
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 5px;
+  padding-top: 7px;
+}
+
+.ns-agent-send-ledger-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ns-agent-send-ledger-heading strong,
+.ns-agent-send-ledger summary {
+  font-size: 11px;
+}
+
+.ns-agent-send-ledger-heading span,
+.ns-agent-send-ledger code,
+.ns-agent-send-ledger p {
+  color: var(--ns-muted);
+  font-size: 10px;
+}
+
+.ns-agent-send-ledger pre {
+  font-family: var(--ns-font-mono);
+  font-size: 10px;
+  margin: 5px 0 0;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .ns-ai-workflow {
   border-top: 1px solid var(--ns-border);
   display: flex;
@@ -6159,6 +6220,83 @@ textarea:focus-visible,
   padding: 5px 7px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.ns-agent-send-preview {
+  max-height: min(470px, 58vh);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.ns-agent-send-preview-target,
+.ns-agent-send-preview-facts {
+  display: grid;
+  gap: 3px 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.ns-agent-send-preview-target > div,
+.ns-agent-send-preview-facts > div {
+  min-width: 0;
+}
+
+.ns-agent-send-preview-target dt,
+.ns-agent-send-preview-facts dt {
+  color: var(--ns-muted);
+  font-size: 9px;
+}
+
+.ns-agent-send-preview-target dd,
+.ns-agent-send-preview-facts dd {
+  font-size: 10px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-agent-send-preview-section {
+  border-top: 1px solid var(--ns-border);
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-top: 7px;
+}
+
+.ns-agent-send-preview-section > h4,
+.ns-agent-send-preview-section > summary {
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.ns-agent-send-preview-section > p,
+.ns-agent-send-preview-tools p {
+  color: var(--ns-muted);
+  font-size: 10px;
+  margin: 0;
+}
+
+.ns-agent-send-preview-section pre,
+.ns-agent-send-preview-tools pre {
+  background: color-mix(in srgb, var(--ns-surface) 76%, transparent);
+  border-left: 2px solid var(--ns-border-strong);
+  font-family: var(--ns-font-mono);
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 5px 7px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ns-agent-send-preview-tools {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .ns-agent-context-actions {

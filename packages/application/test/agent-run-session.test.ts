@@ -13,6 +13,7 @@ import {
 } from "@novel-studio/agent-engine";
 
 import * as applicationExports from "../src/index.js";
+import { createAgentPromptCacheIdentityArtifactV2 } from "../src/agent-prompt-cache.js";
 
 describe("AgentRunSession", () => {
   test("publishes partial usage and persists one priced final record when the round completes", async () => {
@@ -6555,6 +6556,9 @@ describe("AgentRunSession v2 tool facade", () => {
     startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     answerUserInput(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    invalidateAgentRunCapabilities(
+      command: Record<string, unknown>
+    ): Promise<Record<string, unknown>>;
     readAgentRun(runId: string): Promise<Record<string, unknown>>;
     resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
   };
@@ -8154,7 +8158,7 @@ describe("AgentRunSession v2 tool facade", () => {
   });
 
   test("preserves the frozen writing intent across a Guidance 3.0 Plan-to-Act handoff", async () => {
-    const repository = durableMemoryRepository();
+    const repository = promptCacheMemoryRepository();
     let runSequence = 0;
     const session = createSession({
       coordinatorOptions: { createRunId: () => `run_guidance_v3_plan_${++runSequence}` },
@@ -8196,10 +8200,21 @@ describe("AgentRunSession v2 tool facade", () => {
       readToolExecutor: readExecutor
     });
 
+    const start = startCommand();
+    const providerCapabilitySnapshot = start["providerCapabilitySnapshot"] as Record<
+      string,
+      unknown
+    >;
     const planningStarted = await session.startAgentRun({
-      ...startCommand(),
+      ...start,
       operationMode: "planning",
       userRequest: "Rewrite the ending of the current chapter.",
+      providerCapabilitySnapshot: {
+        ...providerCapabilitySnapshot,
+        connectionIdentityChecksum: "a".repeat(64),
+        accountIsolationChecksum: "b".repeat(64),
+        promptCache: cacheablePromptCapability()
+      },
       writingTaskIntent: {
         schemaVersion: "1.0",
         kind: "rewrite",
@@ -8220,17 +8235,26 @@ describe("AgentRunSession v2 tool facade", () => {
       readonly value: { readonly snapshot: { readonly runRevision: number } };
     };
 
-    expect(
-      await session.decidePlan({
-        projectId: "project-01",
-        runId: "run_guidance_v3_plan_1",
-        commandId: "approve-guidance-v3-plan",
-        expectedRunRevision: planning.value.snapshot.runRevision,
-        planId: "plan_guidance_v3_handoff",
-        planRevision: 1,
-        decision: "approve"
-      })
-    ).toMatchObject({ ok: true, value: { runId: "run_guidance_v3_plan_2" } });
+    const executionStarted = await session.decidePlan({
+      projectId: "project-01",
+      runId: "run_guidance_v3_plan_1",
+      commandId: "approve-guidance-v3-plan",
+      expectedRunRevision: planning.value.snapshot.runRevision,
+      planId: "plan_guidance_v3_handoff",
+      planRevision: 1,
+      decision: "approve"
+    });
+    expect(executionStarted).toMatchObject({
+      ok: true,
+      value: { runId: "run_guidance_v3_plan_2", promptCacheArtifactId: expect.any(String) }
+    });
+    const executionSnapshot = executionStarted["value"] as Record<string, unknown>;
+    await expect(
+      repository.readPromptCacheArtifact(
+        "run_guidance_v3_plan_2",
+        String(executionSnapshot["promptCacheArtifactId"])
+      )
+    ).resolves.toMatchObject({ ok: true, value: { schemaVersion: "2.0" } });
 
     await expect(
       repository.readPromptMaterialization(
@@ -8294,15 +8318,18 @@ describe("AgentRunSession v2 tool facade", () => {
     });
   });
 
-  test("fails closed when Guidance 3.0 would reuse a legacy prompt-cache identity", async () => {
+  test("writes a strict prompt-cache v2 identity for Guidance 3.0", async () => {
+    const repository = promptCacheMemoryRepository();
+    const boundary = testCapabilityBoundary();
     const session = createSession({
       coordinatorOptions: { createRunId: () => "run_guidance_v3_cache" },
-      repository: durableMemoryRepository(),
+      repository,
       modelDriver: { streamRound: blockedModelRound },
       startPreflight: echoStartPreflight(),
       readToolExecutor: readExecutor,
       newRunToolFacadeVersion: "v2",
-      agentGuidanceV3: true
+      agentGuidanceV3: true,
+      getCurrentCapabilityBoundary: () => boundary
     });
     const base = startCommand();
     const providerCapabilitySnapshot = base["providerCapabilitySnapshot"] as Record<
@@ -8310,27 +8337,356 @@ describe("AgentRunSession v2 tool facade", () => {
       unknown
     >;
 
+    const started = await session.startAgentRun({
+      ...base,
+      providerCapabilitySnapshot: {
+        ...providerCapabilitySnapshot,
+        connectionIdentityChecksum: "a".repeat(64),
+        accountIsolationChecksum: "b".repeat(64),
+        promptCache: cacheablePromptCapability()
+      }
+    });
+    expect(started).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        promptCacheArtifactId: expect.any(String),
+        providerSemanticVersionSetChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      }
+    });
+    const snapshot = started["value"] as Record<string, unknown>;
+    const artifactId = String(snapshot["promptCacheArtifactId"]);
     await expect(
-      session.startAgentRun({
-        ...base,
-        providerCapabilitySnapshot: {
-          ...providerCapabilitySnapshot,
-          connectionIdentityChecksum: "a".repeat(64),
-          accountIsolationChecksum: "b".repeat(64),
-          promptCache: {
-            mode: "explicit_breakpoints",
-            policyVersion: "anthropic-ephemeral@1.0",
-            minimumCacheableTokens: 1,
-            ttlSeconds: 300,
-            inputTokenSemantics: "excluded_from_input",
-            reportsCacheReadTokens: true,
-            reportsCacheWriteTokens: true
-          }
+      repository.readPromptCacheArtifact("run_guidance_v3_cache", artifactId)
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        providerSemanticVersionSetChecksum: snapshot["providerSemanticVersionSetChecksum"],
+        effectiveCapabilityStateChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        sharingDefaultsRevision: boundary.sharingDefaultsRevision,
+        sharingGrantRevision: boundary.sharingGrantRevision,
+        providerToolProjectionChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      }
+    });
+  });
+
+  test("uses not_applicable sharing revisions for standalone prompt-cache v2 identities", async () => {
+    const repository = promptCacheMemoryRepository();
+    const standaloneScope = { kind: "standalone", scopeId: "standalone" } as const;
+    const boundary = {
+      ...testCapabilityBoundary(),
+      canonicalRootIdentityChecksum: "not_applicable",
+      sharingDefaultsRevision: "not_applicable",
+      sharingGrantRevision: "not_applicable"
+    };
+    const session = createSession({
+      scope: standaloneScope,
+      coordinatorOptions: { createRunId: () => "run_guidance_v3_standalone_cache" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      getCurrentCapabilityBoundary: () => boundary
+    });
+    const base = startCommand();
+    const providerCapabilitySnapshot = base["providerCapabilitySnapshot"] as Record<
+      string,
+      unknown
+    >;
+    const withoutProject = { ...base };
+    delete withoutProject["projectId"];
+    const started = await session.startAgentRun({
+      ...withoutProject,
+      scope: standaloneScope,
+      operationMode: "conversation",
+      contextMode: "standalone_chat",
+      providerCapabilitySnapshot: {
+        ...providerCapabilitySnapshot,
+        connectionIdentityChecksum: "a".repeat(64),
+        accountIsolationChecksum: "b".repeat(64),
+        promptCache: cacheablePromptCapability()
+      }
+    });
+    expect(started).toMatchObject({ ok: true });
+    const snapshot = started["value"] as Record<string, unknown>;
+    await expect(
+      repository.readPromptCacheArtifact(
+        "run_guidance_v3_standalone_cache",
+        String(snapshot["promptCacheArtifactId"])
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        canonicalRootIdentityChecksum: "not_applicable",
+        sharingDefaultsRevision: "not_applicable",
+        sharingGrantRevision: "not_applicable"
+      }
+    });
+  });
+
+  test.each([
+    ["providerSemanticVersionSetChecksum", "6", "provider semantic version"],
+    ["canonicalRootIdentityChecksum", "a", "canonical root"],
+    ["effectiveCapabilityStateChecksum", "7", "effective capability"],
+    ["sharingDefaultsRevision", "8", "sharing"],
+    ["sharingGrantRevision", "b", "sharing grant"],
+    ["policyRevision", "policy", "policy"],
+    ["providerToolProjectionChecksum", "9", "tool projection"]
+  ])("rejects a hydrated prompt cache with a mismatched %s", async (field, replacement) => {
+    const repository = promptCacheMemoryRepository();
+    const boundary = testCapabilityBoundary();
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => `run_cache_hydrate_${field}` },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      getCurrentCapabilityBoundary: () => boundary
+    });
+    const base = startCommand();
+    const providerCapabilitySnapshot = base["providerCapabilitySnapshot"] as Record<
+      string,
+      unknown
+    >;
+    const started = await original.startAgentRun({
+      ...base,
+      commandId: `start-cache-hydrate-${field}`,
+      providerCapabilitySnapshot: {
+        ...providerCapabilitySnapshot,
+        connectionIdentityChecksum: "a".repeat(64),
+        accountIsolationChecksum: "b".repeat(64),
+        promptCache: cacheablePromptCapability()
+      }
+    });
+    expect(started).toMatchObject({ ok: true });
+
+    const restored = createSession({
+      repository: {
+        ...repository,
+        async readPromptCacheArtifact(runId: string, artifactId: string) {
+          const read = await repository.readPromptCacheArtifact(runId, artifactId);
+          if (!read.ok || read.value === undefined) return read;
+          const rebound = createAgentPromptCacheIdentityArtifactV2({
+            ...read.value,
+            [field]: replacement.repeat(64)
+          } as unknown as Parameters<typeof createAgentPromptCacheIdentityArtifactV2>[0]);
+          return { ok: true as const, value: rebound as unknown as Record<string, unknown> };
         }
+      },
+      modelDriver: {
+        streamRound: () => unexpectedModelRound("An invalid cache must not call Provider.")
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      getCurrentCapabilityBoundary: () => boundary
+    });
+    await expect(restored.readAgentRun(`run_cache_hydrate_${field}`)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROMPT_CACHE_ARTIFACT_INVALID" }
+    });
+  });
+
+  test.each([
+    ["canonicalRootIdentityChecksum", "a", "canonical_root_changed"],
+    ["sharingGrantRevision", "b", "sharing_revision_changed"],
+    ["policyRevision", "policy_02", "policy_revision_changed"],
+    [
+      "providerSemanticVersionSetChecksum",
+      "c",
+      "provider_semantic_version_set_changed"
+    ],
+    ["providerToolProjectionChecksum", "d", "provider_tool_projection_changed"],
+    ["effectiveCapabilityStateChecksum", "e", "effective_capability_state_changed"]
+  ])(
+    "stops before a second Provider call when the frozen %s drifts",
+    async (field, replacement, expectedReason) => {
+      const repository = durableMemoryRepository();
+      let currentBoundary = testCapabilityBoundary();
+      let providerCalls = 0;
+      let markReadStarted: () => void = () => undefined;
+      let releaseRead: () => void = () => undefined;
+      const readStarted = new Promise<void>((resolve) => {
+        markReadStarted = resolve;
+      });
+      const readReleased = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const runId = `run_boundary_drift_${field}`;
+      const session = createSession({
+        coordinatorOptions: { createRunId: () => runId },
+        repository,
+        modelDriver: {
+          async *streamRound() {
+            providerCalls += 1;
+            if (providerCalls > 1) throw new Error("Boundary drift reached a second Provider call.");
+            yield toolCall(`read-before-${field}`, "read_resource", {
+              ref: "chapter:chapter-01"
+            });
+            yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+          }
+        },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: {
+          async execute() {
+            markReadStarted();
+            await readReleased;
+            return { ok: true, value: { summary: "ok", data: {} } };
+          }
+        },
+        newRunToolFacadeVersion: "v2",
+        agentGuidanceV3: true,
+        capabilitySnapshot: creativeV2Capabilities(),
+        getCurrentCapabilityBoundary: () => currentBoundary
+      });
+
+      expect(
+        await session.startAgentRun({
+          ...startCommand(),
+          commandId: `start-boundary-drift-${field}`
+        })
+      ).toMatchObject({ ok: true });
+      await readStarted;
+      currentBoundary = {
+        ...currentBoundary,
+        [field]: field === "policyRevision" ? replacement : replacement.repeat(64)
+      };
+      releaseRead();
+
+      await vi.waitFor(async () => {
+        expect(await session.readAgentRun(runId)).toMatchObject({
+          value: {
+            snapshot: { status: "capability_changed" },
+            events: expect.arrayContaining([
+              expect.objectContaining({
+                type: "capability_changed",
+                detail: expect.objectContaining({ reason: expectedReason })
+              })
+            ])
+          }
+        });
+      });
+      expect(providerCalls).toBe(1);
+    }
+  );
+
+  test("explicitly invalidates V20 capability authority once and prevents resume", async () => {
+    const repository = durableMemoryRepository();
+    let providerCalls = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_explicit_capability_invalidation" },
+      repository,
+      modelDriver: {
+        async *streamRound(input: { readonly signal: AbortSignal }) {
+          providerCalls += 1;
+          await new Promise<void>((resolve) => {
+            if (input.signal.aborted) resolve();
+            else input.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          yield { type: "round_completed" as const, finishReason: "stop" as const };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: creativeV2Capabilities()
+    });
+    expect(await session.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(providerCalls).toBe(1));
+    const active = (await session.readAgentRun("run_explicit_capability_invalidation")) as {
+      readonly value: { readonly snapshot: { readonly runRevision: number } };
+    };
+    const command = {
+      projectId: "project-01",
+      runId: "run_explicit_capability_invalidation",
+      commandId: "invalidate-capabilities-01",
+      expectedRunRevision: active.value.snapshot.runRevision,
+      reason: "settings_capability_revoked"
+    };
+
+    const invalidated = await session.invalidateAgentRunCapabilities(command);
+    expect(invalidated).toMatchObject({
+      ok: true,
+      value: {
+        status: "capability_changed",
+        capabilities: {
+          state: "capability_changed",
+          changeReason: "settings_capability_revoked"
+        },
+        pending: { kind: "none" },
+        pendingUserInputId: null,
+        pendingToolApproval: null
+      }
+    });
+    const duplicate = await session.invalidateAgentRunCapabilities(command);
+    expect(duplicate).toEqual(invalidated);
+    const changed = invalidated["value"] as Record<string, unknown>;
+    await expect(
+      session.resumeAgentRun({
+        projectId: "project-01",
+        runId: "run_explicit_capability_invalidation",
+        commandId: "resume-after-explicit-invalidation",
+        expectedRunRevision: changed["runRevision"]
       })
     ).resolves.toMatchObject({
       ok: false,
-      error: { code: "AGENT_GUIDANCE_V3_PROMPT_CACHE_UNQUALIFIED" }
+      error: { code: "AGENT_RUN_ALREADY_TERMINAL" }
+    });
+    expect(providerCalls).toBe(1);
+  });
+
+  test("keeps legacy prompt-cache v1 hydrate behavior unchanged", async () => {
+    const repository = promptCacheMemoryRepository();
+    const original = createSession({
+      coordinatorOptions: { createRunId: () => "run_legacy_cache_v1_hydrate" },
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2"
+    });
+    const base = startCommand();
+    const providerCapabilitySnapshot = base["providerCapabilitySnapshot"] as Record<
+      string,
+      unknown
+    >;
+    const started = await original.startAgentRun({
+      ...base,
+      commandId: "start-legacy-cache-v1-hydrate",
+      providerCapabilitySnapshot: {
+        ...providerCapabilitySnapshot,
+        connectionIdentityChecksum: "a".repeat(64),
+        accountIsolationChecksum: "b".repeat(64),
+        promptCache: cacheablePromptCapability()
+      }
+    });
+    expect(started).toMatchObject({ ok: true, value: { schemaVersion: "1.3" } });
+    const snapshot = started["value"] as Record<string, unknown>;
+    await expect(
+      repository.readPromptCacheArtifact(
+        "run_legacy_cache_v1_hydrate",
+        String(snapshot["promptCacheArtifactId"])
+      )
+    ).resolves.toMatchObject({ ok: true, value: { schemaVersion: "1.0" } });
+
+    const restored = createSession({
+      repository,
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      newRunToolFacadeVersion: "v2"
+    });
+    await expect(restored.readAgentRun("run_legacy_cache_v1_hydrate")).resolves.toMatchObject({
+      ok: true,
+      value: { snapshot: { schemaVersion: "1.3" } }
     });
   });
 
@@ -8649,6 +9005,51 @@ function budgetStartPreflight(contextBudgetSnapshotId: string) {
 function createSequence(values: readonly string[]): () => string {
   let index = 0;
   return () => values[Math.min(index++, values.length - 1)] ?? values[values.length - 1] ?? "";
+}
+
+function cacheablePromptCapability() {
+  return {
+    mode: "explicit_breakpoints" as const,
+    policyVersion: "anthropic-ephemeral@2.0",
+    minimumCacheableTokens: 1,
+    ttlSeconds: 300,
+    inputTokenSemantics: "excluded_from_input" as const,
+    reportsCacheReadTokens: true,
+    reportsCacheWriteTokens: true
+  };
+}
+
+function testCapabilityBoundary() {
+  return {
+    canonicalRootIdentityChecksum: "1".repeat(64),
+    effectiveCapabilityStateChecksum: "2".repeat(64),
+    sharingDefaultsRevision: "3".repeat(64),
+    sharingGrantRevision: "4".repeat(64),
+    policyRevision: "policy_01",
+    providerToolProjectionChecksum: "5".repeat(64),
+    providerSemanticVersionSetChecksum: "6".repeat(64)
+  };
+}
+
+function promptCacheMemoryRepository() {
+  const repository = durableMemoryRepository();
+  const promptCacheArtifacts = new Map<string, Record<string, unknown>>();
+  return {
+    ...repository,
+    async writePromptCacheArtifact(runId: string, artifact: Record<string, unknown>) {
+      promptCacheArtifacts.set(
+        `${runId}:${String(artifact["artifactId"])}`,
+        structuredClone(artifact)
+      );
+      return { ok: true as const, value: artifact };
+    },
+    async readPromptCacheArtifact(runId: string, artifactId: string) {
+      return {
+        ok: true as const,
+        value: promptCacheArtifacts.get(`${runId}:${artifactId}`)
+      };
+    }
+  };
 }
 
 function memoryRepository() {

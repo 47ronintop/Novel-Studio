@@ -45,6 +45,10 @@ export interface ContextBudgetAuditProof {
     readonly descriptorChecksum: string;
     readonly descriptorCount: number;
   };
+  readonly sharing?: {
+    readonly defaultsRevision: string;
+    readonly grantRevision: string;
+  };
 }
 
 /** C4 snapshots add the immutable proof for every resolved operand. */
@@ -83,6 +87,119 @@ export interface CalculateContextBudgetInput {
   readonly usedTokens: number;
   readonly precision: AgentContextPrecision;
   readonly calculatedAt: string;
+}
+
+export type ContextPackingPriority = "required" | "active" | "pinned" | "summary" | "automatic";
+
+export interface ContextPackingSource {
+  readonly sourceId: string;
+  readonly priority: ContextPackingPriority;
+  readonly tokens: number;
+  /** Stable semantic order inside one priority. Defaults to zero, then sourceId breaks ties. */
+  readonly order?: number;
+}
+
+export interface ContextPackingDecision {
+  readonly sourceId: string;
+  readonly priority: ContextPackingPriority;
+  readonly originalTokens: number;
+  readonly includedTokens: number;
+  readonly status: "included" | "truncated" | "excluded";
+  readonly reason: "fits" | "summary_limit" | "budget_limit";
+}
+
+export interface DeterministicContextPackingPlan {
+  readonly availableTokens: number;
+  readonly usedTokens: number;
+  readonly remainingTokens: number;
+  readonly decisions: readonly ContextPackingDecision[];
+}
+
+export interface PlanDeterministicContextPackingInput {
+  readonly availableTokens: number;
+  readonly summaryTokenLimit: number;
+  readonly sources: readonly ContextPackingSource[];
+}
+
+/**
+ * Finalize context source selection before a Provider call. Required, active, and pinned sources
+ * are atomic and fail closed when they do not fit. Summary has its own aggregate cap; automatic
+ * sources consume only the remainder and may be deterministically truncated or excluded.
+ */
+export function planDeterministicContextPacking(
+  input: PlanDeterministicContextPackingInput
+): Result<DeterministicContextPackingPlan, UnifiedError> {
+  if (!isTokenCount(input.availableTokens) || !isTokenCount(input.summaryTokenLimit)) {
+    return err(invalidPacking("limits"));
+  }
+  const sourceIds = new Set<string>();
+  for (const source of input.sources) {
+    if (
+      !isSourceId(source.sourceId) ||
+      sourceIds.has(source.sourceId) ||
+      !isPackingPriority(source.priority) ||
+      !isTokenCount(source.tokens) ||
+      (source.order !== undefined && !isTokenCount(source.order))
+    ) {
+      return err(invalidPacking("sources"));
+    }
+    sourceIds.add(source.sourceId);
+  }
+
+  const ordered = [...input.sources].sort(
+    (left, right) =>
+      packingPriorityRank(left.priority) - packingPriorityRank(right.priority) ||
+      (left.order ?? 0) - (right.order ?? 0) ||
+      left.sourceId.localeCompare(right.sourceId)
+  );
+  const atomicTokens = ordered
+    .filter((source) => isAtomicPackingPriority(source.priority))
+    .reduce((sum, source) => sum + source.tokens, 0);
+  if (!Number.isSafeInteger(atomicTokens)) return err(invalidPacking("sources.tokens"));
+  if (atomicTokens > input.availableTokens) {
+    const requiredTokens = ordered
+      .filter((source) => source.priority === "required")
+      .reduce((sum, source) => sum + source.tokens, 0);
+    return err(
+      insufficientPacking(
+        requiredTokens > input.availableTokens
+          ? "CONTEXT_PACKING_REQUIRED_OVERFLOW"
+          : "CONTEXT_PACKING_ACTIVE_OR_PINNED_OVERFLOW",
+        input.availableTokens,
+        atomicTokens
+      )
+    );
+  }
+
+  let remaining = input.availableTokens;
+  let summaryRemaining = input.summaryTokenLimit;
+  const decisions: ContextPackingDecision[] = [];
+  for (const source of ordered) {
+    if (isAtomicPackingPriority(source.priority)) {
+      remaining -= source.tokens;
+      decisions.push(decision(source, source.tokens, "fits"));
+      continue;
+    }
+    const allowed =
+      source.priority === "summary"
+        ? Math.min(source.tokens, remaining, summaryRemaining)
+        : Math.min(source.tokens, remaining);
+    remaining -= allowed;
+    if (source.priority === "summary") summaryRemaining -= allowed;
+    const reason =
+      allowed === source.tokens
+        ? "fits"
+        : source.priority === "summary" && summaryRemaining === 0
+          ? "summary_limit"
+          : "budget_limit";
+    decisions.push(decision(source, allowed, reason));
+  }
+  return ok({
+    availableTokens: input.availableTokens,
+    usedTokens: input.availableTokens - remaining,
+    remainingTokens: remaining,
+    decisions
+  });
 }
 
 /**
@@ -197,6 +314,63 @@ function isPositiveTokenCount(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+function isPackingPriority(value: unknown): value is ContextPackingPriority {
+  return (
+    value === "required" ||
+    value === "active" ||
+    value === "pinned" ||
+    value === "summary" ||
+    value === "automatic"
+  );
+}
+
+function isAtomicPackingPriority(value: ContextPackingPriority): boolean {
+  return value === "required" || value === "active" || value === "pinned";
+}
+
+function packingPriorityRank(value: ContextPackingPriority): number {
+  switch (value) {
+    case "required":
+      return 0;
+    case "active":
+      return 1;
+    case "pinned":
+      return 2;
+    case "summary":
+      return 3;
+    case "automatic":
+      return 4;
+  }
+}
+
+function decision(
+  source: ContextPackingSource,
+  includedTokens: number,
+  reason: ContextPackingDecision["reason"]
+): ContextPackingDecision {
+  return {
+    sourceId: source.sourceId,
+    priority: source.priority,
+    originalTokens: source.tokens,
+    includedTokens,
+    status:
+      includedTokens === source.tokens
+        ? "included"
+        : includedTokens === 0
+          ? "excluded"
+          : "truncated",
+    reason
+  };
+}
+
+function isSourceId(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) return false;
+  return ![...value].some((character) => {
+    const codePoint = character.codePointAt(0) as number;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+}
+
 function utf8ByteLength(text: string): number {
   let bytes = 0;
   for (const codePoint of text) {
@@ -244,5 +418,39 @@ function insufficientBudget(
       safeInputBudget,
       requiredContextTokens: input.requiredContextTokens
     }
+  });
+}
+
+function invalidPacking(field: string): UnifiedError {
+  return createUnifiedError({
+    code: "CONTEXT_PACKING_INPUT_INVALID",
+    category: "ValidationError",
+    message: "The context packing inputs are invalid.",
+    recoverability: "user-action",
+    suggestedAction: "Refresh the context preview and retry.",
+    traceId: "context-budget-packing",
+    redactedDetail: { field }
+  });
+}
+
+function insufficientPacking(
+  code: "CONTEXT_PACKING_REQUIRED_OVERFLOW" | "CONTEXT_PACKING_ACTIVE_OR_PINNED_OVERFLOW",
+  availableTokens: number,
+  atomicTokens: number
+): UnifiedError {
+  return createUnifiedError({
+    code,
+    category: "UserError",
+    message:
+      code === "CONTEXT_PACKING_ACTIVE_OR_PINNED_OVERFLOW"
+        ? "The active or pinned context does not fit in the selected model."
+        : "The required Agent request does not fit in the selected model.",
+    recoverability: "user-action",
+    suggestedAction:
+      code === "CONTEXT_PACKING_ACTIVE_OR_PINNED_OVERFLOW"
+        ? "Reduce the selected context or choose a model with a larger context window."
+        : "Choose a model with a larger context window.",
+    traceId: "context-budget-packing",
+    redactedDetail: { availableTokens, atomicTokens }
   });
 }

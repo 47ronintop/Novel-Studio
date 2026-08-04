@@ -16,6 +16,7 @@ import {
   type FinishReportV2
 } from "./finish-report.js";
 import {
+  agentRunEventRefV20,
   validateAgentRunHistoryV20,
   validateAgentRunSnapshotV20,
   validateAgentRunStatePairV20,
@@ -693,7 +694,8 @@ function createInitialSnapshot(input: {
       changeReason: null
     },
     pending: { kind: "none" },
-    finish: { state: "not_finished", report: null }
+    finish: { state: "not_finished", report: null },
+    usageId: null
   };
   const validated = validateAgentRunSnapshotV20(raw);
   return validated.ok
@@ -707,7 +709,11 @@ function transitionRunState(
   timestamp: string
 ): TransitionResult {
   if (snapshot.schemaVersion !== "2.0") {
-    if (!isLegacyStatus(input.status) || !isLegacyEventType(input.type)) {
+    if (
+      !isLegacyStatus(input.status) ||
+      !isLegacyEventType(input.type) ||
+      input.snapshotPatch?.usageId !== undefined
+    ) {
       return {
         ok: false,
         error: createCoordinatorError(
@@ -1001,6 +1007,7 @@ function toEvent(
       runRevision: snapshot.runRevision,
       createdAt,
       type: type as AgentRunEventTypeV20,
+      eventRef: agentRunEventRefV20(snapshot.runId, snapshot.lastSequence),
       ...(detail === undefined ? {} : { detail })
     } as Omit<AgentRunEventV20, "projectId">);
   }

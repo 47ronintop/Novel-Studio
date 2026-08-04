@@ -20,7 +20,8 @@ describe("workspace context policy store", () => {
     expect(await store.read(binding(contentRoot))).toMatchObject({
       workspaceTrust: "untrusted",
       projectConventionsEnabled: false,
-      sourcePreferences: []
+      sourcePreferences: [],
+      sharingDefaults: null
     });
   });
 
@@ -36,6 +37,7 @@ describe("workspace context policy store", () => {
       value: { workspaceTrust: "trusted", projectConventionsEnabled: true }
     });
     if (!enabled.ok) throw enabled.error;
+    expect(enabled.value.sharingDefaultsRevision).toBe(defaultPolicy.sharingDefaultsRevision);
 
     const restored = await createDesktopWorkspaceContextPolicyStore({ userDataRoot }).read(
       binding(contentRoot)
@@ -142,7 +144,11 @@ describe("workspace context policy store", () => {
     const targetPath = policyPath(userDataRoot);
     const legacy = await readStoredPolicyFile(targetPath);
     legacy.schemaVersion = "1.0";
-    for (const entry of Object.values(legacy.policies)) delete entry.sourcePreferences;
+    for (const entry of Object.values(legacy.policies)) {
+      delete entry.sourcePreferences;
+      delete entry.sharingDefaults;
+      delete entry.sharingRevision;
+    }
     await writeFile(targetPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
 
     const restored = await createDesktopWorkspaceContextPolicyStore({ userDataRoot }).read(
@@ -161,13 +167,85 @@ describe("workspace context policy store", () => {
     if (!upgraded.ok) return;
     expect(upgraded.value.policyRevision).toBe(restored.policyRevision);
     expect(await readStoredPolicyFile(targetPath)).toMatchObject({
-      schemaVersion: "1.1",
+      schemaVersion: "1.2",
       policies: expect.objectContaining({
         [Object.keys(legacy.policies)[0] as string]: expect.objectContaining({
-          sourcePreferences: []
+          sourcePreferences: [],
+          sharingDefaults: null,
+          sharingRevision: 0
         })
       })
     });
+  });
+
+  test("persists sharing defaults independently from workspace trust", async () => {
+    const userDataRoot = await createRoot("user-data");
+    const contentRoot = await createRoot("workspace");
+    const store = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
+    const initial = await store.read(binding(contentRoot));
+
+    const selected = await store.setSharingDefaults(binding(contentRoot), {
+      outlineMetadata: "automatic",
+      activeResource: "off",
+      conversationSummary: "ask",
+      toolReadResults: "deny"
+    });
+    expect(selected).toMatchObject({
+      ok: true,
+      value: {
+        workspaceTrust: "untrusted",
+        projectConventionsEnabled: false,
+        sharingDefaults: {
+          outlineMetadata: "automatic",
+          activeResource: "off",
+          conversationSummary: "ask",
+          toolReadResults: "deny"
+        }
+      }
+    });
+    if (!selected.ok) throw selected.error;
+    expect(selected.value.sharingDefaultsRevision).not.toBe(initial.sharingDefaultsRevision);
+
+    const trusted = await store.enableTrustedConventions(binding(contentRoot));
+    expect(trusted.ok).toBe(true);
+    if (!trusted.ok) throw trusted.error;
+    expect(trusted.value.sharingDefaults).toEqual(selected.value.sharingDefaults);
+    expect(trusted.value.sharingDefaultsRevision).toBe(selected.value.sharingDefaultsRevision);
+    expect(trusted.value.policyRevision).not.toBe(selected.value.policyRevision);
+
+    const restored = await createDesktopWorkspaceContextPolicyStore({ userDataRoot }).read(
+      binding(contentRoot)
+    );
+    expect(restored).toEqual(trusted.value);
+  });
+
+  test("fails closed for malformed sharing defaults and can return to first-use blocking state", async () => {
+    const userDataRoot = await createRoot("user-data");
+    const contentRoot = await createRoot("workspace");
+    const store = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
+    await expect(
+      store.setSharingDefaults(
+        binding(contentRoot),
+        JSON.parse(
+          '{"outlineMetadata":"automatic","activeResource":"automatic","conversationSummary":"allow","toolReadResults":"allow","extra":true}'
+        )
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_CONTEXT_POLICY_SHARING_INVALID" }
+    });
+
+    const selected = await store.setSharingDefaults(binding(contentRoot), {
+      outlineMetadata: "automatic",
+      activeResource: "automatic",
+      conversationSummary: "allow",
+      toolReadResults: "ask"
+    });
+    if (!selected.ok) throw selected.error;
+    const cleared = await store.setSharingDefaults(binding(contentRoot), null);
+    expect(cleared).toMatchObject({ ok: true, value: { sharingDefaults: null } });
+    if (!cleared.ok) throw cleared.error;
+    expect(cleared.value.sharingDefaultsRevision).not.toBe(selected.value.sharingDefaultsRevision);
   });
 
   test("persists, orders, deletes, and idempotently updates source preferences", async () => {
@@ -345,6 +423,8 @@ interface MutableStoredPolicyFile {
     string,
     {
       sourcePreferences?: Array<{ refId: string; decision: string; priority: number }>;
+      sharingDefaults?: Record<string, unknown> | null;
+      sharingRevision?: number;
     }
   >;
 }

@@ -1,13 +1,16 @@
 import {
   agentContextScopeKey,
   buildCompactionInputManifest,
+  createAgentContextSnapshotV2,
   createContextCompactionRevision,
   createDeterministicTokenEstimator,
   createPlanExecutionProtectedFact,
+  planDeterministicContextPacking,
   planDeterministicEviction,
   isAgentContextScope,
   validateCompactionResultProgress,
   type AgentContextPrecision,
+  type AgentContextSnapshotV20,
   type AgentContextProfileId,
   type AgentContextScope,
   type AgentContextSourceInput,
@@ -21,13 +24,16 @@ import {
   type ContextBudgetSnapshot,
   type ContextCompactionRevision,
   type ContextDraft,
+  type CanonicalRoundManifestV2,
   type EvictableContextSource,
+  type PackedAgentContextManifestV20,
   type PackedAgentContext,
   type PackedAgentContextSourceManifest,
   type PackedAgentContextTokenStats,
   type PlanExecutionRecord,
   type PlanExecutionRecordV20,
   type PreviewContextBudgetCommand,
+  type ProviderSemanticVersionSetV1,
   type ProtectedContextFact
 } from "@novel-studio/agent-engine";
 import {
@@ -53,7 +59,19 @@ import {
   type AgentCompactionSummaryArtifact,
   type CompactionSummaryResult
 } from "./agent-compaction-summary.js";
-import { packAgentContext } from "./agent-prompt-materializer.js";
+import {
+  materializeCanonicalAgentRound,
+  packAgentContext,
+  type MaterializedAgentMessage
+} from "./agent-prompt-materializer.js";
+import type {
+  FrozenRunModelSharingGrant,
+  FrozenWorkspaceModelSharingDefaults
+} from "./agent-model-sharing.js";
+import {
+  parseFrozenRunModelSharingGrant,
+  parseFrozenWorkspaceModelSharingDefaults
+} from "./agent-model-sharing.js";
 
 /** Drafts are read from the persisted store, which may contain either supported schema version. */
 type PersistedAgentRunDraft = AgentRunDraft | AgentRunDraftV20;
@@ -95,6 +113,44 @@ export interface AgentContextBudgetInputs {
   readonly activeSources?: readonly AgentContextSourceInput[];
   /** Explicitly excluded sources retained in the audit manifest but omitted from the payload. */
   readonly excludedSources?: readonly AgentContextSourceInput[];
+  /** Frozen Main-owned sharing inputs. Required for strict workspace protocol-2 previews. */
+  readonly modelSharing?: AgentContextModelSharingInputs;
+  /** Provider-semantic round inputs. Required when the session enables canonical protocol 2.0. */
+  readonly canonicalRound?: AgentCanonicalRoundInputs;
+}
+
+export interface AgentContextModelSharingInputs {
+  readonly defaults: FrozenWorkspaceModelSharingDefaults;
+  readonly grant: FrozenRunModelSharingGrant;
+  /** Independent aggregate cap for compaction/conversation summaries. */
+  readonly summaryTokenLimit: number;
+}
+
+export interface AgentCanonicalRoundInputs {
+  readonly roundId: string;
+  readonly runId: string;
+  readonly roundNumber: number;
+  readonly systemPrompt: string;
+  readonly toolCatalogRevision: string;
+  readonly projectedToolDescriptors: readonly JsonObject[];
+  readonly sharing: {
+    readonly defaultsRevision: string;
+    readonly runGrantRevision: string;
+  };
+  readonly providerSemanticVersionSet: ProviderSemanticVersionSetV1;
+  readonly userRequest: string;
+  readonly conversationSummaryMessages?: readonly MaterializedAgentMessage[];
+  /** Exact result kind approved before a prior-conversation summary was read. */
+  readonly conversationSummaryResultKind?: string;
+  readonly historyMessages?: readonly MaterializedAgentMessage[];
+  readonly contextSnapshot: {
+    readonly contextSnapshotId: string;
+    readonly createdAt: string;
+    readonly guidanceTemplateChecksum: string;
+    readonly compactionRevision?: number;
+    readonly materializationArtifactId?: string;
+    readonly materializationArtifactSourceRefs?: readonly string[];
+  };
 }
 
 /** An author-visible block. `checksum` binds the hidden provider wrapper; `content` stays raw. */
@@ -120,6 +176,9 @@ export interface PackedAgentContextPreview {
   readonly sources: readonly PackedAgentContextSourceManifest[];
   readonly blocks: readonly PackedAgentContextPreviewBlock[];
   readonly fixedBudgetExceeded: boolean;
+  readonly packedContextManifestV2?: PackedAgentContextManifestV20;
+  readonly canonicalRoundManifest?: CanonicalRoundManifestV2;
+  readonly contextSnapshotV2?: AgentContextSnapshotV20;
 }
 
 export interface PackedAgentContextBinding {
@@ -136,6 +195,9 @@ export interface PackedAgentContextBinding {
   };
   readonly activeSources: readonly AgentContextSourceInput[];
   readonly excludedSources: readonly AgentContextSourceInput[];
+  readonly packedContextManifestV2?: PackedAgentContextManifestV20;
+  readonly canonicalRoundManifest?: CanonicalRoundManifestV2;
+  readonly contextSnapshotV2?: AgentContextSnapshotV20;
 }
 
 /**
@@ -330,6 +392,10 @@ export interface CreateAgentContextSessionOptions {
   readonly createCompactionId?: () => string;
   readonly onCompactionEvent?: (event: CompactionEvent) => Promise<void> | void;
   readonly onPackedContext?: (binding: PackedAgentContextBinding) => Promise<void> | void;
+  /** New-run gate. Legacy readers leave this false and never synthesize protocol-2 authority. */
+  readonly requireCanonicalRound?: boolean;
+  /** Workspace new-run gate. Standalone has no project sharing grant. */
+  readonly requireModelSharing?: boolean;
 }
 
 interface PackedPreviewReceipt {
@@ -804,6 +870,11 @@ export function createAgentContextSession(
       return err(packedContextInputsIncomplete());
     }
 
+    const sharing = validateModelSharingForPacking(inputs.value, view.value, {
+      requireModelSharing: options.requireModelSharing === true
+    });
+    if (!sharing.ok) return err(sharing.error);
+
     let packedContext: PackedAgentContext;
     try {
       packedContext = packAgentContext({
@@ -822,9 +893,36 @@ export function createAgentContextSession(
       return err(packedContextInputsIncomplete());
     }
 
+    const packingPlan = validateFinalPackingPlan({
+      budget: budget.value,
+      packedContext,
+      activeSources: inputs.value.activeSources,
+      summaryTokenLimit:
+        inputs.value.modelSharing?.summaryTokenLimit ?? budget.value.safeInputBudget
+    });
+    if (!packingPlan.ok) return err(packingPlan.error);
+
+    let canonical: CanonicalPackingArtifacts | undefined;
+    if (inputs.value.canonicalRound === undefined) {
+      if (options.requireCanonicalRound === true) return err(canonicalRoundInputsIncomplete());
+    } else {
+      const canonicalResult = materializeCanonicalPackingRound(
+        inputs.value,
+        view.value,
+        packedContext
+      );
+      if (!canonicalResult.ok) return err(canonicalResult.error);
+      canonical = canonicalResult.value;
+    }
+
     const activeSources = cloneAndFreezeSources(inputs.value.activeSources);
     const excludedSources = cloneAndFreezeSources(inputs.value.excludedSources);
-    const projection = createPackedContextPreview(budget.value, packedContext, activeSources);
+    const projection = createPackedContextPreview(
+      budget.value,
+      packedContext,
+      activeSources,
+      canonical
+    );
     if (projection === undefined) return err(packedContextInputsIncomplete());
     const binding: PackedAgentContextBinding = deepFreeze({
       packedContext,
@@ -839,7 +937,8 @@ export function createAgentContextSession(
         checksum: view.value.contextDraft.checksum
       },
       activeSources,
-      excludedSources
+      excludedSources,
+      ...(canonical === undefined ? {} : canonical)
     });
     if (options.onPackedContext !== undefined) {
       try {
@@ -873,6 +972,12 @@ type CompleteAgentContextPackingInputs = AgentContextBudgetInputs & {
   readonly excludedSources: readonly AgentContextSourceInput[];
 };
 
+interface CanonicalPackingArtifacts {
+  readonly packedContextManifestV2: PackedAgentContextManifestV20;
+  readonly canonicalRoundManifest: CanonicalRoundManifestV2;
+  readonly contextSnapshotV2: AgentContextSnapshotV20;
+}
+
 function hasValidPackingInputs(
   inputs: AgentContextBudgetInputs,
   view: AgentRunDraftView
@@ -895,7 +1000,8 @@ function hasValidPackingInputs(
 function createPackedContextPreview(
   budget: ContextBudgetSnapshot,
   packedContext: PackedAgentContext,
-  activeSources: readonly AgentContextSourceInput[]
+  activeSources: readonly AgentContextSourceInput[],
+  canonical?: CanonicalPackingArtifacts
 ): PackedAgentContextPreview | undefined {
   const sourcesByRef = new Map<string, AgentContextSourceInput>();
   for (const source of activeSources) {
@@ -946,8 +1052,257 @@ function createPackedContextPreview(
     tokenStats: structuredClone(packedContext.tokenStats),
     sources: structuredClone(packedContext.sources),
     blocks,
-    fixedBudgetExceeded: packedContext.tokenStats.pinnedTokens > budget.safeInputBudget
+    fixedBudgetExceeded: false,
+    ...(canonical === undefined ? {} : canonical)
   });
+}
+
+function validateModelSharingForPacking(
+  inputs: CompleteAgentContextPackingInputs,
+  view: AgentRunDraftView,
+  options: { readonly requireModelSharing: boolean }
+): Result<void, UnifiedError> {
+  const sharing = inputs.modelSharing;
+  if (inputs.profile.scope.kind === "standalone") {
+    return sharing === undefined && inputs.activeSources.length === 0
+      ? ok(undefined)
+      : err(modelSharingInputsInvalid());
+  }
+  if (sharing === undefined) {
+    return options.requireModelSharing ? err(modelSharingInputsInvalid()) : ok(undefined);
+  }
+  let defaults: FrozenWorkspaceModelSharingDefaults;
+  let grant: FrozenRunModelSharingGrant;
+  try {
+    defaults = parseFrozenWorkspaceModelSharingDefaults(sharing.defaults);
+    grant = parseFrozenRunModelSharingGrant(sharing.grant);
+  } catch {
+    return err(modelSharingInputsInvalid());
+  }
+  if (
+    defaults.workspaceBindingId !== inputs.profile.scope.workspaceId ||
+    grant.workspaceBindingId !== defaults.workspaceBindingId ||
+    grant.profileId !== inputs.profile.profileId ||
+    grant.defaultsRevision !== defaults.defaultsRevision ||
+    grant.runDraftRevision !== String(view.runDraft.revision) ||
+    !Number.isSafeInteger(sharing.summaryTokenLimit) ||
+    sharing.summaryTokenLimit < 0 ||
+    inputs.resolved.sharing?.defaultsRevision !== defaults.defaultsRevision ||
+    inputs.resolved.sharing.grantRevision !== grant.grantRevision
+  ) {
+    return err(modelSharingInputsInvalid());
+  }
+
+  const activeRefs = new Set(inputs.activeSources.map((source) => source.refId));
+  const excludedRefs = new Set(inputs.excludedSources.map((source) => source.refId));
+  if (
+    activeRefs.size !== inputs.activeSources.length ||
+    excludedRefs.size !== inputs.excludedSources.length ||
+    [...activeRefs].some((refId) => excludedRefs.has(refId)) ||
+    grant.excludedRefIds.some((refId) => activeRefs.has(refId)) ||
+    grant.includedRefIds.some((refId) => !activeRefs.has(refId))
+  ) {
+    return err(modelSharingInputsInvalid());
+  }
+
+  for (const source of inputs.activeSources) {
+    const includedForRun = grant.includedRefIds.includes(source.refId);
+    const selectionPolicy =
+      source.selectionPolicy ??
+      (source.sourceKind === "project_conventions" || source.sourceKind === "workspace_outline"
+        ? "automatic"
+        : "explicit");
+    if (
+      (source.sourceKind === "workspace_outline" &&
+        defaults.defaults.outlineMetadata === "off" &&
+        !includedForRun) ||
+      (source.sourceKind === "editor_buffer" &&
+        defaults.defaults.activeResource === "off" &&
+        !includedForRun) ||
+      (source.sourceKind === "compaction_summary" &&
+        (defaults.defaults.conversationSummary === "deny" ||
+          (defaults.defaults.conversationSummary === "ask" && !includedForRun))) ||
+      ((selectionPolicy === "explicit" || selectionPolicy === "pinned") &&
+        source.sourceKind !== "project_conventions" &&
+        source.sourceKind !== "compaction_summary" &&
+        !includedForRun)
+    ) {
+      return err(modelSharingInputsInvalid());
+    }
+  }
+  return ok(undefined);
+}
+
+function validateFinalPackingPlan(input: {
+  readonly budget: ContextBudgetSnapshot;
+  readonly packedContext: PackedAgentContext;
+  readonly activeSources: readonly AgentContextSourceInput[];
+  readonly summaryTokenLimit: number;
+}): Result<void, UnifiedError> {
+  const activeManifest = input.packedContext.sources.filter((source) => source.state === "active");
+  const sourceByRef = new Map(input.activeSources.map((source) => [source.refId, source] as const));
+  if (
+    sourceByRef.size !== input.activeSources.length ||
+    activeManifest.length !== input.packedContext.blocks.length ||
+    !Number.isSafeInteger(input.summaryTokenLimit) ||
+    input.summaryTokenLimit < 0
+  ) {
+    return err(packedContextInputsIncomplete());
+  }
+  const nonSourceTokens = Math.max(
+    0,
+    input.budget.usedTokens - input.packedContext.tokenStats.contextTokens
+  );
+  const planned = planDeterministicContextPacking({
+    availableTokens: input.budget.safeInputBudget,
+    summaryTokenLimit: input.summaryTokenLimit,
+    sources: [
+      {
+        sourceId: "required:provider_material",
+        priority: "required",
+        tokens: nonSourceTokens,
+        order: 0
+      },
+      ...activeManifest.map((manifest, order) => {
+        const source = sourceByRef.get(manifest.refId);
+        if (source === undefined) throw new Error("AGENT_PACKED_CONTEXT_INPUTS_INVALID");
+        return {
+          sourceId: manifest.refId,
+          priority: packingPriorityForSource(source),
+          tokens: manifest.tokenCount,
+          order: order + 1
+        } as const;
+      })
+    ]
+  });
+  if (!planned.ok) return err(planned.error);
+  if (
+    planned.value.decisions.some(
+      (decision) =>
+        decision.sourceId !== "required:provider_material" && decision.status !== "included"
+    ) ||
+    planned.value.usedTokens !== nonSourceTokens + input.packedContext.tokenStats.contextTokens ||
+    input.budget.usedTokens > input.budget.safeInputBudget
+  ) {
+    return err(packingRequiresRematerialization());
+  }
+  return ok(undefined);
+}
+
+function packingPriorityForSource(
+  source: AgentContextSourceInput
+): "active" | "pinned" | "summary" | "automatic" {
+  if (source.sourceKind === "editor_buffer") return "active";
+  if (source.sourceKind === "compaction_summary") return "summary";
+  if (source.sourceKind === "project_conventions") return "pinned";
+  const selectionPolicy =
+    source.selectionPolicy ??
+    (source.sourceKind === "workspace_outline" ? "automatic" : "explicit");
+  return selectionPolicy === "automatic" ? "automatic" : "pinned";
+}
+
+function materializeCanonicalPackingRound(
+  inputs: CompleteAgentContextPackingInputs,
+  view: AgentRunDraftView,
+  packedContext: PackedAgentContext
+): Result<CanonicalPackingArtifacts, UnifiedError> {
+  const canonical = inputs.canonicalRound;
+  const expectedSharing =
+    inputs.profile.scope.kind === "standalone"
+      ? { defaultsRevision: "not_applicable", runGrantRevision: "not_applicable" }
+      : {
+          defaultsRevision:
+            inputs.modelSharing?.defaults.defaultsRevision ??
+            inputs.resolved.sharing?.defaultsRevision,
+          runGrantRevision:
+            inputs.modelSharing?.grant.grantRevision ?? inputs.resolved.sharing?.grantRevision
+        };
+  if (
+    canonical === undefined ||
+    canonical.userRequest !== view.runDraft.userRequest ||
+    canonical.toolCatalogRevision !== inputs.resolved.toolCatalog.catalogRevision ||
+    canonical.sharing.defaultsRevision !== expectedSharing.defaultsRevision ||
+    canonical.sharing.runGrantRevision !== expectedSharing.runGrantRevision ||
+    !conversationSummarySharingAllowed(inputs)
+  ) {
+    return err(canonicalRoundInputsIncomplete());
+  }
+  try {
+    const round = materializeCanonicalAgentRound({
+      ...canonical,
+      profile: inputs.profile,
+      contextSources: inputs.activeSources,
+      packedContext
+    });
+    if (round.packedContextManifest === null) return err(canonicalRoundInputsIncomplete());
+    const sourceByRef = new Map(
+      [...inputs.activeSources, ...inputs.excludedSources].map(
+        (source) => [source.refId, source] as const
+      )
+    );
+    const snapshotSources = round.packedContextManifest.sources.map((source) =>
+      sourceByRef.get(source.refId)
+    );
+    if (snapshotSources.some((source) => source === undefined)) {
+      return err(canonicalRoundInputsIncomplete());
+    }
+    const contextSnapshot = createAgentContextSnapshotV2({
+      contextSnapshotId: canonical.contextSnapshot.contextSnapshotId,
+      runId: canonical.runId,
+      scope: inputs.profile.scope,
+      contextProfileId: inputs.profile.profileId,
+      materialization: {
+        schemaVersion: "2.0",
+        profileVersion: inputs.profile.profileVersion,
+        guidanceTemplateChecksum: canonical.contextSnapshot.guidanceTemplateChecksum,
+        stablePrefixChecksum: round.prompt.stablePrefixChecksum,
+        messageOrderVersion: "2.0"
+      },
+      createdAt: canonical.contextSnapshot.createdAt,
+      sources: snapshotSources as AgentContextSourceInput[],
+      excludedSources: round.packedContextManifest.excludedSources,
+      ...(canonical.contextSnapshot.compactionRevision === undefined
+        ? {}
+        : { compactionRevision: canonical.contextSnapshot.compactionRevision }),
+      ...(canonical.contextSnapshot.materializationArtifactId === undefined
+        ? {}
+        : {
+            materializationArtifactId: canonical.contextSnapshot.materializationArtifactId,
+            ...(canonical.contextSnapshot.materializationArtifactSourceRefs === undefined
+              ? {}
+              : {
+                  materializationArtifactSourceRefs:
+                    canonical.contextSnapshot.materializationArtifactSourceRefs
+                })
+          }),
+      roundId: canonical.roundId,
+      sharing: canonical.sharing,
+      providerSemanticVersionSet: canonical.providerSemanticVersionSet,
+      packedContextManifest: round.packedContextManifest
+    });
+    return ok({
+      packedContextManifestV2: round.packedContextManifest,
+      canonicalRoundManifest: round.canonicalRoundManifest,
+      contextSnapshotV2: contextSnapshot
+    });
+  } catch {
+    return err(canonicalRoundInputsIncomplete());
+  }
+}
+
+function conversationSummarySharingAllowed(inputs: CompleteAgentContextPackingInputs): boolean {
+  const canonical = inputs.canonicalRound;
+  if ((canonical?.conversationSummaryMessages?.length ?? 0) === 0) return true;
+  if (inputs.profile.scope.kind === "standalone") return false;
+  const sharing = inputs.modelSharing;
+  if (sharing === undefined) return false;
+  const policy = sharing.defaults.defaults.conversationSummary;
+  if (policy === "deny") return false;
+  if (policy === "allow") return true;
+  return (
+    canonical?.conversationSummaryResultKind !== undefined &&
+    sharing.grant.approvedResultKinds.includes(canonical.conversationSummaryResultKind)
+  );
 }
 
 function cloneAndFreezeSources(
@@ -1279,6 +1634,39 @@ function packedContextInputsIncomplete(): UnifiedError {
     message: "The server-authoritative Packed Context inputs are incomplete or invalid.",
     recoverability: "user-action",
     suggestedAction: "Refresh the context preview before starting the run.",
+    traceId: "agent-context-session"
+  });
+}
+
+function canonicalRoundInputsIncomplete(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CANONICAL_ROUND_INPUTS_INVALID",
+    category: "ValidationError",
+    message: "The canonical protocol-2 round inputs are incomplete or do not match the draft.",
+    recoverability: "user-action",
+    suggestedAction: "Refresh the send preview and materialize the round again.",
+    traceId: "agent-context-session"
+  });
+}
+
+function modelSharingInputsInvalid(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_MODEL_SHARING_BINDING_INVALID",
+    category: "ValidationError",
+    message: "The frozen workspace sharing defaults or Run grant do not match this context.",
+    recoverability: "user-action",
+    suggestedAction: "Review model sharing and create a new Run grant.",
+    traceId: "agent-context-session"
+  });
+}
+
+function packingRequiresRematerialization(): UnifiedError {
+  return createUnifiedError({
+    code: "AGENT_CONTEXT_PACKING_REQUIRES_REMATERIALIZATION",
+    category: "ValidationError",
+    message: "The final selected context does not fit the deterministic packing plan.",
+    recoverability: "user-action",
+    suggestedAction: "Truncate or exclude automatic context, or reduce active and pinned context.",
     traceId: "agent-context-session"
   });
 }

@@ -273,6 +273,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
     let page = await engineeringApp.firstWindow();
     await queueDirectorySelection(engineeringApp, engineeringRoot);
     await openQueuedEngineeringWorkspace(page);
+    await chooseWorkspaceModelSharing(page);
     await ensureAgentConversation(page);
     await configureLocalModel(page, baseUrl);
     const sourceTrigger = page.getByLabel("会话输入区").getByTitle("查看上下文");
@@ -317,6 +318,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
     page = await creativeApp.firstWindow();
     await queueDirectorySelection(creativeApp, creativeRoot);
     await openAgentPanel(page);
+    await chooseWorkspaceModelSharing(page);
     await configureLocalModel(page, baseUrl);
     const creativeSourceTrigger = page.getByLabel("会话输入区").getByTitle("查看上下文");
     await creativeSourceTrigger.click();
@@ -601,6 +603,32 @@ async function sendProviderRequest(page: Page, request: string): Promise<void> {
       .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
       .filter({ hasText: request })
   ).toBeVisible();
+  await composer.getByTitle("查看上下文").click();
+  await page.getByRole("tab", { name: "实际发送预览" }).click();
+  await expect(page.getByLabel("实际发送预览")).toBeVisible();
+  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
+}
+
+async function chooseWorkspaceModelSharing(page: Page): Promise<void> {
+  const result = await page.evaluate(async () => {
+    const api = (window as unknown as {
+      novelStudio?: {
+        workspace?: {
+          updateContextPolicy?: (update: unknown) => Promise<{ readonly ok: boolean }>;
+        };
+      };
+    }).novelStudio;
+    return api?.workspace?.updateContextPolicy?.({
+      action: "set_sharing_defaults",
+      defaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "allow",
+        toolReadResults: "allow"
+      }
+    });
+  });
+  expect(result).toMatchObject({ ok: true });
 }
 
 interface ProviderMessage {
@@ -720,6 +748,7 @@ async function expectWorkspaceSourcePanel(
   await expect(trigger).toBeVisible();
   await trigger.click();
   const panel = page.getByRole("dialog", { name: "上下文用量" });
+  await panel.getByRole("tab", { name: "来源" }).click();
   const sources = panel.getByLabel("上下文来源");
   await expect(sources).toContainText(input.conventionsLabel);
   await expect(sources).toContainText(input.outlineLabel);

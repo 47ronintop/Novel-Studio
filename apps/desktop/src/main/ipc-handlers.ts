@@ -33,6 +33,10 @@ import type {
   UpdateAgentRunDraftCommand,
   UpdateContextDraftCommand
 } from "@novel-studio/application";
+import type {
+  AgentSendPreviewDtoV2,
+  ConfirmAgentSendPreviewCommandV2
+} from "@novel-studio/application";
 import { isAgentContextScope } from "@novel-studio/agent-engine";
 import type {
   AgentContextScope,
@@ -86,7 +90,8 @@ import type {
   StoryAnalysisRecordDto,
   StoryAnalysisReviewCommand,
   StoryAnalysisSettings,
-  UserPreferencesSaveInput
+  UserPreferencesSaveInput,
+  WorkspaceModelSharingDefaults
 } from "@novel-studio/application";
 import type {
   AgentNetworkProviderProfile,
@@ -171,6 +176,22 @@ export interface AgentWriteSaveCoordinator {
   beginSave(
     relativePath: string
   ): { readonly ok: false } | { readonly ok: true; readonly release: () => void };
+}
+
+interface PrepareAgentSendPreviewCommand {
+  readonly schemaVersion: "2.0";
+  readonly commandId: string;
+  readonly startCommand: StartAgentRunCommand;
+}
+
+interface PreviewCapableRuntimeServices {
+  readonly prepareAgentSendPreview: (
+    command: PrepareAgentSendPreviewCommand
+  ) => Promise<Result<AgentSendPreviewDtoV2, UnifiedError>>;
+  readonly confirmAgentSendPreview: (
+    command: ConfirmAgentSendPreviewCommandV2
+  ) => Promise<Result<unknown, UnifiedError>>;
+  readonly readAgentSendLedger?: (runId: string) => Promise<Result<unknown, UnifiedError>>;
 }
 
 interface SavePathState {
@@ -600,6 +621,8 @@ export function createApplicationIpcHandlers(
       const changed =
         update.action === "set_source_preference"
           ? await store.setSourcePreference(binding, update.preference)
+          : update.action === "set_sharing_defaults"
+            ? await store.setSharingDefaults(binding, update.defaults)
           : update.action === "disable_conventions"
             ? await store.disableConventions(binding)
             : await store.revokeTrust(binding);
@@ -877,6 +900,35 @@ export function createApplicationIpcHandlers(
       }
       return draftSession.syncStartDraft(parsed);
     },
+    "application:agent-run:prepare-send-preview": async (command: unknown) => {
+      const parsed = toPrepareAgentSendPreviewCommand(command);
+      const previewRuntime = asPreviewCapableRuntime(activeAgentRuntime());
+      if (parsed === undefined) return invalidAgentRunCommand();
+      if (previewRuntime === undefined) return agentRunUnavailable();
+      return previewRuntime.prepareAgentSendPreview(parsed);
+    },
+    "application:agent-run:confirm-send-preview": async (command: unknown) => {
+      const parsed = toConfirmAgentSendPreviewCommand(command);
+      const previewRuntime = asPreviewCapableRuntime(activeAgentRuntime());
+      if (parsed === undefined) return invalidAgentRunCommand();
+      if (previewRuntime === undefined) return agentRunUnavailable();
+      const manager = options.agentRuntimeManager;
+      if (manager === undefined) return previewRuntime.confirmAgentSendPreview(parsed);
+      const lease = manager.acquireActiveRunStartLease();
+      if (!lease.ok) return lease;
+      try {
+        return await previewRuntime.confirmAgentSendPreview(parsed);
+      } finally {
+        lease.value.release();
+      }
+    },
+    "application:agent-run:read-send-ledger": async (runId: unknown) => {
+      const parsed = toReadAgentSendLedgerRunId(runId);
+      const previewRuntime = asPreviewCapableRuntime(activeAgentRuntime());
+      if (parsed === undefined) return invalidAgentRunCommand();
+      if (previewRuntime?.readAgentSendLedger === undefined) return agentRunUnavailable();
+      return previewRuntime.readAgentSendLedger(parsed);
+    },
     "application:agent-run:read-run-draft": (command: unknown) => {
       const parsed = toReadAgentRunDraftCommand(command);
       const draftSession = currentAgentRunDraftSession();
@@ -952,6 +1004,9 @@ export function createApplicationIpcHandlers(
       const session = currentAgentRunSession();
       if (parsed === undefined || session === undefined) {
         return Promise.resolve(agentRunUnavailable());
+      }
+      if (asPreviewCapableRuntime(activeAgentRuntime()) !== undefined) {
+        return Promise.resolve(agentSendPreviewRequired());
       }
       const manager = options.agentRuntimeManager;
       if (manager === undefined) return session.startAgentRun(parsed);
@@ -1577,6 +1632,50 @@ function toStartAgentRunCommand(value: unknown): StartAgentRunCommand | undefine
     return undefined;
   }
   return { ...value, ...identity } as unknown as StartAgentRunCommand;
+}
+
+function toPrepareAgentSendPreviewCommand(
+  value: unknown
+): PrepareAgentSendPreviewCommand | undefined {
+  if (!isRecord(value) || value["schemaVersion"] !== "2.0") return undefined;
+  if (!hasOnlyKeys(value, ["schemaVersion", "commandId", "startCommand"])) return undefined;
+  if (!isSafeId(value["commandId"])) return undefined;
+  const startCommand = toStartAgentRunCommand(value["startCommand"]);
+  return startCommand === undefined
+    ? undefined
+    : { schemaVersion: "2.0", commandId: value["commandId"], startCommand };
+}
+
+function toConfirmAgentSendPreviewCommand(
+  value: unknown
+): ConfirmAgentSendPreviewCommandV2 | undefined {
+  if (
+    !isRecord(value) ||
+    value["schemaVersion"] !== "2.0" ||
+    !hasOnlyKeys(value, ["schemaVersion", "previewId", "canonicalPayloadChecksum"]) ||
+    !isSafeId(value["previewId"]) ||
+    !isSha256Checksum(value["canonicalPayloadChecksum"])
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: "2.0",
+    previewId: value["previewId"],
+    canonicalPayloadChecksum: value["canonicalPayloadChecksum"]
+  };
+}
+
+function toReadAgentSendLedgerRunId(value: unknown): string | undefined {
+  return isSafeId(value) ? value : undefined;
+}
+
+function asPreviewCapableRuntime(value: unknown): PreviewCapableRuntimeServices | undefined {
+  if (!isRecord(value)) return undefined;
+  const runtime = value as Partial<PreviewCapableRuntimeServices>;
+  return typeof runtime.prepareAgentSendPreview === "function" &&
+    typeof runtime.confirmAgentSendPreview === "function"
+    ? (runtime as PreviewCapableRuntimeServices)
+    : undefined;
 }
 
 function toSyncStartDraftCommand(value: unknown): SyncStartDraftCommand | undefined {
@@ -2589,6 +2688,19 @@ function invalidAgentRunCommand(): Result<never, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Refresh the Agent Run and retry the command.",
       traceId: "desktop-ipc-handlers"
+    })
+  );
+}
+
+function agentSendPreviewRequired(): Result<never, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "AGENT_SEND_PREVIEW_REQUIRED",
+      category: "ValidationError",
+      message: "A current send preview is required before this Agent request can start.",
+      recoverability: "user-action",
+      suggestedAction: "Prepare and confirm the send preview, then retry the Agent request.",
+      traceId: "desktop-agent-run-ipc"
     })
   );
 }
@@ -4472,10 +4584,20 @@ function toWorkspaceContextPolicyAction(value: unknown):
       readonly action: "set_source_preference";
       readonly preference: WorkspaceContextSourcePreferenceMutation;
     }
+  | {
+      readonly action: "set_sharing_defaults";
+      readonly defaults: WorkspaceModelSharingDefaults | null;
+    }
   | undefined {
   if (!isRecord(value)) return undefined;
   if (value["action"] === "disable_conventions" || value["action"] === "revoke_workspace_trust") {
     return { action: value["action"] };
+  }
+  if (value["action"] === "set_sharing_defaults") {
+    if (!hasOnlyKeys(value, ["action", "defaults"])) return undefined;
+    const defaults = value["defaults"];
+    if (defaults !== null && !isWorkspaceModelSharingDefaults(defaults)) return undefined;
+    return { action: "set_sharing_defaults", defaults };
   }
   if (
     value["action"] !== "set_source_preference" ||
@@ -4485,6 +4607,20 @@ function toWorkspaceContextPolicyAction(value: unknown):
   }
   const preference = parseWorkspaceContextSourcePreferenceMutation(value["preference"]);
   return preference === undefined ? undefined : { action: "set_source_preference", preference };
+}
+
+function isWorkspaceModelSharingDefaults(value: unknown): value is WorkspaceModelSharingDefaults {
+  if (!isRecord(value)) return false;
+  return (
+    (value["outlineMetadata"] === "off" || value["outlineMetadata"] === "automatic") &&
+    (value["activeResource"] === "off" || value["activeResource"] === "automatic") &&
+    (value["conversationSummary"] === "allow" ||
+      value["conversationSummary"] === "ask" ||
+      value["conversationSummary"] === "deny") &&
+    (value["toolReadResults"] === "allow" ||
+      value["toolReadResults"] === "ask" ||
+      value["toolReadResults"] === "deny")
+  );
 }
 
 function directorySelectionFailed(): UnifiedError {

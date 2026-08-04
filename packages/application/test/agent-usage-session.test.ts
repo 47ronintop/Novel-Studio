@@ -7,6 +7,7 @@ import {
 import { createDesktopApplication } from "../src/desktop-application.js";
 import type {
   AgentUsageDailyBucket,
+  AgentUsageMetricRecord,
   AgentUsageQuery,
   AgentUsageRunSummary,
   ClearAgentUsageCommand
@@ -48,10 +49,55 @@ function run(): AgentUsageRunSummary {
   };
 }
 
+function metricRecord(overrides: Partial<AgentUsageMetricRecord> = {}): AgentUsageMetricRecord {
+  return {
+    schemaVersion: "2.0",
+    storageScope: "local_only",
+    usageId: "usage_run_01",
+    runId: "run_01",
+    recordedAt: "2026-08-04T04:00:00.000Z",
+    semanticVersionSetChecksum: "b".repeat(64),
+    guidanceVersion: "3.0",
+    contextProfileId: "engineering",
+    messageOrderVersion: "2.0",
+    toolCatalogVersion: "2.0",
+    runOutcome: "blocked",
+    pendingOutcome: "awaiting_approval",
+    recoveryOutcome: "not_required",
+    modelRoundCount: 1,
+    toolCallCount: 2,
+    toolFailureCount: 0,
+    approvalWaitCount: 1,
+    approvalWaitMs: 50,
+    sources: [
+      {
+        sourceKind: "project_conventions",
+        tokenCount: 80,
+        truncated: false,
+        exclusionReason: "none"
+      }
+    ],
+    cacheOutcome: "miss",
+    cacheVerifiedInputTokens: 0,
+    changeSetOutcome: "generated",
+    styleObservations: [],
+    eventRefs: ["event_blocked_01"],
+    ...overrides
+  };
+}
+
 function createRepository(): AgentUsageRepositoryPort & { readonly calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
+    async writeRunMetrics(record: AgentUsageMetricRecord) {
+      calls.push(`metrics:${record.usageId}`);
+      return { ok: true as const, value: record };
+    },
+    async readRunMetrics(usageId: string) {
+      calls.push(`metric:${usageId}`);
+      return { ok: true as const, value: metricRecord({ usageId }) };
+    },
     async queryDailyAggregates(query: AgentUsageQuery) {
       calls.push(`days:${query.range.fromLocalDate}:${query.range.toLocalDate}`);
       return { ok: true as const, value: [daily()] };
@@ -83,6 +129,62 @@ function createSession(repository = createRepository()) {
 }
 
 describe("AgentUsageSession", () => {
+  test("records strict local-only run metrics", async () => {
+    const { repository, session } = createSession();
+    const record = metricRecord();
+
+    expect(await session.recordAgentUsage(record)).toEqual({ ok: true, value: record });
+    expect(repository.calls).toEqual(["metrics:usage_run_01"]);
+  });
+
+  test("reads a local metric by opaque usage ref for the Inspector", async () => {
+    const { repository, session } = createSession();
+
+    expect(await session.getAgentUsage("usage_run_01")).toMatchObject({
+      ok: true,
+      value: { usageId: "usage_run_01", eventRefs: ["event_blocked_01"] }
+    });
+    expect(repository.calls).toEqual(["metric:usage_run_01"]);
+    expect(await session.getAgentUsage("C:\\Users\\alice\\usage")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_USAGE_QUERY_INVALID" }
+    });
+  });
+
+  test("fails closed when a repository returns a content-bearing metric", async () => {
+    const repository = createRepository();
+    repository.readRunMetrics = async () => ({
+      ok: true as const,
+      value: { ...metricRecord(), providerResponse: "private response" } as AgentUsageMetricRecord
+    });
+    const { session } = createSession(repository);
+
+    expect(await session.getAgentUsage("usage_run_01")).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_USAGE_RECORD_V20_INVALID" }
+    });
+  });
+
+  test.each([
+    ["body", { requestBody: "private chapter text" }],
+    ["secret", { eventRefs: ["sk-privateCredential"] }],
+    ["path", { eventRefs: ["C:\\Users\\alice\\novel.md"] }],
+    ["unknown enum", { pendingOutcome: "waiting" }],
+    ["unknown version", { schemaVersion: "2.1" }]
+  ])("rejects metrics containing %s before repository access", async (_label, override) => {
+    const { repository, session } = createSession();
+    const result = await session.recordAgentUsage({
+      ...metricRecord(),
+      ...override
+    } as AgentUsageMetricRecord);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_USAGE_RECORD_V20_INVALID" }
+    });
+    expect(repository.calls).toEqual([]);
+  });
+
   test("validates and returns a typed bounded report with detail runs for the selected day", async () => {
     const { repository, session } = createSession();
     const query: AgentUsageQuery = {

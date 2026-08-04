@@ -181,6 +181,10 @@ interface BridgeState {
   readonly budgetPreview: ContextBudgetSnapshot | undefined;
   /** The immutable packed preview used by the next start and rendered in the context inspector. */
   readonly packedPreview: PackedAgentContextPreview | undefined;
+  /** Main-owned exact first-round preview awaiting the author's confirmation click. */
+  readonly sendPreview: NonNullable<AgentComposerContextStatusControl["sendPreview"]> | undefined;
+  /** Persisted per-round send ledger for the active run. */
+  readonly sendLedger: AgentRunPanelProps["sendLedger"];
   /** Rebuilt from the persisted run manifest/artifact, never from the current workspace. */
   readonly packedContextHistory: AgentRunPackedContextHistory | undefined;
   readonly contextPreferenceScope: AgentComposerContextPreferenceScope;
@@ -231,6 +235,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     contextDraft: undefined,
     budgetPreview: undefined,
     packedPreview: undefined,
+    sendPreview: undefined,
+    sendLedger: undefined,
     packedContextHistory: undefined,
     contextPreferenceScope: "run",
     draftPending: false,
@@ -365,6 +371,41 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   async function sendRun(request: string): Promise<AgentRunPanelProps> {
     if (state.startPending) return toProps();
+    const pendingSendPreview = state.sendPreview;
+    if (pendingSendPreview !== undefined) {
+      // A preview is bound to the exact request that produced it. A changed request must
+      // invalidate the binding rather than confirming a stale payload.
+      if (request !== state.userRequest) {
+        state = { ...state, sendPreview: undefined };
+        notify();
+        return sendRun(request);
+      }
+      const confirmSendPreview = api.agentRuns.confirmSendPreview;
+      if (confirmSendPreview === undefined) {
+        state = {
+          ...state,
+          sendPreview: undefined,
+          errorMessage: "当前桌面端不支持确认实际发送预览。请更新后重试。"
+        };
+        notify();
+        return toProps();
+      }
+      state = { ...state, startPending: true, errorMessage: undefined };
+      notify();
+      try {
+        await applyCommandResult(
+          await confirmSendPreview({
+            schemaVersion: "2.0",
+            previewId: pendingSendPreview.previewId,
+            canonicalPayloadChecksum: pendingSendPreview.canonicalPayloadChecksum
+          })
+        );
+        return toProps();
+      } finally {
+        state = { ...state, startPending: false, sendPreview: undefined };
+        notify();
+      }
+    }
     if (context?.beforeStart !== undefined) {
       try {
         if (!(await context.beforeStart())) return toProps();
@@ -404,6 +445,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       permissionPending: false,
       permissionError: undefined,
       planExecution: undefined,
+      sendPreview: undefined,
       conventionsCreateResult: undefined,
       conventionsCreateError: undefined,
       conventionsPolicyPending: false,
@@ -451,6 +493,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         runDraft: prepared.value.runDraft,
         contextDraft: prepared.value.contextDraft,
         packedPreview: undefined,
+        sendPreview: undefined,
         budgetPreview: undefined
       };
       const packedAttempt = await requestPackedPreview(draftToken, "preview-start");
@@ -498,7 +541,24 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         packedContextId: packedPreview.packedContextId,
         packedContextPayloadChecksum: packedPreview.payloadChecksum
       };
-      await applyCommandResult(await api.agentRuns.start(command));
+      const prepareSendPreview = api.agentRuns.prepareSendPreview;
+      if (prepareSendPreview === undefined) {
+        // Compatibility for pre-Task-2.3 test hosts. Real desktop hosts expose the typed preview
+        // methods and never take this direct-start path.
+        await applyCommandResult(await api.agentRuns.start(command));
+        return toProps();
+      }
+      const sendPreview = await prepareSendPreview({
+        schemaVersion: "2.0",
+        commandId: createCommandId("prepare-send-preview"),
+        startCommand: command
+      });
+      if (!sendPreview.ok) {
+        state = { ...state, errorMessage: formatAgentStartError(sendPreview.error) };
+        return toProps();
+      }
+      state = { ...state, sendPreview: sendPreview.value, errorMessage: undefined };
+      notify();
       return toProps();
     } finally {
       state = { ...state, startPending: false };
@@ -905,6 +965,25 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       return;
     }
     const permission = await readBoundPermissionSummary(read.snapshot);
+    const sendLedgerResult = await api.agentRuns.readSendLedger?.(read.snapshot.runId);
+    const sendLedger =
+      sendLedgerResult?.ok === true
+        ? sendLedgerResult.value.map((entry) => ({
+            entryId: entry.entryId,
+            roundNumber: entry.roundNumber,
+            roundKind: entry.roundKind,
+            canonicalPayloadChecksum: entry.canonicalPayloadChecksum,
+            canonicalRoundManifestChecksum: entry.canonicalRoundManifestChecksum,
+            previewId: entry.previewId,
+            sentAtLabel: sendLedgerTimeLabel(entry.sentAt),
+            additions: entry.additions.map((addition) => ({
+              additionId: addition.additionId,
+              kind: addition.kind,
+              content: addition.content,
+              contentChecksum: addition.contentChecksum
+            }))
+          }))
+        : undefined;
     const nextChangeSet = read.changeSet;
     const nextRollbackReview = rollbackReviewFromRead(read.rollbackReview);
     const sameRollbackReview = hasSameRollbackDecisionContext(
@@ -924,6 +1003,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           : failClosedCurrentWritePolicy(read.snapshot.writePolicy),
       events: [...read.events],
       packedContextHistory: read.packedContextHistory,
+      sendLedger,
       assistantText: assistantTextFromEvents(read.events),
       pendingUserInput: read.pendingUserInput,
       diagnostic: read.diagnostic,
@@ -1116,6 +1196,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...(state.packedContextHistory === undefined
         ? {}
         : { packedContextHistory: state.packedContextHistory }),
+      ...(state.sendLedger === undefined ? {} : { sendLedger: state.sendLedger }),
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
       ...(standalone || pendingToolApproval === undefined ? {} : { pendingToolApproval }),
       ...(state.diagnostic === undefined ? {} : { diagnostic: state.diagnostic }),
@@ -1340,6 +1421,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     state = {
       ...state,
       packedPreview: undefined,
+      sendPreview: undefined,
       budgetPreview: result.ok ? result.value : undefined,
       ...(result.ok ? {} : { errorMessage: formatAgentStartError(result.error) })
     };
@@ -1398,7 +1480,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       }
     });
     draftInFlight = next;
-    state = { ...state, draftPending: true, packedPreview: undefined };
+    state = { ...state, draftPending: true, packedPreview: undefined, sendPreview: undefined };
     notify();
     return next;
   }
@@ -1676,6 +1758,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...state,
       contextPreferencePending: true,
       packedPreview: undefined,
+      sendPreview: undefined,
       errorMessage: undefined
     };
     notify();
@@ -1901,6 +1984,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...state,
       runDraft: result.value.runDraft,
       contextDraft: result.value.contextDraft,
+      sendPreview: undefined,
       operationMode: result.value.runDraft.operationMode,
       contextMode: result.value.runDraft.contextMode,
       writePolicy: failClosedCurrentWritePolicy(result.value.runDraft.writePolicy),
@@ -2132,6 +2216,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
                 }
               : {})
           }),
+      ...(state.sendPreview === undefined ? {} : { sendPreview: state.sendPreview }),
       conventions: {
         relativePath:
           conventionsSource?.relativePath === "AGENTS.md" ||
@@ -2274,6 +2359,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       runDraft: draft,
       contextDraft: prepared.value.contextDraft,
       packedPreview: undefined,
+      sendPreview: undefined,
       budgetPreview: undefined
     };
     const result = await readPermissionSummary({
@@ -2330,7 +2416,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         ? {}
         : { permission: permissionControl() }),
       onRequestChange: (request) => {
-        state = { ...state, userRequest: request };
+        state = { ...state, userRequest: request, sendPreview: undefined };
         notify();
       },
       onOperationModeChange: (mode) => {
@@ -2343,14 +2429,15 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           writePolicyAcknowledged: false,
           permissionSummary: undefined,
           permissionPending: false,
-          permissionError: undefined
+          permissionError: undefined,
+          sendPreview: undefined
         };
         notify();
         updateOperationModeDraft(mode);
       },
       onContextModeChange: (mode) => {
         if (standalone) return;
-        state = { ...state, contextMode: mode };
+        state = { ...state, contextMode: mode, sendPreview: undefined };
         notify();
         updateRunDraftChoice({ kind: "set_context_mode", contextMode: mode }, true);
       },
@@ -2362,7 +2449,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           ...state,
           writePolicy: effectivePolicy,
           executionWritePolicy: effectivePolicy,
-          writePolicyAcknowledged: false
+          writePolicyAcknowledged: false,
+          sendPreview: undefined
         };
         notify();
         updateRunDraftChoice(
@@ -2380,7 +2468,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           ...state,
           executionWritePolicy: policy,
           writePolicy: "write_before_confirmation",
-          writePolicyAcknowledged: false
+          writePolicyAcknowledged: false,
+          sendPreview: undefined
         };
         notify();
         updateRunDraftChoice(
@@ -2464,7 +2553,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       }
       const desiredContextMode = desiredWorkspaceContextMode(nextContext);
       if (desiredContextMode !== undefined && state.contextMode !== desiredContextMode) {
-        state = { ...state, contextMode: desiredContextMode };
+        state = { ...state, contextMode: desiredContextMode, sendPreview: undefined };
         if (state.runDraft !== undefined) {
           updateRunDraftChoice({ kind: "set_context_mode", contextMode: desiredContextMode }, true);
         }
@@ -2657,6 +2746,8 @@ function resetRunState(state: BridgeState, scope?: AgentContextScope): BridgeSta
     contextDraft: undefined,
     budgetPreview: undefined,
     packedPreview: undefined,
+    sendPreview: undefined,
+    sendLedger: undefined,
     packedContextHistory: undefined,
     contextPreferenceScope: "run",
     draftPending: false,
@@ -3489,6 +3580,11 @@ function formatTokenCount(tokens: number): string {
     return `${thousands >= 100 ? Math.round(thousands) : thousands.toFixed(1).replace(/\.0$/u, "")}k`;
   }
   return `${tokens}`;
+}
+
+function sendLedgerTimeLabel(sentAt: string): string {
+  const match = /T(\d{2}:\d{2})/.exec(sentAt);
+  return match?.[1] ?? sentAt;
 }
 
 function appendEvent(events: readonly AgentRunEvent[], event: AgentRunEvent): AgentRunEvent[] {

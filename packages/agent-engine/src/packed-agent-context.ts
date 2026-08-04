@@ -6,6 +6,11 @@ import type {
   AgentContextSourceKind,
   AgentContextTruncationRange
 } from "./context-snapshot.js";
+import {
+  parseProviderSemanticVersionSetV1,
+  providerSemanticVersionSetChecksum,
+  type ProviderSemanticVersionSetV1
+} from "./provider-semantic-version-set.js";
 
 export type AgentContextSelectionPolicy = "automatic" | "explicit" | "pinned";
 export type AgentContextPreferenceScope = "automatic" | "run" | "project";
@@ -101,8 +106,30 @@ export interface PackedAgentContextManifestV12 extends Omit<
   readonly manifestChecksum: string;
 }
 
+export interface PackedAgentContextSharingRevisionV2 {
+  readonly defaultsRevision: string;
+  readonly runGrantRevision: string;
+}
+
+/** Message-protocol 2.0 manifest. It is intentionally not a normalized v1.2 view. */
+export interface PackedAgentContextManifestV20 extends Omit<
+  PackedAgentContextManifestV12,
+  "schemaVersion" | "manifestChecksum"
+> {
+  readonly schemaVersion: "2.0";
+  readonly messageOrderVersion: "2.0";
+  readonly roundId: string;
+  readonly sharing: PackedAgentContextSharingRevisionV2;
+  readonly providerSemanticVersionSet: ProviderSemanticVersionSetV1;
+  readonly providerSemanticVersionSetChecksum: string;
+  readonly manifestChecksum: string;
+}
+
 export type PackedAgentContextManifest =
-  PackedAgentContextManifestV10 | PackedAgentContextManifestV11 | PackedAgentContextManifestV12;
+  | PackedAgentContextManifestV10
+  | PackedAgentContextManifestV11
+  | PackedAgentContextManifestV12
+  | PackedAgentContextManifestV20;
 
 export interface PackedAgentContextRebuildSource {
   readonly refId: string;
@@ -140,6 +167,31 @@ export interface CreatePackedAgentContextInput {
   readonly tokenStats: PackedAgentContextTokenStats;
   readonly createdAt: string;
 }
+
+export interface CreatePackedAgentContextManifestV2Input {
+  readonly roundId: string;
+  readonly sharing: PackedAgentContextSharingRevisionV2;
+  readonly providerSemanticVersionSet: ProviderSemanticVersionSetV1;
+}
+
+const PACKED_MANIFEST_V2_FIELDS = Object.freeze([
+  "schemaVersion",
+  "packedContextId",
+  "payloadChecksum",
+  "scope",
+  "contextProfileId",
+  "blocks",
+  "sources",
+  "excludedSources",
+  "tokenStats",
+  "createdAt",
+  "messageOrderVersion",
+  "roundId",
+  "sharing",
+  "providerSemanticVersionSet",
+  "providerSemanticVersionSetChecksum",
+  "manifestChecksum"
+]);
 
 export function createPackedAgentContext(input: CreatePackedAgentContextInput): PackedAgentContext {
   const blocks = input.blocks.map((block, order) => {
@@ -200,6 +252,144 @@ export function createPackedAgentContextManifest(
     ...unsigned,
     manifestChecksum: packedAgentContextManifestChecksum(unsigned)
   });
+}
+
+/** Strict 2.0 writer. The legacy writer above remains available only for historical run paths. */
+export function createPackedAgentContextManifestV2(
+  packed: PackedAgentContext,
+  input: CreatePackedAgentContextManifestV2Input
+): PackedAgentContextManifestV20 {
+  if (!validatePackedAgentContext(packed) || !isSafeToken(input.roundId)) {
+    throw new Error("PACKED_AGENT_CONTEXT_INVALID");
+  }
+  if (!isSharingRevisionV2(input.sharing)) throw new Error("PACKED_AGENT_CONTEXT_INVALID");
+  let providerSet: ProviderSemanticVersionSetV1;
+  try {
+    providerSet = parseProviderSemanticVersionSetV1(input.providerSemanticVersionSet);
+  } catch {
+    throw new Error("PACKED_AGENT_CONTEXT_INVALID");
+  }
+  const providerChecksum = providerSemanticVersionSetChecksum(providerSet);
+  const unsigned = {
+    schemaVersion: "2.0" as const,
+    packedContextId: packed.packedContextId,
+    payloadChecksum: packed.payloadChecksum,
+    scope: structuredClone(packed.scope),
+    contextProfileId: packed.contextProfileId,
+    blocks: packed.blocks.map(({ content: _content, role: _role, ...block }) => {
+      void _content;
+      void _role;
+      return block;
+    }),
+    sources: packed.sources.map((source) => ({ ...source })),
+    excludedSources: [...packed.excludedSources],
+    tokenStats: { ...packed.tokenStats },
+    createdAt: packed.createdAt,
+    messageOrderVersion: "2.0" as const,
+    roundId: input.roundId,
+    sharing: structuredClone(input.sharing),
+    providerSemanticVersionSet: structuredClone(providerSet),
+    providerSemanticVersionSetChecksum: providerChecksum
+  };
+  return parsePackedAgentContextManifestV2({
+    ...unsigned,
+    manifestChecksum: checksumText(stableSerialize(unsigned))
+  });
+}
+
+export function parsePackedAgentContextManifestV2(
+  value: unknown,
+  expectedChecksum?: string
+): PackedAgentContextManifestV20 {
+  if (!isRecord(value) || !hasExactlyFields(value, PACKED_MANIFEST_V2_FIELDS)) {
+    throw new Error("PACKED_AGENT_CONTEXT_MANIFEST_INVALID");
+  }
+  if (
+    value["schemaVersion"] !== "2.0" ||
+    value["messageOrderVersion"] !== "2.0" ||
+    !isSafeToken(value["roundId"]) ||
+    !isSharingRevisionV2(value["sharing"]) ||
+    !isStrictContextScope(value["scope"]) ||
+    !isContextProfileId(value["contextProfileId"]) ||
+    !Array.isArray(value["blocks"]) ||
+    !value["blocks"].every(isStrictPackedBlockManifest) ||
+    !Array.isArray(value["sources"]) ||
+    !value["sources"].every(isStrictPackedSource) ||
+    !Array.isArray(value["excludedSources"]) ||
+    !value["excludedSources"].every((refId) => typeof refId === "string") ||
+    !isStrictTokenStats(value["tokenStats"]) ||
+    !isIsoTimestamp(value["createdAt"]) ||
+    !isChecksum(value["payloadChecksum"]) ||
+    !isChecksum(value["providerSemanticVersionSetChecksum"]) ||
+    !isChecksum(value["manifestChecksum"]) ||
+    typeof value["packedContextId"] !== "string"
+  ) {
+    throw new Error("PACKED_AGENT_CONTEXT_MANIFEST_INVALID");
+  }
+  const blocks = value["blocks"] as unknown as readonly PackedAgentContextBlockManifest[];
+  const sources = value["sources"] as unknown as readonly PackedAgentContextSourceManifest[];
+  const excludedSources = value["excludedSources"] as unknown as readonly string[];
+  if (
+    value["packedContextId"] !==
+      `packed_context_${String(value["payloadChecksum"]).slice(0, 32)}` ||
+    !hasValidPackedRelationships(blocks, sources) ||
+    stableSerialize(excludedSources) !==
+      stableSerialize(
+        sources.filter((source) => source.state === "excluded").map((source) => source.refId)
+      )
+  ) {
+    throw new Error("PACKED_AGENT_CONTEXT_MANIFEST_INVALID");
+  }
+  let providerSet: ProviderSemanticVersionSetV1;
+  try {
+    providerSet = parseProviderSemanticVersionSetV1(
+      value["providerSemanticVersionSet"],
+      value["providerSemanticVersionSetChecksum"] as string
+    );
+  } catch {
+    throw new Error("PACKED_AGENT_CONTEXT_MANIFEST_INVALID");
+  }
+  const unsigned = {
+    schemaVersion: "2.0" as const,
+    packedContextId: value["packedContextId"] as string,
+    payloadChecksum: value["payloadChecksum"] as string,
+    scope: value["scope"] as AgentContextScope,
+    contextProfileId: value["contextProfileId"] as AgentContextProfileId,
+    blocks,
+    sources,
+    excludedSources,
+    tokenStats: value["tokenStats"] as unknown as PackedAgentContextTokenStats,
+    createdAt: value["createdAt"] as string,
+    messageOrderVersion: "2.0" as const,
+    roundId: value["roundId"] as string,
+    sharing: value["sharing"] as unknown as PackedAgentContextSharingRevisionV2,
+    providerSemanticVersionSet: providerSet,
+    providerSemanticVersionSetChecksum: value["providerSemanticVersionSetChecksum"] as string
+  };
+  const calculated = checksumText(stableSerialize(unsigned));
+  if (
+    value["manifestChecksum"] !== calculated ||
+    (expectedChecksum !== undefined && calculated !== expectedChecksum)
+  ) {
+    throw new Error("PACKED_AGENT_CONTEXT_MANIFEST_INVALID");
+  }
+  return deepFreeze({ ...unsigned, manifestChecksum: calculated });
+}
+
+export function serializePackedAgentContextManifestV2(
+  value: PackedAgentContextManifestV20
+): string {
+  return stableSerialize(parsePackedAgentContextManifestV2(value));
+}
+
+/** Explicit legacy reader. It never fabricates 2.0 authority, sharing, or semantic-version facts. */
+export function readLegacyPackedAgentContextManifest(
+  value: unknown
+): PackedAgentContextManifestV10 | PackedAgentContextManifestV11 | PackedAgentContextManifestV12 {
+  if (!validateLegacyPackedAgentContextManifest(value)) {
+    throw new Error("PACKED_AGENT_CONTEXT_MANIFEST_INVALID");
+  }
+  return deepFreeze(structuredClone(value));
 }
 
 /** The canonical checksum for every persisted packed-context audit fact except itself. */
@@ -295,7 +485,15 @@ export function rebuildPackedAgentContextFromManifest(input: {
   } catch {
     return { status: "stale", reason: "manifest_mismatch" };
   }
-  return stableSerialize(createPackedAgentContextManifest(rebuilt)) === stableSerialize(manifest)
+  const rebuiltManifest =
+    manifest.schemaVersion === "2.0"
+      ? createPackedAgentContextManifestV2(rebuilt, {
+          roundId: manifest.roundId,
+          sharing: manifest.sharing,
+          providerSemanticVersionSet: manifest.providerSemanticVersionSet
+        })
+      : createPackedAgentContextManifest(rebuilt);
+  return stableSerialize(rebuiltManifest) === stableSerialize(manifest)
     ? { status: "available", packedContext: rebuilt }
     : { status: "stale", reason: "manifest_mismatch" };
 }
@@ -344,6 +542,21 @@ export function validatePackedAgentContext(value: unknown): value is PackedAgent
 export function validatePackedAgentContextManifest(
   value: unknown
 ): value is PackedAgentContextManifest {
+  if (isRecord(value) && value["schemaVersion"] === "2.0") {
+    try {
+      parsePackedAgentContextManifestV2(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return validateLegacyPackedAgentContextManifest(value);
+}
+
+function validateLegacyPackedAgentContextManifest(
+  value: unknown
+): value is
+  PackedAgentContextManifestV10 | PackedAgentContextManifestV11 | PackedAgentContextManifestV12 {
   if (
     !isRecord(value) ||
     (value["schemaVersion"] !== "1.0" &&
@@ -453,6 +666,23 @@ function isPackedBlockManifest(value: unknown): value is PackedAgentContextBlock
   );
 }
 
+function isStrictPackedBlockManifest(value: unknown): value is PackedAgentContextBlockManifest {
+  return (
+    isRecord(value) &&
+    hasExactlyFields(value, [
+      "blockId",
+      "refId",
+      "sourceKind",
+      "order",
+      "checksum",
+      "tokenCount",
+      "precision",
+      "truncationRange"
+    ]) &&
+    isPackedBlockManifest(value)
+  );
+}
+
 function hasCanonicalBlockOrder(blocks: readonly PackedAgentContextBlockManifest[]): boolean {
   return blocks.every(
     (block, order) =>
@@ -516,6 +746,27 @@ function isPackedSource(value: unknown): value is PackedAgentContextSourceManife
   );
 }
 
+function isStrictPackedSource(value: unknown): value is PackedAgentContextSourceManifest {
+  if (!isRecord(value)) return false;
+  const expected = [
+    "refId",
+    "sourceKind",
+    ...(value["relativePath"] === undefined ? [] : ["relativePath"]),
+    ...(value["assetId"] === undefined ? [] : ["assetId"]),
+    "sourceRevision",
+    "sourceChecksum",
+    "tokenCount",
+    "precision",
+    "state",
+    "selectionReason",
+    "selectionPolicy",
+    "preferenceScope",
+    "priority",
+    "truncationRange"
+  ];
+  return hasExactlyFields(value, expected) && isPackedSource(value);
+}
+
 function isTokenStats(value: unknown): value is PackedAgentContextTokenStats {
   return (
     isRecord(value) &&
@@ -528,6 +779,21 @@ function isTokenStats(value: unknown): value is PackedAgentContextTokenStats {
   );
 }
 
+function isStrictTokenStats(value: unknown): value is PackedAgentContextTokenStats {
+  return (
+    isRecord(value) &&
+    hasExactlyFields(value, [
+      "contextTokens",
+      "pinnedTokens",
+      "usedTokens",
+      "safeInputBudget",
+      "remainingTokens",
+      "precision"
+    ]) &&
+    isTokenStats(value)
+  );
+}
+
 function isContextScope(value: unknown): value is AgentContextScope {
   return (
     isRecord(value) &&
@@ -536,6 +802,22 @@ function isContextScope(value: unknown): value is AgentContextScope {
         (value["workspaceKind"] === "creativeProject" ||
           value["workspaceKind"] === "engineeringWorkspace") &&
         typeof value["workspaceId"] === "string"))
+  );
+}
+
+function isStrictContextScope(value: unknown): value is AgentContextScope {
+  if (!isRecord(value)) return false;
+  const expected =
+    value["kind"] === "standalone" ? ["kind", "scopeId"] : ["kind", "workspaceKind", "workspaceId"];
+  return hasExactlyFields(value, expected) && isContextScope(value);
+}
+
+function isSharingRevisionV2(value: unknown): value is PackedAgentContextSharingRevisionV2 {
+  return (
+    isRecord(value) &&
+    hasExactlyFields(value, ["defaultsRevision", "runGrantRevision"]) &&
+    isSafeToken(value["defaultsRevision"]) &&
+    isSafeToken(value["runGrantRevision"])
   );
 }
 
@@ -590,6 +872,22 @@ function isChecksum(value: unknown): value is string {
 
 function isIsoTimestamp(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value));
+}
+
+function isSafeToken(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    // eslint-disable-next-line no-control-regex -- Persisted identities reject controls.
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function hasExactlyFields(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  const expected = [...fields].sort();
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

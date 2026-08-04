@@ -7,11 +7,19 @@ import {
   type AgentContextScope
 } from "./agent-context-scope.js";
 import {
+  parsePackedAgentContextManifestV2,
   validatePackedAgentContextManifest,
   type AgentContextPreferenceScope,
   type AgentContextSelectionPolicy,
-  type PackedAgentContextManifest
+  type PackedAgentContextManifest,
+  type PackedAgentContextManifestV20,
+  type PackedAgentContextSharingRevisionV2
 } from "./packed-agent-context.js";
+import {
+  parseProviderSemanticVersionSetV1,
+  providerSemanticVersionSetChecksum,
+  type ProviderSemanticVersionSetV1
+} from "./provider-semantic-version-set.js";
 
 export type AgentContextSourceKind =
   | "disk_file"
@@ -197,6 +205,14 @@ export interface AgentContextMaterializationProvenance {
   readonly messageOrderVersion: "1.0";
 }
 
+export interface AgentContextMaterializationProvenanceV20 extends Omit<
+  AgentContextMaterializationProvenance,
+  "schemaVersion" | "messageOrderVersion"
+> {
+  readonly schemaVersion: "2.0";
+  readonly messageOrderVersion: "2.0";
+}
+
 export interface AgentContextSnapshotV12 extends Omit<
   AgentContextSnapshotV11,
   "schemaVersion" | "sources"
@@ -222,9 +238,28 @@ export interface AgentContextSnapshotV14 extends Omit<
 > {
   readonly schemaVersion: "1.4";
   readonly sources: readonly AgentContextSourceV14[];
-  readonly packedContextManifest: PackedAgentContextManifest | null;
+  readonly packedContextManifest: Exclude<
+    PackedAgentContextManifest,
+    PackedAgentContextManifestV20
+  > | null;
 }
 
+/** Message-protocol 2.0 snapshot. Legacy snapshots are never normalized into this shape. */
+export interface AgentContextSnapshotV20 extends Omit<
+  AgentContextSnapshotV14,
+  "schemaVersion" | "materialization" | "packedContextManifest"
+> {
+  readonly schemaVersion: "2.0";
+  readonly materialization: AgentContextMaterializationProvenanceV20;
+  readonly roundId: string;
+  readonly sharing: PackedAgentContextSharingRevisionV2;
+  readonly providerSemanticVersionSet: ProviderSemanticVersionSetV1;
+  readonly providerSemanticVersionSetChecksum: string;
+  readonly packedContextManifest: PackedAgentContextManifestV20 | null;
+  readonly snapshotChecksum: string;
+}
+
+/** Active legacy runtime view; protocol-2 callers opt into AgentContextSnapshotV20 explicitly. */
 export type AgentContextSnapshot = AgentContextSnapshotV14;
 
 export interface CreateAgentContextSnapshotInput {
@@ -239,13 +274,46 @@ export interface CreateAgentContextSnapshotInput {
   readonly materializationArtifactSourceRefs?: readonly string[];
   readonly excludedSources?: readonly string[];
   readonly compactionRevision?: number;
-  readonly packedContextManifest?: PackedAgentContextManifest | null;
+  readonly packedContextManifest?: Exclude<
+    PackedAgentContextManifest,
+    PackedAgentContextManifestV20
+  > | null;
 }
+
+export interface CreateAgentContextSnapshotV2Input extends Omit<
+  CreateAgentContextSnapshotInput,
+  "materialization" | "packedContextManifest"
+> {
+  readonly materialization: AgentContextMaterializationProvenanceV20;
+  readonly roundId: string;
+  readonly sharing: PackedAgentContextSharingRevisionV2;
+  readonly providerSemanticVersionSet: ProviderSemanticVersionSetV1;
+  readonly packedContextManifest?: PackedAgentContextManifestV20 | null;
+}
+
+const CONTEXT_SNAPSHOT_V2_FIELDS = Object.freeze([
+  "schemaVersion",
+  "contextSnapshotId",
+  "runId",
+  "scope",
+  "contextProfileId",
+  "materialization",
+  "createdAt",
+  "compactionRevision",
+  "sources",
+  "excludedSources",
+  "packedContextManifest",
+  "roundId",
+  "sharing",
+  "providerSemanticVersionSet",
+  "providerSemanticVersionSetChecksum",
+  "snapshotChecksum"
+]);
 
 export function createAgentContextSnapshot(
   input: CreateAgentContextSnapshotInput
-): AgentContextSnapshot {
-  const snapshot: AgentContextSnapshot = {
+): AgentContextSnapshotV14 {
+  const snapshot: AgentContextSnapshotV14 = {
     schemaVersion: "1.4",
     contextSnapshotId: input.contextSnapshotId,
     runId: input.runId,
@@ -303,6 +371,167 @@ export function createAgentContextSnapshot(
     throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
   }
   return snapshot;
+}
+
+export function createAgentContextSnapshotV2(
+  input: CreateAgentContextSnapshotV2Input
+): AgentContextSnapshotV20 {
+  if (!isMaterializationProvenanceV20(input.materialization) || !isSafeToken(input.roundId)) {
+    throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  }
+  if (!isSharingRevisionV20(input.sharing)) throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  let providerSet: ProviderSemanticVersionSetV1;
+  try {
+    providerSet = parseProviderSemanticVersionSetV1(input.providerSemanticVersionSet);
+  } catch {
+    throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  }
+  const providerChecksum = providerSemanticVersionSetChecksum(providerSet);
+  let packed: PackedAgentContextManifestV20 | null = null;
+  if (input.packedContextManifest !== undefined && input.packedContextManifest !== null) {
+    try {
+      packed = parsePackedAgentContextManifestV2(input.packedContextManifest);
+    } catch {
+      throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    }
+    if (
+      packed.roundId !== input.roundId ||
+      packed.providerSemanticVersionSetChecksum !== providerChecksum ||
+      stableSerialize(packed.providerSemanticVersionSet) !== stableSerialize(providerSet) ||
+      stableSerialize(packed.sharing) !== stableSerialize(input.sharing)
+    ) {
+      throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    }
+  }
+  const legacy = createAgentContextSnapshot({
+    ...input,
+    materialization: {
+      schemaVersion: "1.0",
+      profileVersion: input.materialization.profileVersion,
+      guidanceTemplateChecksum: input.materialization.guidanceTemplateChecksum,
+      stablePrefixChecksum: input.materialization.stablePrefixChecksum,
+      messageOrderVersion: "1.0"
+    },
+    packedContextManifest: null
+  });
+  const excludedRefs = new Set(input.excludedSources ?? []);
+  const unsigned = {
+    ...legacy,
+    schemaVersion: "2.0" as const,
+    materialization: structuredClone(input.materialization),
+    sources: legacy.sources.map((source) => ({
+      ...source,
+      state: excludedRefs.has(source.refId) ? ("excluded" as const) : ("active" as const)
+    })),
+    roundId: input.roundId,
+    sharing: structuredClone(input.sharing),
+    providerSemanticVersionSet: structuredClone(providerSet),
+    providerSemanticVersionSetChecksum: providerChecksum,
+    packedContextManifest: packed === null ? null : structuredClone(packed)
+  };
+  return parseAgentContextSnapshotV2({
+    ...unsigned,
+    snapshotChecksum: checksumText(stableSerialize(unsigned))
+  });
+}
+
+export function parseAgentContextSnapshotV2(
+  value: unknown,
+  expectedChecksum?: string
+): AgentContextSnapshotV20 {
+  if (!isRecord(value) || !hasExactlyFields(value, CONTEXT_SNAPSHOT_V2_FIELDS)) {
+    throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  }
+  if (
+    value["schemaVersion"] !== "2.0" ||
+    !isSafeToken(value["contextSnapshotId"]) ||
+    !isSafeToken(value["runId"]) ||
+    !isSafeToken(value["roundId"]) ||
+    !isIsoTimestamp(value["createdAt"]) ||
+    !isNonNegativeInteger(value["compactionRevision"]) ||
+    !isStrictContextScopeV20(value["scope"]) ||
+    !isContextProfileId(value["contextProfileId"]) ||
+    !isMaterializationProvenanceV20(value["materialization"]) ||
+    !isSharingRevisionV20(value["sharing"]) ||
+    !Array.isArray(value["sources"]) ||
+    !value["sources"].every(isStrictAgentContextSourceV20) ||
+    !Array.isArray(value["excludedSources"]) ||
+    !value["excludedSources"].every((refId) => typeof refId === "string") ||
+    !isChecksum(value["providerSemanticVersionSetChecksum"]) ||
+    !isChecksum(value["snapshotChecksum"])
+  ) {
+    throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  }
+  const scope = value["scope"] as unknown as AgentContextScope;
+  const profileId = value["contextProfileId"] as AgentContextProfileId;
+  const sources = value["sources"] as unknown as readonly AgentContextSourceV14[];
+  const excludedSources = value["excludedSources"] as unknown as readonly string[];
+  if (
+    !sources.every(
+      (source) =>
+        isAgentContextSourceV14(source) && sourceMatchesSnapshotIdentity(source, scope, profileId)
+    ) ||
+    !hasCanonicalSnapshotSourceRelationships(sources, excludedSources)
+  ) {
+    throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  }
+  let providerSet: ProviderSemanticVersionSetV1;
+  try {
+    providerSet = parseProviderSemanticVersionSetV1(
+      value["providerSemanticVersionSet"],
+      value["providerSemanticVersionSetChecksum"] as string
+    );
+  } catch {
+    throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  }
+  let packed: PackedAgentContextManifestV20 | null = null;
+  if (value["packedContextManifest"] !== null) {
+    try {
+      packed = parsePackedAgentContextManifestV2(value["packedContextManifest"]);
+    } catch {
+      throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    }
+    if (
+      packed.roundId !== value["roundId"] ||
+      packed.providerSemanticVersionSetChecksum !== value["providerSemanticVersionSetChecksum"] ||
+      stableSerialize(packed.providerSemanticVersionSet) !== stableSerialize(providerSet) ||
+      stableSerialize(packed.sharing) !== stableSerialize(value["sharing"]) ||
+      !packedManifestMatchesSnapshot(packed, scope, profileId, sources, excludedSources)
+    ) {
+      throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    }
+  }
+  const unsigned = {
+    schemaVersion: "2.0" as const,
+    contextSnapshotId: value["contextSnapshotId"] as string,
+    runId: value["runId"] as string,
+    scope,
+    contextProfileId: profileId,
+    materialization: value[
+      "materialization"
+    ] as unknown as AgentContextMaterializationProvenanceV20,
+    createdAt: value["createdAt"] as string,
+    compactionRevision: value["compactionRevision"] as number,
+    sources,
+    excludedSources,
+    packedContextManifest: packed,
+    roundId: value["roundId"] as string,
+    sharing: value["sharing"] as unknown as PackedAgentContextSharingRevisionV2,
+    providerSemanticVersionSet: providerSet,
+    providerSemanticVersionSetChecksum: value["providerSemanticVersionSetChecksum"] as string
+  };
+  const calculated = checksumText(stableSerialize(unsigned));
+  if (
+    value["snapshotChecksum"] !== calculated ||
+    (expectedChecksum !== undefined && calculated !== expectedChecksum)
+  ) {
+    throw new Error("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  }
+  return deepFreeze({ ...unsigned, snapshotChecksum: calculated });
+}
+
+export function serializeAgentContextSnapshotV2(value: AgentContextSnapshotV20): string {
+  return stableSerialize(parseAgentContextSnapshotV2(value));
 }
 
 /**
@@ -399,6 +628,18 @@ export function normalizeAgentContextSnapshot(
 }
 
 export function validateAgentContextSnapshot(value: JsonObject): boolean {
+  if (value["schemaVersion"] === "2.0") {
+    try {
+      parseAgentContextSnapshotV2(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return validateLegacyAgentContextSnapshot(value);
+}
+
+function validateLegacyAgentContextSnapshot(value: JsonObject): boolean {
   if (value["schemaVersion"] !== "1.4") return false;
   if (
     typeof value["contextSnapshotId"] !== "string" ||
@@ -427,6 +668,206 @@ export function validateAgentContextSnapshot(value: JsonObject): boolean {
       isAgentContextSourceV14(source) &&
       sourceMatchesSnapshotIdentity(source, scope, contextProfileId)
   );
+}
+
+function isStrictAgentContextSourceV20(value: unknown): value is AgentContextSourceV14 {
+  if (!isRecord(value)) return false;
+  const fields = [
+    "refId",
+    "sourceKind",
+    ...(value["relativePath"] === undefined ? [] : ["relativePath"]),
+    ...(value["assetId"] === undefined ? [] : ["assetId"]),
+    "checksum",
+    "dirty",
+    "capturedAt",
+    ...(value["range"] === undefined ? [] : ["range"]),
+    "layer",
+    "sourceRevision",
+    "tokenCount",
+    "precision",
+    "state",
+    "artifactId",
+    "materializationOrder",
+    "sourceMaterialization",
+    "evictionPointer",
+    "selectionReason",
+    "selectionPolicy",
+    "preferenceScope",
+    "priority"
+  ];
+  return (
+    hasExactlyFields(value, fields) &&
+    isAgentContextSourceV14(value) &&
+    (value["sourceMaterialization"] === null ||
+      isStrictSourceMaterializationV20(value["sourceMaterialization"])) &&
+    (value["evictionPointer"] === null || isStrictEvictionPointerV20(value["evictionPointer"]))
+  );
+}
+
+function hasCanonicalSnapshotSourceRelationships(
+  sources: readonly AgentContextSourceV14[],
+  excludedSources: readonly string[]
+): boolean {
+  const refs = new Set<string>();
+  for (const [order, source] of sources.entries()) {
+    if (
+      source.refId.length === 0 ||
+      refs.has(source.refId) ||
+      source.materializationOrder !== order ||
+      !isIsoTimestamp(source.capturedAt) ||
+      (source.sourceKind === "system_guidance" && source.state !== "active")
+    ) {
+      return false;
+    }
+    refs.add(source.refId);
+  }
+  return (
+    stableSerialize(excludedSources) ===
+    stableSerialize(
+      sources.filter((source) => source.state === "excluded").map((source) => source.refId)
+    )
+  );
+}
+
+function packedManifestMatchesSnapshot(
+  packed: PackedAgentContextManifestV20,
+  scope: AgentContextScope,
+  profileId: AgentContextProfileId,
+  sources: readonly AgentContextSourceV14[],
+  excludedSources: readonly string[]
+): boolean {
+  if (
+    stableSerialize(packed.scope) !== stableSerialize(scope) ||
+    packed.contextProfileId !== profileId ||
+    stableSerialize(packed.excludedSources) !== stableSerialize(excludedSources)
+  ) {
+    return false;
+  }
+  const contextSources = sources.filter((source) => source.sourceKind !== "system_guidance");
+  if (contextSources.length !== packed.sources.length) return false;
+  return packed.sources.every((packedSource, order) => {
+    const source = contextSources[order];
+    return (
+      source !== undefined &&
+      packedSource.refId === source.refId &&
+      packedSource.sourceKind === source.sourceKind &&
+      packedSource.relativePath === source.relativePath &&
+      packedSource.assetId === source.assetId &&
+      packedSource.sourceRevision === source.sourceRevision &&
+      packedSource.sourceChecksum === source.checksum &&
+      packedSource.state === source.state
+    );
+  });
+}
+
+function isStrictSourceMaterializationV20(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const fields =
+    value["kind"] === "project_conventions"
+      ? [
+          "schemaVersion",
+          "artifactId",
+          "readerVersion",
+          "sourceIdentity",
+          "instructionPolicy",
+          "workspaceTrust",
+          "tokenCount",
+          "truncationRange",
+          "kind",
+          "originalChecksum",
+          "injectedChecksum"
+        ]
+      : [
+          "schemaVersion",
+          "artifactId",
+          "readerVersion",
+          "sourceIdentity",
+          "instructionPolicy",
+          "workspaceTrust",
+          "tokenCount",
+          "truncationRange",
+          "kind",
+          "dependencyManifest",
+          "dependencyManifestChecksum",
+          "dependencyRevisionChecksum",
+          ...(value["dependencyEntries"] === undefined ? [] : ["dependencyEntries"]),
+          ...(value["dependencyEntriesChecksum"] === undefined
+            ? []
+            : ["dependencyEntriesChecksum"]),
+          "materializedChecksum",
+          "rereadHint"
+        ];
+  return (
+    hasExactlyFields(value, fields) &&
+    isStrictSourceIdentityV20(value["sourceIdentity"]) &&
+    validateAgentContextSourceMaterialization(value)
+  );
+}
+
+function isStrictSourceIdentityV20(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactlyFields(value, [
+      "workspaceId",
+      "contextProfileId",
+      "canonicalRootIdentity",
+      ...(value["relativePath"] === undefined ? [] : ["relativePath"])
+    ]) &&
+    isSourceIdentity(value)
+  );
+}
+
+function isStrictEvictionPointerV20(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactlyFields(value, [
+      "schemaVersion",
+      "artifactId",
+      "dependencyManifestChecksum",
+      "rereadHint"
+    ]) &&
+    isEvictionPointer(value)
+  );
+}
+
+function isMaterializationProvenanceV20(
+  value: unknown
+): value is AgentContextMaterializationProvenanceV20 {
+  return (
+    isRecord(value) &&
+    hasExactlyFields(value, [
+      "schemaVersion",
+      "profileVersion",
+      "guidanceTemplateChecksum",
+      "stablePrefixChecksum",
+      "messageOrderVersion"
+    ]) &&
+    value["schemaVersion"] === "2.0" &&
+    isNonEmptyString(value["profileVersion"]) &&
+    isNonEmptyString(value["guidanceTemplateChecksum"]) &&
+    isNonEmptyString(value["stablePrefixChecksum"]) &&
+    value["messageOrderVersion"] === "2.0"
+  );
+}
+
+function isSharingRevisionV20(value: unknown): value is PackedAgentContextSharingRevisionV2 {
+  return (
+    isRecord(value) &&
+    hasExactlyFields(value, ["defaultsRevision", "runGrantRevision"]) &&
+    isSafeToken(value["defaultsRevision"]) &&
+    isSafeToken(value["runGrantRevision"])
+  );
+}
+
+function isStrictContextScopeV20(value: unknown): value is AgentContextScope {
+  if (!isRecord(value)) return false;
+  const fields =
+    value["kind"] === "standalone" ? ["kind", "scopeId"] : ["kind", "workspaceKind", "workspaceId"];
+  try {
+    return hasExactlyFields(value, fields) && normalizeAgentContextScope(value) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 function sourceMatchesSnapshotIdentity(
@@ -542,7 +983,9 @@ function isPriority(value: unknown): value is number {
 }
 
 function isPackedContextManifest(value: unknown): value is PackedAgentContextManifest {
-  return validatePackedAgentContextManifest(value);
+  return (
+    isRecord(value) && value["schemaVersion"] !== "2.0" && validatePackedAgentContextManifest(value)
+  );
 }
 
 export function validateAgentContextSourceMaterialization(
@@ -855,6 +1298,28 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isSafeToken(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    // eslint-disable-next-line no-control-regex -- Persisted identities reject controls.
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0) return false;
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.getTime()) && timestamp.toISOString() === value;
+}
+
+function hasExactlyFields(value: JsonObject, fields: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  const expected = [...fields].sort();
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
+}
+
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -933,4 +1398,24 @@ function sameSourceIdentity(
 
 function checksumText(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableSerialize(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }

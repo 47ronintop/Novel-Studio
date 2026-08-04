@@ -195,6 +195,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         workspaceTrust: workspaceContextPolicy.workspaceTrust,
         projectConventionsEnabled: workspaceContextPolicy.projectConventionsEnabled,
         contextSourcePreferences: workspaceContextPolicy.sourcePreferences,
+        sharingDefaults: workspaceContextPolicy.sharingDefaults,
+        sharingDefaultsRevision: workspaceContextPolicy.sharingDefaultsRevision,
+        workspacePolicyRevision: workspaceContextPolicy.policyRevision,
         ...(binding.activeChapterId === undefined
           ? {}
           : { activeChapterId: binding.activeChapterId }),

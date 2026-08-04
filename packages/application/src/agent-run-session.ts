@@ -7,6 +7,7 @@ import {
   computeAgentRunToolCatalogRevision,
   computeAgentRunToolCatalogRevisionV2,
   createAgentContextSnapshot,
+  createAgentContextSnapshotV2,
   createPackedAgentContextManifest,
   createProviderSemanticVersionSetV1,
   createDefaultCapabilitySnapshot,
@@ -30,10 +31,12 @@ import {
   findStaleContextSources,
   listAgentTools,
   normalizeAgentContextSnapshot,
+  parseAgentContextSnapshotV2,
   normalizeAgentRunEvent,
   normalizeAgentRunSnapshot,
   parseAgentRunEventV20,
   parseAgentRunSnapshotV20,
+  readAgentRunEventRef,
   NO_AGENT_PROMPT_CACHE_CAPABILITY,
   rebuildPackedAgentContextFromManifest,
   validateAgentRunToolCatalogSnapshot,
@@ -138,6 +141,7 @@ import {
 import {
   createAgentPromptMaterializationArtifact,
   createHistoricalAgentPromptMaterializationArtifact,
+  materializeCanonicalAgentRound,
   materializeAgentPrompt,
   materializeProjectDataSource,
   materializeAgentRunHistory,
@@ -159,7 +163,9 @@ import {
 } from "./writing-task-intent.js";
 import {
   createAgentPromptCacheIdentityArtifact,
+  createAgentPromptCacheIdentityArtifactV2,
   deriveAgentPromptCacheIdentityChecksum,
+  deriveAgentPromptCacheIdentityChecksumV2,
   parseAgentPromptCacheIdentityArtifact,
   type AgentPromptCacheIdentityArtifact
 } from "./agent-prompt-cache.js";
@@ -172,6 +178,7 @@ import type { ModelReasoningStrengthControl } from "./model-discovery-session.js
 import type { AgentNetworkPolicy } from "./agent-network-policy.js";
 import type { AgentPermissionSession } from "./agent-permission-session.js";
 import type { AgentPricingRegistry } from "./agent-pricing-registry.js";
+import type { AgentUsageMetricRecord } from "./agent-usage-types.js";
 import type { AgentNetworkToolExecutor, AgentSearchToolExecutor } from "./agent-tool-ports.js";
 import {
   calculateResolvedContextBudget,
@@ -645,6 +652,26 @@ export interface AnswerAgentUserInputCommand {
   readonly answer: string;
 }
 
+/** Main-owned authority facts that must remain unchanged for the lifetime of a V20 run. */
+export interface AgentRunCapabilityBoundary {
+  readonly canonicalRootIdentityChecksum: string;
+  readonly effectiveCapabilityStateChecksum: string;
+  readonly sharingDefaultsRevision: string;
+  readonly sharingGrantRevision: string;
+  readonly policyRevision: string;
+  readonly providerToolProjectionChecksum: string;
+  readonly providerSemanticVersionSetChecksum: string;
+}
+
+export interface InvalidateAgentRunCapabilitiesCommand {
+  readonly scope?: AgentContextScope;
+  readonly projectId?: string;
+  readonly runId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly reason: string;
+}
+
 export interface AgentRunReadResult {
   readonly snapshot: AgentRunSnapshot;
   readonly events: readonly AgentRunEvent[];
@@ -736,6 +763,9 @@ export interface AgentRunContextCompactor {
 export interface AgentRunSession {
   startAgentRun(command: StartAgentRunCommand): Promise<AgentRunCommandResult>;
   stopAgentRun(command: StopAgentRunCommand): Promise<AgentRunCommandResult>;
+  invalidateAgentRunCapabilities(
+    command: InvalidateAgentRunCapabilitiesCommand
+  ): Promise<AgentRunCommandResult>;
   compactContext(command: CompactContextCommand): Promise<AgentRunCommandResult>;
   answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;
   resumeAgentRun(command: ResumeAgentRunCommand): Promise<AgentRunCommandResult>;
@@ -779,6 +809,8 @@ export interface CreateAgentRunSessionOptions {
    * without replacing an active run session.
    */
   readonly getEffectiveCapabilityState?: () => EffectiveCapabilityState;
+  /** Reads the current Main-owned root, sharing, policy, capability, tool, and version boundary. */
+  readonly getCurrentCapabilityBoundary?: () => AgentRunCapabilityBoundary;
   /** Frozen canonical-tool-id -> provider tool-name map for this session. */
   readonly providerNameMapping?: FrozenProviderNameMapping;
   /**
@@ -849,6 +881,12 @@ export interface CreateAgentRunSessionOptions {
   readonly diagnostics?: AgentDiagnosticsSession;
   /** Final, redacted usage is written only after a provider round completes. */
   readonly usageSink?: AgentUsageSink;
+  /** Strict local-only V2 metrics; legacy usageSink remains an isolated compatibility path. */
+  readonly usageMetricSink?: {
+    recordAgentUsage(
+      record: AgentUsageMetricRecord
+    ): Promise<Result<AgentUsageMetricRecord, UnifiedError>>;
+  };
   readonly pricingRegistry?: AgentPricingRegistry;
   readonly usageTime?: () => AgentUsageTimeFacts;
   readonly usageBudgetResolver?: (
@@ -877,6 +915,10 @@ interface RunRuntime {
   systemPrompt: string;
   /** Prevents a rollback or historical hydrate from starting a Provider round under another contract. */
   providerRoundsAllowed: boolean;
+  /** Frozen V20 authority used by both pre-Provider drift guards. */
+  capabilityBoundary?: AgentRunCapabilityBoundary;
+  /** Exact Main-observed boundary at run creation; changes are terminal even when locally derived facts agree. */
+  observedCapabilityBoundary?: AgentRunCapabilityBoundary;
   readonly seenToolCallIds: Set<string>;
   controller: AbortController;
   generation: number;
@@ -1052,6 +1094,56 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
     deepFreeze(child, seen);
   }
   return Object.freeze(value);
+}
+
+function stableBoundarySerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableBoundarySerialize).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableBoundarySerialize(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function capabilityBoundaryChecksum(value: unknown): string {
+  return createHash("sha256").update(stableBoundarySerialize(value), "utf8").digest("hex");
+}
+
+function effectiveCapabilityStateBoundaryChecksum(state: EffectiveCapabilityState): string {
+  return capabilityBoundaryChecksum({
+    active: state.active,
+    capabilitySnapshot: state.capabilitySnapshot,
+    revision: state.revision,
+    revokedCapabilities: state.revokedCapabilities,
+    workspaceKind: state.workspaceKind
+  });
+}
+
+function freezeCapabilityBoundary(
+  value: AgentRunCapabilityBoundary,
+  scope: AgentContextScope
+): AgentRunCapabilityBoundary {
+  const standalone = scope.kind === "standalone";
+  if (
+    !(standalone
+      ? value.canonicalRootIdentityChecksum === "not_applicable"
+      : isChecksum(value.canonicalRootIdentityChecksum)) ||
+    !isChecksum(value.effectiveCapabilityStateChecksum) ||
+    !(standalone
+      ? value.sharingDefaultsRevision === "not_applicable" &&
+        value.sharingGrantRevision === "not_applicable"
+      : isChecksum(value.sharingDefaultsRevision) && isChecksum(value.sharingGrantRevision)) ||
+    typeof value.policyRevision !== "string" ||
+    value.policyRevision.length === 0 ||
+    !isChecksum(value.providerToolProjectionChecksum) ||
+    !isChecksum(value.providerSemanticVersionSetChecksum)
+  ) {
+    throw new Error("AGENT_CAPABILITY_BOUNDARY_INVALID");
+  }
+  return Object.freeze({ ...value });
 }
 
 function freezeEffectiveCapabilityState(
@@ -1489,6 +1581,103 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       : deniedEffectiveCapabilityState;
   }
 
+  function observedCapabilityBoundary(
+    scope: AgentContextScope
+  ): AgentRunCapabilityBoundary | undefined {
+    const observed = options.getCurrentCapabilityBoundary?.();
+    return observed === undefined ? undefined : freezeCapabilityBoundary(observed, scope);
+  }
+
+  function providerToolProjectionChecksum(
+    descriptors: readonly AgentToolDescriptor[],
+    mapping: FrozenProviderNameMapping
+  ): string {
+    return capabilityBoundaryChecksum(
+      descriptors.map((descriptor) => {
+        const name = mapping.providerNameFor(canonicalToolId(descriptor));
+        if (name === undefined) throw new Error("AGENT_TOOL_PROVIDER_MAPPING_INVALID");
+        return {
+          name,
+          ...(descriptor.description === undefined ? {} : { description: descriptor.description }),
+          inputSchema: descriptor.inputSchema
+        };
+      })
+    );
+  }
+
+  function createCapabilityBoundary(input: {
+    readonly scope: AgentContextScope;
+    readonly effectiveState: EffectiveCapabilityState;
+    readonly providerSemanticVersionSetChecksum: string;
+    readonly descriptors: readonly AgentToolDescriptor[];
+    readonly mapping: FrozenProviderNameMapping;
+  }): {
+    readonly frozen: AgentRunCapabilityBoundary;
+    readonly observed?: AgentRunCapabilityBoundary;
+  } {
+    const observed = observedCapabilityBoundary(input.scope);
+    const scopeKey = agentContextScopeKey(input.scope);
+    const frozen = freezeCapabilityBoundary(
+      {
+        canonicalRootIdentityChecksum:
+          observed?.canonicalRootIdentityChecksum ??
+          (input.scope.kind === "standalone"
+            ? "not_applicable"
+            : capabilityBoundaryChecksum(["canonical_root_unavailable", scopeKey])),
+        effectiveCapabilityStateChecksum: effectiveCapabilityStateBoundaryChecksum(
+          input.effectiveState
+        ),
+        sharingDefaultsRevision:
+          observed?.sharingDefaultsRevision ??
+          (input.scope.kind === "standalone"
+            ? "not_applicable"
+            : capabilityBoundaryChecksum(["sharing_defaults_unavailable", scopeKey])),
+        sharingGrantRevision:
+          observed?.sharingGrantRevision ??
+          (input.scope.kind === "standalone"
+            ? "not_applicable"
+            : capabilityBoundaryChecksum(["sharing_grant_unavailable", scopeKey])),
+        policyRevision:
+          observed?.policyRevision ??
+          capabilityBoundaryChecksum([
+            "policy_revision_unavailable",
+            options.dataEgressPolicy ?? "deny"
+          ]),
+        providerToolProjectionChecksum: providerToolProjectionChecksum(
+          input.descriptors,
+          input.mapping
+        ),
+        providerSemanticVersionSetChecksum: input.providerSemanticVersionSetChecksum
+      },
+      input.scope
+    );
+    return observed === undefined ? { frozen } : { frozen, observed };
+  }
+
+  function capabilityBoundaryForSnapshot(snapshot: AgentRunSnapshotV20): {
+    readonly frozen: AgentRunCapabilityBoundary;
+    readonly observed?: AgentRunCapabilityBoundary;
+  } {
+    const catalog = toolCatalogs.get(snapshot.runId);
+    if (catalog?.schemaVersion !== "2.0") {
+      throw new Error("AGENT_CAPABILITY_BOUNDARY_INVALID");
+    }
+    const currentState = effectiveCapabilityState();
+    if (
+      snapshot.capabilities.state === "active" &&
+      currentState.revision !== snapshot.capabilities.revision
+    ) {
+      throw new Error("AGENT_CAPABILITY_BOUNDARY_INVALID");
+    }
+    return createCapabilityBoundary({
+      scope: snapshot.scope,
+      effectiveState: currentState,
+      providerSemanticVersionSetChecksum: snapshot.providerSemanticVersionSetChecksum,
+      descriptors: catalog.descriptors,
+      mapping: providerMappingFor(snapshot)
+    });
+  }
+
   function materializeRunGuidanceV3(input: {
     readonly profile: AgentContextProfile;
     readonly toolDescriptors: readonly AgentToolDescriptor[];
@@ -1609,6 +1798,80 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     const catalog = toolCatalogs.get(snapshot.runId);
     if (catalog?.schemaVersion !== "2.0") return false;
     return catalog.descriptors.some((descriptor) => !isToolDescriptorEffective(descriptor, state));
+  }
+
+  function capabilityBoundaryChangeReason(
+    snapshot: AgentRunSnapshot,
+    runtime: RunRuntime,
+    state: EffectiveCapabilityState
+  ): string | undefined {
+    if (catalogCapabilityChanged(snapshot, state)) return "frozen_catalog_operation_revoked";
+    if (snapshot.schemaVersion !== "2.0" || runtime.capabilityBoundary === undefined) {
+      return undefined;
+    }
+    const frozen = runtime.capabilityBoundary;
+    if (
+      effectiveCapabilityStateBoundaryChecksum(state) !==
+      frozen.effectiveCapabilityStateChecksum
+    ) {
+      return "effective_capability_state_changed";
+    }
+    if (
+      snapshot.providerSemanticVersionSetChecksum !==
+      frozen.providerSemanticVersionSetChecksum
+    ) {
+      return "provider_semantic_version_set_changed";
+    }
+    const catalog = toolCatalogs.get(snapshot.runId);
+    if (
+      catalog?.schemaVersion !== "2.0" ||
+      providerToolProjectionChecksum(catalog.descriptors, providerMappingFor(snapshot)) !==
+        frozen.providerToolProjectionChecksum
+    ) {
+      return "provider_tool_projection_changed";
+    }
+
+    let observed: AgentRunCapabilityBoundary | undefined;
+    try {
+      observed = observedCapabilityBoundary(snapshot.scope);
+    } catch {
+      return "capability_boundary_invalid";
+    }
+    const initialObserved = runtime.observedCapabilityBoundary;
+    if (observed === undefined || initialObserved === undefined) {
+      return observed === initialObserved ? undefined : "capability_boundary_source_changed";
+    }
+    if (
+      observed.canonicalRootIdentityChecksum !==
+      initialObserved.canonicalRootIdentityChecksum
+    ) {
+      return "canonical_root_changed";
+    }
+    if (
+      observed.sharingDefaultsRevision !== initialObserved.sharingDefaultsRevision ||
+      observed.sharingGrantRevision !== initialObserved.sharingGrantRevision
+    ) {
+      return "sharing_revision_changed";
+    }
+    if (observed.policyRevision !== initialObserved.policyRevision) {
+      return "policy_revision_changed";
+    }
+    if (
+      observed.providerSemanticVersionSetChecksum !==
+      initialObserved.providerSemanticVersionSetChecksum
+    ) {
+      return "provider_semantic_version_set_changed";
+    }
+    if (
+      observed.providerToolProjectionChecksum !==
+      initialObserved.providerToolProjectionChecksum
+    ) {
+      return "provider_tool_projection_changed";
+    }
+    return observed.effectiveCapabilityStateChecksum !==
+      initialObserved.effectiveCapabilityStateChecksum
+      ? "effective_capability_state_changed"
+      : undefined;
   }
 
   function budgetCatalogFor(snapshot: AgentRunSnapshot):
@@ -2561,10 +2824,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
     try {
       const artifact = parseAgentPromptCacheIdentityArtifact(read.value);
-      const currentIdentity = deriveAgentPromptCacheIdentityChecksum(
-        artifact.identityBaseChecksum,
-        snapshot.cachePrefixChecksum
-      );
+      const currentIdentity =
+        artifact.schemaVersion === "2.0"
+          ? deriveAgentPromptCacheIdentityChecksumV2(
+              artifact.identityBaseChecksum,
+              snapshot.cachePrefixChecksum
+            )
+          : deriveAgentPromptCacheIdentityChecksum(
+              artifact.identityBaseChecksum,
+              snapshot.cachePrefixChecksum
+            );
       if (
         artifact.artifactId !== snapshot.promptCacheArtifactId ||
         artifact.provider !== snapshot.providerCapabilitySnapshot.provider ||
@@ -2576,6 +2845,36 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         (prompt !== undefined &&
           snapshot.promptCacheStablePrefixMessageCount !== 1 + prompt.stablePrefixMessages.length)
       ) {
+        throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+      }
+      if (snapshot.schemaVersion === "2.0") {
+        if (artifact.schemaVersion !== "2.0" || prompt?.schemaVersion !== "2.0") {
+          throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+        }
+        const boundary = capabilityBoundaryForSnapshot(snapshot).frozen;
+        if (
+          artifact.scope.kind !== snapshot.scope.kind ||
+          agentContextScopeKey(artifact.scope) !== agentContextScopeKey(snapshot.scope) ||
+          artifact.contextProfileId !== snapshot.contextProfileId ||
+          artifact.profileVersion !== snapshot.profileVersion ||
+          artifact.guidanceTemplateChecksum !== snapshot.guidanceTemplateChecksum ||
+          artifact.toolCatalogRevision !== snapshot.toolCatalogRevision ||
+          artifact.providerSemanticVersionSetChecksum !==
+            snapshot.providerSemanticVersionSetChecksum ||
+          artifact.providerSemanticVersionSetChecksum !==
+            prompt.guidanceProof.providerSemanticVersionSetChecksum ||
+          artifact.canonicalRootIdentityChecksum !==
+            boundary.canonicalRootIdentityChecksum ||
+          artifact.effectiveCapabilityStateChecksum !==
+            boundary.effectiveCapabilityStateChecksum ||
+          artifact.sharingDefaultsRevision !== boundary.sharingDefaultsRevision ||
+          artifact.sharingGrantRevision !== boundary.sharingGrantRevision ||
+          artifact.policyRevision !== boundary.policyRevision ||
+          artifact.providerToolProjectionChecksum !== boundary.providerToolProjectionChecksum
+        ) {
+          throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+        }
+      } else if (artifact.schemaVersion === "2.0") {
         throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
       }
       return ok(artifact);
@@ -2797,6 +3096,22 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     const restoredRollbackReview =
       durableRollbackReview?.ok === true ? durableRollbackReview.value : eventRollbackReview;
     const restoredCounters = restoreRunCounters(events);
+    let restoredCapabilityBoundary:
+      | {
+          readonly frozen: AgentRunCapabilityBoundary;
+          readonly observed?: AgentRunCapabilityBoundary;
+        }
+      | undefined;
+    try {
+      if (snapshot.schemaVersion === "2.0") {
+        restoredCapabilityBoundary = capabilityBoundaryForSnapshot(snapshot);
+      }
+    } catch {
+      return failure(
+        "AGENT_CAPABILITY_BOUNDARY_INVALID",
+        "The current Agent capability boundary does not match the persisted V20 run."
+      );
+    }
     const runtime: RunRuntime = {
       messages,
       promptBaseMessageCount,
@@ -2814,6 +3129,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         options.agentGuidanceV3 === true
           ? restoredPromptArtifact?.schemaVersion === "2.0"
           : restoredPromptArtifact?.schemaVersion !== "2.0",
+      ...(restoredCapabilityBoundary === undefined
+        ? {}
+        : { capabilityBoundary: restoredCapabilityBoundary.frozen }),
+      ...(restoredCapabilityBoundary?.observed === undefined
+        ? {}
+        : { observedCapabilityBoundary: restoredCapabilityBoundary.observed }),
       seenToolCallIds: new Set(
         events.flatMap((event) =>
           typeof event.detail?.["toolCallId"] === "string" ? [event.detail["toolCallId"]] : []
@@ -3608,11 +3929,43 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               usageSummaryBeforeRound,
               finalUsage,
               runtime.hasRecordedFinalUsage
-            )
+            ),
+            ...(snapshot.schemaVersion === "2.0"
+              ? {
+                  usageId: usageRecordIdempotencyKey({
+                    runId,
+                    roundId,
+                    finalSequence
+                  })
+                }
+              : {})
           },
           detail: usageUpdatedDetail(roundId, finalUsage, true)
         });
         if (!finalized.ok) return;
+        if (options.usageMetricSink !== undefined && snapshot.schemaVersion === "2.0") {
+          const usageId = usageRecordIdempotencyKey({ runId, roundId, finalSequence });
+          const metric = buildV2UsageMetric({
+            usageId,
+            snapshot: finalized.value,
+            runtime,
+            usage: finalUsage
+          });
+          const recordedMetric = await options.usageMetricSink.recordAgentUsage(metric);
+          if (!recordedMetric.ok) {
+            const metricError = await recordEvent(runId, {
+              runId,
+              status: modelStatusFor(finalized.value),
+              type: "error_recorded",
+              detail: {
+                code: recordedMetric.error.code,
+                severity: "warning",
+                message: "The local usage metric could not be recorded."
+              }
+            });
+            if (!metricError.ok) return;
+          }
+        }
         runtime.hasRecordedFinalUsage = true;
         snapshot = finalized.value;
       } else if (pendingUsage !== undefined) {
@@ -3853,10 +4206,26 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     runtime: RunRuntime
   ): Promise<boolean> {
     const currentState = effectiveCapabilityState();
-    if (!catalogCapabilityChanged(snapshot, currentState)) return false;
+    const reason = capabilityBoundaryChangeReason(snapshot, runtime, currentState);
+    if (reason === undefined) return false;
+    await transitionForCapabilityChange(runId, snapshot, runtime, currentState.revision, reason);
+    return true;
+  }
+
+  async function transitionForCapabilityChange(
+    runId: string,
+    snapshot: AgentRunSnapshot,
+    runtime: RunRuntime,
+    effectiveCapabilityRevision: number,
+    reason: string
+  ): Promise<AgentRunCommandResult> {
     runtime.providerRoundsAllowed = false;
+    const nextCapabilityRevision =
+      snapshot.schemaVersion === "2.0"
+        ? Math.max(effectiveCapabilityRevision, snapshot.capabilities.revision + 1)
+        : effectiveCapabilityRevision;
     try {
-      await recordEvent(
+      return await recordEvent(
         runId,
         snapshot.schemaVersion === "2.0"
           ? {
@@ -3864,8 +4233,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               status: "capability_changed",
               type: "capability_changed",
               detail: {
-                effectiveCapabilityRevision: currentState.revision,
-                reason: "frozen_catalog_operation_revoked"
+                effectiveCapabilityRevision: nextCapabilityRevision,
+                reason
               }
             }
           : {
@@ -3889,7 +4258,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       delete runtime.pendingToolApproval;
       if (runtimes.get(runId) === runtime) runtimes.delete(runId);
     }
-    return true;
   }
 
   async function writeFinalRoundUsage(input: {
@@ -3967,6 +4335,72 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     };
     const validated = validateAgentUsageRecord(record);
     return validated.ok ? options.usageSink.writeFinal(validated.value) : err(validated.error);
+  }
+
+  function buildV2UsageMetric(input: {
+    readonly usageId: string;
+    readonly snapshot: AgentRunSnapshot;
+    readonly runtime: RunRuntime;
+    readonly usage: LlmUsage;
+  }): AgentUsageMetricRecord {
+    if (input.snapshot.schemaVersion !== "2.0") {
+      throw new Error("AGENT_USAGE_RECORD_V20_INVALID");
+    }
+    const events = coordinator.readEvents(input.snapshot.runId);
+    const eventRefs = events
+      .map((event) => readAgentRunEventRef(event))
+      .filter((ref): ref is string => ref !== null);
+    const sourceMetrics = (input.runtime.contextSnapshot?.sources ?? []).map((source) => ({
+      sourceKind: usageMetricSourceKind(source.sourceKind),
+      tokenCount: source.tokenCount ?? 0,
+      truncated:
+        source.sourceMaterialization?.truncationRange !== undefined &&
+        source.sourceMaterialization?.truncationRange !== null,
+      exclusionReason: source.state === "excluded" ? ("user_excluded" as const) : ("none" as const)
+    }));
+    const toolCalls = events.filter((event) => event.type === "tool_started").length;
+    const toolFailures = events.filter((event) => event.type === "tool_failed").length;
+    const approvalWaits = events.filter(
+      (event) =>
+        event.type === "tool_approval_requested" ||
+        event.type === "context_share_approval_requested"
+    ).length;
+    const cacheOutcome =
+      input.usage.cacheOutcome === "hit" ||
+      input.usage.cacheOutcome === "miss" ||
+      input.usage.cacheOutcome === "bypass"
+        ? input.usage.cacheOutcome
+        : "unknown";
+    return {
+      schemaVersion: "2.0",
+      storageScope: "local_only",
+      usageId: input.usageId,
+      runId: input.snapshot.runId,
+      recordedAt: (options.usageTime ?? currentAgentUsageTime)().timestamp,
+      semanticVersionSetChecksum: input.snapshot.providerSemanticVersionSetChecksum,
+      guidanceVersion: "3.0",
+      contextProfileId: input.snapshot.contextProfileId,
+      messageOrderVersion: "2.0",
+      toolCatalogVersion: "2.0",
+      runOutcome: usageMetricRunOutcome(input.snapshot.status),
+      pendingOutcome: usageMetricPendingOutcome(input.snapshot.status),
+      recoveryOutcome:
+        input.snapshot.recoveryState === "none" || input.snapshot.recoveryState === undefined
+          ? "not_required"
+          : "pending",
+      modelRoundCount: input.runtime.modelRounds,
+      toolCallCount: toolCalls,
+      toolFailureCount: Math.min(toolFailures, toolCalls),
+      approvalWaitCount: approvalWaits,
+      approvalWaitMs: 0,
+      sources: sourceMetrics,
+      cacheOutcome,
+      cacheVerifiedInputTokens:
+        cacheOutcome === "hit" ? (input.usage.cacheReadTokens ?? null) : null,
+      changeSetOutcome: usageMetricChangeSetOutcome(events),
+      styleObservations: [],
+      eventRefs: [...new Set(eventRefs)]
+    };
   }
 
   function priceRoundUsage(snapshot: AgentRunSnapshot, usage: LlmUsage) {
@@ -6285,17 +6719,6 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       });
       const promptCacheCapability =
         startInput.providerCapabilitySnapshot.promptCache ?? NO_AGENT_PROMPT_CACHE_CAPABILITY;
-      if (initialGuidanceV3 !== undefined && promptCacheCapability.mode !== "none") {
-        await cancelConversationStart();
-        return recordPreflightFailure(
-          command,
-          applicationError(
-            "AGENT_GUIDANCE_V3_PROMPT_CACHE_UNQUALIFIED",
-            "Guidance 3.0 cannot use the legacy prompt-cache identity."
-          ),
-          preflight.value.model
-        );
-      }
       if (
         promptCacheCapability.mode !== "none" &&
         options.repository.writePromptCacheArtifact === undefined
@@ -6310,7 +6733,35 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           preflight.value.model
         );
       }
-      const promptCacheArtifact = createAgentPromptCacheIdentityArtifact({
+      let initialCapabilityBoundary:
+        | {
+            readonly frozen: AgentRunCapabilityBoundary;
+            readonly observed?: AgentRunCapabilityBoundary;
+          }
+        | undefined;
+      try {
+        if (initialGuidanceV3 !== undefined) {
+          initialCapabilityBoundary = createCapabilityBoundary({
+            scope: startInput.scope ?? commandScope,
+            effectiveState: initialEffectiveState,
+            providerSemanticVersionSetChecksum:
+              initialGuidanceV3.proof.providerSemanticVersionSetChecksum,
+            descriptors: newRunProviderDescriptors,
+            mapping: newRunProviderMapping
+          });
+        }
+      } catch {
+        await cancelConversationStart();
+        return recordPreflightFailure(
+          command,
+          applicationError(
+            "AGENT_CAPABILITY_BOUNDARY_INVALID",
+            "The Main-owned Agent capability boundary is invalid."
+          ),
+          preflight.value.model
+        );
+      }
+      const promptCacheArtifactInput = {
         runBindingId: command.commandId,
         provider: startInput.providerCapabilitySnapshot.provider,
         modelName: startInput.providerCapabilitySnapshot.modelName,
@@ -6347,7 +6798,25 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           options.contextBudgetEstimator
         ),
         createdAt: new Date().toISOString()
-      });
+      };
+      const promptCacheArtifact =
+        initialCapabilityBoundary === undefined
+          ? createAgentPromptCacheIdentityArtifact(promptCacheArtifactInput)
+          : createAgentPromptCacheIdentityArtifactV2({
+              ...promptCacheArtifactInput,
+              providerSemanticVersionSetChecksum:
+                initialCapabilityBoundary.frozen.providerSemanticVersionSetChecksum,
+              canonicalRootIdentityChecksum:
+                initialCapabilityBoundary.frozen.canonicalRootIdentityChecksum,
+              effectiveCapabilityStateChecksum:
+                initialCapabilityBoundary.frozen.effectiveCapabilityStateChecksum,
+              sharingDefaultsRevision:
+                initialCapabilityBoundary.frozen.sharingDefaultsRevision,
+              sharingGrantRevision: initialCapabilityBoundary.frozen.sharingGrantRevision,
+              policyRevision: initialCapabilityBoundary.frozen.policyRevision,
+              providerToolProjectionChecksum:
+                initialCapabilityBoundary.frozen.providerToolProjectionChecksum
+            });
       const startBudgetId = `budget_start_${createHash("sha256")
         .update(`${scopeKey}:${command.commandId}`, "utf8")
         .digest("hex")
@@ -6448,6 +6917,60 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         commandReceipts.set(receiptKey, rejected);
         return rejected;
       };
+      // Protocol 2.0 is materialized only after the coordinator assigns the real run id. Preview
+      // bindings may use a draft-local placeholder, but a persisted snapshot must bind the actual
+      // run and round identity. The canonical prompt is checked against the preflight prompt so
+      // this step cannot silently change the provider payload.
+      let runPromptMaterialization = initialMaterialization;
+      let initialCanonicalRound:
+        | ReturnType<typeof materializeCanonicalAgentRound>
+        | undefined;
+      if (initialGuidanceV3 !== undefined && initialCapabilityBoundary !== undefined) {
+        try {
+          const canonical = materializeCanonicalAgentRound({
+            roundId: `round_${result.value.runId}_0`,
+            runId: result.value.runId,
+            roundNumber: 0,
+            profile: startProfile,
+            systemPrompt: initialGuidanceV3.materializedGuidance,
+            toolCatalogRevision: newRunCatalogRevision,
+            userRequest: startInput.userRequest,
+            contextSources: startInput.initialContextSources ?? [],
+            conversationSummaryMessages: conversationContext,
+            ...(startInput.packedContext === undefined
+              ? {}
+              : { packedContext: startInput.packedContext }),
+            projectedToolDescriptors: newRunProviderDescriptors.map((descriptor) => ({
+              name: providerNameForDescriptorInput(descriptor),
+              ...(descriptor.description === undefined
+                ? {}
+                : { description: descriptor.description }),
+              inputSchema: descriptor.inputSchema
+            })),
+            sharing: {
+              defaultsRevision: initialCapabilityBoundary.frozen.sharingDefaultsRevision,
+              runGrantRevision: initialCapabilityBoundary.frozen.sharingGrantRevision
+            },
+            providerSemanticVersionSet: initialGuidanceV3.normalizedInput.providerSemanticVersionSet
+          });
+          if (
+            stableBoundarySerialize(canonical.prompt.messages) !==
+              stableBoundarySerialize(initialMaterialization.messages) ||
+            canonical.prompt.stablePrefixChecksum !== initialMaterialization.stablePrefixChecksum
+          ) {
+            throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+          }
+          initialCanonicalRound = canonical;
+          runPromptMaterialization = canonical.prompt;
+        } catch {
+          return rejectUnpersistedStart(
+            applicationError(
+              "AGENT_PROMPT_MATERIALIZATION_INVALID",
+              "The canonical protocol-2 prompt could not be materialized for this run."
+            )
+          );
+        }
+      }
       const persistedCatalog = useCatalogV2
         ? createAgentRunToolCatalogSnapshotV2({
             runId: result.value.runId,
@@ -6488,12 +7011,18 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       providerMappingsByRun.set(result.value.runId, newRunProviderMapping);
       const initialContextSources = [...(startInput.initialContextSources ?? [])];
       const runtime: RunRuntime = {
-        messages: [...initialMaterialization.messages],
-        promptBaseMessageCount: initialMaterialization.messages.length,
+        messages: [...runPromptMaterialization.messages],
+        promptBaseMessageCount: runPromptMaterialization.messages.length,
         executionWritePolicyDraft:
           preflight.value.executionWritePolicyDraft ?? "write_before_confirmation",
-        systemPrompt: initialMaterialization.systemPrompt,
+        systemPrompt: runPromptMaterialization.systemPrompt,
         providerRoundsAllowed: true,
+        ...(initialCapabilityBoundary === undefined
+          ? {}
+          : { capabilityBoundary: initialCapabilityBoundary.frozen }),
+        ...(initialCapabilityBoundary?.observed === undefined
+          ? {}
+          : { observedCapabilityBoundary: initialCapabilityBoundary.observed }),
         ...(options.repository.writePromptCacheArtifact === undefined
           ? {}
           : { promptCacheArtifact }),
@@ -6504,7 +7033,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextSources: initialContextSources,
         systemGuidanceSource: agentGuidanceSource(
           result.value.contextProfileId,
-          initialMaterialization.systemPrompt,
+          runPromptMaterialization.systemPrompt,
           initialGuidanceV3 === undefined
             ? undefined
             : `system_guidance:${initialGuidanceV3.proof.registryKey}`
@@ -6524,13 +7053,20 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         runId: result.value.runId,
         contextSnapshotId,
         profile: startProfile,
-        systemPrompt: initialMaterialization.systemPrompt,
+        systemPrompt: runPromptMaterialization.systemPrompt,
         toolCatalogRevision: newRunCatalogRevision,
         userRequest: startInput.userRequest,
         contextSources: initialContextSources,
         ...(startInput.packedContext === undefined
           ? {}
           : { packedContext: startInput.packedContext }),
+        ...(initialCanonicalRound?.packedContextManifest === null ||
+        initialCanonicalRound?.packedContextManifest === undefined
+          ? {}
+          : {
+              packedContextManifestChecksum:
+                initialCanonicalRound.packedContextManifest.manifestChecksum
+            }),
         conversationSummaryMessages: conversationContext
       };
       const promptArtifact =
@@ -6539,23 +7075,66 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           : createAgentPromptMaterializationArtifact({
               ...promptArtifactInput,
               guidanceMaterialization: initialGuidanceV3
-            });
-      runtime.promptArtifact = promptArtifact;
-      runtime.contextSnapshot = createAgentContextSnapshot({
-        contextSnapshotId,
-        runId: result.value.runId,
-        ...contextSnapshotIdentity(result.value),
-        createdAt: new Date().toISOString(),
-        sources: snapshotSourcesFor(runtime),
-        excludedSources: startInput.excludedContextSourceIds ?? [],
-        packedContextManifest:
-          startInput.packedContext === undefined
-            ? null
-            : createPackedAgentContextManifest(startInput.packedContext),
-        ...(options.repository.writePromptMaterialization === undefined
-          ? {}
-          : promptArtifactBinding(runtime))
       });
+      runtime.promptArtifact = promptArtifact;
+      const createdAt = new Date().toISOString();
+      const promptBinding =
+        options.repository.writePromptMaterialization === undefined
+          ? {}
+          : promptArtifactBinding(runtime);
+      if (initialCanonicalRound !== undefined && initialGuidanceV3 !== undefined) {
+        try {
+          runtime.contextSnapshot = createAgentContextSnapshotV2({
+            contextSnapshotId,
+            runId: result.value.runId,
+            ...contextSnapshotIdentity(result.value),
+            materialization: {
+              schemaVersion: "2.0",
+              profileVersion: startProfile.profileVersion,
+              guidanceTemplateChecksum: initialGuidanceV3.proof.templateChecksum,
+              stablePrefixChecksum: runPromptMaterialization.stablePrefixChecksum,
+              messageOrderVersion: "2.0"
+            },
+            createdAt,
+            sources: snapshotSourcesFor(runtime),
+            excludedSources: startInput.excludedContextSourceIds ?? [],
+            ...(promptArtifact.artifactId === undefined
+              ? {}
+              : {
+                  materializationArtifactId: promptArtifact.artifactId,
+                  materializationArtifactSourceRefs: [
+                    ...snapshotSourcesFor(runtime).map((source) => source.refId)
+                  ]
+                }),
+            roundId: initialCanonicalRound.canonicalRoundManifest.roundId,
+            sharing: initialCanonicalRound.canonicalRoundManifest.sharing,
+            providerSemanticVersionSet:
+              initialCanonicalRound.canonicalRoundManifest.providerSemanticVersionSet,
+            packedContextManifest: initialCanonicalRound.packedContextManifest
+          }) as unknown as AgentContextSnapshot;
+        } catch {
+          return rejectUnpersistedStart(
+            applicationError(
+              "AGENT_CONTEXT_SNAPSHOT_INVALID",
+              "The protocol-2 context snapshot could not be persisted safely."
+            )
+          );
+        }
+      } else {
+        runtime.contextSnapshot = createAgentContextSnapshot({
+          contextSnapshotId,
+          runId: result.value.runId,
+          ...contextSnapshotIdentity(result.value),
+          createdAt,
+          sources: snapshotSourcesFor(runtime),
+          excludedSources: startInput.excludedContextSourceIds ?? [],
+          packedContextManifest:
+            startInput.packedContext === undefined
+              ? null
+              : createPackedAgentContextManifest(startInput.packedContext),
+          ...promptBinding
+        });
+      }
       const sourceMaterializationsPersisted = await persistContextSourceMaterializations(
         result.value.runId,
         initialContextSources
@@ -6681,6 +7260,56 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const persisted = await persistLatest(command.runId);
       if (!persisted.ok) return persisted;
       return persistCommandReceipt(command.runId, scopeKey, command.commandId, result);
+    },
+    async invalidateAgentRunCapabilities(command) {
+      const commandScope = resolveSessionRunCommandScope(command);
+      if (commandScope === undefined) {
+        return failure("AGENT_CONTEXT_SCOPE_INVALID", "The Agent run scope is invalid.");
+      }
+      const scopeKey = agentContextScopeKey(commandScope);
+      const prior = await priorCommandReceipt(command.runId, scopeKey, command.commandId);
+      if (prior !== undefined) return prior;
+      const hydrated = await hydrateRun(command.runId);
+      if (!hydrated.ok) return hydrated;
+      const snapshot = coordinator.readSnapshot(command.runId);
+      const invalid = validateRunCommand(snapshot, command);
+      if (invalid !== undefined) return invalid;
+      if (snapshot === undefined) {
+        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not exist.");
+      }
+      if (snapshot.schemaVersion !== "2.0") {
+        return failure(
+          "AGENT_CAPABILITY_INVALIDATION_UNSUPPORTED",
+          "Explicit capability invalidation is available only for V20 Agent runs."
+        );
+      }
+      if (isTerminal(snapshot.status)) {
+        return failure("AGENT_RUN_ALREADY_TERMINAL", "The Agent run has already ended.");
+      }
+      const reason = command.reason.trim();
+      if (reason.length === 0) {
+        return failure(
+          "AGENT_CAPABILITY_INVALIDATION_REASON_INVALID",
+          "Capability invalidation requires a non-empty Main-owned reason."
+        );
+      }
+      const runtime = runtimes.get(command.runId);
+      if (runtime === undefined) {
+        return failure("AGENT_RUN_NOT_FOUND", "The Agent run does not have a live runtime.");
+      }
+      const changed = await transitionForCapabilityChange(
+        command.runId,
+        snapshot,
+        runtime,
+        effectiveCapabilityState().revision,
+        reason
+      );
+      return persistCommandReceipt(
+        command.runId,
+        scopeKey,
+        command.commandId,
+        changed
+      );
     },
     async compactContext(command) {
       const commandScope = resolveSessionRunCommandScope(command);
@@ -7486,6 +8115,30 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           "The execution Guidance 3.0 inputs do not form a valid Provider authority."
         );
       }
+      let executionCapabilityBoundary:
+        | {
+            readonly frozen: AgentRunCapabilityBoundary;
+            readonly observed?: AgentRunCapabilityBoundary;
+          }
+        | undefined;
+      try {
+        if (executionGuidanceV3 !== undefined) {
+          executionCapabilityBoundary = createCapabilityBoundary({
+            scope: snapshot.scope,
+            effectiveState: executionEffectiveState,
+            providerSemanticVersionSetChecksum:
+              executionGuidanceV3.proof.providerSemanticVersionSetChecksum,
+            descriptors: executionProviderDescriptors,
+            mapping: executionProviderMapping
+          });
+        }
+      } catch {
+        await cancelExecutionStart();
+        return failure(
+          "AGENT_CAPABILITY_BOUNDARY_INVALID",
+          "The Main-owned execution capability boundary is invalid."
+        );
+      }
       const executionSystemPrompt =
         executionGuidanceV3?.materializedGuidance ?? buildAgentSystemPrompt(executionProfile);
       const executionMaterialization = materializeAgentPrompt({
@@ -7496,10 +8149,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         contextSources: runtime.contextSources,
         conversationSummaryMessages: executionConversationContext
       });
-      const executionPromptCacheArtifact =
+      const executionPromptCacheArtifactInput =
         runtime.promptCacheArtifact === undefined
           ? undefined
-          : createAgentPromptCacheIdentityArtifact({
+          : {
               runBindingId: `execution_${createHash("sha256")
                 .update(command.commandId, "utf8")
                 .digest("hex")
@@ -7526,7 +8179,28 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                 options.contextBudgetEstimator
               ),
               createdAt: new Date().toISOString()
-            });
+            };
+      const executionPromptCacheArtifact =
+        executionPromptCacheArtifactInput === undefined
+          ? undefined
+          : executionCapabilityBoundary === undefined
+            ? createAgentPromptCacheIdentityArtifact(executionPromptCacheArtifactInput)
+            : createAgentPromptCacheIdentityArtifactV2({
+                ...executionPromptCacheArtifactInput,
+                providerSemanticVersionSetChecksum:
+                  executionCapabilityBoundary.frozen.providerSemanticVersionSetChecksum,
+                canonicalRootIdentityChecksum:
+                  executionCapabilityBoundary.frozen.canonicalRootIdentityChecksum,
+                effectiveCapabilityStateChecksum:
+                  executionCapabilityBoundary.frozen.effectiveCapabilityStateChecksum,
+                sharingDefaultsRevision:
+                  executionCapabilityBoundary.frozen.sharingDefaultsRevision,
+                sharingGrantRevision:
+                  executionCapabilityBoundary.frozen.sharingGrantRevision,
+                policyRevision: executionCapabilityBoundary.frozen.policyRevision,
+                providerToolProjectionChecksum:
+                  executionCapabilityBoundary.frozen.providerToolProjectionChecksum
+              });
       if (
         snapshot.providerCapabilitySnapshot.promptCache.mode !== "none" &&
         (executionPromptCacheArtifact === undefined ||
@@ -7545,7 +8219,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         executionPromptCacheArtifact?.identityChecksum ??
         (executionGuidanceV3 === undefined
           ? "legacy"
-          : deriveAgentPromptCacheIdentityChecksum(
+          : deriveAgentPromptCacheIdentityChecksumV2(
               executionPromptCacheIdentityBaseChecksum,
               executionMaterialization.stablePrefixChecksum
             ));
@@ -7697,6 +8371,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         executionWritePolicyDraft: executionStart.writePolicy ?? "write_before_confirmation",
         systemPrompt: executionSystemPrompt,
         providerRoundsAllowed: true,
+        ...(executionCapabilityBoundary === undefined
+          ? {}
+          : { capabilityBoundary: executionCapabilityBoundary.frozen }),
+        ...(executionCapabilityBoundary?.observed === undefined
+          ? {}
+          : { observedCapabilityBoundary: executionCapabilityBoundary.observed }),
         ...(executionPromptCacheArtifact === undefined
           ? {}
           : { promptCacheArtifact: executionPromptCacheArtifact }),
@@ -10054,6 +10734,22 @@ function parseContextSnapshot(
   value: JsonObject | undefined,
   run: AgentRunSnapshot
 ): AgentContextSnapshot | undefined {
+  if (value?.["schemaVersion"] === "2.0") {
+    if (
+      value["runId"] !== run.runId ||
+      value["contextSnapshotId"] !== run.contextSnapshotId
+    ) {
+      return undefined;
+    }
+    try {
+      // Keep the V2 artifact intact for strict cross-manifest checks while exposing the
+      // historical structural view to the existing hydrate pipeline. V2 is never normalized
+      // into a legacy artifact on disk.
+      return parseAgentContextSnapshotV2(value) as unknown as AgentContextSnapshot;
+    } catch {
+      return undefined;
+    }
+  }
   if (
     value === undefined ||
     (value["schemaVersion"] !== "1.0" &&
@@ -10552,6 +11248,72 @@ function usagePrecision(status: LlmUsage["usageStatus"]): AgentUsageRecord["prec
   return status === "actual" ? "reported" : status === "estimated" ? "estimated" : "unknown";
 }
 
+function usageMetricSourceKind(
+  value: AgentContextSourceInput["sourceKind"]
+): AgentUsageMetricRecord["sources"][number]["sourceKind"] {
+  switch (value) {
+    case "disk_file":
+    case "editor_buffer":
+    case "story_bible_asset":
+    case "project_conventions":
+    case "workspace_outline":
+    case "compaction_summary":
+    case "system_guidance":
+      return value;
+    default:
+      return "tool_result";
+  }
+}
+
+function usageMetricRunOutcome(
+  status: AgentRunSnapshot["status"]
+): AgentUsageMetricRecord["runOutcome"] {
+  if (status === "completed") return "completed";
+  if (status === "cancelled") return "cancelled";
+  if (status === "failed") return "failed";
+  if (status === "limit_reached") return "limit_reached";
+  if (status === "capability_changed") return "capability_changed";
+  if (status === "awaiting_user_input") return "awaiting_input";
+  if (
+    status === "awaiting_write_approval" ||
+    status === "awaiting_tool_approval" ||
+    status === "awaiting_context_share_approval" ||
+    status === "staging_changes"
+  ) {
+    return "awaiting_approval";
+  }
+  if (status === "context_stale" || status === "awaiting_context_refresh") return "stale";
+  return "blocked";
+}
+
+function usageMetricPendingOutcome(
+  status: AgentRunSnapshot["status"]
+): AgentUsageMetricRecord["pendingOutcome"] {
+  if (status === "awaiting_user_input") return "awaiting_input";
+  if (
+    status === "awaiting_write_approval" ||
+    status === "awaiting_tool_approval" ||
+    status === "awaiting_context_share_approval"
+  ) {
+    return status === "awaiting_write_approval" ? "change_set_pending" : "awaiting_approval";
+  }
+  if (status === "context_stale" || status === "awaiting_context_refresh") {
+    return "recovery_pending";
+  }
+  return "none";
+}
+
+function usageMetricChangeSetOutcome(
+  events: readonly AgentRunEvent[]
+): AgentUsageMetricRecord["changeSetOutcome"] {
+  if (events.some((event) => event.type === "write_applied")) return "applied";
+  if (events.some((event) => event.type === "approval_resolved" && event.detail?.["decision"] === "reject_all")) {
+    return "rejected";
+  }
+  if (events.some((event) => event.type === "change_set_ready")) return "generated";
+  return "none";
+}
+
 function currentAgentUsageTime(): AgentUsageTimeFacts {
   const current = new Date();
   const year = String(current.getFullYear()).padStart(4, "0");
@@ -10667,12 +11429,21 @@ function nextPromptCacheIdentityChecksum(
   snapshot: AgentRunSnapshot,
   logicalPrefixChecksum: string
 ): string {
-  return isChecksum(snapshot.promptCacheIdentityBaseChecksum) && isChecksum(logicalPrefixChecksum)
-    ? deriveAgentPromptCacheIdentityChecksum(
+  if (
+    !isChecksum(snapshot.promptCacheIdentityBaseChecksum) ||
+    !isChecksum(logicalPrefixChecksum)
+  ) {
+    return "legacy";
+  }
+  return snapshot.schemaVersion === "2.0"
+    ? deriveAgentPromptCacheIdentityChecksumV2(
         snapshot.promptCacheIdentityBaseChecksum,
         logicalPrefixChecksum
       )
-    : "legacy";
+    : deriveAgentPromptCacheIdentityChecksum(
+        snapshot.promptCacheIdentityBaseChecksum,
+        logicalPrefixChecksum
+      );
 }
 
 function computeCatalogV2RevisionForDescriptors(

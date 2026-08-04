@@ -469,6 +469,9 @@ describe("AgentConversationSession", () => {
       runEvent("run_completed_text", 2, "assistant_text_completed", { text: "完整回答" }),
       runEvent("run_completed_text", 3, "assistant_text_delta", { delta: "第二轮" }),
       runEvent("run_completed_text", 4, "assistant_text_completed", { text: "第二轮" }),
+      runEvent("run_completed_text", 5, "plan_decision_resolved", { decision: "approved" }),
+      runEvent("run_completed_text", 6, "approval_resolved", { decision: "approved" }),
+      runEvent("run_completed_text", 6, "write_applied"),
       runEvent("run_completed_text", 7, "run_completed")
     ]);
 
@@ -483,13 +486,22 @@ describe("AgentConversationSession", () => {
       throughRunLastSequence: 7
     });
     const content = JSON.parse(String(port.summaries[0]?.["content"])) as {
-      recentRuns: { runId: string; assistantTurns?: string[] }[];
+      recentRuns: {
+        runId: string;
+        assistantTurns?: string[];
+        userDecisions?: string[];
+        approvalStates?: string[];
+        sideEffectStates?: string[];
+      }[];
     };
     expect(content.recentRuns).toEqual([
       expect.objectContaining({ runId: "run_legacy_delta", assistantTurns: ["旧回答"] }),
       expect.objectContaining({
         runId: "run_completed_text",
-        assistantTurns: ["完整回答", "第二轮"]
+        assistantTurns: ["完整回答", "第二轮"],
+        userDecisions: ["plan_decision_resolved: approved"],
+        approvalStates: ["approval_resolved: approved"],
+        sideEffectStates: ["write_applied"]
       })
     ]);
     expect(String(port.summaries[0]?.["content"])).not.toContain("不应重复");
@@ -533,7 +545,7 @@ describe("AgentConversationSession", () => {
       projectId: "project_01",
       conversationId: "conv_01"
     });
-    expect(loaded).toMatchObject({ ok: true, value: [{ role: "system" }] });
+    expect(loaded).toMatchObject({ ok: true, value: [{ role: "user" }] });
     if (!loaded.ok) return;
     const serialized = loaded.value.map((message) => message.content).join("\n");
     expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(8 * 1024);

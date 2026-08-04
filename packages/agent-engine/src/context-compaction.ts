@@ -13,6 +13,8 @@ export type ProtectedContextFactKind =
   | "plan_execution"
   | "unresolved_question"
   | "explicit_ref"
+  | "approval_state"
+  | "side_effect_state"
   | "pending_change_set"
   | "recovery"
   | "undo";
@@ -159,7 +161,22 @@ export function buildCompactionInputManifest(
   if (!Number.isSafeInteger(input.throughSequence) || input.throughSequence < 0) {
     return err(manifestInvalid("throughSequence"));
   }
+  const factIds = new Set<string>();
+  const factSourceIds = new Set<string>();
   for (const fact of input.protectedFacts) {
+    if (
+      !isProtectedContextFactKind(fact.kind) ||
+      typeof fact.factId !== "string" ||
+      fact.factId.length === 0 ||
+      typeof fact.sourceId !== "string" ||
+      fact.sourceId.length === 0 ||
+      factIds.has(fact.factId) ||
+      factSourceIds.has(fact.sourceId)
+    ) {
+      return err(manifestInvalid(`protectedFact:${fact.factId}:identity`));
+    }
+    factIds.add(fact.factId);
+    factSourceIds.add(fact.sourceId);
     const hasRevision = fact.sourceRevision !== undefined;
     const hasSequence = fact.eventSequence !== undefined;
     if (hasRevision === hasSequence) {
@@ -176,6 +193,9 @@ export function buildCompactionInputManifest(
       (!Number.isSafeInteger(fact.eventSequence) || (fact.eventSequence ?? -1) < 0)
     ) {
       return err(manifestInvalid(`protectedFact:${fact.factId}:eventSequence`));
+    }
+    if (hasSequence && (fact.eventSequence ?? 0) > input.throughSequence) {
+      return err(manifestInvalid(`protectedFact:${fact.factId}:futureEventSequence`));
     }
     if (typeof fact.checksum !== "string" || !CHECKSUM.test(fact.checksum)) {
       return err(manifestInvalid(`protectedFact:${fact.factId}:checksum`));
@@ -296,11 +316,22 @@ export interface CompactionResultProgressInput {
 export function validateCompactionResultProgress(
   input: CompactionResultProgressInput
 ): Result<CompactionResultProgressInput, UnifiedError> {
+  const candidateIdentityError = validateProtectedFactSet(
+    input.candidateProtectedFacts,
+    input.candidateThroughSequence
+  );
+  if (candidateIdentityError !== undefined) return err(regressed(candidateIdentityError));
   if (input.prior === undefined) return ok(input);
   if (input.candidateThroughSequence < input.prior.throughSequence) {
     return err(regressed("throughSequence"));
   }
+  const priorIdentityError = validateProtectedFactSet(
+    input.prior.protectedFacts,
+    input.prior.throughSequence
+  );
+  if (priorIdentityError !== undefined) return err(regressed(`prior:${priorIdentityError}`));
   const candidateById = new Map(input.candidateProtectedFacts.map((fact) => [fact.factId, fact]));
+  let priorCandidateIndex = -1;
   for (const fact of input.prior.protectedFacts) {
     if (fact.kind === "plan_execution") {
       const candidate = input.candidateProtectedFacts.find(
@@ -308,14 +339,81 @@ export function validateCompactionResultProgress(
       );
       const regression = validatePlanExecutionProgress(fact, candidate);
       if (regression !== undefined) return err(regressed(regression));
+      const candidateIndex =
+        candidate === undefined ? -1 : input.candidateProtectedFacts.indexOf(candidate);
+      if (candidateIndex <= priorCandidateIndex) {
+        return err(regressed(`protectedFact:${fact.factId}:order`));
+      }
+      priorCandidateIndex = candidateIndex;
       continue;
     }
     const candidate = candidateById.get(fact.factId);
-    if (candidate === undefined || candidate.checksum !== fact.checksum) {
+    if (candidate === undefined || stableSerialize(candidate) !== stableSerialize(fact)) {
       return err(regressed(`protectedFact:${fact.factId}`));
     }
+    const candidateIndex = input.candidateProtectedFacts.indexOf(candidate);
+    if (candidateIndex <= priorCandidateIndex) {
+      return err(regressed(`protectedFact:${fact.factId}:order`));
+    }
+    priorCandidateIndex = candidateIndex;
   }
   return ok(input);
+}
+
+function validateProtectedFactSet(
+  facts: readonly ProtectedContextFact[],
+  throughSequence: number
+): string | undefined {
+  if (!isNonNegativeInteger(throughSequence)) return "throughSequence";
+  const factIds = new Set<string>();
+  const sourceIds = new Set<string>();
+  for (const fact of facts) {
+    if (!isProtectedContextFactKind(fact.kind)) return `protectedFact:${fact.factId}:kind`;
+    if (typeof fact.factId !== "string" || fact.factId.length === 0) {
+      return "protectedFact:identity";
+    }
+    if (typeof fact.sourceId !== "string" || fact.sourceId.length === 0) {
+      return `protectedFact:${fact.factId}:sourceIdentity`;
+    }
+    if (factIds.has(fact.factId)) return `protectedFact:${fact.factId}:duplicateId`;
+    if (sourceIds.has(fact.sourceId)) return `protectedFact:${fact.sourceId}:duplicateSource`;
+    const hasRevision = fact.sourceRevision !== undefined;
+    const hasSequence = fact.eventSequence !== undefined;
+    if (hasRevision === hasSequence) return `protectedFact:${fact.factId}:provenance`;
+    if (
+      (hasRevision && !isNonNegativeInteger(fact.sourceRevision)) ||
+      (hasSequence &&
+        (!isNonNegativeInteger(fact.eventSequence) || fact.eventSequence > throughSequence)) ||
+      !CHECKSUM.test(fact.checksum)
+    ) {
+      return `protectedFact:${fact.factId}:invalid`;
+    }
+    if (fact.kind === "plan_execution" && !isPlanExecutionProtectedFact(fact)) {
+      return `protectedFact:${fact.factId}:planExecution`;
+    }
+    if (fact.kind !== "plan_execution" && fact.planExecution !== undefined) {
+      return `protectedFact:${fact.factId}:planExecutionKind`;
+    }
+    factIds.add(fact.factId);
+    sourceIds.add(fact.sourceId);
+  }
+  return undefined;
+}
+
+function isProtectedContextFactKind(value: unknown): value is ProtectedContextFactKind {
+  return (
+    value === "run_goal" ||
+    value === "user_decision" ||
+    value === "approved_plan" ||
+    value === "plan_execution" ||
+    value === "unresolved_question" ||
+    value === "explicit_ref" ||
+    value === "approval_state" ||
+    value === "side_effect_state" ||
+    value === "pending_change_set" ||
+    value === "recovery" ||
+    value === "undo"
+  );
 }
 
 export interface CreateContextCompactionRevisionInput {
@@ -437,11 +535,13 @@ function isPlanExecutionProtectedFact(
     fact.kind !== "plan_execution" ||
     fact.sourceRevision === undefined ||
     fact.planExecution === undefined ||
+    fact.factId !== `plan_execution:${fact.planExecution.planExecutionId}` ||
     fact.planExecution.planExecutionId !== fact.sourceId ||
     fact.planExecution.revision !== fact.sourceRevision ||
     !Number.isSafeInteger(fact.planExecution.revision) ||
     fact.planExecution.revision < 1 ||
-    !Array.isArray(fact.planExecution.steps)
+    !Array.isArray(fact.planExecution.steps) ||
+    fact.checksum !== checksumText(stableSerialize(fact.planExecution))
   ) {
     return false;
   }
@@ -471,6 +571,10 @@ function isPlanExecutionStepStatus(value: string): value is PlanExecutionStepSta
 
 function stepProgress(status: PlanExecutionStepStatus): number {
   return status === "pending" ? 0 : status === "running" ? 1 : 2;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
 function deepFreeze<T>(value: T): T {

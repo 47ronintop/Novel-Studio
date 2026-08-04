@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 import {
   createDeterministicTokenEstimator,
+  validateAgentRunToolCatalogSnapshot,
   validateAgentRunEventV20,
   validateAgentRunHistoryV20,
   validateAgentRunSnapshotV20,
@@ -149,11 +150,15 @@ export class AgentRunFileRepository {
     catalog: JsonObject
   ): Promise<Result<JsonObject, UnifiedError>> {
     const snapshotId = readSafeString(catalog, "toolCatalogSnapshotId");
+    const validated = validateAgentRunToolCatalogSnapshot(catalog);
     if (
       !isSafeId(runId) ||
       snapshotId === undefined ||
       catalog["runId"] !== runId ||
-      (catalog["schemaVersion"] !== "1.0" && catalog["schemaVersion"] !== "2.0")
+      !hasStrictToolCatalogEnvelope(catalog) ||
+      !validated.ok ||
+      validated.value.runId !== runId ||
+      validated.value.toolCatalogSnapshotId !== snapshotId
     ) {
       return Promise.resolve(this.invalidRecord("AGENT_TOOL_CATALOG_INVALID"));
     }
@@ -175,10 +180,12 @@ export class AgentRunFileRepository {
       this.runPath(runId, join("tool-catalogs", `${toolCatalogSnapshotId}.json`))
     );
     if (!read.ok || read.value === undefined) return read;
-    return read.value["runId"] === runId &&
-      read.value["toolCatalogSnapshotId"] === toolCatalogSnapshotId &&
-      (read.value["schemaVersion"] === "1.0" || read.value["schemaVersion"] === "2.0")
-      ? read
+    const validated = validateAgentRunToolCatalogSnapshot(read.value);
+    return hasStrictToolCatalogEnvelope(read.value) &&
+      validated.ok &&
+      validated.value.runId === runId &&
+      validated.value.toolCatalogSnapshotId === toolCatalogSnapshotId
+      ? ok(validated.value as unknown as JsonObject)
       : this.invalidRecord("AGENT_TOOL_CATALOG_INVALID");
   }
 
@@ -327,12 +334,7 @@ export class AgentRunFileRepository {
     artifact: JsonObject
   ): Promise<Result<JsonObject, UnifiedError>> {
     const artifactId = readSafeString(artifact, "artifactId");
-    if (
-      !isSafeId(runId) ||
-      artifactId === undefined ||
-      artifact["schemaVersion"] !== "1.0" ||
-      !isPromptCacheArtifactEnvelope(artifact)
-    ) {
+    if (!isSafeId(runId) || artifactId === undefined || !isPromptCacheArtifactEnvelope(artifact)) {
       return Promise.resolve(this.invalidRecord("AGENT_PROMPT_CACHE_ARTIFACT_INVALID"));
     }
     return this.writeImmutableJson(
@@ -1537,33 +1539,135 @@ function isSupportedAgentSchemaVersion(value: JsonObject): boolean {
   );
 }
 
+const LEGACY_TOOL_CATALOG_FIELDS = new Set([
+  "schemaVersion",
+  "toolCatalogSnapshotId",
+  "runId",
+  "facadeVersion",
+  "descriptors",
+  "descriptorRevision",
+  "providerMappingRevision",
+  "catalogRevision",
+  "createdAt"
+]);
+
+function hasStrictToolCatalogEnvelope(value: JsonObject): boolean {
+  return value["schemaVersion"] === "2.0"
+    ? true
+    : value["schemaVersion"] === "1.0" && hasExactlyJsonFields(value, LEGACY_TOOL_CATALOG_FIELDS);
+}
+
 function isPromptCacheArtifactEnvelope(value: JsonObject): boolean {
+  const version = value["schemaVersion"];
+  const fields =
+    version === "1.0"
+      ? PROMPT_CACHE_ARTIFACT_FIELDS_V1
+      : version === "2.0"
+        ? PROMPT_CACHE_ARTIFACT_FIELDS_V2
+        : undefined;
+  if (fields === undefined || !hasExactlyJsonFields(value, fields)) return false;
   const { artifactChecksum, ...unsigned } = value;
   void artifactChecksum;
   const capability = value["capability"];
   const scope = value["scope"];
+  if (
+    !isPromptCacheCapability(capability) ||
+    !isPromptCacheScope(scope) ||
+    !promptCacheProfileMatchesScope(value["contextProfileId"], scope) ||
+    readSafeString(value, "artifactId") === undefined ||
+    readSafeString(value, "runBindingId") === undefined ||
+    !isNonEmptyString(value["provider"]) ||
+    !isNonEmptyString(value["modelName"]) ||
+    !isChecksum(value["connectionIdentityChecksum"]) ||
+    !isChecksum(value["accountIsolationChecksum"]) ||
+    !isNonEmptyString(value["adapterVersion"]) ||
+    !isNonEmptyString(value["profileVersion"]) ||
+    !isChecksum(value["guidanceTemplateChecksum"]) ||
+    !isNonEmptyString(value["toolCatalogRevision"]) ||
+    !isChecksum(value["logicalPrefixChecksum"]) ||
+    !isPositiveInteger(value["stablePrefixMessageCount"]) ||
+    !isNonNegativeInteger(value["eligibleInputTokens"]) ||
+    !isUtcTimestamp(value["createdAt"]) ||
+    !isChecksum(value["artifactChecksum"]) ||
+    checksumText(stableSerialize(unsigned)) !== value["artifactChecksum"] ||
+    containsForbiddenPromptCacheData(value)
+  ) {
+    return false;
+  }
+  const v2FieldsValid =
+    version === "1.0" ||
+    (isChecksum(value["providerSemanticVersionSetChecksum"]) &&
+      (scope.kind === "standalone"
+        ? value["canonicalRootIdentityChecksum"] === "not_applicable"
+        : isChecksum(value["canonicalRootIdentityChecksum"])) &&
+      isChecksum(value["effectiveCapabilityStateChecksum"]) &&
+      isChecksum(value["providerToolProjectionChecksum"]) &&
+      isNonEmptyString(value["policyRevision"]) &&
+      (scope.kind === "standalone"
+        ? value["sharingDefaultsRevision"] === "not_applicable" &&
+          value["sharingGrantRevision"] === "not_applicable"
+        : isChecksum(value["sharingDefaultsRevision"]) &&
+          isChecksum(value["sharingGrantRevision"])));
+  if (!v2FieldsValid) return false;
+
+  const identityBaseMaterial =
+    version === "1.0"
+      ? {
+          schemaVersion: version,
+          provider: value["provider"],
+          modelName: value["modelName"],
+          connectionIdentityChecksum: value["connectionIdentityChecksum"],
+          accountIsolationChecksum: value["accountIsolationChecksum"],
+          adapterVersion: value["adapterVersion"],
+          capability
+        }
+      : {
+          schemaVersion: version,
+          provider: value["provider"],
+          modelName: value["modelName"],
+          connectionIdentityChecksum: value["connectionIdentityChecksum"],
+          accountIsolationChecksum: value["accountIsolationChecksum"],
+          adapterVersion: value["adapterVersion"],
+          capability,
+          scope,
+          contextProfileId: value["contextProfileId"],
+          profileVersion: value["profileVersion"],
+          guidanceTemplateChecksum: value["guidanceTemplateChecksum"],
+          toolCatalogRevision: value["toolCatalogRevision"],
+          providerSemanticVersionSetChecksum: value["providerSemanticVersionSetChecksum"],
+          canonicalRootIdentityChecksum: value["canonicalRootIdentityChecksum"],
+          effectiveCapabilityStateChecksum: value["effectiveCapabilityStateChecksum"],
+          sharingDefaultsRevision: value["sharingDefaultsRevision"],
+          sharingGrantRevision: value["sharingGrantRevision"],
+          policyRevision: value["policyRevision"],
+          providerToolProjectionChecksum: value["providerToolProjectionChecksum"]
+        };
+  const identityBaseChecksum = checksumText(stableSerialize(identityBaseMaterial));
+  const identityChecksum = checksumText(
+    stableSerialize({
+      schemaVersion: version,
+      identityBaseChecksum,
+      logicalPrefixChecksum: value["logicalPrefixChecksum"]
+    })
+  );
+  const artifactId = `prompt_cache_${checksumText(
+    stableSerialize({ runBindingId: value["runBindingId"], identityChecksum })
+  ).slice(0, 32)}`;
+  const expiresAt =
+    capability.ttlSeconds === null
+      ? null
+      : new Date(
+          Date.parse(value["createdAt"] as string) + capability.ttlSeconds * 1_000
+        ).toISOString();
   return (
-    value["schemaVersion"] === "1.0" &&
-    hasOnlyJsonFields(value, PROMPT_CACHE_ARTIFACT_FIELDS) &&
-    isJsonObject(capability) &&
-    hasOnlyJsonFields(capability, PROMPT_CACHE_CAPABILITY_FIELDS) &&
-    isJsonObject(scope) &&
-    hasOnlyJsonFields(
-      scope,
-      scope["kind"] === "standalone"
-        ? STANDALONE_PROMPT_CACHE_SCOPE_FIELDS
-        : WORKSPACE_PROMPT_CACHE_SCOPE_FIELDS
-    ) &&
-    readSafeString(value, "artifactId") !== undefined &&
-    isChecksum(value["identityBaseChecksum"]) &&
-    isChecksum(value["identityChecksum"]) &&
-    isChecksum(value["artifactChecksum"]) &&
-    checksumText(stableSerialize(unsigned)) === value["artifactChecksum"] &&
-    !containsForbiddenPromptCacheData(value)
+    value["identityBaseChecksum"] === identityBaseChecksum &&
+    value["identityChecksum"] === identityChecksum &&
+    value["artifactId"] === artifactId &&
+    value["expiresAt"] === expiresAt
   );
 }
 
-const PROMPT_CACHE_ARTIFACT_FIELDS = new Set([
+const PROMPT_CACHE_ARTIFACT_FIELDS_V1 = new Set([
   "schemaVersion",
   "artifactId",
   "runBindingId",
@@ -1587,6 +1691,16 @@ const PROMPT_CACHE_ARTIFACT_FIELDS = new Set([
   "expiresAt",
   "artifactChecksum"
 ]);
+const PROMPT_CACHE_ARTIFACT_FIELDS_V2 = new Set([
+  ...PROMPT_CACHE_ARTIFACT_FIELDS_V1,
+  "providerSemanticVersionSetChecksum",
+  "canonicalRootIdentityChecksum",
+  "effectiveCapabilityStateChecksum",
+  "sharingDefaultsRevision",
+  "sharingGrantRevision",
+  "policyRevision",
+  "providerToolProjectionChecksum"
+]);
 const PROMPT_CACHE_CAPABILITY_FIELDS = new Set([
   "mode",
   "policyVersion",
@@ -1598,6 +1712,58 @@ const PROMPT_CACHE_CAPABILITY_FIELDS = new Set([
 ]);
 const STANDALONE_PROMPT_CACHE_SCOPE_FIELDS = new Set(["kind", "scopeId"]);
 const WORKSPACE_PROMPT_CACHE_SCOPE_FIELDS = new Set(["kind", "workspaceKind", "workspaceId"]);
+
+function isPromptCacheCapability(value: unknown): value is {
+  readonly ttlSeconds: number | null;
+} & JsonObject {
+  if (!isJsonObject(value) || !hasExactlyJsonFields(value, PROMPT_CACHE_CAPABILITY_FIELDS)) {
+    return false;
+  }
+  const ttlSeconds = value["ttlSeconds"];
+  return (
+    (value["mode"] === "none" ||
+      value["mode"] === "automatic_prefix" ||
+      value["mode"] === "explicit_breakpoints" ||
+      value["mode"] === "explicit_resource") &&
+    isNonEmptyString(value["policyVersion"]) &&
+    isNonNegativeInteger(value["minimumCacheableTokens"]) &&
+    (ttlSeconds === null || isPositiveInteger(ttlSeconds)) &&
+    (value["inputTokenSemantics"] === "included_in_input" ||
+      value["inputTokenSemantics"] === "excluded_from_input" ||
+      value["inputTokenSemantics"] === "unavailable") &&
+    typeof value["reportsCacheReadTokens"] === "boolean" &&
+    typeof value["reportsCacheWriteTokens"] === "boolean"
+  );
+}
+
+function isPromptCacheScope(value: unknown): value is JsonObject & {
+  readonly kind: "standalone" | "workspace";
+} {
+  if (!isJsonObject(value)) return false;
+  if (value["kind"] === "standalone") {
+    return (
+      hasExactlyJsonFields(value, STANDALONE_PROMPT_CACHE_SCOPE_FIELDS) &&
+      value["scopeId"] === "standalone"
+    );
+  }
+  return (
+    value["kind"] === "workspace" &&
+    hasExactlyJsonFields(value, WORKSPACE_PROMPT_CACHE_SCOPE_FIELDS) &&
+    (value["workspaceKind"] === "creativeProject" ||
+      value["workspaceKind"] === "engineeringWorkspace") &&
+    typeof value["workspaceId"] === "string" &&
+    isSafeId(value["workspaceId"])
+  );
+}
+
+function promptCacheProfileMatchesScope(profile: unknown, scope: JsonObject): boolean {
+  if (profile === "standalone") return scope["kind"] === "standalone";
+  if (scope["kind"] !== "workspace") return false;
+  return profile === "engineering"
+    ? scope["workspaceKind"] === "engineeringWorkspace"
+    : (profile === "writing" || profile === "creative_general") &&
+        scope["workspaceKind"] === "creativeProject";
+}
 
 function containsForbiddenPromptCacheData(value: unknown): boolean {
   if (typeof value === "string") return value.includes("secret://");
@@ -1715,8 +1881,18 @@ function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isUtcTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function isChecksum(value: unknown): value is string {
@@ -1791,6 +1967,10 @@ function isJsonObject(value: unknown): value is JsonObject {
 
 function hasOnlyJsonFields(value: JsonObject, allowed: ReadonlySet<string>): boolean {
   return Object.keys(value).every((field) => allowed.has(field));
+}
+
+function hasExactlyJsonFields(value: JsonObject, expected: ReadonlySet<string>): boolean {
+  return Object.keys(value).length === expected.size && hasOnlyJsonFields(value, expected);
 }
 
 function isMissingFileError(error: unknown): boolean {

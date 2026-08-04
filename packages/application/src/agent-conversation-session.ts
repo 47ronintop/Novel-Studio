@@ -110,7 +110,7 @@ export interface AgentConversationSearchHit extends AgentConversationSummary {
 }
 
 export interface AgentConversationContextMessage {
-  readonly role: "system" | "user" | "assistant" | "tool";
+  readonly role: "user";
   readonly content: string;
 }
 
@@ -1144,7 +1144,7 @@ export function createAgentConversationSession(
         isSummaryCurrent(latest.value, runs.value[0]) &&
         isBoundedSummaryContent(latest.value["content"])
       ) {
-        return ok([{ role: "system", content: String(latest.value["content"]) }]);
+        return ok([{ role: "user", content: String(latest.value["content"]) }]);
       }
       const refreshed = await refreshSummary(input.conversationId);
       if (!refreshed.ok || refreshed.value === undefined) {
@@ -1152,7 +1152,7 @@ export function createAgentConversationSession(
       }
       const content = refreshed.value["content"];
       return isBoundedSummaryContent(content)
-        ? ok([{ role: "system", content }])
+        ? ok([{ role: "user", content }])
         : failure("AGENT_CONVERSATION_SUMMARY_UNAVAILABLE");
     }
   };
@@ -1190,6 +1190,9 @@ interface AgentConversationRunFact {
   readonly planTargets?: readonly string[];
   readonly unresolvedQuestions?: readonly string[];
   readonly changeSetTargets?: readonly string[];
+  readonly userDecisions?: readonly string[];
+  readonly approvalStates?: readonly string[];
+  readonly sideEffectStates?: readonly string[];
   readonly outcomes?: readonly string[];
   readonly errorCodes?: readonly string[];
 }
@@ -1302,6 +1305,9 @@ function toRunFact(run: JsonObject, rawEvents: readonly JsonObject[]): AgentConv
   const planTargets: string[] = [];
   const unresolvedQuestions: string[] = [];
   const changeSetTargets: string[] = [];
+  const userDecisions: string[] = [];
+  const approvalStates: string[] = [];
+  const sideEffectStates: string[] = [];
   const outcomes: string[] = [];
   const errorCodes: string[] = [];
   let pendingLegacyDelta = "";
@@ -1355,6 +1361,35 @@ function toRunFact(run: JsonObject, rawEvents: readonly JsonObject[]): AgentConv
       }
       continue;
     }
+    if (type === "user_input_resolved" || type === "plan_decision_resolved") {
+      const decision =
+        readString(detail ?? {}, "decision") ??
+        readString(detail ?? {}, "resolution") ??
+        readString(detail ?? {}, "answer") ??
+        readString(detail ?? {}, "value");
+      pushUnique(userDecisions, decision === undefined ? type : `${type}: ${decision}`);
+    }
+    if (
+      type === "change_set_auto_approved" ||
+      type === "approval_resolved" ||
+      type === "tool_approval_resolved"
+    ) {
+      const decision =
+        readString(detail ?? {}, "decision") ?? readString(detail ?? {}, "status") ?? "resolved";
+      pushUnique(approvalStates, `${type}: ${decision}`);
+    }
+    if (
+      type === "write_started" ||
+      type === "write_applied" ||
+      type === "write_failed" ||
+      type === "run_undo_started" ||
+      type === "run_undo_review_required" ||
+      type === "run_undone" ||
+      type === "run_undo_failed" ||
+      type === "external_outcome_unknown"
+    ) {
+      pushUnique(sideEffectStates, type);
+    }
     if (
       type === "write_applied" ||
       type === "write_failed" ||
@@ -1362,6 +1397,7 @@ function toRunFact(run: JsonObject, rawEvents: readonly JsonObject[]): AgentConv
       type === "run_undo_failed" ||
       type === "run_undo_review_required" ||
       type === "run_completed" ||
+      type === "run_blocked" ||
       type === "run_cancelled" ||
       type === "run_failed" ||
       type === "run_limit_reached"
@@ -1404,6 +1440,11 @@ function toRunFact(run: JsonObject, rawEvents: readonly JsonObject[]): AgentConv
     ...(changeSetTargets.length === 0
       ? {}
       : { changeSetTargets: changeSetTargets.slice(0, 12).map((text) => boundedFactText(text)) }),
+    ...(userDecisions.length === 0
+      ? {}
+      : { userDecisions: userDecisions.slice(0, 8).map((text) => boundedFactText(text)) }),
+    ...(approvalStates.length === 0 ? {} : { approvalStates: approvalStates.slice(0, 8) }),
+    ...(sideEffectStates.length === 0 ? {} : { sideEffectStates: sideEffectStates.slice(0, 8) }),
     ...(outcomes.length === 0 ? {} : { outcomes }),
     ...(errorCodes.length === 0 ? {} : { errorCodes })
   };
@@ -1422,6 +1463,9 @@ function buildBoundedContextContent(
     ...(fact.unresolvedQuestions === undefined
       ? {}
       : { unresolvedQuestions: fact.unresolvedQuestions }),
+    ...(fact.userDecisions === undefined ? {} : { userDecisions: fact.userDecisions }),
+    ...(fact.approvalStates === undefined ? {} : { approvalStates: fact.approvalStates }),
+    ...(fact.sideEffectStates === undefined ? {} : { sideEffectStates: fact.sideEffectStates }),
     ...(fact.outcomes === undefined ? {} : { outcomes: fact.outcomes }),
     ...(fact.errorCodes === undefined ? {} : { errorCodes: fact.errorCodes })
   }));

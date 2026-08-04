@@ -5,6 +5,7 @@ import type { JsonObject } from "@novel-studio/shared";
 
 import {
   createAgentPromptCacheIdentityArtifact,
+  createAgentPromptCacheIdentityArtifactV2,
   parseAgentPromptCacheIdentityArtifact
 } from "../src/agent-prompt-cache.js";
 
@@ -38,6 +39,17 @@ const baseInput = {
   stablePrefixMessageCount: 3,
   eligibleInputTokens: 2_048,
   createdAt: "2026-07-28T00:00:00.000Z"
+} as const;
+
+const baseV2Input = {
+  ...baseInput,
+  providerSemanticVersionSetChecksum: "1".repeat(64),
+  canonicalRootIdentityChecksum: "6".repeat(64),
+  effectiveCapabilityStateChecksum: "2".repeat(64),
+  sharingDefaultsRevision: "3".repeat(64),
+  sharingGrantRevision: "4".repeat(64),
+  policyRevision: "policy_01",
+  providerToolProjectionChecksum: "5".repeat(64)
 } as const;
 
 describe("Agent prompt cache identity artifact", () => {
@@ -115,5 +127,72 @@ describe("Agent prompt cache identity artifact", () => {
         identityChecksum: "0".repeat(64)
       } as unknown as JsonObject)
     ).toThrow("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+    expect(() =>
+      parseAgentPromptCacheIdentityArtifact({
+        ...artifact,
+        unrecognizedIdentityInput: "ignored-by-old-readers"
+      } as unknown as JsonObject)
+    ).toThrow("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+  });
+
+  test("v2 binds the complete semantic, capability, sharing, profile, scope, and tool projection", () => {
+    const original = createAgentPromptCacheIdentityArtifactV2(baseV2Input);
+    expect(original.schemaVersion).toBe("2.0");
+    expect(
+      parseAgentPromptCacheIdentityArtifact(structuredClone(original) as unknown as JsonObject)
+    ).toEqual(original);
+
+    const variants = [
+      { ...baseV2Input, providerSemanticVersionSetChecksum: "0".repeat(64) },
+      { ...baseV2Input, canonicalRootIdentityChecksum: "1".repeat(64) },
+      { ...baseV2Input, effectiveCapabilityStateChecksum: "7".repeat(64) },
+      { ...baseV2Input, sharingDefaultsRevision: "8".repeat(64) },
+      { ...baseV2Input, sharingGrantRevision: "9".repeat(64) },
+      { ...baseV2Input, policyRevision: "policy_02" },
+      { ...baseV2Input, providerToolProjectionChecksum: "a".repeat(64) },
+      { ...baseV2Input, contextProfileId: "creative_general" as const },
+      { ...baseV2Input, profileVersion: "3.0" },
+      { ...baseV2Input, guidanceTemplateChecksum: "b".repeat(64) },
+      { ...baseV2Input, toolCatalogRevision: "catalog_v2_02" },
+      {
+        ...baseV2Input,
+        scope: {
+          kind: "workspace" as const,
+          workspaceKind: "creativeProject" as const,
+          workspaceId: "project_02"
+        },
+        contextProfileId: "writing" as const
+      }
+    ];
+    for (const variant of variants) {
+      expect(createAgentPromptCacheIdentityArtifactV2(variant).identityChecksum).not.toBe(
+        original.identityChecksum
+      );
+    }
+  });
+
+  test("v2 normalizes sharing as not applicable only for standalone", () => {
+    expect(() =>
+      createAgentPromptCacheIdentityArtifactV2({
+        ...baseV2Input,
+        sharingDefaultsRevision: "not_applicable"
+      })
+    ).toThrow("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+    expect(() =>
+      createAgentPromptCacheIdentityArtifactV2({
+        ...baseV2Input,
+        canonicalRootIdentityChecksum: "not_applicable"
+      })
+    ).toThrow("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+
+    const standalone = createAgentPromptCacheIdentityArtifactV2({
+      ...baseV2Input,
+      scope: { kind: "standalone", scopeId: "standalone" },
+      contextProfileId: "standalone",
+      canonicalRootIdentityChecksum: "not_applicable",
+      sharingDefaultsRevision: "not_applicable",
+      sharingGrantRevision: "not_applicable"
+    });
+    expect(standalone.sharingDefaultsRevision).toBe("not_applicable");
   });
 });

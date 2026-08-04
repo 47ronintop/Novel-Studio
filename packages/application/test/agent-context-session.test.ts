@@ -19,6 +19,11 @@ import type {
   AgentRunDraftV20,
   PreviewContextBudgetCommand
 } from "@novel-studio/agent-engine";
+import { createProviderSemanticVersionSetV1 } from "@novel-studio/agent-engine";
+import {
+  freezeRunModelSharingGrant,
+  freezeWorkspaceModelSharingDefaults
+} from "../src/agent-model-sharing.js";
 
 function createMemoryRepository() {
   const runDrafts = new Map<string, Map<number, JsonObject>>();
@@ -549,13 +554,10 @@ describe("Agent Context session — previewPackedContext", () => {
     });
 
     const result = await session.previewPackedContext(command(draft, "fixed_overflow"));
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.tokenStats.usedTokens).toBe(usedTokens);
-    expect(result.value.tokenStats.usedTokens).toBeGreaterThan(
-      result.value.tokenStats.safeInputBudget
-    );
-    expect(result.value.fixedBudgetExceeded).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_PACKING_REQUIRED_OVERFLOW" }
+    });
   });
 
   test("marks pinned sources as fixed overflow even when aggregate used tokens fit", async () => {
@@ -586,14 +588,149 @@ describe("Agent Context session — previewPackedContext", () => {
     });
 
     const result = await session.previewPackedContext(command(draft, "pinned_overflow"));
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_PACKING_ACTIVE_OR_PINNED_OVERFLOW" }
+    });
+  });
+
+  test("binds strict sharing, packed manifest 2.0, and canonical round to one version set", async () => {
+    const draft = await seedDraft(draftSession);
+    const source: AgentContextSourceInput = {
+      refId: "story_bible:timeline",
+      sourceKind: "story_bible_asset",
+      assetId: "timeline",
+      content: "The timeline",
+      dirty: false,
+      selectionPolicy: "pinned"
+    };
+    const editor: AgentContextSourceInput = {
+      refId: "editor:current",
+      sourceKind: "editor_buffer",
+      content: "current editor text",
+      dirty: false,
+      selectionPolicy: "explicit"
+    };
+    const defaults = freezeWorkspaceModelSharingDefaults({
+      workspaceBindingId: "project_01",
+      defaultsRevision: "1".repeat(64),
+      defaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "ask",
+        toolReadResults: "ask"
+      }
+    });
+    expect(defaults.ok).toBe(true);
+    if (!defaults.ok) return;
+    const grant = freezeRunModelSharingGrant({
+      profileId: "writing",
+      workspaceBindingId: "project_01",
+      grant: {
+        runDraftRevision: String(draft.revision),
+        defaultsRevision: defaults.value.defaultsRevision,
+        includedRefIds: [source.refId, editor.refId],
+        excludedRefIds: [],
+        approvedResultKinds: []
+      }
+    });
+    expect(grant.ok).toBe(true);
+    if (!grant.ok) return;
+    const providerSemanticVersionSet = createProviderSemanticVersionSetV1({
+      writingTaskIntentSchemaVersion: "not_applicable",
+      writingGenerationGuidanceVersion: "not_applicable",
+      approvalRuleSetVersion: "not_applicable",
+      approvalRuleSetChecksum: "not_applicable"
+    });
+    const inputs = packingInputs(draft, { activeSources: [editor, source] });
+    const strictInputs: AgentContextBudgetInputs = {
+      ...inputs,
+      resolved: {
+        ...inputs.resolved,
+        sharing: {
+          defaultsRevision: defaults.value.defaultsRevision,
+          grantRevision: grant.value.grantRevision
+        }
+      },
+      modelSharing: {
+        defaults: defaults.value,
+        grant: grant.value,
+        summaryTokenLimit: 2_048
+      },
+      canonicalRound: {
+        roundId: "round_preview_01",
+        runId: "run_preview_01",
+        roundNumber: 0,
+        systemPrompt: "trusted authority",
+        toolCatalogRevision: inputs.resolved.toolCatalog.catalogRevision,
+        projectedToolDescriptors: [],
+        sharing: {
+          defaultsRevision: defaults.value.defaultsRevision,
+          runGrantRevision: grant.value.grantRevision
+        },
+        providerSemanticVersionSet,
+        userRequest: draft.userRequest,
+        contextSnapshot: {
+          contextSnapshotId: "snapshot_preview_01",
+          createdAt: "2026-08-04T00:00:00.000Z",
+          guidanceTemplateChecksum: "2".repeat(64)
+        }
+      }
+    };
+    let binding: PackedAgentContextBinding | undefined;
+    const session = createAgentContextSession({
+      draftSession,
+      budgetInputs: budgetInputsPort(strictInputs),
+      requireCanonicalRound: true,
+      requireModelSharing: true,
+      onPackedContext(value) {
+        binding = value;
+      }
+    });
+
+    const result = await session.previewPackedContext(command(draft, "strict_round"));
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.tokenStats.usedTokens).toBeLessThan(
-      result.value.tokenStats.safeInputBudget
+    if (!result.ok || binding === undefined) return;
+    expect(result.value.packedContextManifestV2?.schemaVersion).toBe("2.0");
+    expect(result.value.canonicalRoundManifest?.schemaVersion).toBe("2.0");
+    expect(result.value.contextSnapshotV2?.schemaVersion).toBe("2.0");
+    expect(result.value.canonicalRoundManifest?.messages.at(-1)).toMatchObject({
+      kind: "current_user_request",
+      content: draft.userRequest
+    });
+    expect(result.value.packedContextManifestV2?.providerSemanticVersionSetChecksum).toBe(
+      result.value.canonicalRoundManifest?.providerSemanticVersionSetChecksum
     );
-    expect(result.value.tokenStats.pinnedTokens).toBeGreaterThan(
-      result.value.tokenStats.safeInputBudget
+    expect(result.value.contextSnapshotV2?.providerSemanticVersionSetChecksum).toBe(
+      result.value.canonicalRoundManifest?.providerSemanticVersionSetChecksum
     );
-    expect(result.value.fixedBudgetExceeded).toBe(true);
+    expect(result.value.contextSnapshotV2?.sources.map(({ refId }) => refId)).toEqual([
+      source.refId,
+      editor.refId
+    ]);
+    expect(binding.canonicalRoundManifest?.manifestChecksum).toBe(
+      result.value.canonicalRoundManifest?.manifestChecksum
+    );
+  });
+
+  test("strict workspace preview fails before publishing without a sharing grant", async () => {
+    const draft = await seedDraft(draftSession);
+    let published = false;
+    const session = createAgentContextSession({
+      draftSession,
+      budgetInputs: budgetInputsPort(packingInputs(draft)),
+      requireModelSharing: true,
+      onPackedContext() {
+        published = true;
+      }
+    });
+
+    await expect(
+      session.previewPackedContext(command(draft, "sharing_missing"))
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_MODEL_SHARING_BINDING_INVALID" }
+    });
+    expect(published).toBe(false);
   });
 });

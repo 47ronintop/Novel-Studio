@@ -126,7 +126,54 @@ function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord
   };
 }
 
+function metricsRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: "2.0",
+    storageScope: "local_only",
+    usageId: "usage_run_01",
+    runId: "run_01",
+    recordedAt: "2026-08-04T04:00:00.000Z",
+    semanticVersionSetChecksum: "c".repeat(64),
+    guidanceVersion: "3.0",
+    contextProfileId: "creative_general",
+    messageOrderVersion: "2.0",
+    toolCatalogVersion: "2.0",
+    runOutcome: "completed",
+    pendingOutcome: "none",
+    recoveryOutcome: "recovered",
+    modelRoundCount: 2,
+    toolCallCount: 4,
+    toolFailureCount: 1,
+    approvalWaitCount: 1,
+    approvalWaitMs: 75,
+    sources: [
+      {
+        sourceKind: "disk_file",
+        tokenCount: 200,
+        truncated: false,
+        exclusionReason: "none"
+      }
+    ],
+    cacheOutcome: "bypass",
+    cacheVerifiedInputTokens: null,
+    changeSetOutcome: "undone",
+    styleObservations: [
+      { rule: "pov_consistency", version: "2.0", confidence: 0.7, userOutcome: "ignored" }
+    ],
+    eventRefs: ["event_01"],
+    ...overrides
+  };
+}
+
 type UsageRepository = {
+  writeRunMetrics(
+    record: Record<string, unknown>
+  ): Promise<{ ok: boolean; value?: unknown; error?: { code: string } }>;
+  readRunMetrics(usageId: string): Promise<{
+    ok: boolean;
+    value?: Record<string, unknown> | undefined;
+    error?: { code: string };
+  }>;
   writeFinal(
     record: AgentUsageRecord
   ): Promise<{ ok: boolean; value?: unknown; error?: { code: string } }>;
@@ -222,6 +269,55 @@ async function createRepository(existingRoot?: string): Promise<UsageRepository>
 }
 
 describe("AgentUsageFileRepository", () => {
+  test("persists immutable privacy-safe 2.0 metrics locally", async () => {
+    const repository = await createRepository();
+    const record = metricsRecord();
+
+    expect(await repository.writeRunMetrics(record)).toEqual({ ok: true, value: record });
+    expect(await repository.writeRunMetrics(record)).toEqual({ ok: true, value: record });
+    expect(await repository.readRunMetrics("usage_run_01")).toEqual({ ok: true, value: record });
+
+    const persisted = JSON.stringify((await repository.readRunMetrics("usage_run_01")).value);
+    expect(persisted).not.toMatch(
+      /prompt|requestBody|responseBody|chapterBody|filePath|workspaceId|rootIdentity|apiKey|secret|approvalCapability|mcpHandle/i
+    );
+  });
+
+  test("keeps 2.0 metrics first-wins and rejects unknown versions and private content", async () => {
+    const repository = await createRepository();
+    const record = metricsRecord();
+    await repository.writeRunMetrics(record);
+
+    expect(await repository.writeRunMetrics(metricsRecord({ toolCallCount: 5 }))).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_USAGE_RECORD_CONFLICT" }
+    });
+    expect(
+      await repository.writeRunMetrics(metricsRecord({ schemaVersion: "2.1", usageId: "usage_02" }))
+    ).toMatchObject({ ok: false, error: { code: "AGENT_USAGE_RECORD_V20_INVALID" } });
+    for (const leaked of [
+      { prompt: "private chapter" },
+      { requestBody: "private request" },
+      { filePath: "C:\\Users\\alice\\novel.md" },
+      { username: "alice" },
+      { workspaceId: "workspace_private" },
+      { rootIdentity: "root_private" },
+      { apiKey: "sk-privateCredential" },
+      { providerResponse: "raw provider content" },
+      { mcpHandle: "mcp_private" },
+      { approvalCapability: "approval_private" },
+      { unselectedContent: "private chapter" },
+      { eventRefs: ["sk-privateCredential"] }
+    ]) {
+      expect(
+        await repository.writeRunMetrics(metricsRecord({ usageId: "usage_leak", ...leaked }))
+      ).toMatchObject({
+        ok: false,
+        error: { code: "AGENT_USAGE_RECORD_REDACTION_REQUIRED" }
+      });
+    }
+  });
+
   test("writes a final record and reads it back by id", async () => {
     const repository = await createRepository();
     const written = await repository.writeFinal(baseRecord());

@@ -8,6 +8,7 @@ import {
   type ContextDraft,
   type ContextDraftRef
 } from "../src/index.js";
+import { classifyContextDraftSource } from "../src/context-draft.js";
 
 const chapterRef: ContextDraftRef = {
   kind: "chapter",
@@ -403,5 +404,39 @@ describe("Context Draft value object", () => {
       sourceOverrides: undefined
     });
     expect(normalized).toMatchObject({ schemaVersion: "1.2", sourceOverrides: [] });
+  });
+});
+
+describe("Context Draft packing priority", () => {
+  test("classifies active, explicit, automatic, and excluded sources without mutating the draft", () => {
+    const draft = baseDraft({
+      refs: [chapterRef],
+      activeResourceRef: {
+        kind: "story_bible",
+        refId: "story_bible:world",
+        assetId: "world",
+        label: "World"
+      },
+      sourceOverrides: [
+        { refId: "story_bible:world", decision: "excluded", priority: 90 },
+        { refId: "outline", decision: "automatic" }
+      ]
+    });
+
+    expect(classifyContextDraftSource(draft, "story_bible:world")).toBe("excluded");
+    expect(classifyContextDraftSource(draft, "chapter:ch_01")).toBe("pinned");
+    expect(classifyContextDraftSource(draft, "outline")).toBe("automatic");
+    expect(draft.revision).toBe(1);
+  });
+
+  test("standalone always excludes project sharing sources", () => {
+    const draft = createContextDraft({
+      contextDraftId: "context_draft_standalone",
+      conversationId: "conv_standalone",
+      scope: { kind: "standalone", scopeId: "standalone" },
+      contextMode: "standalone_chat",
+      updatedAt: "2026-08-04T00:00:00.000Z"
+    });
+    expect(classifyContextDraftSource(draft, "outline")).toBe("excluded");
   });
 });

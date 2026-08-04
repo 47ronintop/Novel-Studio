@@ -372,7 +372,6 @@ export function createDesktopAgentRuntimeManager(
         deferredSettingsRefresh = undefined;
         return;
       }
-      revokeCurrentSettingsCapabilities();
       if (refreshed.error.code !== "AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED") {
         deferredSettingsRefresh = undefined;
         return;
@@ -610,13 +609,15 @@ export function createDesktopAgentRuntimeManager(
     async refreshCurrentWorkspace() {
       const generation = ++settingsRefreshGeneration;
       deferredSettingsRefresh = undefined;
+      // Settings are already changed when this entry point runs. Revoke first so no continuation can
+      // cross the await/list/stop window with the old executor or policy still reachable.
+      revokeCurrentSettingsCapabilities();
       const previous = settingsRefreshTail;
       const result = (async () => {
         await previous;
         if (generation !== settingsRefreshGeneration) return ok(undefined);
         const refreshed = await refreshWorkspaceAtGeneration(generation);
         if (!refreshed.ok) {
-          revokeCurrentSettingsCapabilities();
           if (refreshed.error.code === "AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED") {
             deferSettingsRefresh(generation);
           }
@@ -670,18 +671,22 @@ function isSameBinding(
 function isTerminal(status: AgentRunSnapshot["status"]): boolean {
   return (
     status === "completed" ||
+    status === "blocked" ||
     status === "cancelled" ||
     status === "failed" ||
-    status === "limit_reached"
+    status === "limit_reached" ||
+    status === "capability_changed"
   );
 }
 
 function isTerminalRunEvent(type: AgentRunEvent["type"]): boolean {
   return (
     type === "run_completed" ||
+    type === "run_blocked" ||
     type === "run_cancelled" ||
     type === "run_failed" ||
-    type === "run_limit_reached"
+    type === "run_limit_reached" ||
+    type === "capability_changed"
   );
 }
 

@@ -86,6 +86,7 @@ function resolve(
     catalogRevision?: string;
     omitToolCatalog?: boolean;
     omitOutlineFromPrompt?: boolean;
+    sharing?: { readonly defaultsRevision: string; readonly grantRevision: string };
   } = {}
 ) {
   const profile = resolveAgentContextProfile(
@@ -144,6 +145,7 @@ function resolve(
         computeAgentRunToolCatalogRevision(facadeVersion, toolDescriptors),
       descriptors: toolDescriptors
     },
+    ...(overrides.sharing === undefined ? {} : { sharing: overrides.sharing }),
     estimator: createDeterministicTokenEstimator()
   };
   return resolveBudgetInputs(
@@ -162,6 +164,47 @@ describe("C4 shared budget inputs", () => {
     expect(result.value.toolReserve).toBeGreaterThan(0);
     expect(result.value.toolCatalog.descriptorCount).toBeGreaterThan(0);
     expect(result.value.operandsChecksum).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  test("binds sharing defaults and Run grant revisions into operands and persisted proof", () => {
+    const sharing = {
+      defaultsRevision: "a".repeat(64),
+      grantRevision: "b".repeat(64)
+    };
+    const withSharing = resolve({ sharing });
+    const withoutSharing = resolve();
+    expect(withSharing.ok && withoutSharing.ok).toBe(true);
+    if (!withSharing.ok || !withoutSharing.ok) return;
+    expect(withSharing.value.sharing).toEqual(sharing);
+    expect(withSharing.value.operandsChecksum).not.toBe(withoutSharing.value.operandsChecksum);
+
+    const snapshot = calculateResolvedContextBudget({
+      contextBudgetSnapshotId: "budget_sharing",
+      resolved: withSharing.value,
+      calculatedAt: "2026-08-04T00:00:00.000Z"
+    });
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    expect(snapshot.value.audit.sharing).toEqual(sharing);
+    const expected = {
+      contextBudgetSnapshotId: snapshot.value.contextBudgetSnapshotId,
+      provider: withSharing.value.provider,
+      model: withSharing.value.model,
+      modelProfileId: withSharing.value.modelProfileId,
+      contextWindow: withSharing.value.contextWindow,
+      facadeVersion: withSharing.value.toolCatalog.facadeVersion,
+      catalogRevision: withSharing.value.toolCatalog.catalogRevision,
+      sharing
+    };
+    expect(
+      readResolvedContextBudgetUsageLimits(snapshot.value as unknown as JsonObject, expected)
+    ).toMatchObject({ ok: true });
+    expect(
+      readResolvedContextBudgetUsageLimits(snapshot.value as unknown as JsonObject, {
+        ...expected,
+        sharing: { ...sharing, grantRevision: "c".repeat(64) }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID" } });
   });
 
   test("provider transport shapes change tool reserve deterministically", () => {

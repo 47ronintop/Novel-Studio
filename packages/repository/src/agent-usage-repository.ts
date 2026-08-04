@@ -152,6 +152,44 @@ export class AgentUsageFileRepository {
     this.traceId = options.traceId ?? "agent-usage-file-repository";
   }
 
+  public async writeRunMetrics<T extends object>(record: T): Promise<Result<T, UnifiedError>> {
+    const written = await this.writeRunMetricsJson(record as unknown as JsonObject);
+    return written as Result<T, UnifiedError>;
+  }
+
+  private async writeRunMetricsJson(record: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
+    const redaction = assertRunMetricsRedacted(record);
+    if (redaction !== undefined) return err(this.redactionRequired(redaction));
+    const validated = validateRunMetricsRecord(record);
+    if (!validated.ok) return err(validated.error);
+    return enqueueUsageMutation(this.options.userDataRoot, async () => {
+      const path = this.runMetricsPath(stringField(record, "usageId"));
+      const existing = await this.readJson(path);
+      if (!existing.ok) return existing as Result<JsonObject, UnifiedError>;
+      if (existing.value !== undefined) {
+        const prior = validateRunMetricsRecord(existing.value);
+        if (!prior.ok) return prior;
+        return usageContentChecksum(prior.value) === usageContentChecksum(record)
+          ? ok(prior.value)
+          : err(this.recordConflict());
+      }
+      return this.writeJson(path, record);
+    });
+  }
+
+  public async readRunMetrics<T extends object>(
+    usageId: string
+  ): Promise<Result<T | undefined, UnifiedError>> {
+    if (!isSafeMetricRef(usageId)) return this.invalid("AGENT_USAGE_RECORD_V20_INVALID");
+    await waitForUsageMutations(this.options.userDataRoot);
+    const stored = await this.readJson(this.runMetricsPath(usageId));
+    if (!stored.ok || stored.value === undefined)
+      return stored as Result<T | undefined, UnifiedError>;
+    const redaction = assertRunMetricsRedacted(stored.value);
+    if (redaction !== undefined) return err(this.redactionRequired(redaction));
+    return validateRunMetricsRecord(stored.value) as Result<T | undefined, UnifiedError>;
+  }
+
   public async writeFinal(record: JsonObject): Promise<Result<JsonObject, UnifiedError>> {
     const redaction = assertRedacted(record);
     if (redaction !== undefined) return err(this.redactionRequired(redaction));
@@ -627,6 +665,11 @@ export class AgentUsageFileRepository {
     return join(this.options.userDataRoot, "agent-usage", suffix);
   }
 
+  private runMetricsPath(usageId: string): string {
+    const fileName = createHash("sha256").update(usageId, "utf8").digest("hex");
+    return this.usagePath(join("run-metrics-v2", `${fileName}.json`));
+  }
+
   private async writeJson(
     path: string,
     value: JsonObject
@@ -712,7 +755,14 @@ export class AgentUsageFileRepository {
       message: "Agent usage data could not be persisted.",
       suggestedAction: "Check local application data permissions and retry.",
       traceId: this.traceId,
-      redactedDetail: { reason: error instanceof Error ? error.message : "Unknown error" }
+      redactedDetail: {
+        reason:
+          typeof error === "object" && error !== null && "code" in error
+            ? String(error.code)
+            : error instanceof Error
+              ? error.name
+              : "UnknownError"
+      }
     });
   }
 }
@@ -825,6 +875,203 @@ function validateUsageRecord(record: JsonObject): Result<JsonObject, UnifiedErro
   }
   const domain = validateAgentUsageRecord(normalized);
   return domain.ok ? ok(candidate) : err(domain.error);
+}
+
+const RUN_METRICS_FIELDS = new Set([
+  "schemaVersion",
+  "storageScope",
+  "usageId",
+  "runId",
+  "recordedAt",
+  "semanticVersionSetChecksum",
+  "guidanceVersion",
+  "contextProfileId",
+  "messageOrderVersion",
+  "toolCatalogVersion",
+  "runOutcome",
+  "pendingOutcome",
+  "recoveryOutcome",
+  "modelRoundCount",
+  "toolCallCount",
+  "toolFailureCount",
+  "approvalWaitCount",
+  "approvalWaitMs",
+  "sources",
+  "cacheOutcome",
+  "cacheVerifiedInputTokens",
+  "changeSetOutcome",
+  "styleObservations",
+  "eventRefs"
+]);
+const SOURCE_METRIC_FIELDS = new Set(["sourceKind", "tokenCount", "truncated", "exclusionReason"]);
+const STYLE_METRIC_FIELDS = new Set(["rule", "version", "confidence", "userOutcome"]);
+const METRIC_PROFILES = new Set(["standalone", "writing", "creative_general", "engineering"]);
+const METRIC_RUN_OUTCOMES = new Set([
+  "completed",
+  "blocked",
+  "cancelled",
+  "failed",
+  "limit_reached",
+  "awaiting_approval",
+  "awaiting_input",
+  "stale",
+  "capability_changed"
+]);
+const METRIC_PENDING_OUTCOMES = new Set([
+  "none",
+  "awaiting_approval",
+  "awaiting_input",
+  "change_set_pending",
+  "recovery_pending"
+]);
+const METRIC_RECOVERY_OUTCOMES = new Set([
+  "not_required",
+  "pending",
+  "recovered",
+  "rolled_back",
+  "failed",
+  "outcome_unknown"
+]);
+const METRIC_CHANGE_SET_OUTCOMES = new Set([
+  "none",
+  "generated",
+  "approved",
+  "rejected",
+  "applied",
+  "rolled_back",
+  "undone",
+  "stale"
+]);
+const METRIC_SOURCE_KINDS = new Set([
+  "disk_file",
+  "editor_buffer",
+  "story_bible_asset",
+  "project_conventions",
+  "workspace_outline",
+  "compaction_summary",
+  "system_guidance",
+  "conversation",
+  "tool_result",
+  "user_request"
+]);
+const METRIC_EXCLUSION_REASONS = new Set([
+  "none",
+  "user_excluded",
+  "budget",
+  "policy",
+  "stale",
+  "unsupported"
+]);
+const METRIC_STYLE_OUTCOMES = new Set(["accepted", "ignored", "dismissed", "no_action"]);
+
+function validateRunMetricsRecord(record: JsonObject): Result<JsonObject, UnifiedError> {
+  if (
+    !hasOnlyFields(record, RUN_METRICS_FIELDS) ||
+    record["schemaVersion"] !== "2.0" ||
+    record["storageScope"] !== "local_only" ||
+    !isSafeMetricRef(record["usageId"]) ||
+    !isSafeMetricRef(record["runId"]) ||
+    !isUtcIsoTimestamp(record["recordedAt"]) ||
+    typeof record["semanticVersionSetChecksum"] !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record["semanticVersionSetChecksum"]) ||
+    record["guidanceVersion"] !== "3.0" ||
+    !METRIC_PROFILES.has(String(record["contextProfileId"])) ||
+    record["messageOrderVersion"] !== "2.0" ||
+    record["toolCatalogVersion"] !== "2.0" ||
+    !METRIC_RUN_OUTCOMES.has(String(record["runOutcome"])) ||
+    !METRIC_PENDING_OUTCOMES.has(String(record["pendingOutcome"])) ||
+    !METRIC_RECOVERY_OUTCOMES.has(String(record["recoveryOutcome"])) ||
+    !isMetricCount(record["modelRoundCount"]) ||
+    !isMetricCount(record["toolCallCount"]) ||
+    !isMetricCount(record["toolFailureCount"]) ||
+    record["toolFailureCount"] > record["toolCallCount"] ||
+    !isMetricCount(record["approvalWaitCount"]) ||
+    !isMetricCount(record["approvalWaitMs"]) ||
+    !Array.isArray(record["sources"]) ||
+    record["sources"].length > 256 ||
+    !new Set(["hit", "miss", "bypass", "unknown"]).has(String(record["cacheOutcome"])) ||
+    (record["cacheVerifiedInputTokens"] !== null &&
+      !isMetricCount(record["cacheVerifiedInputTokens"])) ||
+    ((record["cacheOutcome"] === "unknown" || record["cacheOutcome"] === "bypass") &&
+      record["cacheVerifiedInputTokens"] !== null) ||
+    !METRIC_CHANGE_SET_OUTCOMES.has(String(record["changeSetOutcome"])) ||
+    !Array.isArray(record["styleObservations"]) ||
+    record["styleObservations"].length > 256 ||
+    !Array.isArray(record["eventRefs"]) ||
+    record["eventRefs"].length > 1024
+  ) {
+    return runMetricsValidationError("record");
+  }
+  for (const source of record["sources"]) {
+    if (
+      !isJsonObject(source) ||
+      !hasOnlyFields(source, SOURCE_METRIC_FIELDS) ||
+      !METRIC_SOURCE_KINDS.has(String(source["sourceKind"])) ||
+      !isMetricCount(source["tokenCount"]) ||
+      typeof source["truncated"] !== "boolean" ||
+      !METRIC_EXCLUSION_REASONS.has(String(source["exclusionReason"])) ||
+      (source["exclusionReason"] !== "none" &&
+        (source["tokenCount"] !== 0 || source["truncated"] !== false))
+    ) {
+      return runMetricsValidationError("sources");
+    }
+  }
+  for (const observation of record["styleObservations"]) {
+    if (
+      !isJsonObject(observation) ||
+      !hasOnlyFields(observation, STYLE_METRIC_FIELDS) ||
+      !isSafeMetricRef(observation["rule"]) ||
+      typeof observation["version"] !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/u.test(observation["version"]) ||
+      typeof observation["confidence"] !== "number" ||
+      !Number.isFinite(observation["confidence"]) ||
+      observation["confidence"] < 0 ||
+      observation["confidence"] > 1 ||
+      !METRIC_STYLE_OUTCOMES.has(String(observation["userOutcome"]))
+    ) {
+      return runMetricsValidationError("styleObservations");
+    }
+  }
+  const refs = record["eventRefs"];
+  if (!refs.every(isSafeMetricRef) || new Set(refs).size !== refs.length) {
+    return runMetricsValidationError("eventRefs");
+  }
+  return ok(record);
+}
+
+function assertRunMetricsRedacted(record: JsonObject): string | undefined {
+  for (const field of Object.keys(record)) {
+    if (!RUN_METRICS_FIELDS.has(field)) return `${field}:forbidden_field`;
+  }
+  return scanSensitiveValue(record, "record");
+}
+
+function isSafeMetricRef(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/u.test(value) &&
+    !/^sk-[A-Za-z0-9]/iu.test(value) &&
+    !/^bearer[._:@-]/iu.test(value)
+  );
+}
+
+function isMetricCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function runMetricsValidationError(field: string): {
+  readonly ok: false;
+  readonly error: UnifiedError;
+} {
+  return err(
+    storageError({
+      code: "AGENT_USAGE_RECORD_V20_INVALID",
+      message: "The local Agent run metrics record is invalid.",
+      suggestedAction: "Discard the unrecognized or content-bearing metrics record.",
+      traceId: "agent-usage-file-repository",
+      redactedDetail: { field }
+    })
+  );
 }
 
 const ABSOLUTE_PATH = /(^|[\s"'([])(\/[^\s"']|[A-Za-z]:[\\/])/;

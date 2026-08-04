@@ -486,6 +486,43 @@ describe("DesktopAgentRuntimeManager", () => {
     expect(runtimes).toHaveLength(2);
     expect(runtimes[0]).toMatchObject({ disposeCalls: 1, unsubscribeCalls: 1 });
     expect(runtimes[1]).toMatchObject({ prepareCalls: 1, subscribeCalls: 1 });
+    expect(runtimes[0]).toMatchObject({ revokeCalls: 1 });
+  });
+
+  test("treats capability-changed and blocked runs as terminal during a settings refresh", async () => {
+    const root = await createRoot("settings-refresh-capability-terminal");
+    const runtimes: ReturnType<typeof fakeRuntime>[] = [];
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot, {
+          ...(runtimes.length === 0
+            ? {
+                snapshots: [
+                  {
+                    runId: "run_capability_changed",
+                    projectId: binding.workspaceId,
+                    runRevision: 2,
+                    status: "capability_changed"
+                  },
+                  {
+                    runId: "run_blocked",
+                    projectId: binding.workspaceId,
+                    runRevision: 3,
+                    status: "blocked"
+                  }
+                ]
+              }
+            : {})
+        });
+        runtimes.push(runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      }
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_capability_terminal", root));
+
+    expect(await manager.refreshCurrentWorkspace()).toMatchObject({ ok: true });
+    expect(runtimes).toHaveLength(2);
+    expect(runtimes[0]).toMatchObject({ revokeCalls: 1, stopCalls: 0, disposeCalls: 1 });
   });
 
   test("stops an active pending approval before replacing settings-backed runtime", async () => {

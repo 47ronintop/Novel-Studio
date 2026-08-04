@@ -1693,6 +1693,138 @@ describe("Agent Run IPC", () => {
       "application:agent-run:compact-context"
     ]);
   });
+
+  test("routes send preview IPC through the active preview-capable runtime", async () => {
+    const release = vi.fn();
+    const prepareAgentSendPreview = vi.fn(async (command: unknown) => ok({ command }));
+    const confirmSendPreview = vi.fn(async () => ok({ runId: "run-01" }));
+    const readSendLedger = vi.fn(async () => ok([]));
+    const startAgentRun = vi.fn(async () => ok({ runId: "legacy" }));
+    const runtime = {
+      agentRunSession: { startAgentRun },
+      prepareAgentSendPreview,
+      confirmAgentSendPreview: confirmSendPreview,
+      readAgentSendLedger: readSendLedger
+    };
+    const manager = {
+      active: () => ({
+        scope: "workspace" as const,
+        binding: {
+          kind: "creativeProject" as const,
+          workspaceId: "project-01",
+          contentRoot: "C:/project-01",
+          stateRoot: "C:/project-01/.state"
+        },
+        runtime
+      }),
+      acquireActiveRunStartLease: () => ok({ session: runtime.agentRunSession, release }),
+      subscribeAgentRunEvents: () => () => undefined
+    };
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRuntimeManager: manager
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const startCommand = {
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "command-01",
+      expectedRunRevision: 0,
+      runDraftId: "draft-01",
+      runDraftRevision: 1,
+      runDraftChecksum: "c".repeat(64),
+      packedContextId: "packed-01",
+      packedContextPayloadChecksum: "a".repeat(64)
+    };
+
+    await expect(
+      handlers["application:agent-run:prepare-send-preview"]?.({
+        schemaVersion: "2.0",
+        commandId: "preview-command-01",
+        startCommand
+      })
+    ).resolves.toEqual({ ok: true, value: { command: expect.anything() } });
+    await expect(
+      handlers["application:agent-run:confirm-send-preview"]?.({
+        schemaVersion: "2.0",
+        previewId: "preview-01",
+        canonicalPayloadChecksum: "b".repeat(64)
+      })
+    ).resolves.toEqual({ ok: true, value: { runId: "run-01" } });
+    await expect(handlers["application:agent-run:read-send-ledger"]?.("run-01")).resolves.toEqual({
+      ok: true,
+      value: []
+    });
+    expect(prepareAgentSendPreview).toHaveBeenCalledOnce();
+    expect(confirmSendPreview).toHaveBeenCalledOnce();
+    expect(readSendLedger).toHaveBeenCalledWith("run-01");
+    expect(release).toHaveBeenCalledOnce();
+
+    await expect(
+      handlers["application:agent-run:confirm-send-preview"]?.({
+        schemaVersion: "2.0",
+        previewId: "preview-01",
+        canonicalPayloadChecksum: "not-a-checksum"
+      })
+    ).resolves.toMatchObject({ ok: false });
+    expect(confirmSendPreview).toHaveBeenCalledOnce();
+
+    const directStart = await handlers["application:agent-run:start"]?.(startCommand);
+    expect(directStart).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_SEND_PREVIEW_REQUIRED" }
+    });
+    expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  test("preload exposes the send preview controls on allowlisted channels", async () => {
+    const invoked: string[] = [];
+    const api = createNovelStudioApi({
+      async invoke(channel) {
+        invoked.push(channel);
+        return { ok: true, value: {} };
+      },
+      on: () => () => undefined
+    }) as unknown as Record<string, unknown>;
+    const agentRuns = api["agentRuns"] as
+      Record<string, (...args: unknown[]) => Promise<unknown>> | undefined;
+    expect(agentRuns).toBeDefined();
+    if (agentRuns === undefined) return;
+
+    await agentRuns["prepareSendPreview"]?.({});
+    await agentRuns["confirmSendPreview"]?.({});
+    await agentRuns["readSendLedger"]?.("run-01");
+
+    expect(invoked).toEqual([
+      "application:agent-run:prepare-send-preview",
+      "application:agent-run:confirm-send-preview",
+      "application:agent-run:read-send-ledger"
+    ]);
+  });
+
+  test("preserves direct start for legacy injected sessions without a preview runtime", async () => {
+    const startAgentRun = vi.fn(async () => ok({ runId: "legacy" }));
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRunSession: { startAgentRun, subscribe: () => () => undefined }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const result = await handlers["application:agent-run:start"]?.({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      commandId: "command-01",
+      expectedRunRevision: 0,
+      runDraftId: "draft-01",
+      runDraftRevision: 1,
+      runDraftChecksum: "c".repeat(64),
+      packedContextId: "packed-01",
+      packedContextPayloadChecksum: "a".repeat(64)
+    });
+    expect(result).toEqual({ ok: true, value: { runId: "legacy" } });
+    expect(startAgentRun).toHaveBeenCalledOnce();
+  });
 });
 
 function conversationSummary(projectId: string) {

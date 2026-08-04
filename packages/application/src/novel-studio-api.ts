@@ -43,6 +43,11 @@ import type {
   UpdateContextDraftCommand
 } from "./agent-run-draft-session.js";
 import type { CompactContextResult, PackedAgentContextPreview } from "./agent-context-session.js";
+import type { WorkspaceModelSharingDefaults } from "./agent-model-sharing.js";
+import type {
+  AgentSendPreviewDtoV2,
+  ConfirmAgentSendPreviewCommandV2
+} from "./agent-send-preview-session.js";
 import type {
   CreativeProjectFileDocument,
   CreativeProjectFileLifecycleCommand,
@@ -211,6 +216,10 @@ export type WorkspaceContextPolicyUpdate =
   | {
       readonly action: "set_source_preference";
       readonly preference: WorkspaceContextSourcePreferenceUpdate;
+    }
+  | {
+      readonly action: "set_sharing_defaults";
+      readonly defaults: WorkspaceModelSharingDefaults | null;
     };
 
 interface ForeshadowAnalysisCandidateDtoBase {
@@ -401,6 +410,39 @@ export interface NovelStudioApi {
     compactContext(
       command: CompactContextCommand
     ): Promise<Result<CompactContextResult, UnifiedError>>;
+    prepareSendPreview(command: {
+      readonly schemaVersion: "2.0";
+      readonly commandId: string;
+      readonly startCommand: StartAgentRunCommand;
+    }): Promise<Result<AgentSendPreviewDtoV2, UnifiedError>>;
+    confirmSendPreview(command: ConfirmAgentSendPreviewCommandV2): Promise<AgentRunCommandResult>;
+    readSendLedger(runId: string): Promise<
+      Result<
+        readonly {
+          readonly entryId: string;
+          readonly roundNumber: number;
+          readonly roundKind: "first_send" | "subsequent_send";
+          readonly canonicalPayloadChecksum: string;
+          readonly canonicalRoundManifestChecksum: string;
+          readonly previewId: string | null;
+          readonly sentAt: string;
+          readonly additions: readonly {
+            readonly additionId: string;
+            readonly kind:
+              | "assistant"
+              | "tool_result"
+              | "remote_result"
+              | "user_control"
+              | "jit_context"
+              | "context_refresh"
+              | "recovery";
+            readonly content: string;
+            readonly contentChecksum: string;
+          }[];
+        }[],
+        UnifiedError
+      >
+    >;
     start(command: StartAgentRunCommand): Promise<AgentRunCommandResult>;
     stop(command: StopAgentRunCommand): Promise<AgentRunCommandResult>;
     answerUserInput(command: AnswerAgentUserInputCommand): Promise<AgentRunCommandResult>;

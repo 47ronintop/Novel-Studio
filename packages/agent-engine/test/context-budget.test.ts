@@ -8,6 +8,7 @@ import {
   createDeterministicTokenEstimator,
   type CalculateContextBudgetInput
 } from "../src/index.js";
+import { planDeterministicContextPacking } from "../src/context-budget.js";
 
 function baseInput(
   overrides: Partial<CalculateContextBudgetInput> = {}
@@ -186,5 +187,91 @@ describe("deterministic token estimator", () => {
     // The fallback reserves each serialized byte because no provider tokenizer is available.
     expect(estimator.count("小说创", "profile-01").tokens).toBe(9);
     expect(estimator.count("😀", "profile-01").tokens).toBe(4);
+  });
+});
+
+describe("deterministic context packing", () => {
+  test("packs by required/active/pinned/summary/automatic priority independent of input order", () => {
+    const sources = [
+      { sourceId: "outline", priority: "automatic" as const, tokens: 40 },
+      { sourceId: "request", priority: "required" as const, tokens: 20 },
+      { sourceId: "summary", priority: "summary" as const, tokens: 30 },
+      { sourceId: "explicit", priority: "pinned" as const, tokens: 25 },
+      { sourceId: "active", priority: "active" as const, tokens: 25 }
+    ];
+    const first = planDeterministicContextPacking({
+      availableTokens: 110,
+      summaryTokenLimit: 10,
+      sources
+    });
+    const second = planDeterministicContextPacking({
+      availableTokens: 110,
+      summaryTokenLimit: 10,
+      sources: [...sources].reverse()
+    });
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      ok: true,
+      value: {
+        usedTokens: 110,
+        decisions: [
+          { sourceId: "request", status: "included", includedTokens: 20 },
+          { sourceId: "active", status: "included", includedTokens: 25 },
+          { sourceId: "explicit", status: "included", includedTokens: 25 },
+          { sourceId: "summary", status: "truncated", includedTokens: 10, reason: "summary_limit" },
+          { sourceId: "outline", status: "truncated", includedTokens: 30, reason: "budget_limit" }
+        ]
+      }
+    });
+  });
+
+  test("fails closed instead of silently dropping active or pinned sources", () => {
+    expect(
+      planDeterministicContextPacking({
+        availableTokens: 50,
+        summaryTokenLimit: 0,
+        sources: [
+          { sourceId: "request", priority: "required", tokens: 20 },
+          { sourceId: "active", priority: "active", tokens: 31 }
+        ]
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_PACKING_ACTIVE_OR_PINNED_OVERFLOW" }
+    });
+  });
+
+  test("distinguishes a required payload that cannot fit at all", () => {
+    expect(
+      planDeterministicContextPacking({
+        availableTokens: 50,
+        summaryTokenLimit: 0,
+        sources: [
+          { sourceId: "request", priority: "required", tokens: 51 },
+          { sourceId: "active", priority: "active", tokens: 1 }
+        ]
+      })
+    ).toMatchObject({ ok: false, error: { code: "CONTEXT_PACKING_REQUIRED_OVERFLOW" } });
+  });
+
+  test("excludes automatic sources with an explicit budget reason", () => {
+    expect(
+      planDeterministicContextPacking({
+        availableTokens: 10,
+        summaryTokenLimit: 10,
+        sources: [
+          { sourceId: "request", priority: "required", tokens: 10 },
+          { sourceId: "outline", priority: "automatic", tokens: 20 }
+        ]
+      })
+    ).toMatchObject({
+      ok: true,
+      value: {
+        decisions: [
+          { sourceId: "request", status: "included" },
+          { sourceId: "outline", status: "excluded", includedTokens: 0, reason: "budget_limit" }
+        ]
+      }
+    });
   });
 });

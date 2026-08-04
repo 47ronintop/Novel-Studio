@@ -6,6 +6,14 @@ import {
   validateAgentUsageRecord,
   type AgentUsageRecord
 } from "../src/index.js";
+import {
+  createAgentUsageRecordV20,
+  parseAgentUsageRecordV20,
+  parseAgentUsageRecordV20Json,
+  readVersionedAgentUsageRecord,
+  serializeAgentUsageRecordV20,
+  type AgentUsageRecordV20
+} from "../src/agent-usage-record.js";
 
 function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord {
   return {
@@ -42,6 +50,51 @@ function baseRecord(overrides: Partial<AgentUsageRecord> = {}): AgentUsageRecord
     localDate: "2026-07-16",
     timezone: "Asia/Shanghai",
     utcOffsetMinutes: 480,
+    ...overrides
+  };
+}
+
+function metricsRecord(overrides: Partial<AgentUsageRecordV20> = {}): AgentUsageRecordV20 {
+  return {
+    schemaVersion: "2.0",
+    storageScope: "local_only",
+    usageId: "usage_run_01",
+    runId: "run_01",
+    recordedAt: "2026-08-04T04:00:00.000Z",
+    semanticVersionSetChecksum: "a".repeat(64),
+    guidanceVersion: "3.0",
+    contextProfileId: "writing",
+    messageOrderVersion: "2.0",
+    toolCatalogVersion: "2.0",
+    runOutcome: "completed",
+    pendingOutcome: "none",
+    recoveryOutcome: "not_required",
+    modelRoundCount: 2,
+    toolCallCount: 3,
+    toolFailureCount: 1,
+    approvalWaitCount: 1,
+    approvalWaitMs: 120,
+    sources: [
+      {
+        sourceKind: "editor_buffer",
+        tokenCount: 420,
+        truncated: true,
+        exclusionReason: "none"
+      },
+      {
+        sourceKind: "disk_file",
+        tokenCount: 0,
+        truncated: false,
+        exclusionReason: "user_excluded"
+      }
+    ],
+    cacheOutcome: "hit",
+    cacheVerifiedInputTokens: 300,
+    changeSetOutcome: "applied",
+    styleObservations: [
+      { rule: "sentence_length", version: "2.0", confidence: 0.8, userOutcome: "accepted" }
+    ],
+    eventRefs: ["event_01", "event_02"],
     ...overrides
   };
 }
@@ -260,5 +313,46 @@ describe("validateAgentUsageRecord", () => {
       baseRecord({ inputTokens: 1000, outputTokens: 500, totalTokens: 1000 })
     );
     expect(result).toMatchObject({ ok: false, error: { code: "AGENT_USAGE_RECORD_INVALID" } });
+  });
+});
+
+describe("AgentUsageRecordV20", () => {
+  test("round-trips strict local-only metrics without content or identity fields", () => {
+    const parsed = createAgentUsageRecordV20(metricsRecord());
+
+    expect(JSON.parse(serializeAgentUsageRecordV20(parsed))).toEqual(parsed);
+    expect(parseAgentUsageRecordV20Json(serializeAgentUsageRecordV20(parsed))).toEqual(parsed);
+    expect(() => parseAgentUsageRecordV20Json("{not-json}")).toThrow(
+      "AGENT_USAGE_RECORD_V20_INVALID"
+    );
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(JSON.stringify(parsed)).not.toMatch(
+      /prompt|requestBody|responseBody|chapterBody|filePath|workspaceId|rootIdentity|apiKey|secret|approvalCapability|mcpHandle/i
+    );
+  });
+
+  test.each([
+    ["unknown schema", { schemaVersion: "2.1" }],
+    ["unknown outcome", { runOutcome: "done" }],
+    ["unknown field", { providerResponse: "private chapter" }],
+    ["secret in an opaque ref", { runId: "sk-privateCredential" }],
+    ["absolute path in an opaque ref", { eventRefs: ["C:\\Users\\alice\\novel.md"] }],
+    ["unverified cache tokens", { cacheOutcome: "unknown", cacheVerifiedInputTokens: 3 }],
+    ["invalid failure count", { toolCallCount: 1, toolFailureCount: 2 }]
+  ])("rejects %s", (_label, override) => {
+    expect(() => parseAgentUsageRecordV20({ ...metricsRecord(), ...override })).toThrow(
+      "AGENT_USAGE_RECORD_V20_INVALID"
+    );
+  });
+
+  test("dispatches legacy records through the legacy reader without inferring 2.0 fields", () => {
+    const legacy = readVersionedAgentUsageRecord(baseRecord());
+
+    expect(legacy.schemaVersion).toBe("1.2");
+    expect("semanticVersionSetChecksum" in legacy).toBe(false);
+    expect("eventRefs" in legacy).toBe(false);
+    expect(() => readVersionedAgentUsageRecord({ schemaVersion: "9.9" })).toThrow(
+      "AGENT_USAGE_RECORD_VERSION_UNSUPPORTED"
+    );
   });
 });

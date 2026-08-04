@@ -7,7 +7,11 @@ import {
   createAgentPlanExecutionSession,
   createAgentRunDraftSession,
   createAgentSearchToolSession,
+  createAgentSendPreviewSession,
+  parseAgentFirstRoundSemanticPayloadV2,
   createStoryBibleAgentToolSession,
+  freezeRunModelSharingGrant,
+  freezeWorkspaceModelSharingDefaults,
   freezeProviderNameMapping,
   createAgentRunSession,
   createAgentUsageSession,
@@ -18,7 +22,14 @@ import {
   DEFAULT_PROJECT_CONVENTIONS_TOKEN_LIMIT,
   DEFAULT_WORKSPACE_OUTLINE_LIMITS,
   buildAgentSystemPrompt,
+  canonicalAgentFirstRoundSemanticPayloadChecksumV2,
+  createProviderVisibleAgentRuntimeFacts,
+  createWritingTaskIntent,
   materializeAgentPrompt,
+  materializeAgentSystemPromptV3,
+  materializeCanonicalAgentRound,
+  packAgentContext,
+  parseProviderVisibleUntrustedEnvelope,
   isStoryBibleAssetType,
   isStoryBibleV11AssetType,
   describeStoryBibleType,
@@ -30,6 +41,7 @@ import {
   resolveBudgetInputs as resolveCanonicalBudgetInputs,
   resolveAgentContextProfile,
   workspaceOutlineDependencyRevisionChecksum,
+  writingTaskIntentChecksum,
   type AgentContextBudgetInputs,
   type AgentContextBudgetInputsPort,
   type AgentContextSession,
@@ -55,6 +67,17 @@ import {
   type AgentRunStartFacts,
   type AgentRunStartModelFacts,
   type AgentRunStartPreflightPort,
+  type AgentConfirmedFirstSendV2,
+  type AgentFirstRoundSemanticPayloadV2,
+  type AgentSendPreviewDtoV2,
+  type AgentSendPreviewSession,
+  type AgentSendPreviewValidationFactsV2,
+  type ConfirmAgentSendPreviewCommandV2,
+  type FrozenRunModelSharingGrant,
+  type FrozenWorkspaceModelSharingDefaults,
+  type WorkspaceModelSharingDefaults,
+  type AgentSendPreviewPreparedMaterialV2,
+  type AgentSendPreviewDisplaySourceV2,
   type AgentPricingRegistry,
   type AgentUsageTimeFacts,
   type AgentUsageSession,
@@ -72,7 +95,7 @@ import {
   type VersionGroupApplyBatchResult,
   type VersionGroupTransactionApplyInput
 } from "@novel-studio/application";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
 import { createDesktopProjectConventionsReader } from "./project-conventions-reader.js";
@@ -104,15 +127,24 @@ import {
   agentContextScopeKey,
   computeAgentRunToolCatalogRevisionV2,
   computeAgentRunToolCatalogRevision,
+  createCanonicalRoundManifestV2,
+  parseCanonicalRoundManifestV2,
+  createProviderSemanticVersionSetV1,
   createApprovalRuleSetProjection,
   createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
   freezeAgentToolCapabilitySnapshot,
   inspectChangeSetConsistencyGroups,
+  isCapabilityEffective,
+  effectiveWorkspaceFileOperations,
+  effectiveWritingOperations,
   listAgentTools,
   normalizeAgentRunSnapshot,
   revokeCapability,
+  serializeCanonicalRoundManifestV2,
   validateAgentRunToolCatalogSnapshot,
+  type CanonicalRoundManifestV2,
+  type CreateCanonicalRoundMessageV2Input,
   type EffectiveCapabilityState
 } from "@novel-studio/agent-engine";
 import type { AgentRunDraftSession } from "@novel-studio/application";
@@ -121,6 +153,7 @@ import {
   err,
   ok,
   type JsonObject,
+  type JsonValue,
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
@@ -139,6 +172,7 @@ import {
   AgentProjectReadRepository,
   AgentProjectSearchRepository,
   AgentRunFileRepository,
+  AgentSendLedgerFileRepository,
   AgentUsageFileRepository,
   ChapterFileRepository,
   HistoryRepository,
@@ -150,6 +184,9 @@ import {
   WorkspaceOutlineProjectEntryRepository,
   WorkspaceOutlineProjectMetadataRepository,
   validateWithSchema,
+  createAgentSendLedgerEntryV2,
+  type AgentSendLedgerAdditionV2,
+  type AgentSendLedgerEntryV2,
   type AgentTransactionJournal,
   type AgentConversationRecord,
   type AgentWriteTransactionInput,
@@ -171,6 +208,12 @@ export interface DesktopAgentRunSessionOptions {
   readonly projectConventionsEnabled?: boolean;
   /** Main-owned defaults for pinning, excluding, and recalling context sources across conversations. */
   readonly contextSourcePreferences?: readonly WorkspaceContextSourcePreference[];
+  /** Main-owned model-sharing choice. Null/undefined means first-use selection is incomplete. */
+  readonly sharingDefaults?: WorkspaceModelSharingDefaults | null;
+  /** Persisted revision that changes only when the sharing defaults change. */
+  readonly sharingDefaultsRevision?: string;
+  /** Main-owned workspace policy revision bound into preview drift checks. */
+  readonly workspacePolicyRevision?: string;
   /**
    * Returns the already-materialized C1C creative file tree. The outline reader must never refresh
    * or rescan the creative project on its own.
@@ -281,6 +324,28 @@ export interface PreparedAgentRunStart {
   readonly contextDraftRevision: number;
 }
 
+export interface PrepareDesktopAgentSendPreviewCommand {
+  readonly schemaVersion: "2.0";
+  readonly commandId: string;
+  readonly startCommand: StartAgentRunCommand;
+}
+
+export interface DesktopAgentSendLedgerEntry {
+  readonly entryId: string;
+  readonly roundNumber: number;
+  readonly roundKind: "first_send" | "subsequent_send";
+  readonly canonicalPayloadChecksum: string;
+  readonly canonicalRoundManifestChecksum: string;
+  readonly previewId: string | null;
+  readonly sentAt: string;
+  readonly additions: readonly {
+    readonly additionId: string;
+    readonly kind: AgentSendLedgerAdditionV2["kind"];
+    readonly content: string;
+    readonly contentChecksum: string;
+  }[];
+}
+
 export interface DesktopAgentRuntimeServices {
   readonly workspaceId: string;
   readonly contentRoot: string;
@@ -291,6 +356,16 @@ export interface DesktopAgentRuntimeServices {
   readonly agentContextSession: AgentContextSession;
   readonly agentPermissionSession: AgentPermissionSession;
   readonly agentPlanExecutionSession: AgentPlanExecutionSession;
+  readonly agentSendPreviewSession: AgentSendPreviewSession<AgentRunSnapshot>;
+  readonly prepareAgentSendPreview: (
+    command: PrepareDesktopAgentSendPreviewCommand
+  ) => Promise<Result<AgentSendPreviewDtoV2, UnifiedError>>;
+  readonly confirmAgentSendPreview: (
+    command: ConfirmAgentSendPreviewCommandV2
+  ) => Promise<Result<AgentRunSnapshot, UnifiedError>>;
+  readonly readAgentSendLedger: (
+    runId: string
+  ) => Promise<Result<readonly DesktopAgentSendLedgerEntry[], UnifiedError>>;
   /** Present only when the Electron user-data usage store is configured. */
   readonly agentUsageSession?: AgentUsageSession;
   readonly prepare: () => Promise<Result<void, UnifiedError>>;
@@ -821,6 +896,10 @@ function createDesktopAgentRuntimeServices(
     projectRoot: options.stateRoot,
     traceId: "desktop-agent-run-store"
   });
+  const sendLedgerRepository = new AgentSendLedgerFileRepository({
+    projectRoot: options.stateRoot,
+    traceId: "desktop-agent-send-ledger"
+  });
   const usageRepository =
     options.userDataRoot === undefined
       ? undefined
@@ -977,7 +1056,7 @@ function createDesktopAgentRuntimeServices(
   });
 
   const scriptedDriver = createDesktopScriptedAgentDriver(options.activeChapterId);
-  const modelDriver =
+  const baseModelDriver =
     options.modelDriver ??
     (options.resolveModelProfile === undefined || options.createAgentModelDriver === undefined
       ? scriptedDriver
@@ -986,6 +1065,22 @@ function createDesktopAgentRuntimeServices(
           resolveModelProfile: options.resolveModelProfile,
           createAgentModelDriver: options.createAgentModelDriver
         }));
+  const frozenFirstSends = new Map<string, AgentConfirmedFirstSendV2>();
+  const preparedSendStates = new Map<string, DesktopPreparedSendState>();
+  const sendRoundState = new Map<string, DesktopSendRoundState>();
+  const reservedRunIds: string[] = [];
+  const createRuntimeRunId = (): string =>
+    reservedRunIds.shift() ??
+    options.createRunId?.() ??
+    `agent_run_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`;
+  const modelDriver = createDesktopSendLedgerModelDriver({
+    delegate: baseModelDriver,
+    repository: sendLedgerRepository,
+    frozenFirstSends,
+    preparedSendStates,
+    roundState: sendRoundState,
+    now: () => options.now?.() ?? new Date().toISOString()
+  });
 
   const conversationPersistence: AgentConversationPersistencePort = {
     createConversation(record) {
@@ -1406,10 +1501,126 @@ function createDesktopAgentRuntimeServices(
     },
     createContextSnapshotId: (runId) => `context_${runId}_1`,
     coordinatorOptions: {
-      ...(options.createRunId === undefined ? {} : { createRunId: options.createRunId }),
+      createRunId: createRuntimeRunId,
       ...(options.now === undefined ? {} : { now: options.now })
     }
   });
+  const previewBindings = new Map<string, DesktopSendPreviewBinding>();
+  const latestPreviewBindingByDraft = new Map<string, DesktopSendPreviewBinding>();
+  const startCommandsByReservedRun = new Map<string, StartAgentRunCommand>();
+  const materializePreview = async (binding: DesktopSendPreviewBinding) => {
+    const result = await materializeDesktopSendPreview({
+      binding,
+      options,
+      startPreflight,
+      draftSession,
+      conversationSession,
+      capabilitySnapshot,
+      effectiveCapabilityState,
+      ...(options.externalToolDescriptors === undefined
+        ? {}
+        : { externalToolDescriptors: options.externalToolDescriptors })
+    });
+    if (!result.ok) return result;
+    preparedSendStates.set(binding.reservedRunId, result.value.preparedState);
+    return ok(result.value.material);
+  };
+  const agentSendPreviewSession = createAgentSendPreviewSession<AgentRunSnapshot>({
+    materializer: {
+      async materializeFirstRound(command) {
+        const binding = previewBindings.get(command.commandId);
+        if (binding === undefined) return err(runtimeError("AGENT_SEND_PREVIEW_INVALID"));
+        const materialized = await materializePreview(binding);
+        if (materialized.ok) {
+          latestPreviewBindingByDraft.set(command.runDraftId, binding);
+          startCommandsByReservedRun.set(binding.reservedRunId, binding.startCommand);
+        }
+        return materialized;
+      },
+      async resolveCurrentValidationFacts(input) {
+        const binding = latestPreviewBindingByDraft.get(input.runDraftId);
+        if (binding === undefined) return err(runtimeError("AGENT_SEND_PREVIEW_STALE"));
+        const materialized = await materializePreview(binding);
+        return materialized.ok ? ok(materialized.value.validationFacts) : materialized;
+      }
+    },
+    async sendFrozenFirstRound(input) {
+      let manifest: CanonicalRoundManifestV2;
+      try {
+        manifest = parseDesktopCanonicalRoundManifestJson(
+          input.canonicalRoundManifestJson,
+          input.canonicalRoundManifestChecksum
+        );
+      } catch {
+        return err(runtimeError("AGENT_SEND_PREVIEW_INVALID"));
+      }
+      if (!manifest.runId.startsWith("agent_run_preview_")) {
+        return err(runtimeError("AGENT_SEND_PREVIEW_INVALID"));
+      }
+      const startCommand = startCommandsByReservedRun.get(manifest.runId);
+      if (startCommand === undefined) return err(runtimeError("AGENT_SEND_PREVIEW_STALE"));
+      const prepared = preparedSendStates.get(manifest.runId);
+      if (
+        prepared === undefined ||
+        prepared.canonicalManifest.manifestChecksum !== manifest.manifestChecksum ||
+        manifest.roundNumber !== 0 ||
+        canonicalAgentFirstRoundSemanticPayloadChecksumV2(input.semanticPayload) !==
+          input.canonicalPayloadChecksum
+      ) {
+        return err(runtimeError("AGENT_SEND_PREVIEW_STALE"));
+      }
+      frozenFirstSends.set(manifest.runId, input);
+      reservedRunIds.push(manifest.runId);
+      const started = await session.startAgentRun(startCommand);
+      if (!started.ok || started.value.runId !== manifest.runId) {
+        frozenFirstSends.delete(manifest.runId);
+        const reservedIndex = reservedRunIds.indexOf(manifest.runId);
+        if (reservedIndex >= 0) reservedRunIds.splice(reservedIndex, 1);
+        return started.ok ? err(runtimeError("AGENT_SEND_PREVIEW_STALE")) : started;
+      }
+      return started;
+    },
+    ...(options.now === undefined ? {} : { now: options.now }),
+    traceId: "desktop-agent-send-preview"
+  });
+  const prepareAgentSendPreview = async (
+    command: PrepareDesktopAgentSendPreviewCommand
+  ): Promise<Result<AgentSendPreviewDtoV2, UnifiedError>> => {
+    let invalid: UnifiedError | undefined;
+    try {
+      invalid = validateDesktopSendPreviewCommand(command, runtimeScope);
+    } catch {
+      invalid = runtimeError("AGENT_SEND_PREVIEW_INVALID");
+    }
+    if (invalid !== undefined) return err(invalid);
+    const binding: DesktopSendPreviewBinding = {
+      commandId: command.commandId,
+      startCommand: command.startCommand,
+      reservedRunId: `agent_run_preview_${randomBytes(12).toString("hex")}`
+    };
+    previewBindings.set(command.commandId, binding);
+    const result = await agentSendPreviewSession.preparePreview({
+      schemaVersion: "2.0",
+      commandId: command.commandId,
+      runDraftId: command.startCommand.runDraftId,
+      expectedRunDraftRevision: command.startCommand.runDraftRevision,
+      runDraftChecksum: command.startCommand.runDraftChecksum
+    });
+    if (!result.ok) previewBindings.delete(command.commandId);
+    return result;
+  };
+  const confirmAgentSendPreview = async (
+    command: ConfirmAgentSendPreviewCommandV2
+  ): Promise<Result<AgentRunSnapshot, UnifiedError>> => {
+    const confirmed = await agentSendPreviewSession.confirmAndSend(command);
+    return confirmed.ok ? ok(confirmed.value.value) : confirmed;
+  };
+  const readAgentSendLedger = async (
+    runId: string
+  ): Promise<Result<readonly DesktopAgentSendLedgerEntry[], UnifiedError>> => {
+    const entries = await sendLedgerRepository.readEntries(runId);
+    return entries.ok ? ok(entries.value.map(toDesktopSendLedgerEntry)) : entries;
+  };
   let prepareResult: Promise<Result<void, UnifiedError>> | undefined;
   const prepare = () =>
     (prepareResult ??= (async () => {
@@ -1435,6 +1646,10 @@ function createDesktopAgentRuntimeServices(
     agentContextSession: contextSession,
     agentPermissionSession: permissionSession,
     agentPlanExecutionSession: planExecutionSession,
+    agentSendPreviewSession,
+    prepareAgentSendPreview,
+    confirmAgentSendPreview,
+    readAgentSendLedger,
     ...(usageSession === undefined ? {} : { agentUsageSession: usageSession }),
     prepare,
     revokeSettingsCapabilities,
@@ -1465,6 +1680,1051 @@ function desktopUsageTime(options: DesktopAgentRunSessionOptions): AgentUsageTim
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     utcOffsetMinutes: -current.getTimezoneOffset()
   };
+}
+
+interface DesktopSendPreviewBinding {
+  readonly commandId: string;
+  readonly startCommand: StartAgentRunCommand;
+  readonly reservedRunId: string;
+}
+
+interface DesktopPreparedSendState {
+  readonly defaults: FrozenWorkspaceModelSharingDefaults;
+  readonly grant: FrozenRunModelSharingGrant;
+  readonly canonicalManifest: CanonicalRoundManifestV2;
+}
+
+interface DesktopSendRoundState extends DesktopPreparedSendState {
+  readonly previewId: string;
+  readonly firstPayloadChecksum: string;
+  currentManifest: CanonicalRoundManifestV2;
+  messageCount: number;
+  roundNumber: number;
+}
+
+function createDesktopSendLedgerModelDriver(input: {
+  readonly delegate: AgentRunModelDriver;
+  readonly repository: AgentSendLedgerFileRepository;
+  readonly frozenFirstSends: Map<string, AgentConfirmedFirstSendV2>;
+  readonly preparedSendStates: Map<string, DesktopPreparedSendState>;
+  readonly roundState: Map<string, DesktopSendRoundState>;
+  readonly now: () => string;
+}): AgentRunModelDriver {
+  return {
+    async *streamRound(roundInput) {
+      const existing = input.roundState.get(roundInput.runId);
+      if (existing === undefined) {
+        const first = input.frozenFirstSends.get(roundInput.runId);
+        if (first === undefined) {
+          yield* input.delegate.streamRound(roundInput);
+          return;
+        }
+        const manifest = parseDesktopCanonicalRoundManifestJson(
+          first.canonicalRoundManifestJson,
+          first.canonicalRoundManifestChecksum
+        );
+        const prepared = input.preparedSendStates.get(roundInput.runId);
+        if (
+          prepared === undefined ||
+          manifest.runId !== roundInput.runId ||
+          manifest.roundNumber !== 0 ||
+          prepared.canonicalManifest.manifestChecksum !== manifest.manifestChecksum ||
+          canonicalAgentFirstRoundSemanticPayloadChecksumV2(first.semanticPayload) !==
+            first.canonicalPayloadChecksum
+        ) {
+          throw new Error("AGENT_SEND_PREVIEW_STALE");
+        }
+        const semanticPayload = parseAgentFirstRoundSemanticPayloadV2(
+          structuredClone(first.semanticPayload)
+        );
+        const frozenMessages = freezeDesktopValue(
+          semanticPayload.messages.map((message) => {
+            if (message.role === "assistant") {
+              return {
+                role: "assistant" as const,
+                content: message.content,
+                toolCalls: message.toolCalls.map((call) => ({
+                  id: call.toolCallId,
+                  name: call.name,
+                  arguments: call.argumentsText
+                }))
+              };
+            }
+            if (message.role === "tool") {
+              return { role: "tool" as const, content: message.content, toolCallId: message.toolCallId };
+            }
+            return { role: "user" as const, content: message.content };
+          })
+        );
+        const frozenTools = freezeDesktopValue(
+          semanticPayload.tools.map((tool) => ({
+            name: tool.name,
+            ...(tool.description === null ? {} : { description: tool.description }),
+            inputSchema: tool.inputSchema
+          }))
+        );
+        const frozenInput: AgentModelRoundInput = {
+          ...roundInput,
+          messages: frozenMessages,
+          tools: frozenTools,
+          systemPrompt: semanticPayload.systemPrompt
+        };
+        const entry = createDesktopLedgerEntry({
+          runId: roundInput.runId,
+          roundNumber: 0,
+          roundKind: "first_send",
+          manifest,
+          canonicalPayloadChecksum: first.canonicalPayloadChecksum,
+          previewId: first.previewId,
+          additions: [],
+          sentAt: input.now()
+        });
+        const appended = await input.repository.appendEntry(roundInput.runId, entry);
+        if (!appended.ok) throw new Error(appended.error.code);
+        input.roundState.set(roundInput.runId, {
+          defaults: prepared.defaults,
+          grant: prepared.grant,
+          canonicalManifest: manifest,
+          currentManifest: manifest,
+          previewId: first.previewId,
+          firstPayloadChecksum: first.canonicalPayloadChecksum,
+          messageCount: manifest.messages.length,
+          roundNumber: 0
+        });
+        yield* input.delegate.streamRound(frozenInput);
+        return;
+      }
+
+      if (roundInput.messages.length < existing.messageCount) {
+        throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
+      }
+      const additionsInput = roundInput.messages.slice(existing.messageCount);
+      const additions = additionsInput.map((message) =>
+        createDesktopCanonicalMessageFromModel(message, false)
+      );
+      if (additions.length === 0) {
+        throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
+      }
+      const manifest = createCanonicalRoundManifestV2({
+        roundId: `round_${roundInput.runId}_${String(existing.roundNumber + 1)}`,
+        runId: roundInput.runId,
+        roundNumber: existing.roundNumber + 1,
+        authority: existing.currentManifest.authority.content,
+        toolCatalogRevision: existing.currentManifest.tools.catalogRevision,
+        projectedToolDescriptors: existing.currentManifest.tools.descriptors,
+        sharing: existing.currentManifest.sharing,
+        providerSemanticVersionSet: existing.currentManifest.providerSemanticVersionSet,
+        packedContextManifestChecksum: existing.currentManifest.packedContextManifestChecksum,
+        messages: [
+          ...existing.currentManifest.messages.map((message) =>
+            desktopCanonicalMessageInput(message, existing.currentManifest.sourceRefs)
+          ),
+          ...additions
+        ]
+      });
+      const ledgerAdditions = additions.map((message, index) =>
+        desktopLedgerAddition(message, existing.messageCount + index, roundInput.runId, existing.roundNumber + 1)
+      );
+      const entry = createDesktopLedgerEntry({
+        runId: roundInput.runId,
+        roundNumber: existing.roundNumber + 1,
+        roundKind: "subsequent_send",
+        manifest,
+        canonicalPayloadChecksum: sha256(
+          stableDesktopJson({
+            systemPrompt: roundInput.systemPrompt ?? "",
+            messages: roundInput.messages,
+            tools: roundInput.tools
+          })
+        ),
+        previewId: null,
+        additions: ledgerAdditions,
+        sentAt: input.now()
+      });
+      const appended = await input.repository.appendEntry(roundInput.runId, entry);
+      if (!appended.ok) throw new Error(appended.error.code);
+      existing.messageCount += additions.length;
+      existing.roundNumber += 1;
+      existing.currentManifest = manifest;
+      yield* input.delegate.streamRound(roundInput);
+    }
+  };
+}
+
+function createDesktopLedgerEntry(input: {
+  readonly runId: string;
+  readonly roundNumber: number;
+  readonly roundKind: AgentSendLedgerEntryV2["roundKind"];
+  readonly manifest: CanonicalRoundManifestV2;
+  readonly canonicalPayloadChecksum: string;
+  readonly previewId: string | null;
+  readonly additions: readonly AgentSendLedgerAdditionV2[];
+  readonly sentAt: string;
+}): AgentSendLedgerEntryV2 {
+  return createAgentSendLedgerEntryV2({
+    entryId: `send_${input.runId}_${String(input.roundNumber)}`,
+    runId: input.runId,
+    roundNumber: input.roundNumber,
+    roundKind: input.roundKind,
+    providerSemanticVersionSetChecksum: input.manifest.providerSemanticVersionSetChecksum,
+    canonicalRoundManifestJson: serializeCanonicalRoundManifestV2(input.manifest),
+    canonicalRoundManifestChecksum: input.manifest.manifestChecksum,
+    canonicalPayloadChecksum: input.canonicalPayloadChecksum,
+    previewBinding:
+      input.previewId === null
+        ? null
+        : {
+            schemaVersion: "2.0",
+            previewId: input.previewId,
+            canonicalPayloadChecksum: input.canonicalPayloadChecksum
+          },
+    additions: input.additions,
+    providerNativeSemanticProof: null,
+    sentAt: input.sentAt
+  });
+}
+
+function createDesktopCanonicalMessageFromModel(
+  message: AgentModelMessage,
+  allowCurrentRequest: boolean
+): CreateCanonicalRoundMessageV2Input {
+  if (message.role === "assistant") {
+    return {
+      kind: "assistant",
+      role: "assistant",
+      content: message.content,
+      toolCalls: (message.toolCalls ?? []).map((call) => ({
+        id: call.id,
+        name: call.name,
+        arguments: call.arguments,
+        ...(call.providerMetadata === undefined ? {} : { providerMetadata: call.providerMetadata })
+      }))
+    };
+  }
+  if (message.role === "user") {
+    const envelope = desktopTryParseEnvelope(message.content);
+    if (envelope === undefined) {
+      return {
+        kind: allowCurrentRequest ? "current_user_request" : "user_control",
+        role: "user",
+        content: message.content
+      };
+    }
+    return desktopCanonicalEnvelopeMessage(envelope, message.content);
+  }
+  const envelope = desktopTryParseEnvelope(message.content);
+  if (envelope === undefined) throw new Error("AGENT_SEND_LEDGER_MESSAGE_INVALID");
+  return desktopCanonicalEnvelopeMessage(envelope, message.content, message.toolCallId);
+}
+
+function desktopCanonicalEnvelopeMessage(
+  envelope: ReturnType<typeof parseProviderVisibleUntrustedEnvelope>,
+  content: string,
+  modelToolCallId?: string
+): CreateCanonicalRoundMessageV2Input {
+  const source = envelope.source;
+  const sourceChecksum = sha256(envelope.data);
+  if (source.sourceKind === "tool_result") {
+    if (modelToolCallId !== source.toolCallId) throw new Error("AGENT_SEND_LEDGER_MESSAGE_INVALID");
+    return {
+      kind: "tool_result",
+      role: "tool",
+      content,
+      toolCallId: source.toolCallId,
+      envelopeKind: "untrusted_tool_data",
+      source: {
+        refId: `tool_result:${source.toolCallId}`,
+        sourceKind: "tool_result",
+        sourceRevision: source.toolCallId,
+        sourceChecksum
+      }
+    };
+  }
+  if (source.sourceKind === "network" || source.sourceKind === "remote_mcp") {
+    if (modelToolCallId !== source.toolCallId) throw new Error("AGENT_SEND_LEDGER_MESSAGE_INVALID");
+    return {
+      kind: "remote_result",
+      role: "tool",
+      content,
+      toolCallId: source.toolCallId,
+      envelopeKind: "untrusted_remote_data",
+      source: {
+        refId: `remote_result:${source.toolCallId}`,
+        sourceKind: "remote_result",
+        sourceRevision: source.toolCallId,
+        sourceChecksum
+      }
+    };
+  }
+  if (source.sourceKind === "prior_conversation" || source.sourceKind === "compaction") {
+    return {
+      kind: source.sourceKind,
+      role: "user",
+      content,
+      envelopeKind: "untrusted_conversation_data",
+      source: {
+        refId: `${source.sourceKind}:${source.summaryRevision}`,
+        sourceKind: source.sourceKind,
+        sourceRevision: source.summaryRevision,
+        sourceChecksum
+      }
+    };
+  }
+  if (source.sourceKind === "recovery_summary") {
+    const kind =
+      source.recoveryEventKind === "context_refreshed" ||
+      source.recoveryEventKind === "context_excluded"
+        ? "context_notice"
+        : "recovery";
+    return {
+      kind,
+      role: "user",
+      content,
+      envelopeKind: "untrusted_recovery_data",
+      source: {
+        refId: `${kind}:${sourceChecksum.slice(0, 32)}`,
+        sourceKind: kind,
+        sourceRevision: source.recoveryEventKind,
+        sourceChecksum
+      }
+    };
+  }
+  const kind =
+    source.sourceKind === "project_conventions"
+      ? "project_conventions"
+      : source.sourceKind === "workspace_outline"
+        ? "workspace_outline"
+        : source.sourceKind === "editor_buffer"
+          ? "active_resource"
+          : "explicit_reference";
+  if (!("refId" in source)) throw new Error("AGENT_SEND_LEDGER_MESSAGE_INVALID");
+  return {
+    kind,
+    role: "user",
+    content,
+    envelopeKind: "untrusted_project_data",
+    source: {
+      refId: source.refId,
+      sourceKind: kind,
+      sourceRevision: "0",
+      sourceChecksum
+    }
+  };
+}
+
+function desktopTryParseEnvelope(content: string) {
+  try {
+    return parseProviderVisibleUntrustedEnvelope(content);
+  } catch {
+    return undefined;
+  }
+}
+
+function desktopCanonicalMessageInput(
+  message: CanonicalRoundManifestV2["messages"][number],
+  sourceRefs: CanonicalRoundManifestV2["sourceRefs"]
+): CreateCanonicalRoundMessageV2Input {
+  const source =
+    message.sourceRefId === null
+      ? undefined
+      : sourceRefs.find((candidate) => candidate.refId === message.sourceRefId);
+  if (message.sourceRefId !== null && source === undefined) {
+    throw new Error("AGENT_SEND_LEDGER_MESSAGE_INVALID");
+  }
+  return {
+    kind: message.kind,
+    role: message.role,
+    content: message.content,
+    ...(source === undefined
+      ? {}
+      : {
+          source: {
+            refId: source.refId,
+            sourceKind: source.sourceKind,
+            sourceRevision: source.sourceRevision,
+            sourceChecksum: source.sourceChecksum
+          }
+        }),
+    ...(message.envelopeKind === null ? {} : { envelopeKind: message.envelopeKind }),
+    ...(message.toolCallId === null ? {} : { toolCallId: message.toolCallId }),
+    ...(message.toolCalls.length === 0
+      ? {}
+      : {
+          toolCalls: message.toolCalls.map((call) => ({
+            id: call.id,
+            name: call.name,
+            arguments: call.arguments,
+            ...(call.providerMetadata === null ? {} : { providerMetadata: call.providerMetadata })
+          }))
+        })
+  };
+}
+
+function desktopLedgerAddition(
+  message: CreateCanonicalRoundMessageV2Input,
+  messageOrder: number,
+  runId: string,
+  roundNumber: number
+): AgentSendLedgerAdditionV2 {
+  const additionId = `addition_${runId}_${String(roundNumber)}_${String(messageOrder)}`;
+  const base = {
+    schemaVersion: "2.0" as const,
+    additionId,
+    messageOrder,
+    content: message.content,
+    contentChecksum: sha256(message.content)
+  };
+  if (message.kind === "assistant") return { ...base, kind: "assistant", role: "assistant" };
+  if (message.kind === "tool_result" || message.kind === "remote_result") {
+    if (message.toolCallId === undefined || message.source?.refId === undefined) {
+      throw new Error("AGENT_SEND_LEDGER_MESSAGE_INVALID");
+    }
+    return {
+      ...base,
+      kind: message.kind,
+      role: "tool",
+      sourceRefId: message.source.refId,
+      toolCallId: message.toolCallId
+    };
+  }
+  if (message.kind === "user_control") return { ...base, kind: "user_control", role: "user" };
+  if (message.source?.refId === undefined) throw new Error("AGENT_SEND_LEDGER_MESSAGE_INVALID");
+  return {
+    ...base,
+    kind:
+      message.kind === "context_notice" ||
+      message.kind === "explicit_reference" ||
+      message.kind === "active_resource" ||
+      message.kind === "project_conventions" ||
+      message.kind === "workspace_outline" ||
+      message.kind === "prior_conversation" ||
+      message.kind === "compaction"
+        ? "jit_context"
+        : "recovery",
+    role: "user",
+    sourceRefId: message.source.refId
+  };
+}
+
+function parseDesktopCanonicalRoundManifestJson(
+  value: string,
+  expectedChecksum: string
+): CanonicalRoundManifestV2 {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("AGENT_SEND_PREVIEW_INVALID");
+  }
+  const manifest = parseCanonicalRoundManifestV2(parsed, expectedChecksum);
+  if (serializeCanonicalRoundManifestV2(manifest) !== value) {
+    throw new Error("AGENT_SEND_PREVIEW_INVALID");
+  }
+  return manifest;
+}
+
+function validateDesktopSendPreviewCommand(
+  command: PrepareDesktopAgentSendPreviewCommand,
+  scope: {
+    readonly kind: "workspace";
+    readonly workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"];
+    readonly workspaceId: string;
+  }
+): UnifiedError | undefined {
+  if (
+    command.schemaVersion !== "2.0" ||
+    !isMachineToken(command.commandId) ||
+    !isMachineToken(command.startCommand.conversationId) ||
+    !isMachineToken(command.startCommand.runDraftId) ||
+    !Number.isSafeInteger(command.startCommand.runDraftRevision) ||
+    command.startCommand.runDraftRevision < 0 ||
+    !isSha256(command.startCommand.runDraftChecksum)
+  ) {
+    return runtimeError("AGENT_SEND_PREVIEW_INVALID");
+  }
+  const startScope = command.startCommand.scope;
+  if (
+    startScope !== undefined &&
+    (!isRecord(startScope) ||
+      startScope.kind !== "workspace" ||
+      startScope.workspaceKind !== scope.workspaceKind ||
+      startScope.workspaceId !== scope.workspaceId)
+  ) {
+    return runtimeError("AGENT_SEND_PREVIEW_STALE");
+  }
+  if (
+    command.startCommand.projectId !== undefined &&
+    command.startCommand.projectId !== scope.workspaceId
+  ) {
+    return runtimeError("AGENT_SEND_PREVIEW_STALE");
+  }
+  return undefined;
+}
+
+function toDesktopSendLedgerEntry(value: AgentSendLedgerEntryV2): DesktopAgentSendLedgerEntry {
+  return {
+    entryId: value.entryId,
+    roundNumber: value.roundNumber,
+    roundKind: value.roundKind,
+    canonicalPayloadChecksum: value.canonicalPayloadChecksum,
+    canonicalRoundManifestChecksum: value.canonicalRoundManifestChecksum,
+    previewId: value.previewBinding?.previewId ?? null,
+    sentAt: value.sentAt,
+    additions: value.additions.map((addition) => ({
+      additionId: addition.additionId,
+      kind: addition.kind,
+      content: addition.content,
+      contentChecksum: addition.contentChecksum
+    }))
+  };
+}
+
+function isMachineToken(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u.test(value);
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function freezeDesktopValue<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      freezeDesktopValue(child);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function stableDesktopJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableDesktopJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableDesktopJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function desktopProviderRuntimeFactsJson(
+  value: ReturnType<typeof createProviderVisibleAgentRuntimeFacts>
+): JsonObject {
+  const result: JsonObject = {
+    schemaVersion: value.schemaVersion,
+    profileId: value.profileId,
+    operationMode: value.operationMode,
+    workspaceBound: value.workspaceBound,
+    workspaceKind: value.workspaceKind,
+    writeCapability: value.writeCapability,
+    writingOperations: [...value.writingOperations],
+    workspaceFileOperations: [...value.workspaceFileOperations],
+    writeApprovalPolicy: value.writeApprovalPolicy,
+    approvalRuleSetVersion: value.approvalRuleSetVersion,
+    approvalRuleSetChecksum: value.approvalRuleSetChecksum,
+    approvalRules: value.approvalRules.map((rule) => desktopJsonValue(rule)),
+    networkRead: value.networkRead,
+    externalTools: value.externalTools,
+    activeResourceKind: value.activeResourceKind
+  };
+  return result;
+}
+
+function desktopJsonValue(value: unknown): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((entry) => desktopJsonValue(entry));
+  if (typeof value !== "object") throw new Error("AGENT_SEND_PREVIEW_INVALID");
+  const result: JsonObject = {};
+  for (const [key, child] of Object.entries(value)) result[key] = desktopJsonValue(child);
+  return result;
+}
+
+function isDesktopToolDescriptorEffective(
+  descriptor: AgentToolDescriptor,
+  state: EffectiveCapabilityState
+): boolean {
+  if (!state.active) return false;
+  if (descriptor.writeOperation !== undefined) {
+    return new Set<string>([
+      ...effectiveWritingOperations(state),
+      ...effectiveWorkspaceFileOperations(state)
+    ]).has(descriptor.writeOperation);
+  }
+  if (descriptor.source?.kind === "mcp") return isCapabilityEffective(state, "mcp_tools");
+  if (descriptor.source?.kind === "plugin") return isCapabilityEffective(state, "plugin_tools");
+  if (descriptor.kind === "network_tool") return isCapabilityEffective(state, "network");
+  if (descriptor.kind === "search_tool") return isCapabilityEffective(state, "search");
+  return true;
+}
+
+function desktopCanonicalToolId(descriptor: AgentToolDescriptor): string {
+  return descriptor.id ?? descriptor.name;
+}
+
+function desktopProviderToolName(descriptor: AgentToolDescriptor): string {
+  const candidate = descriptor.providerName ?? descriptor.name;
+  if (/^[A-Za-z0-9_-]{1,64}$/u.test(candidate)) return candidate;
+  return desktopCanonicalToolId(descriptor).replace(/[^A-Za-z0-9_-]/gu, "__").slice(0, 64);
+}
+
+function desktopActiveResourceKind(
+  profileId: string,
+  sources: readonly AgentContextSourceInput[]
+): "none" | "chapter" | "story_bible" | "project_file" {
+  if (profileId === "writing") {
+    for (const source of [...sources].reverse()) {
+      if (source.sourceKind === "story_bible_asset") return "story_bible";
+      if (
+        (source.sourceKind === "disk_file" || source.sourceKind === "editor_buffer") &&
+        source.relativePath !== undefined
+      ) {
+        return "chapter";
+      }
+    }
+    return "none";
+  }
+  return sources.some(
+    (source) => source.sourceKind === "disk_file" || source.sourceKind === "editor_buffer"
+  )
+    ? "project_file"
+    : "none";
+}
+
+function repackDesktopPreviewContext(
+  packed: AgentRunStartFacts["packedContext"],
+  profile: ReturnType<typeof resolveAgentContextProfile>,
+  activeSources: readonly AgentContextSourceInput[],
+  excludedSources: readonly AgentContextSourceInput[],
+  modelProfileId: string
+): Result<NonNullable<AgentRunStartFacts["packedContext"]> | undefined, UnifiedError> {
+  if (packed === undefined) return ok(undefined);
+  const activeRefs = new Set(activeSources.map((source) => source.refId));
+  const matches = packed.blocks.every((block) => activeRefs.has(block.refId));
+  if (matches && packed.blocks.length === activeSources.length) return ok(packed);
+  try {
+    return ok(
+      packAgentContext({
+        profile,
+        contextSources: activeSources,
+        excludedContextSources: excludedSources,
+        excludedSourceManifests: packed.sources.filter((source) => source.state === "excluded"),
+        modelProfileId,
+        usedTokens: packed.tokenStats.usedTokens,
+        safeInputBudget: packed.tokenStats.safeInputBudget,
+        remainingTokens: packed.tokenStats.remainingTokens,
+        precision: packed.tokenStats.precision,
+        createdAt: packed.createdAt
+      })
+    );
+  } catch {
+    return err(runtimeError("AGENT_CONTEXT_PREVIEW_STALE"));
+  }
+}
+
+function desktopSemanticPayload(
+  canonical: ReturnType<typeof materializeCanonicalAgentRound>,
+  projectedTools: readonly JsonObject[],
+  parameters: JsonObject
+): AgentFirstRoundSemanticPayloadV2 {
+  return {
+    schemaVersion: "2.0",
+    systemPrompt: canonical.prompt.systemPrompt,
+    messages: canonical.canonicalRoundManifest.messages.map((message) => {
+      if (message.role === "assistant") {
+        return {
+          schemaVersion: "2.0" as const,
+          role: "assistant" as const,
+          content: message.content,
+          toolCalls: message.toolCalls.map((call) => ({
+            schemaVersion: "2.0" as const,
+            toolCallId: call.id,
+            name: call.name,
+            argumentsText: call.arguments
+          }))
+        };
+      }
+      if (message.role === "tool") {
+        if (message.toolCallId === null) throw new Error("AGENT_SEND_PREVIEW_INVALID");
+        return {
+          schemaVersion: "2.0" as const,
+          role: "tool" as const,
+          content: message.content,
+          toolCallId: message.toolCallId
+        };
+      }
+      return { schemaVersion: "2.0" as const, role: "user" as const, content: message.content };
+    }),
+    tools: projectedTools.map((tool) => ({
+      schemaVersion: "2.0" as const,
+      name: typeof tool.name === "string" ? tool.name : "",
+      description: typeof tool.description === "string" ? tool.description : null,
+      inputSchema: desktopRequiredJsonObject(tool.inputSchema)
+    })),
+    parameters
+  };
+}
+
+function desktopRequiredJsonObject(value: JsonValue | undefined): JsonObject {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("AGENT_SEND_PREVIEW_INVALID");
+  }
+  return value;
+}
+
+function desktopPreviewTarget(
+  facts: AgentRunStartFacts,
+  profile: LlmModelProfile | undefined
+) {
+  const providerId = profile?.provider ?? facts.model.provider;
+  const modelId = profile?.modelName ?? facts.model.modelName;
+  const connectionId = desktopSafeIdentity(profile?.id ?? facts.model.profileId, "connection");
+  const accountIdentityChecksum = isSha256(facts.model.accountIsolationChecksum)
+    ? facts.model.accountIsolationChecksum
+    : sha256("desktop-account-identity-unavailable");
+  const adapterPolicyRevision = "desktop-llm-adapter-v2";
+  return {
+    providerId: desktopSafeIdentity(providerId, "provider"),
+    modelId: desktopSafeIdentity(modelId, "model"),
+    connectionId,
+    accountIdentityChecksum,
+    adapterPolicyRevision,
+    adapterPolicyChecksum: sha256(
+      stableDesktopJson({ providerId, modelId, connectionId, adapterPolicyRevision })
+    )
+  };
+}
+
+function desktopSafeIdentity(value: string, fallback: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9._:@/-]/gu, "_").slice(0, 256);
+  return isMachineToken(normalized) ? normalized : fallback;
+}
+
+function desktopPreviewSources(
+  manifest: CanonicalRoundManifestV2,
+  sources: readonly AgentContextSourceInput[],
+  explicitRefs: ReadonlySet<string>
+): readonly AgentSendPreviewDisplaySourceV2[] {
+  const sourceByRef = new Map(sources.map((source) => [source.refId, source]));
+  return manifest.sourceRefs.map((source) => {
+    const message = manifest.messages[source.messageOrder];
+    const original = sourceByRef.get(source.refId);
+    const envelope = desktopTryParseEnvelope(message?.content ?? "");
+    const envelopeSource = envelope?.source;
+    const kind: AgentSendPreviewDisplaySourceV2["kind"] =
+      source.sourceKind === "compaction"
+        ? "compaction_summary"
+        : source.sourceKind === "prior_conversation"
+          ? "conversation_summary"
+          : source.sourceKind === "workspace_outline"
+            ? "workspace_outline"
+            : source.sourceKind === "project_conventions"
+              ? "project_conventions"
+              : source.sourceKind === "active_resource"
+                ? "active_resource"
+                : "explicit_reference";
+    return {
+      sourceRef: source.refId,
+      label: original?.relativePath ?? original?.assetId ?? source.refId,
+      kind,
+      // The manifest carries a provider-visible untrusted envelope. The preview display exposes
+      // only its data field, never the envelope metadata or local provenance.
+      content: original?.content ?? envelope?.data ?? "",
+      tokenCount: null,
+      tokenPrecision: "unknown",
+      dirty:
+        original?.dirty ??
+        (envelopeSource !== undefined && "dirty" in envelopeSource
+          ? envelopeSource.dirty
+          : false),
+      truncated:
+        original?.materialization?.truncationRange !== undefined
+          ? original.materialization.truncationRange !== null
+          : envelopeSource !== undefined &&
+              "truncated" in envelopeSource &&
+              envelopeSource.truncated === true,
+      selectionState: explicitRefs.has(source.refId) ? "explicit" : "automatic",
+      grantSource: explicitRefs.has(source.refId) ? "user_explicit" : "workspace_default"
+    };
+  });
+}
+
+async function materializeDesktopSendPreview(input: {
+  readonly binding: DesktopSendPreviewBinding;
+  readonly options: DesktopAgentRunSessionOptions;
+  readonly startPreflight: AgentRunStartPreflightPort;
+  readonly draftSession: AgentRunDraftSession;
+  readonly conversationSession: AgentConversationSession;
+  readonly capabilitySnapshot: AgentToolCapabilitySnapshot;
+  readonly effectiveCapabilityState: EffectiveCapabilityState;
+  readonly externalToolDescriptors?: readonly AgentToolDescriptor[];
+}): Promise<
+  Result<
+    {
+      readonly material: AgentSendPreviewPreparedMaterialV2;
+      readonly preparedState: DesktopPreparedSendState;
+    },
+    UnifiedError
+  >
+> {
+  const { startCommand } = input.binding;
+  if (
+    input.options.sharingDefaults == null ||
+    !isSha256(input.options.sharingDefaultsRevision)
+  ) {
+    return err(runtimeError("AGENT_MODEL_SHARING_DEFAULTS_REQUIRED"));
+  }
+  const workspaceBindingId = sha256(
+    `${input.options.workspaceKind}\n${input.options.projectId}\n${input.options.contentRoot}`
+  );
+  const defaults = freezeWorkspaceModelSharingDefaults({
+    workspaceBindingId,
+    ...(input.options.sharingDefaultsRevision === undefined
+      ? {}
+      : { defaultsRevision: input.options.sharingDefaultsRevision }),
+    defaults: input.options.sharingDefaults
+  });
+  if (!defaults.ok) return defaults;
+  const draft = await input.draftSession.resolveStartDraft({
+    ...(startCommand.scope === undefined ? {} : { scope: startCommand.scope }),
+    ...(startCommand.projectId === undefined ? {} : { projectId: startCommand.projectId }),
+    conversationId: startCommand.conversationId,
+    runDraftId: startCommand.runDraftId,
+    runDraftRevision: startCommand.runDraftRevision,
+    runDraftChecksum: startCommand.runDraftChecksum
+  });
+  if (!draft.ok) return draft;
+  const facts = await input.startPreflight.resolveStart(startCommand);
+  if (!facts.ok) return facts;
+  const profile = resolveAgentContextProfile(
+    facts.value.scope ?? startCommand.scope ?? {
+      kind: "workspace",
+      workspaceKind: input.options.workspaceKind,
+      workspaceId: input.options.projectId
+    },
+    facts.value.operationMode,
+    facts.value.contextMode
+  );
+  const explicitRefs = new Set(draft.value.contextDraft.refs.map((ref) => ref.refId));
+  const activeRef = draft.value.contextDraft.activeResourceRef?.refId;
+  const activeSources = facts.value.initialContextSources.filter((source) => {
+    if (source.sourceKind === "workspace_outline") {
+      return defaults.value.defaults.outlineMetadata === "automatic";
+    }
+    if (activeRef !== undefined && source.refId === activeRef && !explicitRefs.has(source.refId)) {
+      return defaults.value.defaults.activeResource === "automatic";
+    }
+    return true;
+  });
+  const excludedSources = facts.value.initialContextSources.filter(
+    (source) => !activeSources.includes(source)
+  );
+  const grant = freezeRunModelSharingGrant({
+    profileId: profile.profileId,
+    workspaceBindingId,
+    grant: {
+      runDraftRevision: String(startCommand.runDraftRevision),
+      defaultsRevision: defaults.value.defaultsRevision,
+      includedRefIds: activeSources.map((source) => source.refId),
+      excludedRefIds: [
+        ...excludedSources.map((source) => source.refId),
+        ...(facts.value.excludedContextSourceIds ?? [])
+      ].filter((value, index, values) => values.indexOf(value) === index),
+      approvedResultKinds: []
+    }
+  });
+  if (!grant.ok) return grant;
+  const descriptors = listAgentTools({
+    facadeVersion: "v2",
+    catalogSchemaVersion: "2.0",
+    operationMode: facts.value.operationMode,
+    contextMode: facts.value.contextMode,
+    writePolicy: facts.value.writePolicy,
+    capabilitySnapshot: input.capabilitySnapshot,
+    ...(input.externalToolDescriptors === undefined
+      ? {}
+      : { externalToolDescriptors: input.externalToolDescriptors })
+  }).filter((descriptor) => isDesktopToolDescriptorEffective(descriptor, input.effectiveCapabilityState));
+  const providerDescriptors =
+    defaults.value.defaults.toolReadResults === "allow"
+      ? descriptors
+      : descriptors.filter((descriptor) => descriptor.effect !== "read");
+  const providerMapping = freezeProviderNameMapping(
+    providerDescriptors.map((descriptor) => ({
+      id: desktopCanonicalToolId(descriptor),
+      providerName: desktopProviderToolName(descriptor)
+    }))
+  );
+  const projectedTools: readonly JsonObject[] = providerDescriptors.map((descriptor) => {
+    const projected: JsonObject = {
+      name:
+        providerMapping.providerNameFor(desktopCanonicalToolId(descriptor)) ??
+        desktopProviderToolName(descriptor),
+      inputSchema: descriptor.inputSchema
+    };
+    if (descriptor.description !== undefined) projected.description = descriptor.description;
+    return projected;
+  });
+  const runtimeFacts = createProviderVisibleAgentRuntimeFacts({
+    profile,
+    toolDescriptors: providerDescriptors,
+    effectiveCapabilityState: input.effectiveCapabilityState,
+    executionWritePolicy: facts.value.writePolicy,
+    ...(facts.value.writePolicyAcknowledged ? { executionWritePolicyAcknowledged: true } : {}),
+    limitedRunPreapprovalQualified: false,
+    activeResourceKind: desktopActiveResourceKind(profile.profileId, activeSources)
+  });
+  const writingTaskIntent =
+    profile.profileId === "writing"
+      ? (facts.value.writingTaskIntent ?? createWritingTaskIntent({ currentRequest: facts.value.userRequest }))
+      : null;
+  const approvalProjection =
+    runtimeFacts.writeCapability === "none"
+      ? { version: "not_applicable", checksum: "not_applicable" }
+      : {
+          version: runtimeFacts.approvalRuleSetVersion,
+          checksum: runtimeFacts.approvalRuleSetChecksum
+        };
+  const providerSemanticVersionSet = createProviderSemanticVersionSetV1({
+    writingTaskIntentSchemaVersion: writingTaskIntent === null ? "not_applicable" : "1.0",
+    writingGenerationGuidanceVersion: "not_applicable",
+    approvalRuleSetVersion: approvalProjection.version,
+    approvalRuleSetChecksum: approvalProjection.checksum
+  });
+  const guidance = materializeAgentSystemPromptV3({
+    profile,
+    runtimeFacts,
+    writingTaskIntent,
+    writingGenerationGuidanceVersion: "not_applicable",
+    providerSemanticVersionSet
+  });
+  const catalogRevision = computeCatalogV2RevisionForDescriptors(providerDescriptors);
+  const conversation =
+    defaults.value.defaults.conversationSummary === "allow"
+      ? await input.conversationSession.loadContext({
+          ...(startCommand.scope === undefined ? {} : { scope: startCommand.scope }),
+          ...(startCommand.projectId === undefined ? {} : { projectId: startCommand.projectId }),
+          conversationId: startCommand.conversationId
+        })
+      : ok([]);
+  if (!conversation.ok) return conversation;
+  const packedContext = repackDesktopPreviewContext(
+    facts.value.packedContext,
+    profile,
+    activeSources,
+    excludedSources,
+    facts.value.model.profileId
+  );
+  if (!packedContext.ok) return packedContext;
+  const canonical = materializeCanonicalAgentRound({
+    roundId: `round_${input.binding.reservedRunId}_0`,
+    runId: input.binding.reservedRunId,
+    roundNumber: 0,
+    profile,
+    systemPrompt: guidance.materializedGuidance,
+    toolCatalogRevision: catalogRevision,
+    userRequest: facts.value.userRequest,
+    contextSources: activeSources,
+    conversationSummaryMessages: conversation.value,
+    ...(packedContext.value === undefined ? {} : { packedContext: packedContext.value }),
+    projectedToolDescriptors: projectedTools,
+    sharing: {
+      defaultsRevision: defaults.value.defaultsRevision,
+      runGrantRevision: grant.value.grantRevision
+    },
+    providerSemanticVersionSet: guidance.normalizedInput.providerSemanticVersionSet
+  });
+  const resolvedProfile = await input.options.resolveModelProfile?.(
+    facts.value.model.profileId,
+    facts.value.model.modelName
+  );
+  const parameters: JsonObject = {};
+  const resolvedParameters = resolvedProfile?.parameters;
+  if (resolvedParameters?.temperature !== undefined) {
+    parameters.temperature = resolvedParameters.temperature;
+  }
+  if (resolvedParameters?.maxTokens !== undefined) {
+    parameters.maxTokens = resolvedParameters.maxTokens;
+  }
+  if (resolvedParameters?.topP !== undefined) parameters.topP = resolvedParameters.topP;
+  if (resolvedParameters?.reasoningEffort !== undefined) {
+    parameters.reasoningEffort = resolvedParameters.reasoningEffort;
+  }
+  if (facts.value.requestedReasoningEffort !== undefined) {
+    parameters.reasoningEffort = facts.value.requestedReasoningEffort;
+  }
+  const semanticPayload = desktopSemanticPayload(canonical, projectedTools, parameters);
+  const payloadChecksum = canonicalAgentFirstRoundSemanticPayloadChecksumV2(semanticPayload);
+  const manifest = canonical.canonicalRoundManifest;
+  const target = desktopPreviewTarget(facts.value, resolvedProfile?.modelProfile);
+  const validationFacts: AgentSendPreviewValidationFactsV2 = {
+    schemaVersion: "2.0",
+    scopeBindingChecksum: sha256(agentContextScopeKey(facts.value.scope ?? profile.scope)),
+    runDraftId: startCommand.runDraftId,
+    runDraftRevision: startCommand.runDraftRevision,
+    runDraftChecksum: startCommand.runDraftChecksum,
+    requestRevision: String(startCommand.runDraftRevision),
+    requestChecksum: sha256(facts.value.userRequest),
+    target,
+    sourceBindings: manifest.sourceRefs.map((source) => ({
+      sourceRef: source.refId,
+      sourceRevision: source.sourceRevision,
+      sourceChecksum: source.sourceChecksum
+    })),
+    sharingDefaultsRevision: defaults.value.defaultsRevision,
+    sharingGrantRevision: grant.value.grantRevision,
+    sharingGrantChecksum: sha256(stableDesktopJson(grant.value)),
+    taskIntentChecksum:
+      writingTaskIntent === null ? sha256("not_applicable") : writingTaskIntentChecksum(writingTaskIntent),
+    capabilityRevision: String(input.effectiveCapabilityState.revision),
+    capabilityChecksum: sha256(
+      stableDesktopJson({
+        capabilityState: input.effectiveCapabilityState,
+        workspacePolicyRevision: input.options.workspacePolicyRevision ?? "not_applicable"
+      })
+    ),
+    toolProjectionRevision: manifest.tools.catalogRevision,
+    toolProjectionChecksum: manifest.tools.projectionChecksum,
+    providerSemanticVersionSetChecksum: manifest.providerSemanticVersionSetChecksum,
+    canonicalRoundManifestChecksum: manifest.manifestChecksum,
+    canonicalPayloadChecksum: payloadChecksum
+  };
+  const displaySources = desktopPreviewSources(manifest, canonical.prompt.contextSources, explicitRefs);
+  const material: AgentSendPreviewPreparedMaterialV2 = {
+    semanticPayload,
+    canonicalRoundManifestJson: serializeCanonicalRoundManifestV2(manifest),
+    validationFacts,
+    display: {
+      schemaVersion: "2.0",
+      target: {
+        providerLabel: resolvedProfile?.modelProfile.provider ?? facts.value.model.provider,
+        modelLabel: resolvedProfile?.modelProfile.displayName ?? facts.value.model.modelName,
+        connectionLabel: resolvedProfile?.modelProfile.displayName ?? facts.value.model.profileId,
+        adapterPolicyLabel: target.adapterPolicyRevision
+      },
+      guidance: {
+        version: "3.0",
+        profileId: profile.profileId,
+        runtimeFacts: desktopProviderRuntimeFactsJson(runtimeFacts)
+      },
+      sources: displaySources,
+      retainedLocalProvenanceKinds: [
+        "workspace_identity",
+        "canonical_root_identity",
+        "provider_account_identity"
+      ],
+      providerNativeSemanticChecksum: null
+    }
+  };
+  return ok({
+    material,
+    preparedState: { defaults: defaults.value, grant: grant.value, canonicalManifest: manifest }
+  });
 }
 
 async function resolveDesktopUsageBudget(

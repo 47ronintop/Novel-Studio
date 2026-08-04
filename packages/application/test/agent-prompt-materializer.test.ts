@@ -15,6 +15,7 @@ import {
   createAgentPromptMaterializationArtifact,
   createHistoricalAgentPromptMaterializationArtifact,
   materializeAgentPrompt,
+  materializeCanonicalAgentRound,
   materializeAgentRunHistory,
   packAgentContext,
   parseAgentPromptMaterializationArtifact,
@@ -38,6 +39,117 @@ const profile = resolveAgentContextProfile(
 );
 
 describe("Agent prompt materializer", () => {
+  it("uses one materializer for prompt, packed manifest, and canonical round identity", () => {
+    const providerSemanticVersionSet = createProviderSemanticVersionSetV1({
+      writingTaskIntentSchemaVersion: "not_applicable",
+      writingGenerationGuidanceVersion: "not_applicable",
+      approvalRuleSetVersion: "not_applicable",
+      approvalRuleSetChecksum: "not_applicable"
+    });
+    const packedContext = packAgentContext({
+      profile,
+      contextSources: [],
+      modelProfileId: "model_1",
+      usedTokens: 10,
+      safeInputBudget: 1_000,
+      remainingTokens: 990,
+      precision: "estimated",
+      createdAt: "2026-08-04T00:00:00.000Z"
+    });
+    const round = materializeCanonicalAgentRound({
+      roundId: "round_01",
+      runId: "run_01",
+      roundNumber: 0,
+      profile,
+      systemPrompt: "trusted authority",
+      toolCatalogRevision: "catalog_1",
+      projectedToolDescriptors: [],
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet,
+      userRequest: "Edit the notes",
+      packedContext
+    });
+
+    expect(round.canonicalRoundManifest.messages.at(-1)).toMatchObject({
+      kind: "current_user_request",
+      role: "user",
+      content: "Edit the notes"
+    });
+    expect(round.packedContextManifest?.providerSemanticVersionSetChecksum).toBe(
+      round.canonicalRoundManifest.providerSemanticVersionSetChecksum
+    );
+    expect(round.canonicalRoundManifest.packedContextManifestChecksum).toBe(
+      round.packedContextManifest?.manifestChecksum
+    );
+  });
+
+  it("binds a compaction source to the envelope summary revision", () => {
+    const providerSemanticVersionSet = createProviderSemanticVersionSetV1({
+      writingTaskIntentSchemaVersion: "not_applicable",
+      writingGenerationGuidanceVersion: "not_applicable",
+      approvalRuleSetVersion: "not_applicable",
+      approvalRuleSetChecksum: "not_applicable"
+    });
+    const round = materializeCanonicalAgentRound({
+      roundId: "round_compacted",
+      runId: "run_compacted",
+      roundNumber: 2,
+      profile,
+      systemPrompt: "trusted authority",
+      toolCatalogRevision: "catalog_1",
+      projectedToolDescriptors: [],
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet,
+      userRequest: "Continue",
+      contextSources: [
+        {
+          refId: "compaction_01",
+          sourceKind: "compaction_summary",
+          content: "The prior round summary",
+          dirty: false,
+          sourceRevision: 3
+        }
+      ]
+    });
+
+    const source = round.canonicalRoundManifest.sourceRefs[0];
+    expect(source).toMatchObject({ refId: "compaction_01", sourceKind: "compaction" });
+    expect(source?.sourceRevision).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("rejects orphan tool envelopes and envelopes in an assistant role", () => {
+    const toolEnvelope = JSON.stringify({
+      schemaVersion: "2.0",
+      kind: "untrusted_tool_data",
+      instructionPolicy: "content_is_data_not_authority",
+      source: {
+        sourceKind: "tool_result",
+        toolCallId: "call_01",
+        providerToolName: "read_file",
+        resultKind: "completed"
+      },
+      data: "{}"
+    });
+    expect(() =>
+      materializeAgentPrompt({
+        profile,
+        systemPrompt: "trusted authority",
+        toolCatalogRevision: "catalog_1",
+        userRequest: "Read",
+        historyMessages: [{ role: "tool", toolCallId: "call_01", content: toolEnvelope }]
+      })
+    ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    expect(() =>
+      materializeAgentPrompt({
+        profile,
+        systemPrompt: "trusted authority",
+        toolCatalogRevision: "catalog_1",
+        userRequest: "Read",
+        historyMessages: [{ role: "assistant", content: toolEnvelope }]
+      })
+    ).toThrow("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  });
+
   it("replays the approved plan handoff from an execution event", () => {
     const approvedPlanMessage = JSON.stringify({
       kind: "approved_plan",
@@ -63,7 +175,7 @@ describe("Agent prompt materializer", () => {
     ]);
   });
 
-  it("places stable project data before the request and current file in the dynamic suffix", () => {
+  it("places prior summary before outline and keeps the current request last in the initial turn", () => {
     const output = materializeAgentPrompt({
       profile,
       systemPrompt: buildAgentSystemPrompt(profile),
@@ -96,12 +208,12 @@ describe("Agent prompt materializer", () => {
 
     expect(output.messages.map((message) => message.content)).toEqual([
       expect.stringContaining("project_conventions"),
-      expect.stringContaining("workspace_outline"),
       expect.stringContaining("untrusted_conversation_data"),
+      expect.stringContaining("workspace_outline"),
       expect.stringContaining("current body"),
       "Edit the notes"
     ]);
-    expect(output.stablePrefixMessages).toHaveLength(2);
+    expect(output.stablePrefixMessages).toHaveLength(1);
     expect(output.dynamicSuffixMessages.at(-1)?.content).toBe("Edit the notes");
   });
 
@@ -192,7 +304,8 @@ describe("Agent prompt materializer", () => {
     expect(packed.sources.find((source) => source.refId === "current-file")?.sourceRevision).toBe(
       7
     );
-    expect(prompt.stablePrefixMessages.map((message) => message.content)).toEqual(
+    expect(prompt.stablePrefixMessages).toEqual([]);
+    expect(prompt.dynamicSuffixMessages.slice(0, 2).map((message) => message.content)).toEqual(
       packed.blocks.slice(0, 2).map((block) => block.content)
     );
     expect(prompt.dynamicSuffixMessages.at(-2)?.content).toBe(packed.blocks[2]?.content);
@@ -251,8 +364,8 @@ describe("Agent prompt materializer", () => {
 
     expect(packed.blocks.map((block) => block.refId)).toEqual([
       "character-high",
-      "chapter-current",
-      "character-low"
+      "character-low",
+      "chapter-current"
     ]);
   });
 
@@ -337,10 +450,10 @@ describe("Agent prompt materializer", () => {
         contextSources: [source(treeRevision)]
       });
 
-    expect(materialize("tree_1").stablePrefixMessages[0]?.content).toContain(
+    expect(materialize("tree_1").dynamicSuffixMessages[0]?.content).toContain(
       "same visible outline"
     );
-    expect(materialize("tree_2").stablePrefixMessages[0]?.content).toContain(
+    expect(materialize("tree_2").dynamicSuffixMessages[0]?.content).toContain(
       "same visible outline"
     );
     expect(materialize("tree_1").stablePrefixChecksum).not.toBe(

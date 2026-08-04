@@ -10,6 +10,11 @@ import {
   createCompactionSummaryArtifact,
   buildCompactionSummaryPrompt,
   buildAgentSystemPrompt,
+  createAgentPromptMaterializationArtifact,
+  createProviderVisibleAgentRuntimeFacts,
+  deriveAgentPromptCacheIdentityChecksumV2,
+  materializeAgentSystemPromptV3,
+  packAgentContext,
   createHistoricalAgentPromptMaterializationArtifact,
   checksumProjectContext,
   contextSourceMaterializationArtifactId,
@@ -21,8 +26,15 @@ import {
 import type { AgentContextBudgetInputsPort, AgentRunDraftSession } from "@novel-studio/application";
 import {
   createAgentContextSnapshot,
+  createAgentContextSnapshotV2,
+  createAgentRunCoordinator,
+  createAgentRunToolCatalogSnapshotV2,
   createAgentRunToolCatalogSnapshot,
   buildCompactionInputManifest,
+  createDefaultCapabilitySnapshot,
+  createEffectiveCapabilityState,
+  createPackedAgentContextManifestV2,
+  createProviderSemanticVersionSetV1,
   createDeterministicTokenEstimator,
   type AgentContextSourceInput
 } from "@novel-studio/agent-engine";
@@ -111,6 +123,70 @@ describe("desktop compaction composer", () => {
     if (!usage.ok) return;
     expect(usage.value?.["terminationReason"]).toBe("context_compaction");
     expect(usage.value?.["compactionAfterTokens"]).toBe(4335);
+  });
+
+  test("compacts a protocol-2 snapshot through canonical materialization and V2 cache identity", async () => {
+    const { repository } = await seedV2Run();
+    const compactionSources = createDesktopCompactionSources({
+      repository,
+      now: () => "2026-08-04T00:00:00.000Z"
+    });
+    const command = {
+      projectId: "project_01",
+      runId: "run_01",
+      commandId: "cmd_v2_compact",
+      expectedRunRevision: 1,
+      contextBudgetSnapshotId: "budget_target_v2",
+      trigger: "manual" as const
+    };
+    const loaded = await compactionSources.loadInputs(command);
+    if (!loaded.ok) throw new Error(`V2 input failed: ${loaded.error.code}`);
+    const manifest = buildCompactionInputManifest({
+      compactionId: "compaction_v2",
+      runId: "run_01",
+      sourceSnapshotId: loaded.value.sourceSnapshotId,
+      throughSequence: loaded.value.throughSequence,
+      protectedFacts: loaded.value.protectedFacts,
+      evictableSources: loaded.value.evictableSources,
+      createdAt: "2026-08-04T00:00:00.000Z"
+    });
+    if (!manifest.ok) throw new Error(`V2 manifest failed: ${manifest.error.code}`);
+    const result = await compactionSources.buildArtifacts({
+      command,
+      manifest: manifest.value,
+      strategy: "deterministic",
+      evictedSourceIds: ["file:draft-notes.md"],
+      targetTokens: loaded.value.targetTokens,
+      inputTokens: 0,
+      outputTokens: 0,
+      precision: "estimated",
+      summaryChecksum: ""
+    });
+    if (!result.ok) throw new Error(`V2 compaction failed: ${result.error.code}`);
+
+    const compacted = result.value.resultSnapshot;
+    expect(compacted["schemaVersion"]).toBe("2.0");
+    expect(compacted["roundId"]).toBe("round_run_01_0");
+    expect(compacted["sharing"]).toEqual({
+      defaultsRevision: "defaults_v2",
+      runGrantRevision: "grant_v2"
+    });
+    expect(compacted["packedContextManifest"]).toMatchObject({ schemaVersion: "2.0" });
+
+    const packed = compacted["packedContextManifest"] as JsonObject;
+    const prompt = result.value.promptMaterialization;
+    expect(prompt).toMatchObject({ schemaVersion: "2.0" });
+    if (prompt === undefined) return;
+    expect(prompt["packedContextManifestChecksum"]).toBe(packed["manifestChecksum"]);
+
+    const run = result.value.runSnapshot;
+    expect(run["schemaVersion"]).toBe("2.0");
+    expect(run["promptCacheIdentityChecksum"]).toBe(
+      deriveAgentPromptCacheIdentityChecksumV2(
+        String(run["promptCacheIdentityBaseChecksum"]),
+        String(run["cachePrefixChecksum"])
+      )
+    );
   });
 
   test("protects conventions and evicts workspace outlines to a manifest pointer", async () => {
@@ -709,8 +785,8 @@ async function seedRun(
     runId: "run_01",
     scope,
     conversationId: "conv_01",
-    operationMode: "planning",
-    contextMode: "writing",
+    operationMode: "execution",
+    contextMode: "general_file",
     writePolicy: "write_before_confirmation",
     userRequest: "Review the chapter",
     status: "planning_model",
@@ -764,6 +840,220 @@ async function seedRun(
     await appendAssistantHistory(repository, options.historyTokens ?? 0, scope);
   }
   return { repository, usageRepository, projectRoot };
+}
+
+async function seedV2Run(): Promise<{
+  repository: AgentRunFileRepository;
+  usageRepository: AgentUsageFileRepository;
+  projectRoot: string;
+}> {
+  const seeded = await seedRun({ chapterTokens: 4_000, noteTokens: 20_000 });
+  await rm(
+    join(
+      seeded.projectRoot,
+      "history",
+      "agent-runs",
+      "run_01",
+      "tool-catalogs",
+      "tool_catalog_run_01.json"
+    ),
+    { force: true }
+  );
+  await rm(join(seeded.projectRoot, "history", "agent-runs", "run_01", "run.json"), {
+    force: true
+  });
+  const scope = {
+    kind: "workspace" as const,
+    workspaceKind: "creativeProject" as const,
+    workspaceId: "project_01"
+  };
+  const profile = resolveAgentContextProfile(scope, "execution", "general_file");
+  const contextSources: AgentContextSourceInput[] = [
+    {
+      refId: "chapter:ch-01",
+      sourceKind: "disk_file",
+      relativePath: "chapters/ch-01.md",
+      content: "c".repeat(4_000),
+      dirty: false,
+      sourceRevision: 1
+    },
+    {
+      refId: "file:draft-notes.md",
+      sourceKind: "disk_file",
+      relativePath: "draft-notes.md",
+      content: "n".repeat(20_000),
+      dirty: false,
+      sourceRevision: 1
+    }
+  ];
+  const capability = {
+    ...createDefaultCapabilitySnapshot("creativeProject"),
+    writingOperations: [],
+    workspaceFileOperations: []
+  } as const;
+  const runtimeFacts = createProviderVisibleAgentRuntimeFacts({
+    profile,
+    toolDescriptors: [],
+    effectiveCapabilityState: createEffectiveCapabilityState(capability),
+    executionWritePolicy: "write_before_confirmation",
+    activeResourceKind: "project_file"
+  });
+  const guidance = materializeAgentSystemPromptV3({
+    profile,
+    runtimeFacts,
+    writingTaskIntent: null,
+    writingGenerationGuidanceVersion: "not_applicable",
+    providerSemanticVersionSet: createProviderSemanticVersionSetV1({
+      writingTaskIntentSchemaVersion: "not_applicable",
+      writingGenerationGuidanceVersion: "not_applicable",
+      approvalRuleSetVersion: runtimeFacts.approvalRuleSetVersion,
+      approvalRuleSetChecksum: runtimeFacts.approvalRuleSetChecksum
+    })
+  });
+  const providerSemanticVersionSet = guidance.normalizedInput.providerSemanticVersionSet;
+  const catalog = createAgentRunToolCatalogSnapshotV2({
+    runId: "run_01",
+    descriptors: [],
+    createdAt: "2026-08-04T00:00:00.000Z"
+  });
+  const packed = packAgentContext({
+    profile,
+    contextSources,
+    modelProfileId: "profile_01",
+    usedTokens: 24_000,
+    safeInputBudget: 32_000,
+    remainingTokens: 8_000,
+    precision: "estimated",
+    createdAt: "2026-08-04T00:00:00.000Z"
+  });
+  const sharing = { defaultsRevision: "defaults_v2", runGrantRevision: "grant_v2" } as const;
+  const packedManifest = createPackedAgentContextManifestV2(packed, {
+    roundId: "round_run_01_0",
+    sharing,
+    providerSemanticVersionSet
+  });
+  const prompt = createAgentPromptMaterializationArtifact({
+    runId: "run_01",
+    contextSnapshotId: "context_run_01",
+    profile,
+    systemPrompt: guidance.materializedGuidance,
+    toolCatalogRevision: catalog.catalogRevision,
+    userRequest: "Review the chapter",
+    contextSources,
+    packedContextManifestChecksum: packedManifest.manifestChecksum,
+    guidanceMaterialization: guidance
+  });
+  const guidanceSource: AgentContextSourceInput = {
+    refId: prompt.systemGuidanceRefId,
+    sourceKind: "system_guidance",
+    content: guidance.materializedGuidance,
+    dirty: false
+  };
+  const baseSnapshot = createAgentContextSnapshotV2({
+    contextSnapshotId: "context_run_01",
+    runId: "run_01",
+    scope,
+    contextProfileId: profile.profileId,
+    materialization: {
+      schemaVersion: "2.0",
+      profileVersion: profile.profileVersion,
+      guidanceTemplateChecksum: prompt.guidanceTemplateChecksum,
+      stablePrefixChecksum: prompt.stablePrefixChecksum,
+      messageOrderVersion: "2.0"
+    },
+    createdAt: "2026-08-04T00:00:00.000Z",
+    sources: [guidanceSource, ...contextSources],
+    materializationArtifactId: prompt.artifactId,
+    roundId: "round_run_01_0",
+    sharing,
+    providerSemanticVersionSet,
+    packedContextManifest: packedManifest
+  });
+  const changedSources = baseSnapshot.sources.map((source) =>
+    source.refId === "chapter:ch-01"
+      ? {
+          ...source,
+          layer: "explicit_ref" as const,
+          tokenCount: 4_000,
+          precision: "estimated" as const
+        }
+      : source.refId === "file:draft-notes.md"
+        ? {
+            ...source,
+            layer: "tool_result" as const,
+            tokenCount: 20_000,
+            precision: "estimated" as const
+          }
+        : source
+  );
+  const { snapshotChecksum: _baseChecksum, ...snapshotUnsigned } = baseSnapshot;
+  void _baseChecksum;
+  const snapshot = {
+    ...snapshotUnsigned,
+    sources: changedSources,
+    snapshotChecksum: checksumText(stableJson({ ...snapshotUnsigned, sources: changedSources }))
+  };
+  const identityBaseChecksum = "f".repeat(64);
+  const coordinator = createAgentRunCoordinator({
+    now: () => "2026-08-04T00:00:00.000Z",
+    createRunId: () => "run_01"
+  });
+  const started = coordinator.startRun({
+    projectId: "project_01",
+    conversationId: "conv_v2",
+    commandId: "start_v2",
+    expectedRunRevision: 0,
+    operationMode: "execution",
+    contextMode: "general_file",
+    writePolicy: "write_before_confirmation",
+    userRequest: "Review the chapter",
+    providerCapabilitySnapshot: {
+      profileId: "profile_01",
+      provider: "demo",
+      modelName: "demo-model",
+      streaming: true,
+      toolCalling: true,
+      structuredArguments: true,
+      contextWindow: 40_000,
+      requiredContextTokens: 8_000
+    },
+    toolFacadeVersion: "v2",
+    toolCatalogRevision: catalog.catalogRevision,
+    contextProfileId: profile.profileId,
+    profileVersion: profile.profileVersion,
+    guidanceTemplateChecksum: prompt.guidanceTemplateChecksum,
+    cachePrefixChecksum: prompt.stablePrefixChecksum,
+    promptCacheIdentityBaseChecksum: identityBaseChecksum,
+    promptCacheIdentityChecksum: deriveAgentPromptCacheIdentityChecksumV2(
+      identityBaseChecksum,
+      prompt.stablePrefixChecksum
+    ),
+    runV20: {
+      schemaVersion: "2.0" as const,
+      providerSemanticVersionSetChecksum: guidance.proof.providerSemanticVersionSetChecksum,
+      authorityRegistryKey: guidance.proof.registryKey,
+      materializedGuidanceChecksum: guidance.proof.materializedGuidanceChecksum,
+      toolCatalogChecksum: catalog.catalogRevision,
+      effectiveCapabilityRevision: 1,
+      executionWritePolicyDraft: "write_before_confirmation"
+    }
+  });
+  if (!started.ok) throw new Error(`V2 seed failed: ${started.error.code}`);
+  const run = { ...started.value, contextSnapshotId: "context_run_01" } as unknown as JsonObject;
+  const catalogWritten = await seeded.repository.writeToolCatalog(
+    "run_01",
+    catalog as unknown as JsonObject
+  );
+  if (!catalogWritten.ok) throw new Error(`catalog write failed: ${catalogWritten.error.code}`);
+  expect(
+    await seeded.repository.writePromptMaterialization("run_01", prompt as unknown as JsonObject)
+  ).toMatchObject({ ok: true });
+  expect(
+    await seeded.repository.writeContextSnapshot(snapshot as unknown as JsonObject)
+  ).toMatchObject({ ok: true });
+  const runWritten = await seeded.repository.writeSnapshotV20(run as never);
+  if (!runWritten.ok) throw new Error(`run write failed: ${runWritten.error.code}`);
+  return seeded;
 }
 
 async function seedC3OutlineRun(): Promise<{
@@ -1015,4 +1305,14 @@ function stubBudgetInputs(): AgentContextBudgetInputsPort {
 
 function checksumText(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, child]) => child !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
+    .join(",")}}`;
 }

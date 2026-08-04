@@ -106,6 +106,26 @@ describe("AgentContextMenu", () => {
     expect(preview?.textContent).not.toContain("system");
   });
 
+  test("renders the exact Main-owned first-round target, guidance, tools, and sources", () => {
+    const { host } = render(createControl({ sendPreview: exactSendPreview() }));
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label^="上下文"]')?.click());
+    act(() => document.querySelector<HTMLButtonElement>('[data-context-tab="preview"]')?.click());
+
+    const preview = document.querySelector('[aria-label="实际发送预览"]');
+    expect(preview?.textContent).toContain("OpenAI");
+    expect(preview?.textContent).toContain("GPT Test");
+    expect(preview?.textContent).toContain("Writing account");
+    expect(preview?.textContent).toContain("System Guidance 3.0");
+    expect(preview?.textContent).toContain("SYSTEM AUTHORITY BODY");
+    expect(preview?.textContent).toContain("list_chapters");
+    expect(preview?.textContent).toContain("additionalProperties");
+    expect(preview?.textContent).toContain("PROJECT CONVENTIONS BODY");
+    expect(preview?.textContent).toContain("未保存");
+    expect(preview?.textContent).toContain("已截断");
+    expect(preview?.textContent).toContain("Provider 账户身份");
+    expect(preview?.textContent).not.toContain("城门在日落后关闭");
+  });
+
   test("labels an automatically resolved source instead of hiding its preference scope", () => {
     const { host } = render(createControl({ sourcePreferenceScope: "automatic" }));
     act(() => host.querySelector<HTMLButtonElement>('[aria-label^="上下文"]')?.click());
@@ -127,6 +147,7 @@ interface ControlOverrides {
   };
   readonly previewBlocks?: AgentComposerContextStatusControl["previewBlocks"];
   readonly previewUnavailableReason?: string;
+  readonly sendPreview?: AgentComposerContextStatusControl["sendPreview"];
 }
 
 function createControl(overrides: ControlOverrides = {}): AgentComposerContextStatusControl {
@@ -186,7 +207,54 @@ function createControl(overrides: ControlOverrides = {}): AgentComposerContextSt
     ],
     ...(overrides.previewUnavailableReason === undefined
       ? {}
-      : { previewUnavailableReason: overrides.previewUnavailableReason })
+      : { previewUnavailableReason: overrides.previewUnavailableReason }),
+    ...(overrides.sendPreview === undefined ? {} : { sendPreview: overrides.sendPreview })
+  };
+}
+
+function exactSendPreview(): NonNullable<AgentComposerContextStatusControl["sendPreview"]> {
+  return {
+    schemaVersion: "2.0",
+    previewId: "preview_01",
+    createdAt: "2026-08-04T00:00:00.000Z",
+    expiresAt: "2026-08-04T00:05:00.000Z",
+    canonicalPayloadChecksum: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    target: {
+      providerLabel: "OpenAI",
+      modelLabel: "GPT Test",
+      connectionLabel: "Writing account",
+      adapterPolicyLabel: "Chat Completions"
+    },
+    guidance: {
+      version: "3.0",
+      profileId: "writing",
+      runtimeFacts: { operationMode: "planning", workspaceKind: "creativeProject" },
+      content: "SYSTEM AUTHORITY BODY"
+    },
+    tools: [
+      {
+        name: "list_chapters",
+        description: "List chapters",
+        inputSchema: { type: "object", additionalProperties: false, properties: {} }
+      }
+    ],
+    sources: [
+      {
+        sourceRef: "project:conventions",
+        label: "Project conventions",
+        kind: "project_conventions",
+        content: "PROJECT CONVENTIONS BODY",
+        tokenCount: 18,
+        tokenPrecision: "reported",
+        dirty: true,
+        truncated: true,
+        selectionState: "pinned",
+        grantSource: "run_grant"
+      }
+    ],
+    retainedLocalProvenanceKinds: ["canonical_root_identity", "provider_account_identity"],
+    providerNativeSemanticChecksum:
+      "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
   };
 }
 

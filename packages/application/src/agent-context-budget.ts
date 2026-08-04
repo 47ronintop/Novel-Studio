@@ -46,6 +46,11 @@ export interface AgentBudgetArtifactPointer {
   readonly checksum: string;
 }
 
+export interface AgentBudgetSharingIdentity {
+  readonly defaultsRevision: string;
+  readonly grantRevision: string;
+}
+
 export interface ResolveBudgetInputsInput {
   readonly provider: string;
   readonly model: string;
@@ -59,6 +64,7 @@ export interface ResolveBudgetInputsInput {
   readonly historyMessages?: readonly MaterializedAgentMessage[];
   readonly artifactPointers?: readonly AgentBudgetArtifactPointer[];
   readonly toolCatalog: AgentBudgetToolCatalogInput;
+  readonly sharing?: AgentBudgetSharingIdentity;
   readonly estimator?: AgentTokenEstimator;
 }
 
@@ -84,6 +90,7 @@ export interface ResolvedAgentContextBudgetInputs {
   readonly systemMaterializationChecksum: string;
   readonly usedMaterializationChecksum: string;
   readonly operandsChecksum: string;
+  readonly sharing?: AgentBudgetSharingIdentity;
 }
 
 export interface ResolvedContextBudgetUsageLimits {
@@ -103,6 +110,7 @@ export function readResolvedContextBudgetUsageLimits(
     readonly facadeVersion: AgentToolFacadeVersion;
     readonly schemaVersion?: "1.0" | "2.0";
     readonly catalogRevision: string;
+    readonly sharing?: AgentBudgetSharingIdentity;
   }
 ): Result<ResolvedContextBudgetUsageLimits, UnifiedError> {
   const audit = value["audit"];
@@ -117,6 +125,7 @@ export function readResolvedContextBudgetUsageLimits(
   const requiredContextTokens = value["requiredContextTokens"];
   const precision = value["precision"];
   const requestedMaxOutputTokens = isRecord(audit) ? audit["requestedMaxOutputTokens"] : undefined;
+  const persistedSharing = isRecord(audit) ? audit["sharing"] : undefined;
   if (
     value["schemaVersion"] !== "1.1" ||
     value["contextBudgetSnapshotId"] !== expected.contextBudgetSnapshotId ||
@@ -150,7 +159,8 @@ export function readResolvedContextBudgetUsageLimits(
       : catalog["schemaVersion"] !== expected.schemaVersion) ||
     catalog["catalogRevision"] !== expected.catalogRevision ||
     !isChecksum(catalog["descriptorChecksum"]) ||
-    !isTokenCount(catalog["descriptorCount"])
+    !isTokenCount(catalog["descriptorCount"]) ||
+    !sharingIdentityMatches(persistedSharing, expected.sharing)
   ) {
     return err(persistedBudgetInvalid(expected));
   }
@@ -173,7 +183,8 @@ export function readResolvedContextBudgetUsageLimits(
       descriptorCount: catalog["descriptorCount"]
     },
     systemMaterializationChecksum: audit["systemMaterializationChecksum"],
-    usedMaterializationChecksum: audit["usedMaterializationChecksum"]
+    usedMaterializationChecksum: audit["usedMaterializationChecksum"],
+    ...(expected.sharing === undefined ? {} : { sharing: expected.sharing })
   });
   if (audit["operandsChecksum"] !== checksum(stableSerialize(resolvedWithoutChecksum))) {
     return err(persistedBudgetInvalid(expected));
@@ -212,7 +223,8 @@ export function calculateResolvedContextBudget(input: {
       operandsChecksum: input.resolved.operandsChecksum,
       systemMaterializationChecksum: input.resolved.systemMaterializationChecksum,
       usedMaterializationChecksum: input.resolved.usedMaterializationChecksum,
-      toolCatalog: input.resolved.toolCatalog
+      toolCatalog: input.resolved.toolCatalog,
+      ...(input.resolved.sharing === undefined ? {} : { sharing: input.resolved.sharing })
     }
   });
 }
@@ -370,7 +382,8 @@ export function resolveBudgetInputs(
     ]),
     toolCatalog: proof,
     systemMaterializationChecksum: checksum(systemSerialized),
-    usedMaterializationChecksum: checksum(usedSerialized)
+    usedMaterializationChecksum: checksum(usedSerialized),
+    ...(input.sharing === undefined ? {} : { sharing: cloneSharingIdentity(input.sharing) })
   });
   return ok(
     deepFreeze({
@@ -397,7 +410,8 @@ function createResolvedOperands(
     precision: input.precision,
     toolCatalog: input.toolCatalog,
     systemMaterializationChecksum: input.systemMaterializationChecksum,
-    usedMaterializationChecksum: input.usedMaterializationChecksum
+    usedMaterializationChecksum: input.usedMaterializationChecksum,
+    ...(input.sharing === undefined ? {} : { sharing: input.sharing })
   };
 }
 
@@ -475,6 +489,7 @@ function validateInput(input: ResolveBudgetInputsInput): string | undefined {
     return "toolCatalog.catalogRevision";
   }
   if (!Array.isArray(input.toolCatalog.descriptors)) return "toolCatalog.descriptors";
+  if (input.sharing !== undefined && !isSharingIdentity(input.sharing)) return "sharing";
   return undefined;
 }
 
@@ -639,6 +654,34 @@ function isTokenCount(value: unknown): value is number {
 
 function isChecksum(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function isSharingIdentity(value: unknown): value is AgentBudgetSharingIdentity {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 2 &&
+    isChecksum(value["defaultsRevision"]) &&
+    isChecksum(value["grantRevision"])
+  );
+}
+
+function cloneSharingIdentity(value: AgentBudgetSharingIdentity): AgentBudgetSharingIdentity {
+  return {
+    defaultsRevision: value.defaultsRevision,
+    grantRevision: value.grantRevision
+  };
+}
+
+function sharingIdentityMatches(
+  persisted: unknown,
+  expected: AgentBudgetSharingIdentity | undefined
+): boolean {
+  if (expected === undefined) return persisted === undefined;
+  return (
+    isSharingIdentity(persisted) &&
+    persisted.defaultsRevision === expected.defaultsRevision &&
+    persisted.grantRevision === expected.grantRevision
+  );
 }
 
 function isNonEmptyString(value: unknown): value is string {

@@ -435,6 +435,64 @@ export interface AgentComposerContextPreviewBlock {
   readonly truncationRange?: AgentComposerContextTruncationRange | null;
 }
 
+export interface AgentComposerSendPreviewSource {
+  readonly sourceRef: string;
+  readonly label: string;
+  readonly kind:
+    | "disk_file"
+    | "editor_buffer"
+    | "story_bible_asset"
+    | "project_conventions"
+    | "workspace_outline"
+    | "conversation_summary"
+    | "compaction_summary"
+    | "active_resource"
+    | "explicit_reference";
+  readonly content: string;
+  readonly tokenCount: number | null;
+  readonly tokenPrecision: AgentContextPrecision;
+  readonly dirty: boolean;
+  readonly truncated: boolean;
+  readonly selectionState: "automatic" | "pinned" | "explicit" | "excluded";
+  readonly grantSource: "not_applicable" | "workspace_default" | "run_grant" | "user_explicit";
+}
+
+export interface AgentComposerSendPreview {
+  readonly schemaVersion: "2.0";
+  readonly previewId: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly canonicalPayloadChecksum: string;
+  readonly target: {
+    readonly providerLabel: string;
+    readonly modelLabel: string;
+    readonly connectionLabel: string;
+    readonly adapterPolicyLabel: string;
+  };
+  readonly guidance: {
+    readonly version: string;
+    readonly profileId: string;
+    readonly runtimeFacts: JsonObject;
+    readonly content: string;
+  };
+  readonly tools: readonly {
+    readonly name: string;
+    readonly description: string | null;
+    readonly inputSchema: JsonObject;
+  }[];
+  readonly sources: readonly AgentComposerSendPreviewSource[];
+  readonly retainedLocalProvenanceKinds: readonly (
+    | "workspace_identity"
+    | "canonical_root_identity"
+    | "absolute_path"
+    | "artifact_identity"
+    | "provider_account_identity"
+    | "transport_secret"
+    | "cache_resource_handle"
+  )[];
+  readonly providerNativeSemanticChecksum: string | null;
+}
+
 export interface AgentComposerContextSourceRow {
   readonly refId: string;
   readonly label: string;
@@ -489,6 +547,8 @@ export interface AgentComposerContextStatusControl {
   readonly previewBlocks?: readonly AgentComposerContextPreviewBlock[];
   readonly previewPayloadChecksum?: string;
   readonly previewUnavailableReason?: string;
+  /** Exact Main-owned first-round projection. The legacy block preview is not a send authority. */
+  readonly sendPreview?: AgentComposerSendPreview;
   readonly tokenStats?: AgentComposerContextTokenStats;
   readonly fixedBudgetExceeded?: boolean;
   readonly fixedBudgetMessage?: string;
@@ -521,6 +581,7 @@ export interface AgentRunPanelProps {
   readonly events: readonly AgentRunEvent[];
   /** Historical provider-bound context; unavailable/stale is explicit rather than silently empty. */
   readonly packedContextHistory?: AgentRunPackedContextHistory;
+  readonly sendLedger?: readonly AgentSendLedgerEntryDisplay[];
   readonly pendingUserInput?: AgentRunPendingUserInputProps;
   readonly pendingToolApproval?: AgentRunPendingToolApprovalProps;
   readonly diagnostic?: AgentRunErrorRecord;
@@ -538,6 +599,29 @@ export interface AgentRunPanelProps {
   readonly onRetryTarget?: (target: AgentRunRetryTarget) => void;
   readonly onRefreshContext: (decision: "refresh" | "exclude" | "cancel") => void;
   readonly onDecideToolApproval?: (decision: "approve" | "reject") => void;
+}
+
+export interface AgentSendLedgerEntryDisplay {
+  readonly entryId: string;
+  readonly roundNumber: number;
+  readonly roundKind: "first_send" | "subsequent_send";
+  readonly canonicalPayloadChecksum: string;
+  readonly canonicalRoundManifestChecksum: string;
+  readonly previewId: string | null;
+  readonly sentAtLabel: string;
+  readonly additions: readonly {
+    readonly additionId: string;
+    readonly kind:
+      | "assistant"
+      | "tool_result"
+      | "remote_result"
+      | "user_control"
+      | "jit_context"
+      | "context_refresh"
+      | "recovery";
+    readonly content: string;
+    readonly contentChecksum: string;
+  }[];
 }
 
 export interface AgentRunPendingToolApprovalProps {

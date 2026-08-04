@@ -132,6 +132,26 @@ describe("buildCompactionInputManifest", () => {
     });
   });
 
+  test("rejects duplicate protected identities and facts from a future event", () => {
+    expect(
+      buildCompactionInputManifest(manifestInput({ protectedFacts: [goalFact, { ...goalFact }] }))
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" }
+    });
+    expect(
+      buildCompactionInputManifest(
+        manifestInput({
+          throughSequence: 20,
+          protectedFacts: [{ ...goalFact, eventSequence: 21 }]
+        })
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_COMPACTION_MANIFEST_INVALID" }
+    });
+  });
+
   test("rejects an evictable source whose pointer is larger than its body", () => {
     const result = buildCompactionInputManifest(
       manifestInput({ evictableSources: [evictable({ tokenCount: 40, pointerTokenCount: 50 })] })
@@ -278,6 +298,59 @@ describe("validateCompactionResultProgress — regression guard", () => {
       prior: { throughSequence: 20, protectedFacts: priorManifest.value.protectedFacts }
     });
     expect(result).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
+  });
+
+  test("rejects protected decision classification/provenance changes even with the same checksum", () => {
+    if (!priorManifest.ok) return;
+    const reclassified = {
+      ...goalFact,
+      kind: "approval_state" as const,
+      sourceId: "approval_01"
+    };
+    expect(
+      validateCompactionResultProgress({
+        candidateThroughSequence: 25,
+        candidateProtectedFacts: [reclassified, planFact],
+        prior: { throughSequence: 20, protectedFacts: priorManifest.value.protectedFacts }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
+  });
+
+  test("rejects protected fact reorder and duplicate identities", () => {
+    if (!priorManifest.ok) return;
+    expect(
+      validateCompactionResultProgress({
+        candidateThroughSequence: 25,
+        candidateProtectedFacts: [planFact, goalFact],
+        prior: { throughSequence: 20, protectedFacts: priorManifest.value.protectedFacts }
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
+    expect(
+      validateCompactionResultProgress({
+        candidateThroughSequence: 25,
+        candidateProtectedFacts: [goalFact, { ...goalFact }]
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
+  });
+
+  test("rejects invalid candidate identity and plan data on a non-plan fact", () => {
+    expect(
+      validateCompactionResultProgress({
+        candidateThroughSequence: 25,
+        candidateProtectedFacts: [{ ...goalFact, factId: "" }]
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
+    expect(
+      validateCompactionResultProgress({
+        candidateThroughSequence: 25,
+        candidateProtectedFacts: [
+          {
+            ...goalFact,
+            planExecution: planExecutionFact().planExecution
+          } as ProtectedContextFact
+        ]
+      })
+    ).toMatchObject({ ok: false, error: { code: "AGENT_COMPACTION_REGRESSED" } });
   });
 
   test("accepts any candidate when there is no prior compaction", () => {

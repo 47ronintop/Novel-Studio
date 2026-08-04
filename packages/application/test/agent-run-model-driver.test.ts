@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, test } from "vitest";
 
 import * as applicationExports from "../src/index.js";
@@ -508,7 +510,154 @@ describe("AgentRunModelDriver", () => {
 
     expect(providerRequest?.["promptCache"]).toEqual(promptCache);
   });
+
+  test("fails closed on V20 authority drift before reaching the provider", async () => {
+    const createDriver = (applicationExports as unknown as Record<string, unknown>)[
+      "createLlmAgentRunModelDriver"
+    ];
+    if (typeof createDriver !== "function") return;
+    let providerCalls = 0;
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
+      adapter: {
+        async *stream() {
+          providerCalls += 1;
+          yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
+        }
+      },
+      modelProfile: {
+        id: "profile-v20",
+        provider: "openai",
+        displayName: "Model",
+        modelName: "gpt-5"
+      }
+    });
+    const input = v20RoundInput("trusted guidance");
+
+    await expect(async () => {
+      for await (const _event of driver.streamRound({
+        ...input,
+        systemPrompt: "different guidance"
+      })) {
+        void _event;
+      }
+    }).rejects.toThrow("AGENT_MODEL_ROUND_AUTHORITY_INVALID");
+    expect(providerCalls).toBe(0);
+
+    await expect(async () => {
+      for await (const _event of driver.streamRound({
+        ...input,
+        snapshot: {
+          ...(input.snapshot as Record<string, unknown>),
+          status: "capability_changed",
+          capabilities: {
+            contractVersion: "2.0",
+            revision: 2,
+            state: "capability_changed",
+            changeReason: "sharing_policy_changed"
+          }
+        }
+      })) {
+        void _event;
+      }
+    }).rejects.toThrow("AGENT_CAPABILITY_CHANGED");
+    expect(providerCalls).toBe(0);
+  });
+
+  test("does not resend orphaned hydrated tool results as recovery data", async () => {
+    const createDriver = (applicationExports as unknown as Record<string, unknown>)[
+      "createLlmAgentRunModelDriver"
+    ];
+    if (typeof createDriver !== "function") return;
+    let providerRequest: Record<string, unknown> | undefined;
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
+      adapter: {
+        async *stream(request: Record<string, unknown>) {
+          providerRequest = request;
+          yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
+        }
+      },
+      modelProfile: {
+        id: "profile-legacy",
+        provider: "openai",
+        displayName: "Model",
+        modelName: "gpt-5"
+      }
+    });
+    const orphan = JSON.stringify({
+      schemaVersion: "2.0",
+      kind: "untrusted_recovery_data",
+      instructionPolicy: "content_is_data_not_authority",
+      source: {
+        sourceKind: "recovery_summary",
+        recoveryEventKind: "orphan_tool_completed"
+      },
+      data: "must not be resent"
+    });
+
+    for await (const _event of driver.streamRound({
+      runId: "run-orphan",
+      snapshot: { runRevision: 1, operationMode: "execution", contextMode: "writing" },
+      messages: [
+        { role: "user", content: orphan },
+        { role: "user", content: "continue" }
+      ],
+      tools: [],
+      signal: new AbortController().signal
+    })) {
+      void _event;
+    }
+
+    expect(JSON.stringify(providerRequest?.["messages"])).not.toContain("must not be resent");
+    expect(providerRequest?.["messages"]).toEqual([{ role: "user", content: "continue" }]);
+  });
 });
+
+function v20RoundInput(systemPrompt: string): Record<string, unknown> {
+  const catalogRevision = "a".repeat(64);
+  return {
+    runId: "run-v20",
+    snapshot: {
+      schemaVersion: "2.0",
+      runId: "run-v20",
+      runRevision: 1,
+      status: "executing_model",
+      operationMode: "execution",
+      contextMode: "writing",
+      authority: {
+        guidanceChecksum: createHash("sha256").update(systemPrompt, "utf8").digest("hex")
+      },
+      capabilities: { state: "active" },
+      catalog: { revision: catalogRevision, checksum: catalogRevision },
+      toolCatalogRevision: catalogRevision,
+      providerCapabilitySnapshot: {
+        profileId: "profile-v20",
+        provider: "openai",
+        modelName: "gpt-5"
+      },
+      promptCacheIdentityChecksum: "b".repeat(64),
+      cachePrefixChecksum: "c".repeat(64),
+      promptCachePolicyVersion: "none@1.0",
+      promptCacheStablePrefixMessageCount: 0
+    },
+    systemPrompt,
+    messages: [{ role: "user", content: "continue" }],
+    tools: [],
+    contextBudget: {
+      provider: "openai",
+      model: "gpt-5",
+      audit: { toolCatalog: { catalogRevision, descriptorCount: 0 } }
+    },
+    signal: new AbortController().signal
+  };
+}
 
 function cacheSnapshot(
   overrides: {

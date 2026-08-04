@@ -1,19 +1,27 @@
 import { createHash } from "node:crypto";
 
 import {
+  agentControlEventMessageMappingV20,
   aggregateContextPrecision,
+  createCanonicalRoundManifestV2,
   createDeterministicTokenEstimator,
   createPackedAgentContext,
   createPackedAgentContextManifest,
+  createPackedAgentContextManifestV2,
   parseProviderSemanticVersionSetV1,
   validatePackedAgentContext,
   validateAgentContextSourceMaterialization,
   type AgentContextPreferenceScope,
   type AgentContextPrecision,
   type AgentRunEvent,
+  type AgentControlEventTypeV20,
   type AgentContextSourceInput,
   type AgentTokenEstimator,
+  type CanonicalRoundManifestV2,
+  type CanonicalRoundMessageKindV2,
+  type CreateCanonicalRoundMessageV2Input,
   type PackedAgentContext,
+  type PackedAgentContextManifestV20,
   type PackedAgentContextSourceManifest,
   type ProviderSemanticVersionSetV1
 } from "@novel-studio/agent-engine";
@@ -45,6 +53,8 @@ import { parseWritingTaskIntent, type WritingTaskIntent } from "./writing-task-i
 import { createAgentContextSourceMaterializationArtifact } from "./workspace-project-context.js";
 import {
   createProviderVisibleUntrustedEnvelope,
+  isProviderVisibleEnvelopeAllowedInRole,
+  parseProviderVisibleUntrustedEnvelope,
   providerVisibleSummaryRevision,
   serializeProviderVisibleUntrustedEnvelope,
   type ProviderVisibleProjectSourceKind
@@ -143,6 +153,24 @@ export interface MaterializeAgentPromptInput {
   readonly packedContext?: PackedAgentContext;
 }
 
+export interface MaterializeCanonicalAgentRoundInput extends MaterializeAgentPromptInput {
+  readonly roundId: string;
+  readonly runId: string;
+  readonly roundNumber: number;
+  readonly projectedToolDescriptors: readonly JsonObject[];
+  readonly sharing: {
+    readonly defaultsRevision: string;
+    readonly runGrantRevision: string;
+  };
+  readonly providerSemanticVersionSet: ProviderSemanticVersionSetV1;
+}
+
+export interface MaterializedCanonicalAgentRound {
+  readonly prompt: AgentPromptMaterialization;
+  readonly packedContextManifest: PackedAgentContextManifestV20 | null;
+  readonly canonicalRoundManifest: CanonicalRoundManifestV2;
+}
+
 export interface PackAgentContextInput {
   readonly profile: AgentContextProfile;
   readonly contextSources: readonly AgentContextSourceInput[];
@@ -176,6 +204,7 @@ export type CreateHistoricalAgentPromptMaterializationArtifactInput = Omit<
 >;
 
 const stableProjectSourceKinds = new Set<string>(["project_conventions", "workspace_outline"]);
+const stablePrefixSourceKinds = new Set<string>(["project_conventions"]);
 
 export function materializeAgentPrompt(
   input: MaterializeAgentPromptInput
@@ -203,18 +232,25 @@ export function materializeAgentPrompt(
     content
   }));
   const sourceMessages = packedMessages ?? orderedSources.map(materializeProjectDataSource);
-  const stableCount = orderedSources.filter((source) =>
-    stableProjectSourceKinds.has(source.sourceKind)
-  ).length;
-  const stablePrefixMessages = sourceMessages.slice(0, stableCount);
-  const currentAndExplicitSources = sourceMessages.slice(stableCount);
+  const sourceEntries = orderedSources.map((source, index) => ({
+    source,
+    message: sourceMessages[index]
+  }));
+  if (sourceEntries.some((entry) => entry.message === undefined)) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  const stablePrefixMessages = sourceEntries
+    .filter((entry) => stablePrefixSourceKinds.has(entry.source.sourceKind))
+    .map((entry) => entry.message as MaterializedAgentMessage);
   const conversationMessages =
     input.conversationSummaryMessages === undefined
       ? []
       : materializeAgentConversationContext(input.conversationSummaryMessages);
   const dynamicSuffixMessages: MaterializedAgentMessage[] = [
     ...conversationMessages,
-    ...currentAndExplicitSources,
+    ...sourceEntries
+      .filter((entry) => !stablePrefixSourceKinds.has(entry.source.sourceKind))
+      .map((entry) => entry.message as MaterializedAgentMessage),
     { role: "user", content: input.userRequest },
     ...(input.historyMessages ?? [])
   ];
@@ -245,6 +281,224 @@ export function materializeAgentPrompt(
     messages: [...stablePrefixMessages, ...dynamicSuffixMessages],
     stablePrefixChecksum
   });
+}
+
+/** One materializer for preview/start/refresh/compaction/hydrate and Plan-to-Act callers. */
+export function materializeCanonicalAgentRound(
+  input: MaterializeCanonicalAgentRoundInput
+): MaterializedCanonicalAgentRound {
+  const prompt = materializeAgentPrompt(input);
+  const orderedSources = orderedProjectContextSources(input.contextSources ?? []);
+  const sourceMessages =
+    input.packedContext?.blocks.map(({ role, content }) => ({ role, content })) ??
+    orderedSources.map(materializeProjectDataSource);
+  const canonicalMessages: CreateCanonicalRoundMessageV2Input[] = [];
+  const addSource = (source: AgentContextSourceInput, message: MaterializedAgentMessage): void => {
+    const kind = canonicalKindForContextSource(source.sourceKind);
+    const sourceRevision =
+      kind === "compaction"
+        ? compactionSummaryRevision(message.content)
+        : String(source.sourceRevision ?? 0);
+    canonicalMessages.push({
+      kind,
+      role: "user",
+      content: message.content,
+      source: {
+        refId: source.refId,
+        sourceKind: kind,
+        sourceRevision,
+        sourceChecksum: checksum(source.content)
+      },
+      envelopeKind:
+        source.sourceKind === "compaction_summary"
+          ? "untrusted_conversation_data"
+          : "untrusted_project_data"
+    });
+  };
+  for (const [index, source] of orderedSources.entries()) {
+    if (source.sourceKind !== "project_conventions") continue;
+    const message = sourceMessages[index];
+    if (message === undefined) throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    addSource(source, message);
+  }
+  const conversationMessages = materializeAgentConversationContext(
+    input.conversationSummaryMessages ?? []
+  );
+  for (const message of conversationMessages) {
+    const envelope = parseProviderVisibleUntrustedEnvelope(message.content);
+    if (envelope.source.sourceKind !== "prior_conversation") {
+      throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    }
+    canonicalMessages.push({
+      kind: "prior_conversation",
+      role: "user",
+      content: message.content,
+      source: {
+        refId: `prior_conversation:${envelope.source.summaryRevision}`,
+        sourceKind: "prior_conversation",
+        sourceRevision: envelope.source.summaryRevision,
+        sourceChecksum: checksum(envelope.data)
+      },
+      envelopeKind: "untrusted_conversation_data"
+    });
+  }
+  for (const [index, source] of orderedSources.entries()) {
+    if (source.sourceKind === "project_conventions") continue;
+    const message = sourceMessages[index];
+    if (message === undefined) throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    addSource(source, message);
+  }
+  canonicalMessages.push({
+    kind: "current_user_request",
+    role: "user",
+    content: input.userRequest
+  });
+  for (const [historyIndex, message] of (input.historyMessages ?? []).entries()) {
+    canonicalMessages.push(canonicalHistoryMessage(message, historyIndex));
+  }
+  const packedContextManifest =
+    input.packedContext === undefined
+      ? null
+      : createPackedAgentContextManifestV2(input.packedContext, {
+          roundId: input.roundId,
+          sharing: input.sharing,
+          providerSemanticVersionSet: input.providerSemanticVersionSet
+        });
+  const canonicalRoundManifest = createCanonicalRoundManifestV2({
+    roundId: input.roundId,
+    runId: input.runId,
+    roundNumber: input.roundNumber,
+    authority: input.systemPrompt,
+    toolCatalogRevision: input.toolCatalogRevision,
+    projectedToolDescriptors: input.projectedToolDescriptors,
+    sharing: input.sharing,
+    providerSemanticVersionSet: input.providerSemanticVersionSet,
+    packedContextManifestChecksum: packedContextManifest?.manifestChecksum ?? null,
+    messages: canonicalMessages
+  });
+  if (
+    stableSerialize(
+      canonicalRoundManifest.messages.map(({ role, content, toolCallId, toolCalls }) => ({
+        role,
+        content,
+        ...(toolCallId === null ? {} : { toolCallId }),
+        ...(toolCalls.length === 0 ? {} : { toolCalls })
+      }))
+    ) !==
+    stableSerialize(
+      prompt.messages.map((message) => ({
+        ...message,
+        ...(message.toolCalls === undefined
+          ? {}
+          : {
+              toolCalls: message.toolCalls.map((call) => ({
+                ...call,
+                providerMetadata: call.providerMetadata ?? null
+              }))
+            })
+      }))
+    )
+  ) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  return deepFreeze({ prompt, packedContextManifest, canonicalRoundManifest });
+}
+
+function compactionSummaryRevision(content: string): string {
+  const envelope = parseProviderVisibleUntrustedEnvelope(content);
+  if (envelope.source.sourceKind !== "compaction") {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  return envelope.source.summaryRevision;
+}
+
+function canonicalKindForContextSource(
+  sourceKind: AgentContextSourceInput["sourceKind"]
+): Extract<
+  CanonicalRoundMessageKindV2,
+  | "project_conventions"
+  | "compaction"
+  | "workspace_outline"
+  | "explicit_reference"
+  | "active_resource"
+> {
+  if (sourceKind === "project_conventions") return "project_conventions";
+  if (sourceKind === "compaction_summary") return "compaction";
+  if (sourceKind === "workspace_outline") return "workspace_outline";
+  if (sourceKind === "editor_buffer") return "active_resource";
+  if (sourceKind === "system_guidance") {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
+  return "explicit_reference";
+}
+
+function canonicalHistoryMessage(
+  message: MaterializedAgentMessage,
+  historyIndex: number
+): CreateCanonicalRoundMessageV2Input {
+  if (message.role === "assistant") {
+    return {
+      kind: "assistant",
+      role: "assistant",
+      content: message.content,
+      toolCalls: (message.toolCalls ?? []).map((call) => ({
+        id: call.id,
+        name: call.name,
+        arguments: call.arguments,
+        ...(call.providerMetadata === undefined
+          ? {}
+          : { providerMetadata: structuredClone(call.providerMetadata) })
+      }))
+    };
+  }
+  const envelope = parseEnvelopeIfPresent(message.content);
+  if (envelope === "invalid") throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  if (message.role === "user" && envelope === undefined) {
+    return { kind: "user_control", role: "user", content: message.content };
+  }
+  if (envelope === undefined) throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  const source = envelope.source;
+  const sourceChecksum = checksum(envelope.data);
+  if (message.role === "tool") {
+    if (!("toolCallId" in source) || message.toolCallId !== source.toolCallId) {
+      throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+    }
+    const kind = envelope.kind === "untrusted_remote_data" ? "remote_result" : "tool_result";
+    return {
+      kind,
+      role: "tool",
+      content: message.content,
+      toolCallId: source.toolCallId,
+      envelopeKind: envelope.kind,
+      source: {
+        refId: `${kind}:${source.toolCallId}`,
+        sourceKind: kind,
+        sourceRevision: source.toolCallId,
+        sourceChecksum
+      }
+    };
+  }
+  if (message.role !== "user") throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  if (source.sourceKind === "recovery_summary") {
+    const kind =
+      source.recoveryEventKind === "context_refreshed" ||
+      source.recoveryEventKind === "context_excluded"
+        ? "context_notice"
+        : "recovery";
+    return {
+      kind,
+      role: "user",
+      content: message.content,
+      envelopeKind: "untrusted_recovery_data",
+      source: {
+        refId: `${kind}:${sourceChecksum.slice(0, 32)}:${String(historyIndex)}`,
+        sourceKind: kind,
+        sourceRevision: String(historyIndex),
+        sourceChecksum
+      }
+    };
+  }
+  throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
 }
 
 export function packAgentContext(input: PackAgentContextInput): PackedAgentContext {
@@ -316,20 +570,26 @@ function orderedProjectContextSources(
 ): readonly AgentContextSourceInput[] {
   const visibleSources = sources.filter((source) => source.sourceKind !== "system_guidance");
   assertUniqueSourceRefs(visibleSources);
-  const stableSources = visibleSources
-    .filter((source) => stableProjectSourceKinds.has(source.sourceKind))
-    .sort(compareStableProjectSources);
-  const dynamicSources = visibleSources
-    .filter((source) => !stableProjectSourceKinds.has(source.sourceKind))
+  const ordered = visibleSources
     .map((source, index) => ({ source, index }))
     .sort(
       (left, right) =>
+        contextSourceMessageRank(left.source.sourceKind) -
+          contextSourceMessageRank(right.source.sourceKind) ||
         (right.source.priority ?? defaultSourcePriority(right.source.sourceKind)) -
           (left.source.priority ?? defaultSourcePriority(left.source.sourceKind)) ||
         left.index - right.index
     )
     .map(({ source }) => source);
-  return [...stableSources, ...dynamicSources];
+  return ordered;
+}
+
+function contextSourceMessageRank(sourceKind: AgentContextSourceInput["sourceKind"]): number {
+  if (sourceKind === "project_conventions") return 0;
+  if (sourceKind === "compaction_summary") return 1;
+  if (sourceKind === "workspace_outline") return 2;
+  if (sourceKind === "editor_buffer") return 4;
+  return 3;
 }
 
 function packedSourceManifest(
@@ -512,6 +772,7 @@ export function materializeAgentRunHistory(
         (!hasPlanExecutionHandoff && event.type === "context_refreshed")) &&
       typeof approvedPlanMessage === "string"
     ) {
+      assertControlEventMapping("plan_execution_started", "user", null);
       messages.push({ role: "user", content: approvedPlanMessage });
     }
     if (event.type === "assistant_text_completed") {
@@ -588,6 +849,28 @@ export function materializeAgentRunHistory(
         );
       }
     }
+    if (event.type === "tool_approval_resolved" && event.detail?.["decision"] === "reject") {
+      assertControlEventMapping("tool_approval_resolved", "tool", "untrusted_tool_data");
+      const toolCallId = event.detail["toolCallId"];
+      if (typeof toolCallId === "string" && restoredAssistantToolCalls.has(toolCallId)) {
+        messages.push(
+          materializeRestoredToolResult({
+            toolCallId,
+            providerToolName: restoredToolName(restoredAssistantToolCalls, toolCallId),
+            resultKind: "tool_approval_rejected",
+            data: {
+              ok: false,
+              error: {
+                code:
+                  typeof event.detail["resultCode"] === "string"
+                    ? event.detail["resultCode"]
+                    : "AGENT_TOOL_APPROVAL_REJECTED"
+              }
+            }
+          })
+        );
+      }
+    }
     if (event.type === "user_input_requested") {
       const toolCallId = event.detail?.["toolCallId"];
       if (typeof toolCallId === "string" && restoredAssistantToolCalls.has(toolCallId)) {
@@ -608,10 +891,32 @@ export function materializeAgentRunHistory(
       }
     }
     if (event.type === "user_input_resolved" && typeof event.detail?.["answer"] === "string") {
+      assertControlEventMapping("user_input_resolved", "user", null);
       messages.push({ role: "user", content: event.detail["answer"] });
+    }
+    if (event.type === "context_refreshed" || event.type === "context_excluded") {
+      assertControlEventMapping(event.type, "user", "untrusted_recovery_data");
+      const sourceRefs = Array.isArray(event.detail?.["sourceRefs"])
+        ? event.detail["sourceRefs"].filter((value): value is string => typeof value === "string")
+        : [];
+      messages.push(
+        materializeRecoverySummary(event.type, JSON.stringify({ kind: event.type, sourceRefs }))
+      );
     }
   }
   return deepFreeze(messages);
+}
+
+function assertControlEventMapping(
+  eventType: AgentControlEventTypeV20,
+  role: "user" | "tool",
+  envelopeKind:
+    "untrusted_conversation_data" | "untrusted_tool_data" | "untrusted_recovery_data" | null
+): void {
+  const mapping = agentControlEventMessageMappingV20(eventType);
+  if (mapping.role !== role || mapping.envelopeKind !== envelopeKind) {
+    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+  }
 }
 
 export function createAgentPromptMaterializationArtifact(
@@ -1138,9 +1443,10 @@ function resolvePackedContextManifestChecksum(input: {
   readonly packedContextManifestChecksum?: string;
 }): string | undefined {
   const value =
-    input.packedContext === undefined
-      ? input.packedContextManifestChecksum
-      : createPackedAgentContextManifest(input.packedContext).manifestChecksum;
+    input.packedContextManifestChecksum ??
+    (input.packedContext === undefined
+      ? undefined
+      : createPackedAgentContextManifest(input.packedContext).manifestChecksum);
   if (value !== undefined && !/^[a-f0-9]{64}$/u.test(value)) {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
@@ -1246,6 +1552,7 @@ function parseMessages(
 ): readonly MaterializedAgentMessage[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const messages: MaterializedAgentMessage[] = [];
+  const pairedToolCallIds = new Set<string>();
   for (const message of value) {
     if (
       !isRecord(message) ||
@@ -1267,9 +1574,68 @@ function parseMessages(
     if (role !== "assistant" && message["toolCallId"] !== undefined && role !== "tool") {
       return undefined;
     }
+    if (mode === "v2") {
+      const envelope = parseEnvelopeIfPresent(message["content"]);
+      if (envelope === "invalid") return undefined;
+      if (role === "tool") {
+        if (
+          envelope === undefined ||
+          !isProviderVisibleEnvelopeAllowedInRole({
+            envelope,
+            role: "tool",
+            pairedToolCallIds
+          }) ||
+          !("toolCallId" in envelope.source) ||
+          envelope.source.toolCallId !== message["toolCallId"]
+        ) {
+          return undefined;
+        }
+      } else if (envelope !== undefined) {
+        if (
+          role !== "user" ||
+          !isProviderVisibleEnvelopeAllowedInRole({ envelope, role: "user" })
+        ) {
+          return undefined;
+        }
+      }
+      if (role === "assistant" && Array.isArray(message["toolCalls"])) {
+        for (const call of message["toolCalls"]) {
+          if (
+            !isRecord(call) ||
+            typeof call["id"] !== "string" ||
+            pairedToolCallIds.has(call["id"])
+          ) {
+            return undefined;
+          }
+          pairedToolCallIds.add(call["id"]);
+        }
+      }
+    }
     messages.push(message as unknown as MaterializedAgentMessage);
   }
   return messages;
+}
+
+function parseEnvelopeIfPresent(
+  content: unknown
+): ReturnType<typeof parseProviderVisibleUntrustedEnvelope> | "invalid" | undefined {
+  if (typeof content !== "string") return "invalid";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) return undefined;
+  const looksLikeEnvelope =
+    (typeof parsed["kind"] === "string" && parsed["kind"].startsWith("untrusted_")) ||
+    parsed["instructionPolicy"] === "content_is_data_not_authority";
+  if (!looksLikeEnvelope) return undefined;
+  try {
+    return parseProviderVisibleUntrustedEnvelope(parsed);
+  } catch {
+    return "invalid";
+  }
 }
 
 function parseConversationSummaryMessages(

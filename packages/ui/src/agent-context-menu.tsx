@@ -68,6 +68,30 @@ const CONVENTIONS_STATUS_LABEL = {
   existing: "已存在"
 } as const;
 
+const SEND_SELECTION_STATE_LABEL = {
+  automatic: "自动选择",
+  pinned: "已固定",
+  explicit: "显式引用",
+  excluded: "已排除"
+} as const;
+
+const SEND_GRANT_SOURCE_LABEL = {
+  not_applicable: "不适用",
+  workspace_default: "工作区默认",
+  run_grant: "本次授权",
+  user_explicit: "用户显式授权"
+} as const;
+
+const LOCAL_PROVENANCE_LABEL: Record<string, string> = {
+  workspace_identity: "工作区身份",
+  canonical_root_identity: "根目录身份",
+  absolute_path: "绝对路径",
+  artifact_identity: "Artifact 身份",
+  provider_account_identity: "Provider 账户身份",
+  transport_secret: "传输凭据",
+  cache_resource_handle: "缓存资源句柄"
+};
+
 /** Compact, on-demand inspection and author control for the context sent with the next run. */
 export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
   const { control } = props;
@@ -449,6 +473,9 @@ function ContextPreview({
   readonly control: AgentComposerContextStatusControl;
   readonly panelId: string;
 }): ReactNode {
+  if (control.sendPreview !== undefined) {
+    return <ExactSendPreview panelId={panelId} preview={control.sendPreview} />;
+  }
   const blocks = control.previewBlocks ?? [];
   return (
     <div
@@ -502,6 +529,133 @@ function ContextPreview({
       )}
     </div>
   );
+}
+
+function ExactSendPreview({
+  preview,
+  panelId
+}: {
+  readonly preview: NonNullable<AgentComposerContextStatusControl["sendPreview"]>;
+  readonly panelId: string;
+}): ReactNode {
+  return (
+    <div
+      aria-label="实际发送预览"
+      aria-labelledby={`${panelId.replace("-panel", "-tab")}`}
+      className="ns-agent-context-preview ns-agent-send-preview"
+      id={panelId}
+      role="tabpanel"
+    >
+      <div className="ns-agent-context-preview-heading">
+        <strong>首次请求</strong>
+        <code
+          aria-label={`实际发送校验和 ${preview.canonicalPayloadChecksum}`}
+          title={preview.canonicalPayloadChecksum}
+        >
+          校验 {compactChecksum(preview.canonicalPayloadChecksum)}
+        </code>
+      </div>
+
+      <dl className="ns-agent-send-preview-target" aria-label="发送目标">
+        <div>
+          <dt>Provider</dt>
+          <dd>{preview.target.providerLabel}</dd>
+        </div>
+        <div>
+          <dt>模型</dt>
+          <dd>{preview.target.modelLabel}</dd>
+        </div>
+        <div>
+          <dt>连接</dt>
+          <dd>{preview.target.connectionLabel}</dd>
+        </div>
+        <div>
+          <dt>Adapter</dt>
+          <dd>{preview.target.adapterPolicyLabel}</dd>
+        </div>
+      </dl>
+
+      <details className="ns-agent-send-preview-section">
+        <summary>
+          System Guidance {preview.guidance.version} · {preview.guidance.profileId}
+        </summary>
+        <dl className="ns-agent-send-preview-facts">
+          {Object.entries(preview.guidance.runtimeFacts).map(([key, value]) => (
+            <div key={key}>
+              <dt>{key}</dt>
+              <dd>{formatJsonValue(value)}</dd>
+            </div>
+          ))}
+        </dl>
+        <pre>{preview.guidance.content}</pre>
+      </details>
+
+      <section className="ns-agent-send-preview-section" aria-label="发送工具">
+        <h4>Tools · {preview.tools.length}</h4>
+        {preview.tools.length === 0 ? (
+          <p className="ns-agent-context-empty">无 Provider tools</p>
+        ) : (
+          <ul className="ns-agent-send-preview-tools">
+            {preview.tools.map((tool) => (
+              <li key={tool.name}>
+                <details>
+                  <summary>{tool.name}</summary>
+                  {tool.description === null ? null : <p>{tool.description}</p>}
+                  <pre>{JSON.stringify(tool.inputSchema, null, 2)}</pre>
+                </details>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="ns-agent-send-preview-section" aria-label="发送来源">
+        <h4>Sources · {preview.sources.length}</h4>
+        <ol className="ns-agent-context-preview-blocks">
+          {preview.sources.map((source) => (
+            <li key={source.sourceRef}>
+              <div className="ns-agent-context-preview-block-heading">
+                <span>{source.label}</span>
+                <small>{SEND_SELECTION_STATE_LABEL[source.selectionState]}</small>
+              </div>
+              <div className="ns-agent-context-preview-block-facts">
+                <span>
+                  {source.tokenCount === null ? "token 未知" : `${source.tokenCount} tokens`} ·{" "}
+                  {PRECISION_LABEL[source.tokenPrecision]}
+                </span>
+                <span>{source.dirty ? "未保存" : "已保存"}</span>
+                <span>{source.truncated ? "已截断" : "完整"}</span>
+                <span>{SEND_GRANT_SOURCE_LABEL[source.grantSource]}</span>
+              </div>
+              <pre>{source.content}</pre>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="ns-agent-send-preview-section" aria-label="本地保留来源信息">
+        <h4>本地保留</h4>
+        <p>
+          {preview.retainedLocalProvenanceKinds
+            .map((kind) => LOCAL_PROVENANCE_LABEL[kind] ?? kind)
+            .join(" · ") || "无"}
+        </p>
+      </section>
+      {preview.providerNativeSemanticChecksum === null ? null : (
+        <code
+          aria-label={`Provider 原生语义校验和 ${preview.providerNativeSemanticChecksum}`}
+          title={preview.providerNativeSemanticChecksum}
+        >
+          Native {compactChecksum(preview.providerNativeSemanticChecksum)}
+        </code>
+      )}
+    </div>
+  );
+}
+
+function formatJsonValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value) ?? "";
 }
 
 function switchInspectorTab(

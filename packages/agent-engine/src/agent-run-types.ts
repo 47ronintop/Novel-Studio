@@ -349,6 +349,39 @@ export type AgentRunEventTypeV13 =
   /** App-authored proof used when a strict completion has no preceding tool result (for example model stop). */
   | "completion_evidence_recorded";
 
+export type AgentControlEventTypeV20 =
+  | "user_input_resolved"
+  | "plan_execution_started"
+  | "tool_approval_resolved"
+  | "context_refreshed"
+  | "context_excluded"
+  | "context_compaction_completed";
+
+export interface AgentControlEventMessageMappingV20 {
+  readonly role: "user" | "tool";
+  readonly envelopeKind:
+    "untrusted_conversation_data" | "untrusted_tool_data" | "untrusted_recovery_data" | null;
+}
+
+const AGENT_CONTROL_EVENT_MESSAGE_MAPPINGS_V20 = Object.freeze({
+  user_input_resolved: { role: "user", envelopeKind: null },
+  plan_execution_started: { role: "user", envelopeKind: null },
+  tool_approval_resolved: { role: "tool", envelopeKind: "untrusted_tool_data" },
+  context_refreshed: { role: "user", envelopeKind: "untrusted_recovery_data" },
+  context_excluded: { role: "user", envelopeKind: "untrusted_recovery_data" },
+  context_compaction_completed: {
+    role: "user",
+    envelopeKind: "untrusted_conversation_data"
+  }
+} as const satisfies Record<AgentControlEventTypeV20, AgentControlEventMessageMappingV20>);
+
+/** The protocol mapping is app-owned and cannot be selected by persisted event detail. */
+export function agentControlEventMessageMappingV20(
+  eventType: AgentControlEventTypeV20
+): AgentControlEventMessageMappingV20 {
+  return AGENT_CONTROL_EVENT_MESSAGE_MAPPINGS_V20[eventType];
+}
+
 /**
  * Task C.2 — ToolApprovalBinding discriminated union.
  * Binds a tool call requiring approval to its specific execution context.
@@ -434,6 +467,8 @@ export interface AgentRunSnapshotPatch {
   readonly promptCacheIdentityChecksum?: string;
   readonly promptCacheStablePrefixMessageCount?: number;
   readonly finishReport?: FinishInputV2 | null;
+  /** V2.0-only local usage artifact binding. Legacy transitions reject this field. */
+  readonly usageId?: string | null;
 }
 
 export interface RecordAgentRunEventInput {
@@ -442,6 +477,16 @@ export interface RecordAgentRunEventInput {
   readonly type: AgentRunEventTypeV13 | AgentRunEventTypeV20;
   readonly detail?: JsonObject;
   readonly snapshotPatch?: AgentRunSnapshotPatch;
+}
+
+/** Read an explicitly persisted V2.0 usage binding; legacy snapshots never infer one. */
+export function readAgentRunUsageId(snapshot: AgentRunSnapshot): string | null {
+  return snapshot.schemaVersion === "2.0" ? snapshot.usageId : null;
+}
+
+/** Read an explicitly persisted V2.0 event reference; legacy events never infer one. */
+export function readAgentRunEventRef(event: AgentRunEvent): string | null {
+  return event.schemaVersion === "2.0" ? event.eventRef : null;
 }
 
 /** Main-owned terminal transition carrying the strict structured completion report. */

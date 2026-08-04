@@ -19,7 +19,8 @@ import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@no
 const POLICY_DIRECTORY = "workspace-context-policy";
 const POLICY_FILE = "policies.json";
 const LEGACY_SCHEMA_VERSION = "1.0" as const;
-const SCHEMA_VERSION = "1.1" as const;
+const SOURCE_PREFERENCES_SCHEMA_VERSION = "1.1" as const;
+const SCHEMA_VERSION = "1.2" as const;
 
 export interface WorkspaceContextPolicyBinding {
   readonly workspaceKind: "creativeProject" | "engineeringWorkspace";
@@ -31,8 +32,19 @@ export interface WorkspaceContextPolicy {
   readonly workspaceTrust: "trusted" | "untrusted";
   readonly projectConventionsEnabled: boolean;
   readonly sourcePreferences: readonly WorkspaceContextSourcePreference[];
+  /** Null means the independent first-use sharing choice has not been completed. */
+  readonly sharingDefaults: WorkspaceModelSharingDefaults | null;
+  /** Changes only when sharing defaults change, never when workspace trust changes. */
+  readonly sharingDefaultsRevision: string;
   /** A stable persisted revision included in the runtime capability/cache identity. */
   readonly policyRevision: string;
+}
+
+export interface WorkspaceModelSharingDefaults {
+  readonly outlineMetadata: "off" | "automatic";
+  readonly activeResource: "off" | "automatic";
+  readonly conversationSummary: "allow" | "ask" | "deny";
+  readonly toolReadResults: "allow" | "ask" | "deny";
 }
 
 export interface WorkspaceContextSourcePreference {
@@ -66,6 +78,11 @@ export interface WorkspaceContextPolicyStore {
     binding: WorkspaceContextPolicyBinding,
     mutation: WorkspaceContextSourcePreferenceMutation
   ): Promise<Result<WorkspaceContextPolicy, UnifiedError>>;
+  /** Persists an explicit UI choice; null returns the workspace to first-use blocking state. */
+  setSharingDefaults(
+    binding: WorkspaceContextPolicyBinding,
+    defaults: WorkspaceModelSharingDefaults | null
+  ): Promise<Result<WorkspaceContextPolicy, UnifiedError>>;
 }
 
 interface StoredPolicyFile {
@@ -80,6 +97,8 @@ interface StoredWorkspaceContextPolicy {
   readonly workspaceTrust: WorkspaceContextPolicy["workspaceTrust"];
   readonly projectConventionsEnabled: boolean;
   readonly sourcePreferences: readonly WorkspaceContextSourcePreference[];
+  readonly sharingDefaults: WorkspaceModelSharingDefaults | null;
+  readonly sharingRevision: number;
   readonly revision: number;
 }
 
@@ -93,12 +112,13 @@ interface ResolvedPolicyBinding {
 const DEFAULT_POLICY_STATE = {
   workspaceTrust: "untrusted",
   projectConventionsEnabled: false,
-  sourcePreferences: [] as readonly WorkspaceContextSourcePreference[]
+  sourcePreferences: [] as readonly WorkspaceContextSourcePreference[],
+  sharingDefaults: null
 } as const;
 
 type WorkspaceContextPolicyState = Pick<
   WorkspaceContextPolicy,
-  "workspaceTrust" | "projectConventionsEnabled" | "sourcePreferences"
+  "workspaceTrust" | "projectConventionsEnabled" | "sourcePreferences" | "sharingDefaults"
 >;
 
 export function createDesktopWorkspaceContextPolicyStore(input: {
@@ -156,6 +176,16 @@ export function createDesktopWorkspaceContextPolicyStore(input: {
               : canonicalSourcePreferences([...remaining, normalized])
         };
       });
+    },
+    setSharingDefaults(binding, defaults) {
+      if (defaults !== null && !isSharingDefaults(defaults)) {
+        return Promise.resolve(err(policyError("WORKSPACE_CONTEXT_POLICY_SHARING_INVALID")));
+      }
+      const normalized = defaults === null ? null : cloneSharingDefaults(defaults);
+      return mutate(binding, (previous) => ({
+        ...policyState(previous),
+        sharingDefaults: normalized
+      }));
     }
   };
 
@@ -182,6 +212,11 @@ export function createDesktopWorkspaceContextPolicyStore(input: {
       const resolvedState =
         typeof nextState === "function" ? nextState(previous, resolved) : nextState;
       const unchanged = previous !== undefined && sameState(previous, resolvedState);
+      const sharingChanged =
+        previous === undefined
+          ? resolvedState.sharingDefaults !== null
+          : JSON.stringify(previous.sharingDefaults) !==
+            JSON.stringify(resolvedState.sharingDefaults);
       const entry: StoredWorkspaceContextPolicy = unchanged
         ? previous
         : {
@@ -189,6 +224,9 @@ export function createDesktopWorkspaceContextPolicyStore(input: {
             workspaceId: resolved.workspaceId,
             canonicalRootIdentity: resolved.canonicalRootIdentity,
             ...resolvedState,
+            sharingRevision: sharingChanged
+              ? (previous?.sharingRevision ?? 0) + 1
+              : (previous?.sharingRevision ?? 0),
             revision: (previous?.revision ?? 0) + 1
           };
       const written = await writePolicyFile(targetPath, {
@@ -300,6 +338,7 @@ function parsePolicyFile(value: unknown): StoredPolicyFile | undefined {
   if (
     !isRecord(value) ||
     (value["schemaVersion"] !== SCHEMA_VERSION &&
+      value["schemaVersion"] !== SOURCE_PREFERENCES_SCHEMA_VERSION &&
       value["schemaVersion"] !== LEGACY_SCHEMA_VERSION) ||
     !isRecord(value["policies"])
   ) {
@@ -318,10 +357,44 @@ function parsePolicyFile(value: unknown): StoredPolicyFile | undefined {
 
 function parseStoredPolicy(
   value: unknown,
-  schemaVersion: typeof SCHEMA_VERSION | typeof LEGACY_SCHEMA_VERSION
+  schemaVersion:
+    typeof SCHEMA_VERSION | typeof SOURCE_PREFERENCES_SCHEMA_VERSION | typeof LEGACY_SCHEMA_VERSION
 ): StoredWorkspaceContextPolicy | undefined {
+  const allowedKeys =
+    schemaVersion === LEGACY_SCHEMA_VERSION
+      ? [
+          "workspaceKind",
+          "workspaceId",
+          "canonicalRootIdentity",
+          "workspaceTrust",
+          "projectConventionsEnabled",
+          "revision"
+        ]
+      : schemaVersion === SOURCE_PREFERENCES_SCHEMA_VERSION
+        ? [
+            "workspaceKind",
+            "workspaceId",
+            "canonicalRootIdentity",
+            "workspaceTrust",
+            "projectConventionsEnabled",
+            "sourcePreferences",
+            "revision"
+          ]
+        : [
+            "workspaceKind",
+            "workspaceId",
+            "canonicalRootIdentity",
+            "workspaceTrust",
+            "projectConventionsEnabled",
+            "sourcePreferences",
+            "sharingDefaults",
+            "sharingRevision",
+            "revision"
+          ];
   if (
     !isRecord(value) ||
+    !hasOnlyKeys(value, allowedKeys) ||
+    Object.keys(value).length !== allowedKeys.length ||
     (value["workspaceKind"] !== "creativeProject" &&
       value["workspaceKind"] !== "engineeringWorkspace") ||
     !isSafeIdentifier(value["workspaceId"]) ||
@@ -339,6 +412,17 @@ function parseStoredPolicy(
       ? []
       : parseSourcePreferences(value["sourcePreferences"]);
   if (sourcePreferences === undefined) return undefined;
+  const sharingDefaults =
+    schemaVersion === SCHEMA_VERSION ? parseSharingDefaults(value["sharingDefaults"]) : null;
+  const sharingRevision = schemaVersion === SCHEMA_VERSION ? value["sharingRevision"] : 0;
+  if (
+    sharingDefaults === undefined ||
+    typeof sharingRevision !== "number" ||
+    !Number.isSafeInteger(sharingRevision) ||
+    sharingRevision < 0
+  ) {
+    return undefined;
+  }
   return {
     workspaceKind: value["workspaceKind"],
     workspaceId: value["workspaceId"],
@@ -346,6 +430,8 @@ function parseStoredPolicy(
     workspaceTrust: value["workspaceTrust"],
     projectConventionsEnabled: value["projectConventionsEnabled"],
     sourcePreferences,
+    sharingDefaults,
+    sharingRevision,
     revision: value["revision"]
   };
 }
@@ -369,18 +455,23 @@ function sameState(
     entry.workspaceTrust === state.workspaceTrust &&
     entry.projectConventionsEnabled === state.projectConventionsEnabled &&
     JSON.stringify(entry.sourcePreferences) ===
-      JSON.stringify(canonicalSourcePreferences(state.sourcePreferences))
+      JSON.stringify(canonicalSourcePreferences(state.sourcePreferences)) &&
+    JSON.stringify(entry.sharingDefaults) === JSON.stringify(state.sharingDefaults)
   );
 }
 
 function toPolicy(entry: StoredWorkspaceContextPolicy, key: string): WorkspaceContextPolicy {
   const sourcePreferences = canonicalSourcePreferences(entry.sourcePreferences);
+  const sharingDefaults =
+    entry.sharingDefaults === null ? null : cloneSharingDefaults(entry.sharingDefaults);
   return {
     workspaceTrust: entry.workspaceTrust,
     projectConventionsEnabled: entry.projectConventionsEnabled,
     sourcePreferences,
+    sharingDefaults,
+    sharingDefaultsRevision: sharingRevisionFor(key, sharingDefaults, entry.sharingRevision),
     policyRevision: checksum(
-      `${key}\n${entry.workspaceTrust}\n${String(entry.projectConventionsEnabled)}\n${JSON.stringify(sourcePreferences)}\n${String(entry.revision)}`
+      `${key}\n${entry.workspaceTrust}\n${String(entry.projectConventionsEnabled)}\n${JSON.stringify(sourcePreferences)}\n${JSON.stringify(sharingDefaults)}\n${String(entry.revision)}`
     )
   };
 }
@@ -388,6 +479,7 @@ function toPolicy(entry: StoredWorkspaceContextPolicy, key: string): WorkspaceCo
 function defaultPolicy(key: string): WorkspaceContextPolicy {
   return {
     ...DEFAULT_POLICY_STATE,
+    sharingDefaultsRevision: sharingRevisionFor(key, null, 0),
     policyRevision: checksum(`${key}\ndefault-fail-closed@1`)
   };
 }
@@ -398,8 +490,54 @@ function policyState(entry: StoredWorkspaceContextPolicy | undefined): Workspace
     : {
         workspaceTrust: entry.workspaceTrust,
         projectConventionsEnabled: entry.projectConventionsEnabled,
-        sourcePreferences: entry.sourcePreferences
+        sourcePreferences: entry.sourcePreferences,
+        sharingDefaults: entry.sharingDefaults
       };
+}
+
+function parseSharingDefaults(value: unknown): WorkspaceModelSharingDefaults | null | undefined {
+  if (value === null) return null;
+  return isSharingDefaults(value) ? cloneSharingDefaults(value) : undefined;
+}
+
+function isSharingDefaults(value: unknown): value is WorkspaceModelSharingDefaults {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      "outlineMetadata",
+      "activeResource",
+      "conversationSummary",
+      "toolReadResults"
+    ]) &&
+    Object.keys(value).length === 4 &&
+    (value["outlineMetadata"] === "off" || value["outlineMetadata"] === "automatic") &&
+    (value["activeResource"] === "off" || value["activeResource"] === "automatic") &&
+    isSharingReadPolicy(value["conversationSummary"]) &&
+    isSharingReadPolicy(value["toolReadResults"])
+  );
+}
+
+function cloneSharingDefaults(value: WorkspaceModelSharingDefaults): WorkspaceModelSharingDefaults {
+  return {
+    outlineMetadata: value.outlineMetadata,
+    activeResource: value.activeResource,
+    conversationSummary: value.conversationSummary,
+    toolReadResults: value.toolReadResults
+  };
+}
+
+function isSharingReadPolicy(value: unknown): value is "allow" | "ask" | "deny" {
+  return value === "allow" || value === "ask" || value === "deny";
+}
+
+function sharingRevisionFor(
+  key: string,
+  defaults: WorkspaceModelSharingDefaults | null,
+  revision: number
+): string {
+  return defaults === null && revision === 0
+    ? checksum(`${key}\nsharing-defaults-unselected@1`)
+    : checksum(`${key}\nsharing-defaults@1\n${JSON.stringify(defaults)}\n${String(revision)}`);
 }
 
 function parseSourcePreferences(
@@ -627,6 +765,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function policyError(
   code:
     | "WORKSPACE_CONTEXT_POLICY_BINDING_INVALID"
+    | "WORKSPACE_CONTEXT_POLICY_SHARING_INVALID"
     | "WORKSPACE_CONTEXT_POLICY_SOURCE_PREFERENCE_INVALID"
     | "WORKSPACE_CONTEXT_POLICY_WRITE_FAILED"
 ): UnifiedError {
@@ -636,12 +775,15 @@ function policyError(
     message:
       code === "WORKSPACE_CONTEXT_POLICY_BINDING_INVALID"
         ? "The active workspace identity is unavailable for this policy change."
-        : code === "WORKSPACE_CONTEXT_POLICY_SOURCE_PREFERENCE_INVALID"
-          ? "The project context source preference is invalid."
-          : "The workspace conventions policy could not be persisted.",
+        : code === "WORKSPACE_CONTEXT_POLICY_SHARING_INVALID"
+          ? "The workspace model sharing defaults are invalid."
+          : code === "WORKSPACE_CONTEXT_POLICY_SOURCE_PREFERENCE_INVALID"
+            ? "The project context source preference is invalid."
+            : "The workspace conventions policy could not be persisted.",
     recoverability: "user-action",
     suggestedAction:
-      code === "WORKSPACE_CONTEXT_POLICY_SOURCE_PREFERENCE_INVALID"
+      code === "WORKSPACE_CONTEXT_POLICY_SOURCE_PREFERENCE_INVALID" ||
+      code === "WORKSPACE_CONTEXT_POLICY_SHARING_INVALID"
         ? "Choose a valid context source, decision, and priority, then retry."
         : "Reopen the workspace and retry.",
     traceId: "desktop-workspace-context-policy"

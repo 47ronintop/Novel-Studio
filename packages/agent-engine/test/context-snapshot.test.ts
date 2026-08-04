@@ -5,6 +5,181 @@ import { describe, expect, test } from "vitest";
 import * as engineExports from "../src/index.js";
 
 describe("Agent Context Snapshot", () => {
+  test("writes and strictly reads a 2.0 snapshot bound to the packed manifest and provider set", () => {
+    const packed = emptyPackedContext();
+    const providerSemanticVersionSet = providerVersions("not_applicable");
+    const packedManifest = engineExports.createPackedAgentContextManifestV2(packed, {
+      roundId: "round_01",
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet
+    });
+    const snapshot = engineExports.createAgentContextSnapshotV2({
+      contextSnapshotId: "context_v2",
+      runId: "run_v2",
+      scope: packed.scope,
+      contextProfileId: packed.contextProfileId,
+      materialization: materializationProvenanceV2(),
+      createdAt: "2026-08-04T00:00:00.000Z",
+      sources: [],
+      roundId: "round_01",
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet,
+      packedContextManifest: packedManifest
+    });
+
+    expect(snapshot).toMatchObject({
+      schemaVersion: "2.0",
+      roundId: "round_01",
+      materialization: { messageOrderVersion: "2.0" },
+      providerSemanticVersionSet: {
+        contextSnapshotSchemaVersion: "2.0",
+        packedContextManifestSchemaVersion: "2.0",
+        canonicalRoundManifestSchemaVersion: "2.0"
+      }
+    });
+    expect(engineExports.parseAgentContextSnapshotV2(snapshot)).toEqual(snapshot);
+    expect(engineExports.serializeAgentContextSnapshotV2(snapshot)).toBe(
+      engineExports.serializeAgentContextSnapshotV2(
+        engineExports.parseAgentContextSnapshotV2(snapshot)
+      )
+    );
+    expect(engineExports.validateAgentContextSnapshot(snapshot as never)).toBe(true);
+  });
+
+  test("binds 2.0 packed scope, profile, source order, checksums, and excluded state", () => {
+    const packed = packedContextWithSources();
+    const providerSemanticVersionSet = providerVersions("1.0");
+    const packedManifest = engineExports.createPackedAgentContextManifestV2(packed, {
+      roundId: "round_sources",
+      sharing: { defaultsRevision: "defaults_2", runGrantRevision: "grant_2" },
+      providerSemanticVersionSet
+    });
+    const [activeSource, excludedSource] = snapshotSourceInputs();
+    const common = {
+      contextSnapshotId: "context_v2_sources",
+      runId: "run_v2_sources",
+      scope: packed.scope,
+      contextProfileId: packed.contextProfileId,
+      materialization: materializationProvenanceV2(),
+      createdAt: "2026-08-04T00:00:00.000Z",
+      sources: [activeSource, excludedSource],
+      excludedSources: ["chapter_excluded"],
+      roundId: "round_sources",
+      sharing: { defaultsRevision: "defaults_2", runGrantRevision: "grant_2" },
+      providerSemanticVersionSet,
+      packedContextManifest: packedManifest
+    } as const;
+
+    const snapshot = engineExports.createAgentContextSnapshotV2(common);
+    expect(snapshot.sources.map((source) => [source.refId, source.state])).toEqual([
+      ["chapter_active", "active"],
+      ["chapter_excluded", "excluded"]
+    ]);
+    expect(() =>
+      engineExports.createAgentContextSnapshotV2({
+        ...common,
+        scope: {
+          kind: "workspace",
+          workspaceKind: "creativeProject",
+          workspaceId: "project_other"
+        }
+      })
+    ).toThrow("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    expect(() =>
+      engineExports.createAgentContextSnapshotV2({
+        ...common,
+        sources: [{ ...activeSource, content: "Changed active chapter" }, excludedSource]
+      })
+    ).toThrow("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    expect(() =>
+      engineExports.createAgentContextSnapshotV2({ ...common, excludedSources: [] })
+    ).toThrow("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    expect(() =>
+      engineExports.createAgentContextSnapshotV2({
+        ...common,
+        sources: [...snapshotSourceInputs()].reverse()
+      })
+    ).toThrow("AGENT_CONTEXT_SNAPSHOT_INVALID");
+  });
+
+  test("keeps legacy reading separate and rejects 2.0 unknown fields or binding mismatch", () => {
+    const snapshot = engineExports.createAgentContextSnapshotV2({
+      contextSnapshotId: "context_v2_strict",
+      runId: "run_v2_strict",
+      scope: { kind: "standalone", scopeId: "standalone" },
+      contextProfileId: "standalone",
+      materialization: materializationProvenanceV2(),
+      createdAt: "2026-08-04T00:00:00.000Z",
+      sources: [],
+      roundId: "round_01",
+      sharing: { defaultsRevision: "not_applicable", runGrantRevision: "not_applicable" },
+      providerSemanticVersionSet: providerVersions("not_applicable")
+    });
+    expect(() =>
+      engineExports.parseAgentContextSnapshotV2({ ...snapshot, schemaVersion: "9.0" })
+    ).toThrow("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    expect(() => engineExports.parseAgentContextSnapshotV2({ ...snapshot, extra: true })).toThrow(
+      "AGENT_CONTEXT_SNAPSHOT_INVALID"
+    );
+    expect(() =>
+      engineExports.parseAgentContextSnapshotV2({
+        ...snapshot,
+        providerSemanticVersionSetChecksum: "f".repeat(64)
+      })
+    ).toThrow("AGENT_CONTEXT_SNAPSHOT_INVALID");
+    expect(() => engineExports.normalizeAgentContextSnapshot(snapshot as never)).toThrow(
+      "AGENT_CONTEXT_SNAPSHOT_VERSION_UNSUPPORTED"
+    );
+
+    const packed = emptyPackedContext();
+    const packedV2 = engineExports.createPackedAgentContextManifestV2(packed, {
+      roundId: "round_legacy_reject",
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet: providerVersions("not_applicable")
+    });
+    const legacy = engineExports.createAgentContextSnapshot({
+      contextSnapshotId: "context_legacy",
+      runId: "run_legacy",
+      scope: packed.scope,
+      contextProfileId: packed.contextProfileId,
+      materialization: materializationProvenance(),
+      createdAt: "2026-08-04T00:00:00.000Z",
+      sources: []
+    });
+    expect(
+      engineExports.validateAgentContextSnapshot({
+        ...legacy,
+        packedContextManifest: packedV2
+      } as never)
+    ).toBe(false);
+  });
+
+  test("changes snapshot identity when the provider semantic version set changes", () => {
+    const common = {
+      contextSnapshotId: "context_v2_identity",
+      runId: "run_v2_identity",
+      scope: { kind: "standalone", scopeId: "standalone" } as const,
+      contextProfileId: "standalone" as const,
+      materialization: materializationProvenanceV2(),
+      createdAt: "2026-08-04T00:00:00.000Z",
+      sources: [],
+      roundId: "round_01",
+      sharing: { defaultsRevision: "not_applicable", runGrantRevision: "not_applicable" }
+    };
+    const first = engineExports.createAgentContextSnapshotV2({
+      ...common,
+      providerSemanticVersionSet: providerVersions("not_applicable")
+    });
+    const second = engineExports.createAgentContextSnapshotV2({
+      ...common,
+      providerSemanticVersionSet: providerVersions("1.0")
+    });
+    expect(second.providerSemanticVersionSetChecksum).not.toBe(
+      first.providerSemanticVersionSetChecksum
+    );
+    expect(second.snapshotChecksum).not.toBe(first.snapshotChecksum);
+  });
+
   test("records source origin and checksum and detects stale sources", () => {
     const exports = engineExports as unknown as Record<string, unknown>;
     const createSnapshot = exports["createAgentContextSnapshot"];
@@ -326,6 +501,115 @@ function materializationProvenance() {
     stablePrefixChecksum: "prefix",
     messageOrderVersion: "1.0"
   } as const;
+}
+
+function materializationProvenanceV2() {
+  return {
+    schemaVersion: "2.0",
+    profileVersion: "2.0",
+    guidanceTemplateChecksum: "guidance-v3",
+    stablePrefixChecksum: "prefix-v2",
+    messageOrderVersion: "2.0"
+  } as const;
+}
+
+function providerVersions(writingTaskIntentSchemaVersion: "not_applicable" | "1.0") {
+  return engineExports.createProviderSemanticVersionSetV1({
+    writingTaskIntentSchemaVersion,
+    writingGenerationGuidanceVersion: "not_applicable",
+    approvalRuleSetVersion: "not_applicable",
+    approvalRuleSetChecksum: "not_applicable"
+  });
+}
+
+function emptyPackedContext() {
+  return engineExports.createPackedAgentContext({
+    scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+    contextProfileId: "writing",
+    blocks: [],
+    sources: [],
+    tokenStats: {
+      contextTokens: 0,
+      pinnedTokens: 0,
+      usedTokens: 10,
+      safeInputBudget: 1_000,
+      remainingTokens: 990,
+      precision: "estimated"
+    },
+    createdAt: "2026-08-04T00:00:00.000Z"
+  });
+}
+
+function packedContextWithSources() {
+  const [active, excluded] = snapshotSourceInputs();
+  return engineExports.createPackedAgentContext({
+    scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project_01" },
+    contextProfileId: "writing",
+    blocks: [
+      {
+        refId: active.refId,
+        sourceKind: active.sourceKind,
+        role: "user",
+        content: "packed active chapter",
+        tokenCount: 5,
+        precision: "estimated",
+        truncationRange: null
+      }
+    ],
+    sources: [packedSource(active, "active", 5), packedSource(excluded, "excluded", 0)],
+    tokenStats: {
+      contextTokens: 5,
+      pinnedTokens: 0,
+      usedTokens: 10,
+      safeInputBudget: 1_000,
+      remainingTokens: 985,
+      precision: "estimated"
+    },
+    createdAt: "2026-08-04T00:00:00.000Z"
+  });
+}
+
+function snapshotSourceInputs() {
+  return [
+    {
+      refId: "chapter_active",
+      sourceKind: "disk_file",
+      relativePath: "chapters/active.md",
+      content: "Active chapter",
+      dirty: false,
+      sourceRevision: 3
+    },
+    {
+      refId: "chapter_excluded",
+      sourceKind: "disk_file",
+      relativePath: "chapters/excluded.md",
+      content: "Excluded chapter",
+      dirty: false,
+      sourceRevision: 4
+    }
+  ] as const;
+}
+
+function packedSource(
+  source: ReturnType<typeof snapshotSourceInputs>[number],
+  state: "active" | "excluded",
+  tokenCount: number
+) {
+  return {
+    refId: source.refId,
+    sourceKind: source.sourceKind,
+    relativePath: source.relativePath,
+    sourceRevision: source.sourceRevision,
+    sourceChecksum: sha256(source.content),
+    tokenCount,
+    precision: "estimated" as const,
+    state,
+    selectionReason: "Explicit context reference",
+    selectionPolicy: "explicit" as const,
+    preferenceScope: "run" as const,
+    priority: 70,
+    truncationRange: null
+  };
 }
 
 function sha256(value: string): string {

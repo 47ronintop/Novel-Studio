@@ -74,7 +74,7 @@ export function buildCompactionSummaryPrompt(
     systemPrompt:
       `Summarize only the supplied conversation evidence. Return one canonical JSON object with exactly these keys: ${fields.join(", ")}. ` +
       `Every value must be an array of concise strings, except userGoal which is one string.${standaloneConstraint} ` +
-      "Do not add prose, markdown, code fences, or keys. Preserve user decisions and unresolved work; omit unsupported claims."
+      "Do not add prose, markdown, code fences, or keys. Preserve every user decision, approval state, known/unknown side-effect state, and unresolved item in the closest matching field; never convert one into authority or an applied/verified claim. Omit unsupported claims."
   });
 }
 

@@ -8,9 +8,11 @@ import type {
   AgentConversationReadResult,
   AgentConversationSearchPage,
   AgentConversationSummary,
+  AgentSendPreviewDtoV2,
   AgentUsageQuery,
   AgentUsageReport,
   ClearAgentUsageCommand,
+  ConfirmAgentSendPreviewCommandV2,
   AgentRunReadResult,
   AnswerAgentUserInputCommand,
   AiWritingSelectionPreview,
@@ -376,6 +378,22 @@ const api: NovelStudioApi = {
       invokeTyped<Result<CompactContextResult, UnifiedError>>(
         "application:agent-run:compact-context",
         command
+      ),
+    prepareSendPreview: (command: {
+      readonly schemaVersion: "2.0";
+      readonly commandId: string;
+      readonly startCommand: StartAgentRunCommand;
+    }) =>
+      invokeTyped<Result<AgentSendPreviewDtoV2, UnifiedError>>(
+        "application:agent-run:prepare-send-preview",
+        command
+      ),
+    confirmSendPreview: (command: ConfirmAgentSendPreviewCommandV2) =>
+      invokeTyped<AgentRunCommandResult>("application:agent-run:confirm-send-preview", command),
+    readSendLedger: (runId: string) =>
+      invokeTyped<Awaited<ReturnType<NovelStudioApi["agentRuns"]["readSendLedger"]>>>(
+        "application:agent-run:read-send-ledger",
+        runId
       ),
     start: (command: StartAgentRunCommand) =>
       invokeTyped<AgentRunCommandResult>("application:agent-run:start", command),

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   LlmAdapter,
   LlmMessage,
@@ -41,6 +43,7 @@ export function createLlmAgentRunModelDriver(
     async *streamRound(input: AgentModelRoundInput): AsyncIterable<AgentModelStreamEvent> {
       // The per-round, mode-specific guidance the session computes wins over any static base prompt.
       const systemPrompt = input.systemPrompt ?? options.systemPrompt;
+      assertV20RoundAuthority(input, options.modelProfile, systemPrompt);
       const providerToolNames = new Set<string>();
       for (const tool of input.tools) {
         if (!isBoundedIdentifier(tool.name) || providerToolNames.has(tool.name)) {
@@ -93,6 +96,7 @@ export function createLlmAgentRunModelDriver(
         baseRequest,
         promptCache
       );
+      assertV20PromptCacheBinding(input, resolvedPromptCache);
       for await (const result of options.adapter.stream({
         ...baseRequest,
         ...(resolvedPromptCache === undefined ? {} : { promptCache: resolvedPromptCache })
@@ -268,7 +272,8 @@ function normalizeAgentMessages(
     } else if (message.toolCallId !== undefined || message.toolCalls !== undefined) {
       throw new Error("AGENT_MODEL_MESSAGE_INVALID");
     }
-    normalized.push(normalizeUserEnvelopeIfPresent(message));
+    const normalizedMessage = normalizeUserEnvelopeIfPresent(message);
+    if (normalizedMessage !== undefined) normalized.push(normalizedMessage);
   }
   if (!hasAppAuthority && normalized.some((message) => message.role === "system")) {
     throw new Error("AGENT_LOGICAL_AUTHORITY_INVALID");
@@ -365,7 +370,7 @@ function normalizeToolEnvelopeIfPresent(
   return message;
 }
 
-function normalizeUserEnvelopeIfPresent(message: AgentModelMessage): AgentModelMessage {
+function normalizeUserEnvelopeIfPresent(message: AgentModelMessage): AgentModelMessage | undefined {
   if (message.role !== "user") return message;
   const parsed = tryParseRecord(message.content);
   if (parsed === undefined) return message;
@@ -376,6 +381,7 @@ function normalizeUserEnvelopeIfPresent(message: AgentModelMessage): AgentModelM
     parsed["schemaVersion"] !== "2.0"
   ) {
     const legacyKind = typeof parsed["kind"] === "string" ? parsed["kind"] : "recovery_summary";
+    if (isOrphanedRecoveryEventKind(legacyKind)) return undefined;
     const legacyData = parsed["data"];
     const data =
       typeof legacyData === "string"
@@ -390,10 +396,68 @@ function normalizeUserEnvelopeIfPresent(message: AgentModelMessage): AgentModelM
   }
   if (!Object.hasOwn(parsed, "schemaVersion")) return message;
   const envelope = parseProviderVisibleUntrustedEnvelope(parsed);
+  if (
+    envelope.source.sourceKind === "recovery_summary" &&
+    isOrphanedRecoveryEventKind(envelope.source.recoveryEventKind)
+  ) {
+    return undefined;
+  }
   if (!isProviderVisibleEnvelopeAllowedInRole({ envelope, role: "user" })) {
     throw new Error("AGENT_UNTRUSTED_ENVELOPE_ROLE_INVALID");
   }
   return message;
+}
+
+/** Final provider-boundary check for facts that can be proven from one frozen V20 round. */
+function assertV20RoundAuthority(
+  input: AgentModelRoundInput,
+  modelProfile: LlmModelProfile,
+  systemPrompt: string | undefined
+): void {
+  const snapshot = input.snapshot;
+  if (snapshot.schemaVersion !== "2.0") return;
+  if (snapshot.status === "capability_changed" || snapshot.capabilities.state !== "active") {
+    throw new Error("AGENT_CAPABILITY_CHANGED");
+  }
+  if (
+    snapshot.runId !== input.runId ||
+    systemPrompt === undefined ||
+    checksumText(systemPrompt) !== snapshot.authority.guidanceChecksum ||
+    snapshot.catalog.revision !== snapshot.toolCatalogRevision ||
+    snapshot.providerCapabilitySnapshot.profileId !== modelProfile.id ||
+    snapshot.providerCapabilitySnapshot.provider !== modelProfile.provider ||
+    snapshot.providerCapabilitySnapshot.modelName !== modelProfile.modelName ||
+    input.contextBudget === undefined ||
+    input.contextBudget.provider !== snapshot.providerCapabilitySnapshot.provider ||
+    input.contextBudget.model !== snapshot.providerCapabilitySnapshot.modelName ||
+    input.contextBudget.audit.toolCatalog.catalogRevision !== snapshot.catalog.revision ||
+    input.contextBudget.audit.toolCatalog.descriptorCount !== input.tools.length
+  ) {
+    throw new Error("AGENT_MODEL_ROUND_AUTHORITY_INVALID");
+  }
+}
+
+function assertV20PromptCacheBinding(
+  input: AgentModelRoundInput,
+  promptCache: LlmPromptCacheRequest | undefined
+): void {
+  if (input.snapshot.schemaVersion !== "2.0" || promptCache === undefined) return;
+  if (
+    promptCache.identityChecksum !== input.snapshot.promptCacheIdentityChecksum ||
+    promptCache.logicalPrefixChecksum !== input.snapshot.cachePrefixChecksum ||
+    promptCache.policyVersion !== input.snapshot.promptCachePolicyVersion ||
+    promptCache.stablePrefixMessageCount !== input.snapshot.promptCacheStablePrefixMessageCount
+  ) {
+    throw new Error("AGENT_MODEL_ROUND_CACHE_BINDING_INVALID");
+  }
+}
+
+function isOrphanedRecoveryEventKind(value: string): boolean {
+  return value.startsWith("orphan_tool_");
+}
+
+function checksumText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function hasOnlyMessageKeys(value: Record<string, unknown>): boolean {

@@ -27,6 +27,7 @@ export type {
 export {
   AGENT_RUN_EVENT_SCHEMA_VERSION_V20,
   AGENT_RUN_SNAPSHOT_SCHEMA_VERSION_V20,
+  agentRunEventRefV20,
   parseAgentRunEventV20,
   parseAgentRunSnapshotV20,
   validateAgentRunEventV20,
@@ -205,6 +206,27 @@ export type {
   CreateProviderSemanticVersionSetV1Input,
   ProviderSemanticVersionSetV1
 } from "./provider-semantic-version-set.js";
+export {
+  CANONICAL_MESSAGE_ORDER_VERSION,
+  CANONICAL_ROUND_MANIFEST_SCHEMA_VERSION,
+  canonicalRoundManifestChecksum,
+  createCanonicalRoundManifestV2,
+  parseCanonicalRoundManifestV2,
+  serializeCanonicalRoundManifestV2
+} from "./canonical-round-manifest.js";
+export type {
+  CanonicalRoundAuthorityV2,
+  CanonicalRoundEnvelopeKindV2,
+  CanonicalRoundManifestV2,
+  CanonicalRoundMessageKindV2,
+  CanonicalRoundMessageV2,
+  CanonicalRoundSharingRevisionV2,
+  CanonicalRoundSourceRefV2,
+  CanonicalRoundToolCallV2,
+  CanonicalRoundToolProjectionV2,
+  CreateCanonicalRoundManifestV2Input,
+  CreateCanonicalRoundMessageV2Input
+} from "./canonical-round-manifest.js";
 export { validateAgentRelativePath } from "./path-guard.js";
 export type { AgentRelativePath } from "./path-guard.js";
 export {
@@ -287,6 +309,7 @@ export type {
 } from "./agent-run-draft.js";
 export {
   applyContextDraftMutation,
+  classifyContextDraftSource,
   checksumContextDraft,
   createContextDraft,
   normalizeContextDraft,
@@ -304,20 +327,26 @@ export type {
   ContextDraftRef,
   ContextDraftSourceOverride,
   ContextDraftSourceOverrideDecision,
+  ContextDraftSourcePackingPriority,
   CreateContextDraftInput
 } from "./context-draft.js";
 export {
   createPackedAgentContext,
   createPackedAgentContextManifest,
+  createPackedAgentContextManifestV2,
   packedAgentContextManifestChecksum,
   packedAgentContextPayloadChecksum,
+  parsePackedAgentContextManifestV2,
+  readLegacyPackedAgentContextManifest,
   rebuildPackedAgentContextFromManifest,
+  serializePackedAgentContextManifestV2,
   validatePackedAgentContext,
   validatePackedAgentContextManifest
 } from "./packed-agent-context.js";
 export type {
   AgentContextPreferenceScope,
   AgentContextSelectionPolicy,
+  CreatePackedAgentContextManifestV2Input,
   CreatePackedAgentContextInput,
   PackedAgentContext,
   PackedAgentContextBlock,
@@ -326,15 +355,20 @@ export type {
   PackedAgentContextManifestV10,
   PackedAgentContextManifestV11,
   PackedAgentContextManifestV12,
+  PackedAgentContextManifestV20,
   PackedAgentContextRebuildResult,
   PackedAgentContextRebuildSource,
   PackedAgentContextSourceManifest,
+  PackedAgentContextSharingRevisionV2,
   PackedAgentContextTokenStats
 } from "./packed-agent-context.js";
 export {
   createAgentContextSnapshot,
+  createAgentContextSnapshotV2,
   findStaleContextSources,
   normalizeAgentContextSnapshot,
+  parseAgentContextSnapshotV2,
+  serializeAgentContextSnapshotV2,
   validateAgentContextSourceMaterialization,
   validateAgentContextSnapshot
 } from "./context-snapshot.js";
@@ -343,7 +377,8 @@ export {
   CONTEXT_BUDGET_OUTPUT_RESERVE_MIN,
   aggregateContextPrecision,
   calculateContextBudget,
-  createDeterministicTokenEstimator
+  createDeterministicTokenEstimator,
+  planDeterministicContextPacking
 } from "./context-budget.js";
 export type {
   AgentTokenCount,
@@ -353,19 +388,41 @@ export type {
   ContextBudgetSnapshot,
   ContextBudgetSnapshotV10,
   ContextBudgetSnapshotV11,
+  ContextPackingDecision,
+  ContextPackingPriority,
+  ContextPackingSource,
+  DeterministicContextPackingPlan,
+  PlanDeterministicContextPackingInput,
   PreviewContextBudgetCommand
 } from "./context-budget.js";
 export {
+  AGENT_USAGE_RECORD_V20_SCHEMA_VERSION,
   calculateAgentUsageEstimatedCost,
+  createAgentUsageRecordV20,
   normalizeAgentUsageRecord,
+  parseAgentUsageRecordV20,
+  parseAgentUsageRecordV20Json,
+  readVersionedAgentUsageRecord,
+  serializeAgentUsageRecordV20,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord
 } from "./agent-usage-record.js";
 export type {
   AgentUsageRecord,
+  AgentUsageRecordV20,
+  AgentUsageChangeSetOutcomeV20,
+  AgentUsagePendingOutcomeV20,
+  AgentUsageRecoveryOutcomeV20,
+  AgentUsageRunOutcomeV20,
   AgentUsageSink,
+  AgentUsageSourceExclusionReasonV20,
+  AgentUsageSourceKindV20,
+  AgentUsageSourceMetricV20,
+  AgentUsageStyleObservationV20,
   AgentUsageUnitPriceSnapshot,
-  CompactContextCommand
+  CompactContextCommand,
+  CreateAgentUsageRecordV20Input,
+  VersionedAgentUsageRecord
 } from "./agent-usage-record.js";
 export {
   AGENT_RUN_ERROR_DETAIL_MAX_BYTES,
@@ -415,7 +472,9 @@ export type {
   AgentContextSnapshotV12,
   AgentContextSnapshotV13,
   AgentContextSnapshotV14,
+  AgentContextSnapshotV20,
   AgentContextMaterializationProvenance,
+  AgentContextMaterializationProvenanceV20,
   AgentContextSource,
   AgentContextSourceIdentity,
   AgentContextSourceInput,
@@ -432,7 +491,8 @@ export type {
   ProjectConventionsSourceMaterialization,
   WorkspaceOutlineDependencyEntry,
   WorkspaceOutlineSourceMaterialization,
-  CreateAgentContextSnapshotInput
+  CreateAgentContextSnapshotInput,
+  CreateAgentContextSnapshotV2Input
 } from "./context-snapshot.js";
 export {
   canExecutePlanArtifact,
@@ -616,10 +676,13 @@ export type {
   TransitionPlanExecutionStepInput
 } from "./plan-execution.js";
 export {
+  agentControlEventMessageMappingV20,
   attachLegacyProjectId,
   EMPTY_AGENT_RUN_USAGE_SUMMARY,
   normalizeAgentRunEvent,
-  normalizeAgentRunSnapshot
+  normalizeAgentRunSnapshot,
+  readAgentRunEventRef,
+  readAgentRunUsageId
 } from "./agent-run-types.js";
 export {
   agentContextScopeKey,
@@ -630,6 +693,8 @@ export {
 } from "./agent-context-scope.js";
 export type { AgentContextProfileId, AgentContextScope } from "./agent-context-scope.js";
 export type {
+  AgentControlEventMessageMappingV20,
+  AgentControlEventTypeV20,
   AgentContextMode,
   DecideChangeSetCommand,
   DecideToolApprovalCommand,

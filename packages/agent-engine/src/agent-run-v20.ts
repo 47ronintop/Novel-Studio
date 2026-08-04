@@ -165,6 +165,8 @@ export interface AgentRunSnapshotV20 extends Omit<AgentRunSnapshotV13, ReplacedV
   readonly capabilities: AgentRunCapabilitiesV20;
   readonly pending: AgentRunPendingV20;
   readonly finish: AgentRunFinishV20;
+  /** Opaque local-only usage artifact binding. Null until a 2.0 usage record is committed. */
+  readonly usageId: string | null;
 }
 
 export interface AgentRunEventV20 {
@@ -175,6 +177,8 @@ export interface AgentRunEventV20 {
   readonly runRevision: number;
   readonly type: AgentRunEventTypeV20;
   readonly createdAt: string;
+  /** Canonical local reference used by privacy-safe usage records. */
+  readonly eventRef: string;
   readonly detail?: JsonObject;
   /** Non-enumerable workspace compatibility accessor, attached after strict validation. */
   readonly projectId: string;
@@ -247,7 +251,8 @@ const SNAPSHOT_REQUIRED_FIELDS = [
   "catalog",
   "capabilities",
   "pending",
-  "finish"
+  "finish",
+  "usageId"
 ] as const;
 
 const SNAPSHOT_OPTIONAL_FIELDS = new Set(["reasoningEffort"]);
@@ -439,7 +444,8 @@ export function validateAgentRunSnapshotV20(
     !isCatalog(value.catalog) ||
     !isCapabilities(value.capabilities) ||
     !isPending(value.pending) ||
-    !isFinish(value.finish)
+    !isFinish(value.finish) ||
+    !isNullableMetricRef(value.usageId)
   ) {
     return invalid("AGENT_RUN_SNAPSHOT_V20_INVALID");
   }
@@ -482,7 +488,8 @@ export function validateAgentRunEventV20(value: unknown): Result<AgentRunEventV2
     "sequence",
     "runRevision",
     "type",
-    "createdAt"
+    "createdAt",
+    "eventRef"
   ];
   if (!hasOnlyFields(value, [...required, "detail"])) {
     return invalid("AGENT_RUN_EVENT_V20_UNKNOWN_FIELD");
@@ -498,6 +505,7 @@ export function validateAgentRunEventV20(value: unknown): Result<AgentRunEventV2
     !positiveInteger(value.runRevision) ||
     !isEventType(value.type) ||
     !isNonEmptyString(value.createdAt) ||
+    value.eventRef !== agentRunEventRefV20(value.runId, value.sequence) ||
     (value.detail !== undefined && !isRecord(value.detail)) ||
     !eventDetailMatchesType(value.type as AgentRunEventTypeV20, value.detail)
   ) {
@@ -514,6 +522,11 @@ export function parseAgentRunEventV20(value: unknown): AgentRunEventV20 {
   const parsed = validateAgentRunEventV20(value);
   if (!parsed.ok) throw new Error(parsed.error.code);
   return parsed.value;
+}
+
+/** Create the only accepted opaque event reference without embedding event content or workspace data. */
+export function agentRunEventRefV20(runId: string, sequence: number): string {
+  return `${runId}:event:${String(sequence)}`;
 }
 
 /** Validate the snapshot/event pair that one atomic repository commit is about to expose. */
@@ -1582,6 +1595,16 @@ function isNullableSha256(value: unknown): value is string | null {
 
 function isNullableSafeId(value: unknown): value is string | null {
   return value === null || isSafeId(value);
+}
+
+function isNullableMetricRef(value: unknown): value is string | null {
+  return (
+    value === null ||
+    (typeof value === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/u.test(value) &&
+      !/^sk-[A-Za-z0-9]/iu.test(value) &&
+      !/^bearer[._:@-]/iu.test(value))
+  );
 }
 
 function positiveInteger(value: unknown): value is number {

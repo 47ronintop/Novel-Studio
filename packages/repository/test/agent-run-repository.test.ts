@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDeterministicTokenEstimator } from "@novel-studio/agent-engine";
+import {
+  createAgentRunToolCatalogSnapshot,
+  createDeterministicTokenEstimator
+} from "@novel-studio/agent-engine";
 import { afterEach, describe, expect, test } from "vitest";
 
 import * as repositoryExports from "../src/index.js";
@@ -47,9 +50,8 @@ function compactionSummaryArtifact(overrides: Record<string, unknown> = {}) {
 }
 
 function promptCacheArtifact(overrides: Record<string, unknown> = {}) {
-  const unsigned = {
+  const source = {
     schemaVersion: "1.0",
-    artifactId: "prompt_cache_01",
     runBindingId: "run_01",
     provider: "google-gemini",
     modelName: "gemini-1.5-pro",
@@ -77,11 +79,64 @@ function promptCacheArtifact(overrides: Record<string, unknown> = {}) {
     logicalPrefixChecksum: "e".repeat(64),
     stablePrefixMessageCount: 3,
     eligibleInputTokens: 40_000,
-    identityBaseChecksum: "f".repeat(64),
-    identityChecksum: "0".repeat(64),
     createdAt: "2026-07-28T00:00:00.000Z",
-    expiresAt: "2026-07-28T01:00:00.000Z",
     ...overrides
+  };
+  const identityBaseChecksum = checksumText(
+    stableSerialize({
+      schemaVersion: source.schemaVersion,
+      provider: source.provider,
+      modelName: source.modelName,
+      connectionIdentityChecksum: source.connectionIdentityChecksum,
+      accountIsolationChecksum: source.accountIsolationChecksum,
+      adapterVersion: source.adapterVersion,
+      capability: source.capability,
+      ...(source.schemaVersion === "2.0"
+        ? {
+            scope: source.scope,
+            contextProfileId: source.contextProfileId,
+            profileVersion: source.profileVersion,
+            guidanceTemplateChecksum: source.guidanceTemplateChecksum,
+            toolCatalogRevision: source.toolCatalogRevision,
+            providerSemanticVersionSetChecksum: (source as Record<string, unknown>)[
+              "providerSemanticVersionSetChecksum"
+            ],
+            canonicalRootIdentityChecksum: (source as Record<string, unknown>)[
+              "canonicalRootIdentityChecksum"
+            ],
+            effectiveCapabilityStateChecksum: (source as Record<string, unknown>)[
+              "effectiveCapabilityStateChecksum"
+            ],
+            sharingDefaultsRevision: (source as Record<string, unknown>)["sharingDefaultsRevision"],
+            sharingGrantRevision: (source as Record<string, unknown>)["sharingGrantRevision"],
+            policyRevision: (source as Record<string, unknown>)["policyRevision"],
+            providerToolProjectionChecksum: (source as Record<string, unknown>)[
+              "providerToolProjectionChecksum"
+            ]
+          }
+        : {})
+    })
+  );
+  const identityChecksum = checksumText(
+    stableSerialize({
+      schemaVersion: source.schemaVersion,
+      identityBaseChecksum,
+      logicalPrefixChecksum: source.logicalPrefixChecksum
+    })
+  );
+  const unsigned = {
+    ...source,
+    artifactId: `prompt_cache_${checksumText(
+      stableSerialize({ runBindingId: source.runBindingId, identityChecksum })
+    ).slice(0, 32)}`,
+    identityBaseChecksum,
+    identityChecksum,
+    expiresAt:
+      source.capability.ttlSeconds === null
+        ? null
+        : new Date(
+            Date.parse(source.createdAt) + Number(source.capability.ttlSeconds) * 1_000
+          ).toISOString()
   };
   return {
     ...unsigned,
@@ -106,7 +161,9 @@ describe("AgentRunFileRepository", () => {
     expect(await repository.writePromptCacheArtifact("run_01", artifact)).toMatchObject({
       ok: true
     });
-    expect(await repository.readPromptCacheArtifact("run_01", "prompt_cache_01")).toEqual({
+    expect(
+      await repository.readPromptCacheArtifact("run_01", String(artifact["artifactId"]))
+    ).toEqual({
       ok: true,
       value: artifact
     });
@@ -126,10 +183,12 @@ describe("AgentRunFileRepository", () => {
       "agent-runs",
       "run_01",
       "prompt-cache-artifacts",
-      "prompt_cache_01.json"
+      `${String(artifact["artifactId"])}.json`
     );
     await writeFile(artifactPath, JSON.stringify({ ...artifact, eligibleInputTokens: 1 }), "utf8");
-    expect(await repository.readPromptCacheArtifact("run_01", "prompt_cache_01")).toMatchObject({
+    expect(
+      await repository.readPromptCacheArtifact("run_01", String(artifact["artifactId"]))
+    ).toMatchObject({
       ok: false,
       error: { code: "AGENT_PROMPT_CACHE_ARTIFACT_INVALID" }
     });
@@ -146,6 +205,38 @@ describe("AgentRunFileRepository", () => {
         error: { code: "AGENT_PROMPT_CACHE_ARTIFACT_INVALID" }
       });
     }
+
+    const { artifactChecksum: _artifactChecksum, ...forgedUnsigned } = artifact;
+    void _artifactChecksum;
+    const forged = {
+      ...forgedUnsigned,
+      identityBaseChecksum: "f".repeat(64)
+    };
+    expect(
+      await repository.writePromptCacheArtifact("run_forged", {
+        ...forged,
+        artifactChecksum: checksumText(stableSerialize(forged))
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_PROMPT_CACHE_ARTIFACT_INVALID" }
+    });
+
+    const v2 = promptCacheArtifact({
+      schemaVersion: "2.0",
+      providerSemanticVersionSetChecksum: "1".repeat(64),
+      canonicalRootIdentityChecksum: "6".repeat(64),
+      effectiveCapabilityStateChecksum: "2".repeat(64),
+      sharingDefaultsRevision: "3".repeat(64),
+      sharingGrantRevision: "4".repeat(64),
+      policyRevision: "desktop-policy@1",
+      providerToolProjectionChecksum: "5".repeat(64)
+    });
+    expect(await repository.writePromptCacheArtifact("run_v2", v2)).toMatchObject({ ok: true });
+    expect(await repository.readPromptCacheArtifact("run_v2", String(v2["artifactId"]))).toEqual({
+      ok: true,
+      value: v2
+    });
   });
 
   test("persists immutable compaction summary artifacts", async () => {
@@ -300,17 +391,12 @@ describe("AgentRunFileRepository", () => {
       readToolCatalog(runId: string, catalogId: string): Promise<unknown>;
     };
     const repository = new Repository({ projectRoot });
-    const catalog = {
-      schemaVersion: "1.0",
-      toolCatalogSnapshotId: "tool_catalog_run_01",
+    const catalog = createAgentRunToolCatalogSnapshot({
       runId: "run_01",
       facadeVersion: "v2",
       descriptors: [],
-      descriptorRevision: "a".repeat(64),
-      providerMappingRevision: "b".repeat(64),
-      catalogRevision: "c".repeat(64),
       createdAt: "2026-07-26T00:00:00.000Z"
-    };
+    }) as unknown as Record<string, unknown>;
 
     expect(await repository.writeToolCatalog("run_01", catalog)).toMatchObject({ ok: true });
     expect(await repository.writeToolCatalog("run_01", catalog)).toMatchObject({ ok: true });
@@ -325,6 +411,10 @@ describe("AgentRunFileRepository", () => {
       })
     ).toMatchObject({ ok: false, error: { code: "AGENT_TOOL_CATALOG_CONFLICT" } });
     expect(await repository.writeToolCatalog("../run", catalog)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TOOL_CATALOG_INVALID" }
+    });
+    expect(await repository.writeToolCatalog("run_01", { ...catalog, extra: true })).toMatchObject({
       ok: false,
       error: { code: "AGENT_TOOL_CATALOG_INVALID" }
     });

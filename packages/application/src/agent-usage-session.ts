@@ -4,11 +4,18 @@ import type {
   AgentUsageDailyBucket,
   AgentUsageQuery,
   AgentUsageReport,
+  AgentUsageMetricRecord,
   AgentUsageRunSummary,
   ClearAgentUsageCommand
 } from "./agent-usage-types.js";
 
 export interface AgentUsageRepositoryPort {
+  writeRunMetrics(
+    record: AgentUsageMetricRecord
+  ): Promise<Result<AgentUsageMetricRecord, UnifiedError>>;
+  readRunMetrics(
+    usageId: string
+  ): Promise<Result<AgentUsageMetricRecord | undefined, UnifiedError>>;
   queryDailyAggregates(
     query: AgentUsageQuery
   ): Promise<Result<readonly AgentUsageDailyBucket[], UnifiedError>>;
@@ -20,6 +27,10 @@ export interface AgentUsageRepositoryPort {
 }
 
 export interface AgentUsageSession {
+  recordAgentUsage(
+    record: AgentUsageMetricRecord
+  ): Promise<Result<AgentUsageMetricRecord, UnifiedError>>;
+  getAgentUsage(usageId: string): Promise<Result<AgentUsageMetricRecord | undefined, UnifiedError>>;
   listAgentUsage(query: AgentUsageQuery): Promise<Result<AgentUsageReport, UnifiedError>>;
   clearAgentUsage(command: ClearAgentUsageCommand): Promise<Result<AgentUsageReport, UnifiedError>>;
 }
@@ -56,6 +67,28 @@ export function createAgentUsageSession(
   };
 
   return {
+    async recordAgentUsage(record) {
+      if (!isValidMetricRecord(record)) {
+        return err(usageError("AGENT_USAGE_RECORD_V20_INVALID"));
+      }
+      const written = await options.repository.writeRunMetrics(record);
+      if (!written.ok) return written;
+      return isValidMetricRecord(written.value)
+        ? written
+        : err(usageError("AGENT_USAGE_RECORD_V20_INVALID"));
+    },
+
+    async getAgentUsage(usageId) {
+      if (!isSafeMetricRef(usageId)) {
+        return err(usageError("AGENT_USAGE_QUERY_INVALID"));
+      }
+      const stored = await options.repository.readRunMetrics(usageId);
+      if (!stored.ok || stored.value === undefined) return stored;
+      return isValidMetricRecord(stored.value)
+        ? stored
+        : err(usageError("AGENT_USAGE_RECORD_V20_INVALID"));
+    },
+
     listAgentUsage,
 
     async clearAgentUsage(command) {
@@ -73,6 +106,167 @@ export function createAgentUsageSession(
       return listAgentUsage({ range: command.range });
     }
   };
+}
+
+const METRIC_FIELDS = [
+  "schemaVersion",
+  "storageScope",
+  "usageId",
+  "runId",
+  "recordedAt",
+  "semanticVersionSetChecksum",
+  "guidanceVersion",
+  "contextProfileId",
+  "messageOrderVersion",
+  "toolCatalogVersion",
+  "runOutcome",
+  "pendingOutcome",
+  "recoveryOutcome",
+  "modelRoundCount",
+  "toolCallCount",
+  "toolFailureCount",
+  "approvalWaitCount",
+  "approvalWaitMs",
+  "sources",
+  "cacheOutcome",
+  "cacheVerifiedInputTokens",
+  "changeSetOutcome",
+  "styleObservations",
+  "eventRefs"
+] as const;
+
+function isValidMetricRecord(value: unknown): value is AgentUsageMetricRecord {
+  if (!hasOnlyKeys(value, METRIC_FIELDS)) return false;
+  const record = value as unknown as AgentUsageMetricRecord;
+  if (
+    record.schemaVersion !== "2.0" ||
+    record.storageScope !== "local_only" ||
+    !isSafeMetricRef(record.usageId) ||
+    !isSafeMetricRef(record.runId) ||
+    !isUtcIsoTimestamp(record.recordedAt) ||
+    !/^[a-f0-9]{64}$/u.test(record.semanticVersionSetChecksum) ||
+    record.guidanceVersion !== "3.0" ||
+    !["standalone", "writing", "creative_general", "engineering"].includes(
+      record.contextProfileId
+    ) ||
+    record.messageOrderVersion !== "2.0" ||
+    record.toolCatalogVersion !== "2.0" ||
+    ![
+      "completed",
+      "blocked",
+      "cancelled",
+      "failed",
+      "limit_reached",
+      "awaiting_approval",
+      "awaiting_input",
+      "stale",
+      "capability_changed"
+    ].includes(record.runOutcome) ||
+    ![
+      "none",
+      "awaiting_approval",
+      "awaiting_input",
+      "change_set_pending",
+      "recovery_pending"
+    ].includes(record.pendingOutcome) ||
+    !["not_required", "pending", "recovered", "rolled_back", "failed", "outcome_unknown"].includes(
+      record.recoveryOutcome
+    ) ||
+    !isMetricCount(record.modelRoundCount) ||
+    !isMetricCount(record.toolCallCount) ||
+    !isMetricCount(record.toolFailureCount) ||
+    record.toolFailureCount > record.toolCallCount ||
+    !isMetricCount(record.approvalWaitCount) ||
+    !isMetricCount(record.approvalWaitMs) ||
+    !Array.isArray(record.sources) ||
+    record.sources.length > 256 ||
+    !["hit", "miss", "bypass", "unknown"].includes(record.cacheOutcome) ||
+    (record.cacheVerifiedInputTokens !== null && !isMetricCount(record.cacheVerifiedInputTokens)) ||
+    ((record.cacheOutcome === "bypass" || record.cacheOutcome === "unknown") &&
+      record.cacheVerifiedInputTokens !== null) ||
+    ![
+      "none",
+      "generated",
+      "approved",
+      "rejected",
+      "applied",
+      "rolled_back",
+      "undone",
+      "stale"
+    ].includes(record.changeSetOutcome) ||
+    !Array.isArray(record.styleObservations) ||
+    record.styleObservations.length > 256 ||
+    !Array.isArray(record.eventRefs) ||
+    record.eventRefs.length > 1024 ||
+    !record.eventRefs.every(isSafeMetricRef) ||
+    new Set(record.eventRefs).size !== record.eventRefs.length
+  ) {
+    return false;
+  }
+  return (
+    record.sources.every(isValidSourceMetric) && record.styleObservations.every(isValidStyleMetric)
+  );
+}
+
+function isValidSourceMetric(source: AgentUsageMetricRecord["sources"][number]): boolean {
+  if (!hasOnlyKeys(source, ["sourceKind", "tokenCount", "truncated", "exclusionReason"])) {
+    return false;
+  }
+  return (
+    [
+      "disk_file",
+      "editor_buffer",
+      "story_bible_asset",
+      "project_conventions",
+      "workspace_outline",
+      "compaction_summary",
+      "system_guidance",
+      "conversation",
+      "tool_result",
+      "user_request"
+    ].includes(source.sourceKind) &&
+    isMetricCount(source.tokenCount) &&
+    typeof source.truncated === "boolean" &&
+    ["none", "user_excluded", "budget", "policy", "stale", "unsupported"].includes(
+      source.exclusionReason
+    ) &&
+    (source.exclusionReason === "none" || (source.tokenCount === 0 && source.truncated === false))
+  );
+}
+
+function isValidStyleMetric(
+  observation: AgentUsageMetricRecord["styleObservations"][number]
+): boolean {
+  if (!hasOnlyKeys(observation, ["rule", "version", "confidence", "userOutcome"])) {
+    return false;
+  }
+  return (
+    isSafeMetricRef(observation.rule) &&
+    /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/u.test(observation.version) &&
+    Number.isFinite(observation.confidence) &&
+    observation.confidence >= 0 &&
+    observation.confidence <= 1 &&
+    ["accepted", "ignored", "dismissed", "no_action"].includes(observation.userOutcome)
+  );
+}
+
+function isMetricCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isSafeMetricRef(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/u.test(value) &&
+    !/^sk-[A-Za-z0-9]/iu.test(value) &&
+    !/^bearer[._:@-]/iu.test(value)
+  );
+}
+
+function isUtcIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
 function isValidQuery(query: unknown): query is AgentUsageQuery {

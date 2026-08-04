@@ -1321,15 +1321,17 @@ describe("desktop Agent Run runtime", () => {
     });
     expect(pinned).toMatchObject({ ok: true });
     if (!pinned.ok) return;
-    const previewed = await previewDraftStart(runtime, pinned.value, "start-packed-overflow");
-    expect(previewed.preview.tokenStats.pinnedTokens).toBeGreaterThan(
-      previewed.preview.tokenStats.safeInputBudget
-    );
-    expect(previewed.preview.fixedBudgetExceeded).toBe(true);
-
-    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+    const preview = await runtime.agentContextSession.previewPackedContext({
+      projectId: runtime.workspaceId,
+      conversationId: conversation.value.conversationId,
+      commandId: "preview-packed-overflow",
+      runDraftId: pinned.value.runDraft.runDraftId,
+      expectedDraftRevision: pinned.value.runDraft.revision,
+      runDraftChecksum: pinned.value.runDraft.checksum
+    });
+    expect(preview).toMatchObject({
       ok: false,
-      error: { code: "AGENT_CONTEXT_FIXED_BUDGET_EXCEEDED" }
+      error: { code: "CONTEXT_PACKING_ACTIVE_OR_PINNED_OVERFLOW" }
     });
     expect(modelRounds).toBe(0);
   });

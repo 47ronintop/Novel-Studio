@@ -42,6 +42,23 @@ export { HistoryRepository } from "./history-repository.js";
 export { AgentRunFileRepository } from "./agent-run-repository.js";
 export type { AgentRunFileRepositoryOptions } from "./agent-run-repository.js";
 export {
+  AGENT_SEND_LEDGER_SCHEMA_VERSION,
+  AgentSendLedgerFileRepository,
+  createAgentSendLedgerEntryV2,
+  parseAgentSendLedgerEntryV2,
+  parseAgentSendLedgerEntryV2Json,
+  serializeAgentSendLedgerEntryV2
+} from "./agent-send-ledger-repository.js";
+export type {
+  AgentSendLedgerAdditionKindV2,
+  AgentSendLedgerAdditionV2,
+  AgentSendLedgerEntryV2,
+  AgentSendLedgerFileRepositoryOptions,
+  AgentSendLedgerPreviewBindingV2,
+  CreateAgentSendLedgerEntryV2Input,
+  ProviderNativeSemanticProofV2
+} from "./agent-send-ledger-repository.js";
+export {
   AGENT_RUN_EVENT_SCHEMA_VERSION_V20,
   AGENT_RUN_SNAPSHOT_SCHEMA_VERSION_V20,
   parseAgentRunEventV20,
