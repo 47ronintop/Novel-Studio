@@ -150,6 +150,37 @@ describe("AgentRunPanel", () => {
     disposePanelHost(host);
   });
 
+  test("renders and dispatches a pending context-sharing approval without result content", () => {
+    const onDecideContextShareApproval = vi.fn();
+    const host = renderPanelHost({
+      status: "awaiting_context_share_approval",
+      pendingContextShareApproval: {
+        requestId: "context_share_request_01",
+        approvalBinding: "a".repeat(64),
+        resultClass: "tool_read_result",
+        resultKind: "workspace_text",
+        toolCallId: "tool_call_context_share_01",
+        deciding: false
+      },
+      onDecideContextShareApproval
+    });
+    const approval = host.querySelector<HTMLElement>('[aria-label="上下文共享审批"]');
+
+    expect(approval?.dataset["requestId"]).toBe("context_share_request_01");
+    expect(approval?.textContent).toContain("工具读取结果");
+    expect(approval?.textContent).toContain("workspace_text");
+    expect(approval?.textContent).not.toContain("tool_call_context_share_01");
+    act(() =>
+      approval?.querySelector<HTMLButtonElement>('[aria-label="批准共享读取结果"]')?.click()
+    );
+    act(() =>
+      approval?.querySelector<HTMLButtonElement>('[aria-label="拒绝共享读取结果"]')?.click()
+    );
+    expect(onDecideContextShareApproval.mock.calls).toEqual([["approve"], ["reject"]]);
+
+    disposePanelHost(host);
+  });
+
   test("shows a bounded, redacted network target and arguments before approval", () => {
     const destination = `https://user:password@api.example.test/v1?access_token=do-not-render`;
     const argumentsText = JSON.stringify({

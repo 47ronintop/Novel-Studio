@@ -331,6 +331,78 @@ describe("Agent Run renderer bridge", () => {
     expect(bridge.getProps()?.pendingToolApproval).toBeUndefined();
   });
 
+  test("projects a durable context-sharing request and sends its bound decision", async () => {
+    const approvalBinding = "c".repeat(64);
+    const pendingSnapshot = {
+      ...snapshot,
+      schemaVersion: "2.0",
+      status: "awaiting_context_share_approval",
+      runRevision: 12,
+      lastSequence: 12,
+      pending: { kind: "context_share_approval", requestId: "context_share_request_01" }
+    } as unknown as AgentRunSnapshot;
+    const requestedEvent = {
+      schemaVersion: "2.0",
+      runId: "run-bridge",
+      projectId: "project-01",
+      sequence: 12,
+      runRevision: 12,
+      type: "context_share_approval_requested",
+      createdAt: "2026-07-25T00:00:00.000Z",
+      detail: {
+        requestId: "context_share_request_01",
+        approvalBinding,
+        resultClass: "tool_read_result",
+        resultKind: "workspace_text",
+        toolCallId: "tool-call-context-share-01"
+      }
+    } as never;
+    const resolvedSnapshot = {
+      ...pendingSnapshot,
+      status: "executing_model",
+      runRevision: 13,
+      lastSequence: 13,
+      pending: { kind: "none" }
+    } as unknown as AgentRunSnapshot;
+    let current = pendingSnapshot;
+    const decisions: Record<string, unknown>[] = [];
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([current]),
+        read: async () => ok({ snapshot: current, events: [requestedEvent] }),
+        decideContextShareApproval: async (command: Record<string, unknown>) => {
+          decisions.push(structuredClone(command));
+          current = resolvedSnapshot;
+          return ok(resolvedSnapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    const loaded = await bridge.load("project-01");
+    expect(loaded.pendingContextShareApproval).toMatchObject({
+      requestId: "context_share_request_01",
+      approvalBinding,
+      resultClass: "tool_read_result",
+      resultKind: "workspace_text"
+    });
+    await bridge.decideContextShareApproval("reject");
+
+    expect(decisions).toEqual([
+      expect.objectContaining({
+        runId: "run-bridge",
+        projectId: "project-01",
+        expectedRunRevision: 12,
+        requestId: "context_share_request_01",
+        approvalBinding,
+        decision: "deny"
+      })
+    ]);
+    expect(bridge.getProps()?.pendingContextShareApproval).toBeUndefined();
+  });
+
   test("projects network approval destination alongside its persisted arguments", async () => {
     const pendingSnapshot = {
       ...snapshot,
@@ -3698,7 +3770,12 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
               connectionLabel: "Local connection",
               adapterPolicyLabel: "Adapter policy 1"
             },
-            guidance: { version: "3.0", profileId: "writing", runtimeFacts: {}, content: "guidance" },
+            guidance: {
+              version: "3.0",
+              profileId: "writing",
+              runtimeFacts: {},
+              content: "guidance"
+            },
             tools: [],
             sources: [],
             retainedLocalProvenanceKinds: [],

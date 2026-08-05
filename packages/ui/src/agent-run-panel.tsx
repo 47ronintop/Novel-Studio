@@ -148,6 +148,43 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
         </section>
       )}
 
+      {props.pendingContextShareApproval === undefined ||
+      props.onDecideContextShareApproval === undefined ? null : (
+        <section
+          aria-label="上下文共享审批"
+          className="ns-agent-tool-approval"
+          data-request-id={props.pendingContextShareApproval.requestId}
+        >
+          <strong>读取结果需要共享确认</strong>
+          <p>
+            {contextShareResultClassLabel(props.pendingContextShareApproval.resultClass)}：
+            {props.pendingContextShareApproval.resultKind}
+          </p>
+          <div className="ns-agent-inline-actions">
+            <button
+              aria-label="拒绝共享读取结果"
+              className="ns-ai-secondary-button"
+              disabled={props.pendingContextShareApproval.deciding}
+              onClick={() => props.onDecideContextShareApproval?.("reject")}
+              type="button"
+            >
+              <X aria-hidden="true" size={13} />
+              拒绝
+            </button>
+            <button
+              aria-label="批准共享读取结果"
+              className="ns-ai-send-button"
+              disabled={props.pendingContextShareApproval.deciding}
+              onClick={() => props.onDecideContextShareApproval?.("approve")}
+              type="button"
+            >
+              <Check aria-hidden="true" size={13} />
+              批准
+            </button>
+          </div>
+        </section>
+      )}
+
       {props.status !== "awaiting_context_refresh" ? null : (
         <section className="ns-agent-context-refresh" aria-label="上下文刷新">
           <strong>上下文已变化</strong>
@@ -228,6 +265,7 @@ function RunStatusIndicator({ status }: { readonly status: AgentRunPanelProps["s
   const isWaiting =
     status === "awaiting_write_approval" ||
     status === "awaiting_tool_approval" ||
+    status === "awaiting_context_share_approval" ||
     status === "awaiting_external_outcome_resolution" ||
     status === "awaiting_user_input" ||
     status === "awaiting_context_refresh" ||
@@ -257,6 +295,12 @@ function toolApprovalKindLabel(
     case "task":
       return "项目任务";
   }
+}
+
+function contextShareResultClassLabel(
+  resultClass: NonNullable<AgentRunPanelProps["pendingContextShareApproval"]>["resultClass"]
+): string {
+  return resultClass === "conversation_summary" ? "对话摘要" : "工具读取结果";
 }
 
 const TOOL_APPROVAL_PREVIEW_LIMIT = 1_500;
@@ -384,6 +428,8 @@ function statusLabel(status: AgentRunPanelProps["status"]): string {
       return "更改待确认";
     case "awaiting_tool_approval":
       return "工具待确认";
+    case "awaiting_context_share_approval":
+      return "读取结果待共享确认";
     case "awaiting_external_outcome_resolution":
       return "外部结果待核验";
     case "applying_changes":

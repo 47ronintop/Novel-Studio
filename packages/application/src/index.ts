@@ -850,6 +850,8 @@ export type {
   AgentRunStartPermissionPort,
   AgentRunStartPreflightPort,
   AgentRunContextCompactor,
+  AgentRunContextSharingPort,
+  AgentRunContextSharingState,
   AgentContextBudgetPressure,
   AgentUsageBudgetFacts,
   AgentUsageTimeFacts,
@@ -857,6 +859,7 @@ export type {
   AgentUserInputOption,
   AgentUserInputRequest,
   AnswerAgentUserInputCommand,
+  DecideContextShareApprovalCommand,
   CreateAgentRunSessionOptions,
   RecordAgentPlanDeviationCommand
 } from "./agent-run-session.js";

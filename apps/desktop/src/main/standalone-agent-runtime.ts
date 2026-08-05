@@ -399,6 +399,7 @@ function composeDesktopStandaloneAgentRuntime(
         return written.ok ? ok(written.value as unknown as AgentUsageRecord) : err(written.error);
       }
     },
+    usageMetricSink: usageSession,
     pricingRegistry,
     usageTime,
     usageBudgetResolver: (snapshot: AgentRunSnapshot) =>

@@ -12,6 +12,7 @@ import {
   createStoryBibleAgentToolSession,
   freezeRunModelSharingGrant,
   freezeWorkspaceModelSharingDefaults,
+  filterReadToolsBySharingPolicy,
   freezeProviderNameMapping,
   createAgentRunSession,
   createAgentUsageSession,
@@ -28,6 +29,8 @@ import {
   materializeAgentPrompt,
   materializeAgentSystemPromptV3,
   materializeCanonicalAgentRound,
+  parseFrozenRunModelSharingGrant,
+  parseFrozenWorkspaceModelSharingDefaults,
   packAgentContext,
   parseProviderVisibleUntrustedEnvelope,
   isStoryBibleAssetType,
@@ -63,6 +66,7 @@ import {
   type AgentExternalToolExecutor,
   type AgentFileOperationSessionPort,
   type AgentRunModelDriver,
+  type AgentRunContextSharingPort,
   type AgentRunSession,
   type AgentRunStartFacts,
   type AgentRunStartModelFacts,
@@ -96,7 +100,8 @@ import {
   type VersionGroupTransactionApplyInput
 } from "@novel-studio/application";
 import { createHash, randomBytes } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
+import { join } from "node:path";
 import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
 import { createDesktopProjectConventionsReader } from "./project-conventions-reader.js";
 import { createDesktopWorkspaceOutlineReader } from "./workspace-outline-reader.js";
@@ -105,6 +110,7 @@ import { DEFAULT_AGENT_FEATURE_FLAGS, type AgentFeatureFlags } from "./agent-fea
 import type { WorkspaceContextSourcePreference } from "./workspace-context-policy-store.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type {
+  AgentContextScope,
   AgentContextSourceIdentity,
   AgentContextSourceInput,
   AgentContextMode,
@@ -184,6 +190,7 @@ import {
   WorkspaceOutlineProjectEntryRepository,
   WorkspaceOutlineProjectMetadataRepository,
   validateWithSchema,
+  writeTextAtomically,
   createAgentSendLedgerEntryV2,
   type AgentSendLedgerAdditionV2,
   type AgentSendLedgerEntryV2,
@@ -900,6 +907,47 @@ function createDesktopAgentRuntimeServices(
     projectRoot: options.stateRoot,
     traceId: "desktop-agent-send-ledger"
   });
+  const expectedSharingWorkspaceBindingId = sha256(
+    `${options.workspaceKind}\n${options.projectId}\n${options.contentRoot}`
+  );
+  const persistModelSharingState = async (input: {
+    readonly runId: string;
+    readonly defaults: FrozenWorkspaceModelSharingDefaults;
+    readonly grant: FrozenRunModelSharingGrant;
+  }): Promise<Result<void, UnifiedError>> => {
+    if (
+      !isMachineToken(input.runId) ||
+      input.defaults.workspaceBindingId !== expectedSharingWorkspaceBindingId ||
+      input.grant.workspaceBindingId !== expectedSharingWorkspaceBindingId
+    ) {
+      return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+    }
+    return writeTextAtomically({
+      targetPath: sharingStatePath(options.stateRoot, input.runId),
+      content: serializeDesktopModelSharingState(input),
+      traceId: "desktop-agent-model-sharing-state"
+    });
+  };
+  const readPersistedModelSharingState = async (
+    runId: string
+  ): Promise<Result<DesktopPersistedModelSharingState | undefined, UnifiedError>> => {
+    if (!isMachineToken(runId)) return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+    try {
+      const raw = await readFile(sharingStatePath(options.stateRoot, runId), "utf8");
+      const parsed = parseDesktopModelSharingState(JSON.parse(raw) as unknown, runId);
+      if (
+        parsed === undefined ||
+        parsed.defaults.workspaceBindingId !== expectedSharingWorkspaceBindingId ||
+        parsed.grant.workspaceBindingId !== expectedSharingWorkspaceBindingId
+      ) {
+        return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+      }
+      return ok(parsed);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return ok(undefined);
+      return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+    }
+  };
   const usageRepository =
     options.userDataRoot === undefined
       ? undefined
@@ -1079,8 +1127,93 @@ function createDesktopAgentRuntimeServices(
     frozenFirstSends,
     preparedSendStates,
     roundState: sendRoundState,
+    ...(resolvedFeatureFlags.agentGuidanceV3 &&
+    options.sharingDefaults != null &&
+    isSha256(options.sharingDefaultsRevision)
+      ? { readModelSharingState: readPersistedModelSharingState }
+      : {}),
     now: () => options.now?.() ?? new Date().toISOString()
   });
+  const contextSharing: AgentRunContextSharingPort | undefined =
+    !resolvedFeatureFlags.agentGuidanceV3 ||
+    options.sharingDefaults == null ||
+    !isSha256(options.sharingDefaultsRevision)
+      ? undefined
+      : {
+          async readForRun(input: { readonly runId: string; readonly scope: AgentContextScope }) {
+            if (
+              input.scope.kind !== "workspace" ||
+              input.scope.workspaceId !== runtimeScope.workspaceId ||
+              input.scope.workspaceKind !== runtimeScope.workspaceKind
+            ) {
+              return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+            }
+            const state = sendRoundState.get(input.runId) ?? preparedSendStates.get(input.runId);
+            if (state !== undefined) return ok({ defaults: state.defaults, grant: state.grant });
+            const restored = await readPersistedModelSharingState(input.runId);
+            if (!restored.ok) return restored;
+            return restored.value === undefined
+              ? err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"))
+              : ok({ defaults: restored.value.defaults, grant: restored.value.grant });
+          },
+          async updateGrant(input: {
+            readonly runId: string;
+            readonly scope: AgentContextScope;
+            readonly priorGrantRevision: string;
+            readonly grant: FrozenRunModelSharingGrant;
+          }) {
+            if (
+              input.scope.kind !== "workspace" ||
+              input.scope.workspaceId !== runtimeScope.workspaceId ||
+              input.scope.workspaceKind !== runtimeScope.workspaceKind
+            ) {
+              return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+            }
+            const prepared = preparedSendStates.get(input.runId);
+            const round = sendRoundState.get(input.runId);
+            const inMemory = round ?? prepared;
+            const restored =
+              inMemory === undefined
+                ? await readPersistedModelSharingState(input.runId)
+                : ok(undefined);
+            if (!restored.ok) return restored;
+            const current =
+              inMemory ??
+              (restored.value === undefined
+                ? undefined
+                : { defaults: restored.value.defaults, grant: restored.value.grant });
+            if (
+              current === undefined ||
+              current.grant.grantRevision !== input.priorGrantRevision ||
+              input.grant.workspaceBindingId !== current.defaults.workspaceBindingId ||
+              input.grant.defaultsRevision !== current.defaults.defaultsRevision
+            ) {
+              return err(runtimeError("AGENT_MODEL_SHARING_APPROVAL_STALE"));
+            }
+            const previousGrant = current.grant;
+            if (prepared !== undefined) prepared.grant = input.grant;
+            if (round !== undefined) round.grant = input.grant;
+            const persisted = await persistModelSharingState({
+              runId: input.runId,
+              defaults: current.defaults,
+              grant: input.grant
+            });
+            if (!persisted.ok) {
+              if (prepared !== undefined) prepared.grant = previousGrant;
+              if (round !== undefined) round.grant = previousGrant;
+              return persisted;
+            }
+            return ok(input.grant);
+          },
+          classifyReadResult(descriptor: AgentToolDescriptor) {
+            return descriptor.effect !== "read"
+              ? undefined
+              : {
+                  resultClass: "tool_read_result" as const,
+                  resultKind: `tool:${desktopProviderToolName(descriptor)}`
+                };
+          }
+        };
 
   const conversationPersistence: AgentConversationPersistencePort = {
     createConversation(record) {
@@ -1302,6 +1435,7 @@ function createDesktopAgentRuntimeServices(
     repository,
     modelDriver,
     readToolExecutor,
+    ...(contextSharing === undefined ? {} : { contextSharing }),
     startPreflight,
     newRunToolFacadeVersion: "v2",
     agentGuidanceV3: resolvedFeatureFlags.agentGuidanceV3,
@@ -1345,6 +1479,7 @@ function createDesktopAgentRuntimeServices(
                 : err(written.error);
             }
           },
+          ...(usageSession === undefined ? {} : { usageMetricSink: usageSession }),
           pricingRegistry:
             options.pricingRegistry ??
             createAgentPricingRegistry({ version: "stage-5-default", entries: [] }),
@@ -1569,6 +1704,12 @@ function createDesktopAgentRuntimeServices(
       ) {
         return err(runtimeError("AGENT_SEND_PREVIEW_STALE"));
       }
+      const persistedSharing = await persistModelSharingState({
+        runId: manifest.runId,
+        defaults: prepared.defaults,
+        grant: prepared.grant
+      });
+      if (!persistedSharing.ok) return persistedSharing;
       frozenFirstSends.set(manifest.runId, input);
       reservedRunIds.push(manifest.runId);
       const started = await session.startAgentRun(startCommand);
@@ -1690,8 +1831,56 @@ interface DesktopSendPreviewBinding {
 
 interface DesktopPreparedSendState {
   readonly defaults: FrozenWorkspaceModelSharingDefaults;
-  readonly grant: FrozenRunModelSharingGrant;
+  grant: FrozenRunModelSharingGrant;
   readonly canonicalManifest: CanonicalRoundManifestV2;
+}
+
+interface DesktopPersistedModelSharingState {
+  readonly schemaVersion: "1.0";
+  readonly runId: string;
+  readonly defaults: FrozenWorkspaceModelSharingDefaults;
+  readonly grant: FrozenRunModelSharingGrant;
+}
+
+function sharingStatePath(stateRoot: string, runId: string): string {
+  // Hashing the id keeps the storage path safe even if an old caller supplied a slash-bearing id.
+  return join(stateRoot, "agent-model-sharing", `${sha256(runId)}.json`);
+}
+
+function serializeDesktopModelSharingState(input: {
+  readonly runId: string;
+  readonly defaults: FrozenWorkspaceModelSharingDefaults;
+  readonly grant: FrozenRunModelSharingGrant;
+}): string {
+  const record: DesktopPersistedModelSharingState = {
+    schemaVersion: "1.0",
+    runId: input.runId,
+    defaults: input.defaults,
+    grant: input.grant
+  };
+  return `${JSON.stringify(record)}\n`;
+}
+
+function parseDesktopModelSharingState(
+  value: unknown,
+  runId: string
+): DesktopPersistedModelSharingState | undefined {
+  if (!isRecord(value)) return undefined;
+  const keys = Object.keys(value).sort();
+  if (
+    keys.join("\u0000") !== "defaults\u0000grant\u0000runId\u0000schemaVersion" ||
+    value["schemaVersion"] !== "1.0" ||
+    value["runId"] !== runId
+  ) {
+    return undefined;
+  }
+  try {
+    const defaults = parseFrozenWorkspaceModelSharingDefaults(value["defaults"]);
+    const grant = parseFrozenRunModelSharingGrant(value["grant"]);
+    return Object.freeze({ schemaVersion: "1.0", runId, defaults, grant });
+  } catch {
+    return undefined;
+  }
 }
 
 interface DesktopSendRoundState extends DesktopPreparedSendState {
@@ -1700,6 +1889,7 @@ interface DesktopSendRoundState extends DesktopPreparedSendState {
   currentManifest: CanonicalRoundManifestV2;
   messageCount: number;
   roundNumber: number;
+  readonly tools: AgentModelRoundInput["tools"];
 }
 
 function createDesktopSendLedgerModelDriver(input: {
@@ -1708,11 +1898,62 @@ function createDesktopSendLedgerModelDriver(input: {
   readonly frozenFirstSends: Map<string, AgentConfirmedFirstSendV2>;
   readonly preparedSendStates: Map<string, DesktopPreparedSendState>;
   readonly roundState: Map<string, DesktopSendRoundState>;
+  readonly readModelSharingState?: (
+    runId: string
+  ) => Promise<Result<DesktopPersistedModelSharingState | undefined, UnifiedError>>;
   readonly now: () => string;
 }): AgentRunModelDriver {
+  async function hydrateRoundState(runId: string): Promise<DesktopSendRoundState | undefined> {
+    const current = input.roundState.get(runId);
+    if (current !== undefined) return current;
+    const entries = await input.repository.readEntries(runId);
+    if (!entries.ok) throw new Error(entries.error.code);
+    if (entries.value.length === 0) return undefined;
+    const first = entries.value[0];
+    const last = entries.value.at(-1);
+    if (first === undefined || last === undefined || first.previewBinding === null) {
+      throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
+    }
+    const firstManifest = parseDesktopCanonicalRoundManifestJson(
+      first.canonicalRoundManifestJson,
+      first.canonicalRoundManifestChecksum
+    );
+    const currentManifest = parseDesktopCanonicalRoundManifestJson(
+      last.canonicalRoundManifestJson,
+      last.canonicalRoundManifestChecksum
+    );
+    if (
+      firstManifest.runId !== runId ||
+      firstManifest.roundNumber !== 0 ||
+      currentManifest.runId !== runId ||
+      currentManifest.roundNumber !== last.roundNumber ||
+      first.canonicalPayloadChecksum !== first.previewBinding.canonicalPayloadChecksum
+    ) {
+      throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
+    }
+    if (input.readModelSharingState === undefined) return undefined;
+    const sharing = await input.readModelSharingState(runId);
+    if (!sharing.ok) throw new Error(sharing.error.code);
+    if (sharing.value === undefined) throw new Error("AGENT_MODEL_SHARING_BINDING_INVALID");
+    const tools = desktopToolsFromManifest(currentManifest);
+    const restored: DesktopSendRoundState = {
+      defaults: sharing.value.defaults,
+      grant: sharing.value.grant,
+      canonicalManifest: firstManifest,
+      currentManifest,
+      previewId: first.previewBinding.previewId,
+      firstPayloadChecksum: first.canonicalPayloadChecksum,
+      messageCount: currentManifest.messages.length,
+      roundNumber: last.roundNumber,
+      tools
+    };
+    input.roundState.set(runId, restored);
+    return restored;
+  }
+
   return {
     async *streamRound(roundInput) {
-      const existing = input.roundState.get(roundInput.runId);
+      const existing = await hydrateRoundState(roundInput.runId);
       if (existing === undefined) {
         const first = input.frozenFirstSends.get(roundInput.runId);
         if (first === undefined) {
@@ -1751,7 +1992,11 @@ function createDesktopSendLedgerModelDriver(input: {
               };
             }
             if (message.role === "tool") {
-              return { role: "tool" as const, content: message.content, toolCallId: message.toolCallId };
+              return {
+                role: "tool" as const,
+                content: message.content,
+                toolCallId: message.toolCallId
+              };
             }
             return { role: "user" as const, content: message.content };
           })
@@ -1789,7 +2034,8 @@ function createDesktopSendLedgerModelDriver(input: {
           previewId: first.previewId,
           firstPayloadChecksum: first.canonicalPayloadChecksum,
           messageCount: manifest.messages.length,
-          roundNumber: 0
+          roundNumber: 0,
+          tools: frozenTools
         });
         yield* input.delegate.streamRound(frozenInput);
         return;
@@ -1812,7 +2058,10 @@ function createDesktopSendLedgerModelDriver(input: {
         authority: existing.currentManifest.authority.content,
         toolCatalogRevision: existing.currentManifest.tools.catalogRevision,
         projectedToolDescriptors: existing.currentManifest.tools.descriptors,
-        sharing: existing.currentManifest.sharing,
+        sharing: {
+          defaultsRevision: existing.defaults.defaultsRevision,
+          runGrantRevision: existing.grant.grantRevision
+        },
         providerSemanticVersionSet: existing.currentManifest.providerSemanticVersionSet,
         packedContextManifestChecksum: existing.currentManifest.packedContextManifestChecksum,
         messages: [
@@ -1823,7 +2072,12 @@ function createDesktopSendLedgerModelDriver(input: {
         ]
       });
       const ledgerAdditions = additions.map((message, index) =>
-        desktopLedgerAddition(message, existing.messageCount + index, roundInput.runId, existing.roundNumber + 1)
+        desktopLedgerAddition(
+          message,
+          existing.messageCount + index,
+          roundInput.runId,
+          existing.roundNumber + 1
+        )
       );
       const entry = createDesktopLedgerEntry({
         runId: roundInput.runId,
@@ -1834,7 +2088,7 @@ function createDesktopSendLedgerModelDriver(input: {
           stableDesktopJson({
             systemPrompt: roundInput.systemPrompt ?? "",
             messages: roundInput.messages,
-            tools: roundInput.tools
+            tools: existing.tools
           })
         ),
         previewId: null,
@@ -1846,7 +2100,7 @@ function createDesktopSendLedgerModelDriver(input: {
       existing.messageCount += additions.length;
       existing.roundNumber += 1;
       existing.currentManifest = manifest;
-      yield* input.delegate.streamRound(roundInput);
+      yield* input.delegate.streamRound({ ...roundInput, tools: existing.tools });
     }
   };
 }
@@ -1882,6 +2136,28 @@ function createDesktopLedgerEntry(input: {
     providerNativeSemanticProof: null,
     sentAt: input.sentAt
   });
+}
+
+function desktopToolsFromManifest(
+  manifest: CanonicalRoundManifestV2
+): AgentModelRoundInput["tools"] {
+  return freezeDesktopValue(
+    manifest.tools.descriptors.map((descriptor) => {
+      const name = descriptor["name"];
+      if (typeof name !== "string" || name.length === 0) {
+        throw new Error("AGENT_SEND_LEDGER_TOOL_INVALID");
+      }
+      const inputSchema = desktopRequiredJsonObject(
+        descriptor["inputSchema"] as JsonValue | undefined
+      );
+      const description = descriptor["description"];
+      return {
+        name,
+        ...(typeof description === "string" ? { description } : {}),
+        inputSchema
+      };
+    })
+  );
 }
 
 function createDesktopCanonicalMessageFromModel(
@@ -2235,7 +2511,12 @@ function desktopProviderRuntimeFactsJson(
 }
 
 function desktopJsonValue(value: unknown): JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return value;
   }
   if (Array.isArray(value)) return value.map((entry) => desktopJsonValue(entry));
@@ -2270,7 +2551,9 @@ function desktopCanonicalToolId(descriptor: AgentToolDescriptor): string {
 function desktopProviderToolName(descriptor: AgentToolDescriptor): string {
   const candidate = descriptor.providerName ?? descriptor.name;
   if (/^[A-Za-z0-9_-]{1,64}$/u.test(candidate)) return candidate;
-  return desktopCanonicalToolId(descriptor).replace(/[^A-Za-z0-9_-]/gu, "__").slice(0, 64);
+  return desktopCanonicalToolId(descriptor)
+    .replace(/[^A-Za-z0-9_-]/gu, "__")
+    .slice(0, 64);
 }
 
 function desktopActiveResourceKind(
@@ -2377,10 +2660,7 @@ function desktopRequiredJsonObject(value: JsonValue | undefined): JsonObject {
   return value;
 }
 
-function desktopPreviewTarget(
-  facts: AgentRunStartFacts,
-  profile: LlmModelProfile | undefined
-) {
+function desktopPreviewTarget(facts: AgentRunStartFacts, profile: LlmModelProfile | undefined) {
   const providerId = profile?.provider ?? facts.model.provider;
   const modelId = profile?.modelName ?? facts.model.modelName;
   const connectionId = desktopSafeIdentity(profile?.id ?? facts.model.profileId, "connection");
@@ -2439,15 +2719,13 @@ function desktopPreviewSources(
       tokenPrecision: "unknown",
       dirty:
         original?.dirty ??
-        (envelopeSource !== undefined && "dirty" in envelopeSource
-          ? envelopeSource.dirty
-          : false),
+        (envelopeSource !== undefined && "dirty" in envelopeSource ? envelopeSource.dirty : false),
       truncated:
         original?.materialization?.truncationRange !== undefined
           ? original.materialization.truncationRange !== null
           : envelopeSource !== undefined &&
-              "truncated" in envelopeSource &&
-              envelopeSource.truncated === true,
+            "truncated" in envelopeSource &&
+            envelopeSource.truncated === true,
       selectionState: explicitRefs.has(source.refId) ? "explicit" : "automatic",
       grantSource: explicitRefs.has(source.refId) ? "user_explicit" : "workspace_default"
     };
@@ -2473,10 +2751,7 @@ async function materializeDesktopSendPreview(input: {
   >
 > {
   const { startCommand } = input.binding;
-  if (
-    input.options.sharingDefaults == null ||
-    !isSha256(input.options.sharingDefaultsRevision)
-  ) {
+  if (input.options.sharingDefaults == null || !isSha256(input.options.sharingDefaultsRevision)) {
     return err(runtimeError("AGENT_MODEL_SHARING_DEFAULTS_REQUIRED"));
   }
   const workspaceBindingId = sha256(
@@ -2502,11 +2777,12 @@ async function materializeDesktopSendPreview(input: {
   const facts = await input.startPreflight.resolveStart(startCommand);
   if (!facts.ok) return facts;
   const profile = resolveAgentContextProfile(
-    facts.value.scope ?? startCommand.scope ?? {
-      kind: "workspace",
-      workspaceKind: input.options.workspaceKind,
-      workspaceId: input.options.projectId
-    },
+    facts.value.scope ??
+      startCommand.scope ?? {
+        kind: "workspace",
+        workspaceKind: input.options.workspaceKind,
+        workspaceId: input.options.projectId
+      },
     facts.value.operationMode,
     facts.value.contextMode
   );
@@ -2549,11 +2825,14 @@ async function materializeDesktopSendPreview(input: {
     ...(input.externalToolDescriptors === undefined
       ? {}
       : { externalToolDescriptors: input.externalToolDescriptors })
-  }).filter((descriptor) => isDesktopToolDescriptorEffective(descriptor, input.effectiveCapabilityState));
-  const providerDescriptors =
-    defaults.value.defaults.toolReadResults === "allow"
-      ? descriptors
-      : descriptors.filter((descriptor) => descriptor.effect !== "read");
+  }).filter((descriptor) =>
+    isDesktopToolDescriptorEffective(descriptor, input.effectiveCapabilityState)
+  );
+  const providerDescriptors = filterReadToolsBySharingPolicy({
+    defaults: defaults.value.defaults,
+    tools: descriptors,
+    resultClassFor: (descriptor) => (descriptor.effect === "read" ? "tool_read_result" : undefined)
+  });
   const providerMapping = freezeProviderNameMapping(
     providerDescriptors.map((descriptor) => ({
       id: desktopCanonicalToolId(descriptor),
@@ -2581,7 +2860,8 @@ async function materializeDesktopSendPreview(input: {
   });
   const writingTaskIntent =
     profile.profileId === "writing"
-      ? (facts.value.writingTaskIntent ?? createWritingTaskIntent({ currentRequest: facts.value.userRequest }))
+      ? (facts.value.writingTaskIntent ??
+        createWritingTaskIntent({ currentRequest: facts.value.userRequest }))
       : null;
   const approvalProjection =
     runtimeFacts.writeCapability === "none"
@@ -2680,7 +2960,9 @@ async function materializeDesktopSendPreview(input: {
     sharingGrantRevision: grant.value.grantRevision,
     sharingGrantChecksum: sha256(stableDesktopJson(grant.value)),
     taskIntentChecksum:
-      writingTaskIntent === null ? sha256("not_applicable") : writingTaskIntentChecksum(writingTaskIntent),
+      writingTaskIntent === null
+        ? sha256("not_applicable")
+        : writingTaskIntentChecksum(writingTaskIntent),
     capabilityRevision: String(input.effectiveCapabilityState.revision),
     capabilityChecksum: sha256(
       stableDesktopJson({
@@ -2694,7 +2976,11 @@ async function materializeDesktopSendPreview(input: {
     canonicalRoundManifestChecksum: manifest.manifestChecksum,
     canonicalPayloadChecksum: payloadChecksum
   };
-  const displaySources = desktopPreviewSources(manifest, canonical.prompt.contextSources, explicitRefs);
+  const displaySources = desktopPreviewSources(
+    manifest,
+    canonical.prompt.contextSources,
+    explicitRefs
+  );
   const material: AgentSendPreviewPreparedMaterialV2 = {
     semanticPayload,
     canonicalRoundManifestJson: serializeCanonicalRoundManifestV2(manifest),

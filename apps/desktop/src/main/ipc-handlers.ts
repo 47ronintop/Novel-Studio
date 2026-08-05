@@ -14,6 +14,7 @@ import type {
   AgentRunSession,
   AgentUsageQuery,
   ClearAgentUsageCommand,
+  DecideContextShareApprovalCommand,
   AnswerAgentUserInputCommand,
   ApplicationIpcChannel,
   StoryAnalysisCompletionEvent,
@@ -623,9 +624,9 @@ export function createApplicationIpcHandlers(
           ? await store.setSourcePreference(binding, update.preference)
           : update.action === "set_sharing_defaults"
             ? await store.setSharingDefaults(binding, update.defaults)
-          : update.action === "disable_conventions"
-            ? await store.disableConventions(binding)
-            : await store.revokeTrust(binding);
+            : update.action === "disable_conventions"
+              ? await store.disableConventions(binding)
+              : await store.revokeTrust(binding);
       if (!changed.ok) return changed;
       const refreshed = await manager.refreshCurrentWorkspace();
       if (!refreshed.ok) {
@@ -1126,6 +1127,13 @@ export function createApplicationIpcHandlers(
       return parsed === undefined || session === undefined
         ? Promise.resolve(invalidAgentRunCommand())
         : session.decideToolApproval(parsed);
+    },
+    "application:agent-run:decide-context-share-approval": (command: unknown) => {
+      const parsed = toDecideContextShareApprovalCommand(command);
+      const session = currentAgentRunSession();
+      return parsed === undefined || session === undefined
+        ? Promise.resolve(invalidAgentRunCommand())
+        : session.decideContextShareApproval(parsed);
     },
     "application:agent-run:undo": (command: unknown) => {
       const parsed = toUndoAgentRunCommand(command);
@@ -2433,6 +2441,33 @@ function toDecideToolApprovalCommand(value: unknown): DecideToolApprovalCommand 
     isNonNegativeInteger(value["expectedRunRevision"]) &&
     (value["decision"] === "approve" || value["decision"] === "reject")
     ? ({ ...value, ...identity } as unknown as DecideToolApprovalCommand)
+    : undefined;
+}
+
+function toDecideContextShareApprovalCommand(
+  value: unknown
+): DecideContextShareApprovalCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  const identity = parseAgentScopeIdentity(value);
+  return identity?.projectId !== undefined &&
+    hasOnlyKeys(value, [
+      "runId",
+      "scope",
+      "projectId",
+      "commandId",
+      "expectedRunRevision",
+      "requestId",
+      "approvalBinding",
+      "decision"
+    ]) &&
+    isSafeId(value["runId"]) &&
+    isSafeId(value["commandId"]) &&
+    isSafeId(value["requestId"]) &&
+    typeof value["approvalBinding"] === "string" &&
+    /^[a-f0-9]{64}$/u.test(value["approvalBinding"]) &&
+    isNonNegativeInteger(value["expectedRunRevision"]) &&
+    (value["decision"] === "approve" || value["decision"] === "deny")
+    ? ({ ...value, ...identity } as unknown as DecideContextShareApprovalCommand)
     : undefined;
 }
 

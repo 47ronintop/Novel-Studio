@@ -576,7 +576,7 @@ export interface AgentRunPanelProps {
   readonly runId?: string;
   /** The request currently being started; shown immediately before a persisted run exists. */
   readonly userRequest?: string;
-  readonly status: AgentRunStatusV13 | "idle";
+  readonly status: AgentRunStatusV13 | "awaiting_context_share_approval" | "idle";
   readonly assistantText: string;
   readonly events: readonly AgentRunEvent[];
   /** Historical provider-bound context; unavailable/stale is explicit rather than silently empty. */
@@ -584,6 +584,7 @@ export interface AgentRunPanelProps {
   readonly sendLedger?: readonly AgentSendLedgerEntryDisplay[];
   readonly pendingUserInput?: AgentRunPendingUserInputProps;
   readonly pendingToolApproval?: AgentRunPendingToolApprovalProps;
+  readonly pendingContextShareApproval?: AgentRunPendingContextShareApprovalProps;
   readonly diagnostic?: AgentRunErrorRecord;
   readonly errorMessage?: string;
   readonly providerLabel?: string;
@@ -599,6 +600,7 @@ export interface AgentRunPanelProps {
   readonly onRetryTarget?: (target: AgentRunRetryTarget) => void;
   readonly onRefreshContext: (decision: "refresh" | "exclude" | "cancel") => void;
   readonly onDecideToolApproval?: (decision: "approve" | "reject") => void;
+  readonly onDecideContextShareApproval?: (decision: "approve" | "reject") => void;
 }
 
 export interface AgentSendLedgerEntryDisplay {
@@ -632,6 +634,15 @@ export interface AgentRunPendingToolApprovalProps {
   readonly destination?: string;
   readonly requestedAt: string;
   readonly expiresAt: string;
+  readonly deciding: boolean;
+}
+
+export interface AgentRunPendingContextShareApprovalProps {
+  readonly requestId: string;
+  readonly approvalBinding: string;
+  readonly resultClass: "conversation_summary" | "tool_read_result";
+  readonly resultKind: string;
+  readonly toolCallId: string;
   readonly deciding: boolean;
 }
 

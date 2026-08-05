@@ -138,6 +138,7 @@ export interface AgentRunBridge {
   applyChangeSet(): Promise<AgentRunPanelProps>;
   rejectChangeSet(): Promise<AgentRunPanelProps>;
   decideToolApproval(decision: "approve" | "reject"): Promise<AgentRunPanelProps>;
+  decideContextShareApproval(decision: "approve" | "reject"): Promise<AgentRunPanelProps>;
   undoRun(): Promise<AgentRunPanelProps>;
   subscribe(listener: () => void): () => void;
   subscribeProjectFilesChanged(
@@ -257,6 +258,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   const projectFilesChangedListeners = new Set<(event: AgentProjectFilesChangedEvent) => void>();
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
   let toolApprovalInFlight: Promise<AgentRunPanelProps> | undefined;
+  let contextShareApprovalInFlight: Promise<AgentRunPanelProps> | undefined;
   let selectionInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlightAction: "request" | "resolve" | "retry" | undefined;
@@ -323,6 +325,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       event.type === "write_failed" ||
       event.type === "tool_approval_requested" ||
       event.type === "tool_approval_resolved" ||
+      event.type === "context_share_approval_requested" ||
+      event.type === "context_share_approval_resolved" ||
       event.type === "permission_summary_ready" ||
       event.type === "plan_step_started" ||
       event.type === "plan_step_completed" ||
@@ -831,6 +835,45 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return request;
   }
 
+  function decidePendingContextShareApproval(
+    decision: "approve" | "reject"
+  ): Promise<AgentRunPanelProps> {
+    if (contextShareApprovalInFlight !== undefined) return contextShareApprovalInFlight;
+    const snapshot = requireSnapshot();
+    const pending = pendingContextShareApprovalProps(snapshot, state.events, false);
+    const decideContextShareApproval = (api.agentRuns as unknown as OptionalContextSharingApi)
+      .decideContextShareApproval;
+    if (
+      snapshot === undefined ||
+      pending === undefined ||
+      decideContextShareApproval === undefined ||
+      isStandaloneScope(scopeForSnapshot(snapshot))
+    ) {
+      return Promise.resolve(toProps());
+    }
+    const command = {
+      runId: snapshot.runId,
+      ...scopeIdentity(scopeForSnapshot(snapshot)),
+      commandId: createCommandId("context-share-approval"),
+      expectedRunRevision: snapshot.runRevision,
+      requestId: pending.requestId,
+      approvalBinding: pending.approvalBinding,
+      decision: decision === "approve" ? ("approve" as const) : ("deny" as const)
+    };
+    const request = (async () => {
+      try {
+        await applyCommandResult(await decideContextShareApproval(command));
+      } finally {
+        contextShareApprovalInFlight = undefined;
+        notify();
+      }
+      return toProps();
+    })();
+    contextShareApprovalInFlight = request;
+    notify();
+    return request;
+  }
+
   function undoAgentRun(): Promise<AgentRunPanelProps> {
     if (undoInFlight !== undefined) return undoInFlight;
     const snapshot = requireSnapshot();
@@ -1184,6 +1227,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       state.snapshot,
       toolApprovalInFlight !== undefined
     );
+    const pendingContextShareApproval = pendingContextShareApprovalProps(
+      state.snapshot,
+      state.events,
+      contextShareApprovalInFlight !== undefined
+    );
     const props = {
       ...(scope === undefined ? {} : { scope }),
       ...(scope?.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
@@ -1199,6 +1247,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...(state.sendLedger === undefined ? {} : { sendLedger: state.sendLedger }),
       ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
       ...(standalone || pendingToolApproval === undefined ? {} : { pendingToolApproval }),
+      ...(standalone || pendingContextShareApproval === undefined
+        ? {}
+        : { pendingContextShareApproval }),
       ...(state.diagnostic === undefined ? {} : { diagnostic: state.diagnostic }),
       ...(standalone || state.changeSet === undefined
         ? {}
@@ -1296,6 +1347,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         : {
             onDecideToolApproval: (decision: "approve" | "reject") =>
               void decidePendingToolApproval(decision).then(notify)
+          }),
+      ...(standalone || pendingContextShareApproval === undefined
+        ? {}
+        : {
+            onDecideContextShareApproval: (decision: "approve" | "reject") =>
+              void decidePendingContextShareApproval(decision).then(notify)
           })
     };
     return props as AgentRunPanelProps;
@@ -2704,6 +2761,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     applyChangeSet: () => decideChangeSet("apply_selected"),
     rejectChangeSet: () => decideChangeSet("reject_all"),
     decideToolApproval: decidePendingToolApproval,
+    decideContextShareApproval: decidePendingContextShareApproval,
     undoRun: undoAgentRun,
     subscribe(listener) {
       listeners.add(listener);
@@ -3345,6 +3403,19 @@ interface OptionalStage5BApi {
   decidePlanRevision?: NovelStudioApi["agentRuns"]["decidePlanRevision"];
 }
 
+interface OptionalContextSharingApi {
+  decideContextShareApproval?: (command: {
+    readonly scope?: AgentContextScope;
+    readonly projectId?: string;
+    readonly runId: string;
+    readonly commandId: string;
+    readonly expectedRunRevision: number;
+    readonly requestId: string;
+    readonly approvalBinding: string;
+    readonly decision: "approve" | "deny";
+  }) => Promise<AgentRunCommandResult>;
+}
+
 const REFERENCE_KIND_LABEL: Record<AgentComposerReferenceKind, string> = {
   chapter: "章节",
   story_bible: "设定",
@@ -3621,6 +3692,8 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
       return "awaiting_write_approval";
     case "tool_approval_requested":
       return "awaiting_tool_approval";
+    case "context_share_approval_requested":
+      return "awaiting_context_share_approval";
     case "external_outcome_unknown":
       return "awaiting_external_outcome_resolution";
     case "write_started":
@@ -3656,6 +3729,8 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
     case "tool_failed":
     case "tool_retry_requested":
     case "tool_approval_resolved":
+    case "context_share_approval_resolved":
+    case "capability_changed":
     case "capability_revoked":
     case "process_output":
     case "assistant_text_delta":
@@ -3867,6 +3942,59 @@ function pendingToolApprovalProps(
     expiresAt: pending.binding.expiresAt,
     deciding
   };
+}
+
+function pendingContextShareApprovalProps(
+  snapshot: AgentRunSnapshot | undefined,
+  events: readonly AgentRunEvent[],
+  deciding: boolean
+): AgentRunPanelProps["pendingContextShareApproval"] {
+  if (snapshot?.status !== "awaiting_context_share_approval") return undefined;
+  const pending = (snapshot as unknown as { readonly pending?: unknown }).pending;
+  if (
+    typeof pending !== "object" ||
+    pending === null ||
+    (pending as { readonly kind?: unknown }).kind !== "context_share_approval" ||
+    typeof (pending as { readonly requestId?: unknown }).requestId !== "string"
+  ) {
+    return undefined;
+  }
+  const requestId = (pending as { readonly requestId: string }).requestId;
+  const requested = [...events]
+    .reverse()
+    .find(
+      (event) =>
+        event.type === "context_share_approval_requested" &&
+        contextShareApprovalFromDetail(event.detail)?.requestId === requestId
+    );
+  const approval = contextShareApprovalFromDetail(requested?.detail);
+  return approval === undefined ? undefined : { ...approval, deciding };
+}
+
+function contextShareApprovalFromDetail(
+  detail: AgentRunEvent["detail"] | undefined
+): Omit<NonNullable<AgentRunPanelProps["pendingContextShareApproval"]>, "deciding"> | undefined {
+  if (detail === undefined) return undefined;
+  const nested = detail["approval"];
+  const value = typeof nested === "object" && nested !== null ? nested : detail;
+  const requestId = detail["requestId"];
+  const approvalBinding = (value as Record<string, unknown>)["approvalBinding"];
+  const resultClass = (value as Record<string, unknown>)["resultClass"];
+  const resultKind = (value as Record<string, unknown>)["resultKind"];
+  const toolCallId = (value as Record<string, unknown>)["toolCallId"];
+  if (
+    typeof requestId !== "string" ||
+    typeof approvalBinding !== "string" ||
+    !/^[a-f0-9]{64}$/.test(approvalBinding) ||
+    (resultClass !== "conversation_summary" && resultClass !== "tool_read_result") ||
+    typeof resultKind !== "string" ||
+    resultKind.length === 0 ||
+    typeof toolCallId !== "string" ||
+    toolCallId.length === 0
+  ) {
+    return undefined;
+  }
+  return { requestId, approvalBinding, resultClass, resultKind, toolCallId };
 }
 
 function isOption(value: unknown): value is { readonly id: string; readonly label: string } {

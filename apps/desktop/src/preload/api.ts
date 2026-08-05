@@ -11,6 +11,7 @@ import type {
   AgentSendPreviewDtoV2,
   AgentUsageQuery,
   AgentUsageReport,
+  DecideContextShareApprovalCommand,
   ClearAgentUsageCommand,
   ConfirmAgentSendPreviewCommandV2,
   AiWritingSuggestion,
@@ -496,6 +497,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<AgentRunCommandResult>(
           ipc,
           "application:agent-run:decide-tool-approval",
+          command
+        ),
+      decideContextShareApproval: (command: DecideContextShareApprovalCommand) =>
+        invokeTyped<AgentRunCommandResult>(
+          ipc,
+          "application:agent-run:decide-context-share-approval",
           command
         ),
       undoRun: (command: UndoRunCommand) =>

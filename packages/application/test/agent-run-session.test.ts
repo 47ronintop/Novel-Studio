@@ -14,6 +14,11 @@ import {
 
 import * as applicationExports from "../src/index.js";
 import { createAgentPromptCacheIdentityArtifactV2 } from "../src/agent-prompt-cache.js";
+import {
+  freezeRunModelSharingGrant,
+  freezeWorkspaceModelSharingDefaults,
+  type FrozenRunModelSharingGrant
+} from "../src/agent-model-sharing.js";
 
 describe("AgentRunSession", () => {
   test("publishes partial usage and persists one priced final record when the round completes", async () => {
@@ -5781,6 +5786,307 @@ describe("AgentRunSession context-engineering profiles", () => {
  * session hands the driver, the untrusted-data envelope messages, and the sources written into the
  * initial Context Snapshot. Used to assert the two context-engineering profiles differ.
  */
+describe("AgentRunSession JIT context sharing approvals", () => {
+  function sharingHarness(input: {
+    readonly runId: string;
+    readonly policy: "ask" | "deny";
+    readonly repository?: Record<string, unknown>;
+  }) {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      decideContextShareApproval(
+        command: Record<string, unknown>
+      ): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const defaultsResult = freezeWorkspaceModelSharingDefaults({
+      workspaceBindingId: "workspace_binding_1",
+      defaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "ask",
+        toolReadResults: input.policy
+      }
+    });
+    if (!defaultsResult.ok) throw defaultsResult.error;
+    const defaults = defaultsResult.value;
+    const grantResult = freezeRunModelSharingGrant({
+      profileId: "writing",
+      workspaceBindingId: defaults.workspaceBindingId,
+      grant: {
+        runDraftRevision: "1",
+        defaultsRevision: defaults.defaultsRevision,
+        includedRefIds: [],
+        excludedRefIds: [],
+        approvedResultKinds: []
+      }
+    });
+    if (!grantResult.ok) throw grantResult.error;
+    let grant: FrozenRunModelSharingGrant = grantResult.value;
+    let boundary = {
+      ...testCapabilityBoundary(),
+      sharingDefaultsRevision: defaults.defaultsRevision,
+      sharingGrantRevision: grant.grantRevision
+    };
+    let rounds = 0;
+    let reads = 0;
+    const repository = input.repository ?? durableMemoryRepository();
+    const options = {
+      coordinatorOptions: { createRunId: () => input.runId },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: creativeV2Capabilities(),
+      getCurrentCapabilityBoundary: () => boundary,
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("sharing-read-1", "read_resource", {
+              ref: "chapter:chapter-01"
+            });
+            yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+            return;
+          }
+          yield { type: "round_completed" as const, finishReason: "stop" as const };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          reads += 1;
+          return { ok: true as const, value: { summary: "read", data: { text: "body" } } };
+        }
+      },
+      contextSharing: {
+        async readForRun() {
+          return { ok: true as const, value: { defaults, grant } };
+        },
+        async updateGrant(update: {
+          readonly priorGrantRevision: string;
+          readonly grant: FrozenRunModelSharingGrant;
+        }) {
+          if (update.priorGrantRevision !== grant.grantRevision) {
+            return {
+              ok: false as const,
+              error: testRepositoryError("AGENT_MODEL_SHARING_GRANT_STALE")
+            };
+          }
+          grant = update.grant;
+          boundary = { ...boundary, sharingGrantRevision: grant.grantRevision };
+          return { ok: true as const, value: grant };
+        }
+      }
+    };
+    return {
+      createSession: () => createSession(options),
+      repository,
+      reads: () => reads,
+      grant: () => grant
+    };
+  }
+
+  test("persists ask before reading, hydrates it, approves the grant, and replays exactly once", async () => {
+    const harness = sharingHarness({ runId: "run_context_share_approve", policy: "ask" });
+    const original = harness.createSession();
+    expect(await original.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await original.readAgentRun("run_context_share_approve")).toMatchObject({
+        value: {
+          snapshot: {
+            schemaVersion: "2.0",
+            status: "awaiting_context_share_approval",
+            pending: { kind: "context_share_approval", requestId: expect.any(String) }
+          },
+          pendingContextShareApproval: {
+            resultKind: "read_resource",
+            toolCallId: "sharing-read-1"
+          }
+        }
+      });
+    });
+    expect(harness.reads()).toBe(0);
+
+    const restored = harness.createSession();
+    const pending = (await restored.readAgentRun("run_context_share_approve"))["value"] as {
+      readonly snapshot: {
+        readonly runRevision: number;
+        readonly pending: { readonly requestId: string };
+      };
+      readonly pendingContextShareApproval: { readonly approvalBinding: string };
+    };
+    expect(
+      await restored.decideContextShareApproval({
+        projectId: "project-01",
+        runId: "run_context_share_approve",
+        commandId: "approve-context-share-1",
+        expectedRunRevision: pending.snapshot.runRevision,
+        requestId: pending.snapshot.pending.requestId,
+        approvalBinding: pending.pendingContextShareApproval.approvalBinding,
+        decision: "approve"
+      })
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await restored.readAgentRun("run_context_share_approve")).toMatchObject({
+        value: {
+          snapshot: { status: "blocked" },
+          events: expect.arrayContaining([
+            expect.objectContaining({ type: "context_share_approval_requested" }),
+            expect.objectContaining({ type: "context_share_approval_resolved" }),
+            expect.objectContaining({ type: "tool_completed" })
+          ])
+        }
+      });
+    });
+    expect(harness.reads()).toBe(1);
+    expect(harness.grant().approvedResultKinds).toEqual(["read_resource"]);
+
+    // The old prompt-cache artifact is auditable but safely bypassed after the grant revision moves.
+    await expect(
+      harness.createSession().readAgentRun("run_context_share_approve")
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { snapshot: { status: "blocked" } }
+    });
+  });
+
+  test("turns a denied ask into a safe tool error without invoking the reader", async () => {
+    const harness = sharingHarness({ runId: "run_context_share_reject", policy: "ask" });
+    const session = harness.createSession();
+    await session.startAgentRun(startCommand());
+    let pending!: {
+      snapshot: { runRevision: number; pending: { requestId: string } };
+      pendingContextShareApproval: { approvalBinding: string };
+    };
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun("run_context_share_reject");
+      expect(read).toMatchObject({
+        value: { snapshot: { status: "awaiting_context_share_approval" } }
+      });
+      pending = read["value"] as typeof pending;
+    });
+    await session.decideContextShareApproval({
+      projectId: "project-01",
+      runId: "run_context_share_reject",
+      commandId: "deny-context-share-1",
+      expectedRunRevision: pending.snapshot.runRevision,
+      requestId: pending.snapshot.pending.requestId,
+      approvalBinding: pending.pendingContextShareApproval.approvalBinding,
+      decision: "deny"
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_context_share_reject")).toMatchObject({
+        value: {
+          snapshot: { status: "blocked" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({ code: "AGENT_MODEL_SHARING_APPROVAL_DENIED" })
+            })
+          ])
+        }
+      });
+    });
+    expect(harness.reads()).toBe(0);
+  });
+
+  test("rolls back the widened grant when approval event persistence fails", async () => {
+    const durable = durableMemoryRepository();
+    let rejectedResolutionAttempts = 0;
+    const repository = {
+      ...durable,
+      async commitRunStateV20(input: {
+        readonly snapshot: AgentRunSnapshotV20;
+        readonly event: AgentRunEventV20;
+      }) {
+        if (
+          rejectedResolutionAttempts < 2 &&
+          input.event.type === "context_share_approval_resolved"
+        ) {
+          rejectedResolutionAttempts += 1;
+          return {
+            ok: false as const,
+            error: testRepositoryError("AGENT_RUN_STORE_UNAVAILABLE")
+          };
+        }
+        return durable.commitRunStateV20(input);
+      }
+    };
+    const harness = sharingHarness({
+      runId: "run_context_share_persist_retry",
+      policy: "ask",
+      repository
+    });
+    const initialGrantRevision = harness.grant().grantRevision;
+    const session = harness.createSession();
+    await session.startAgentRun(startCommand());
+    let pending!: {
+      snapshot: { runRevision: number; pending: { requestId: string } };
+      pendingContextShareApproval: { approvalBinding: string };
+    };
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun("run_context_share_persist_retry");
+      expect(read).toMatchObject({
+        value: { snapshot: { status: "awaiting_context_share_approval" } }
+      });
+      pending = read["value"] as typeof pending;
+    });
+    await expect(
+      session.decideContextShareApproval({
+        projectId: "project-01",
+        runId: "run_context_share_persist_retry",
+        commandId: "approve-context-share-persist-fails",
+        expectedRunRevision: pending.snapshot.runRevision,
+        requestId: pending.snapshot.pending.requestId,
+        approvalBinding: pending.pendingContextShareApproval.approvalBinding,
+        decision: "approve"
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: "AGENT_RUN_PERSIST_FAILED" } });
+    expect(harness.grant().grantRevision).toBe(initialGrantRevision);
+    expect(harness.reads()).toBe(0);
+
+    // Durable state is still pending, so a fresh session can safely retry the same bound decision.
+    const recovered = harness.createSession();
+    const durablePending = (await recovered.readAgentRun("run_context_share_persist_retry"))[
+      "value"
+    ] as typeof pending;
+    expect(
+      await recovered.decideContextShareApproval({
+        projectId: "project-01",
+        runId: "run_context_share_persist_retry",
+        commandId: "approve-context-share-persist-retry",
+        expectedRunRevision: durablePending.snapshot.runRevision,
+        requestId: durablePending.snapshot.pending.requestId,
+        approvalBinding: durablePending.pendingContextShareApproval.approvalBinding,
+        decision: "approve"
+      })
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(harness.reads()).toBe(1));
+  });
+
+  test("fails closed under deny without creating a JIT request or reading", async () => {
+    const harness = sharingHarness({ runId: "run_context_share_policy_deny", policy: "deny" });
+    const session = harness.createSession();
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_context_share_policy_deny")).toMatchObject({
+        value: {
+          snapshot: { status: "blocked" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({ code: "AGENT_MODEL_SHARING_READ_DENIED" })
+            })
+          ])
+        }
+      });
+    });
+    expect(harness.reads()).toBe(0);
+  });
+});
+
 describe("AgentRunSession effectful tool approvals", () => {
   test("holds a task launch until a durable approval and launches its binding only once", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[

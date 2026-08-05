@@ -508,6 +508,24 @@ describe("desktop Agent Run runtime", () => {
         value: { snapshot: { status: "completed" } }
       });
     });
+    const completed = await runtime.agentRunSession.readAgentRun(runId);
+    expect(completed).toMatchObject({
+      ok: true,
+      value: { snapshot: { usageId: expect.any(String) } }
+    });
+    if (!completed.ok || completed.value.snapshot.usageId === null) return;
+    expect(await runtime.agentUsageSession?.getAgentUsage(completed.value.snapshot.usageId)).toMatchObject({
+      ok: true,
+      value: {
+        schemaVersion: "2.0",
+        storageScope: "local_only",
+        usageId: completed.value.snapshot.usageId,
+        runId,
+        guidanceVersion: "3.0",
+        messageOrderVersion: "2.0",
+        toolCatalogVersion: "2.0"
+      }
+    });
 
     const detailFiles = await readdir(join(userDataRoot, "agent-usage", "details"));
     expect(detailFiles).toHaveLength(1);

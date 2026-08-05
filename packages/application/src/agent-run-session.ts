@@ -208,6 +208,15 @@ import {
   revokeAgentRunProposalAuthorization
 } from "./agent-write-authorization.js";
 import {
+  decideContextShareApproval as applyContextShareApprovalDecision,
+  parseAwaitingContextShareApproval,
+  preflightContextShareRead,
+  type AgentModelReadResultClass,
+  type AwaitingContextShareApproval,
+  type FrozenRunModelSharingGrant,
+  type FrozenWorkspaceModelSharingDefaults
+} from "./agent-model-sharing.js";
+import {
   createToolCallAssembler,
   dispatchAssembledToolCalls,
   parseToolCallArguments,
@@ -528,6 +537,42 @@ export interface RecordAgentPlanDeviationCommand {
   readonly proposal: string;
 }
 
+export interface DecideContextShareApprovalCommand {
+  readonly scope?: AgentContextScope;
+  readonly projectId: string;
+  readonly runId: string;
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly requestId: string;
+  readonly approvalBinding: string;
+  readonly decision: "approve" | "deny";
+}
+
+export interface AgentRunContextSharingState {
+  readonly defaults: FrozenWorkspaceModelSharingDefaults;
+  readonly grant: FrozenRunModelSharingGrant;
+}
+
+/** Main-owned bridge to the run grant frozen by the confirmed send preview. */
+export interface AgentRunContextSharingPort {
+  readForRun(input: {
+    readonly runId: string;
+    readonly scope: AgentContextScope;
+  }): Promise<Result<AgentRunContextSharingState, UnifiedError>>;
+  updateGrant(input: {
+    readonly runId: string;
+    readonly scope: AgentContextScope;
+    readonly priorGrantRevision: string;
+    readonly grant: FrozenRunModelSharingGrant;
+  }): Promise<Result<FrozenRunModelSharingGrant, UnifiedError>>;
+  classifyReadResult?(descriptor: AgentToolDescriptor):
+    | {
+        readonly resultClass: AgentModelReadResultClass;
+        readonly resultKind: string;
+      }
+    | undefined;
+}
+
 export interface AgentRunPersistencePort {
   writeSnapshot(snapshot: JsonObject): Promise<Result<JsonObject, UnifiedError>>;
   commitRunStateV20?(input: {
@@ -677,6 +722,7 @@ export interface AgentRunReadResult {
   readonly events: readonly AgentRunEvent[];
   readonly packedContextHistory: AgentRunPackedContextHistory;
   readonly pendingUserInput?: AgentUserInputRequest;
+  readonly pendingContextShareApproval?: AwaitingContextShareApproval;
   readonly planArtifact?: PlanArtifact | PlanArtifactV20;
   readonly planExecution?: PlanExecutionRecord | PlanExecutionRecordV20;
   readonly changeSet?: ChangeSet;
@@ -772,6 +818,9 @@ export interface AgentRunSession {
   retryRunTarget(command: RetryRunTargetCommand): Promise<AgentRunCommandResult>;
   retryStep(command: RetryAgentRunStepCommand): Promise<AgentRunCommandResult>;
   decideToolApproval(command: DecideToolApprovalCommand): Promise<AgentRunCommandResult>;
+  decideContextShareApproval(
+    command: DecideContextShareApprovalCommand
+  ): Promise<AgentRunCommandResult>;
   decidePlan(command: DecideAgentPlanCommand): Promise<AgentRunCommandResult>;
   recordPlanDeviation(command: RecordAgentPlanDeviationCommand): Promise<AgentRunCommandResult>;
   decidePlanRevision(command: DecidePlanRevisionCommand): Promise<AgentRunCommandResult>;
@@ -791,6 +840,8 @@ export interface CreateAgentRunSessionOptions {
   readonly repository: AgentRunPersistencePort;
   readonly modelDriver: AgentRunModelDriver;
   readonly readToolExecutor: AgentReadToolExecutor;
+  /** JIT authorization for project read results before any read executor is invoked. */
+  readonly contextSharing?: AgentRunContextSharingPort;
   readonly startPreflight: AgentRunStartPreflightPort;
   /** Product runtimes set v2; the v1 default keeps lower-level legacy embedders compatible. */
   readonly newRunToolFacadeVersion?: AgentToolFacadeVersion;
@@ -931,6 +982,7 @@ interface RunRuntime {
   planArtifact?: PlanArtifact | PlanArtifactV20;
   changeSet?: ChangeSet;
   pendingToolApproval?: PendingToolApproval;
+  pendingContextShareApproval?: PendingContextShareApprovalRuntime;
   /** Task bindings that have crossed the durable launch boundary in this process. */
   readonly launchedTaskBindingIds: Set<string>;
   versionGroup?: JsonObject;
@@ -951,6 +1003,13 @@ interface RunRuntime {
    * that the staleness reader and change-set path work over.
    */
   systemGuidanceSource?: AgentContextSourceInput;
+}
+
+interface PendingContextShareApprovalRuntime {
+  readonly approval: AwaitingContextShareApproval;
+  readonly requestId: string;
+  readonly providerToolName: string;
+  readonly argumentsText: string;
 }
 
 function rebuildHistoricalPackedContext(
@@ -2788,7 +2847,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
 
   async function hydratePromptCacheArtifact(
     snapshot: AgentRunSnapshot,
-    prompt: AgentPromptMaterializationArtifact | undefined
+    prompt: AgentPromptMaterializationArtifact | undefined,
+    sharingTransition?: {
+      readonly initialGrantRevision: string;
+      readonly finalGrantRevision: string;
+    }
   ): Promise<Result<AgentPromptCacheIdentityArtifact | undefined, UnifiedError>> {
     const capability = snapshot.providerCapabilitySnapshot.promptCache;
     if (snapshot.promptCacheArtifactId === null) {
@@ -2852,6 +2915,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
         }
         const boundary = capabilityBoundaryForSnapshot(snapshot).frozen;
+        const staleOnlyBecauseOfApprovedSharing =
+          sharingTransition !== undefined &&
+          artifact.sharingGrantRevision === sharingTransition.initialGrantRevision &&
+          boundary.sharingGrantRevision === sharingTransition.finalGrantRevision;
         if (
           artifact.scope.kind !== snapshot.scope.kind ||
           agentContextScopeKey(artifact.scope) !== agentContextScopeKey(snapshot.scope) ||
@@ -2868,11 +2935,18 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           artifact.effectiveCapabilityStateChecksum !==
             boundary.effectiveCapabilityStateChecksum ||
           artifact.sharingDefaultsRevision !== boundary.sharingDefaultsRevision ||
-          artifact.sharingGrantRevision !== boundary.sharingGrantRevision ||
           artifact.policyRevision !== boundary.policyRevision ||
           artifact.providerToolProjectionChecksum !== boundary.providerToolProjectionChecksum
         ) {
           throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+        }
+        if (artifact.sharingGrantRevision !== boundary.sharingGrantRevision) {
+          if (!staleOnlyBecauseOfApprovedSharing) {
+            throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
+          }
+          // A durable JIT approval intentionally changes only the run grant. The old cache identity
+          // remains auditable but cannot be reused after restart.
+          return ok(undefined);
         }
       } else if (artifact.schemaVersion === "2.0") {
         throw new Error("AGENT_PROMPT_CACHE_ARTIFACT_INVALID");
@@ -2995,7 +3069,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
     const restoredPromptCacheArtifactResult = await hydratePromptCacheArtifact(
       persistedSnapshot,
-      restoredPromptArtifact
+      restoredPromptArtifact,
+      approvedContextSharingTransition(events)
     );
     if (!restoredPromptCacheArtifactResult.ok) {
       return { ok: false, error: restoredPromptCacheArtifactResult.error };
@@ -3024,6 +3099,30 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       pendingEvent.detail !== undefined
         ? parseUserInputRequest(pendingEvent.detail)
         : undefined;
+    const contextShareEvent = [...events]
+      .reverse()
+      .find(
+        (event) =>
+          event.type === "context_share_approval_requested" ||
+          event.type === "context_share_approval_resolved"
+      );
+    const pendingContextShareApproval =
+      snapshot.schemaVersion === "2.0" &&
+      snapshot.status === "awaiting_context_share_approval" &&
+      contextShareEvent?.type === "context_share_approval_requested" &&
+      contextShareEvent.detail !== undefined
+        ? parsePendingContextShareApprovalRuntime(contextShareEvent.detail)
+        : undefined;
+    if (
+      snapshot.schemaVersion === "2.0" &&
+      snapshot.status === "awaiting_context_share_approval" &&
+      pendingContextShareApproval === undefined
+    ) {
+      return failure(
+        "AGENT_MODEL_SHARING_APPROVAL_INVALID",
+        "The pending context sharing approval could not be restored safely."
+      );
+    }
     const planEvent = [...events].reverse().find((event) => event.type === "plan_ready");
     const persistedPlanResult =
       planEvent?.detail !== undefined ||
@@ -3186,6 +3285,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       ...(snapshot.pendingToolApproval === undefined || snapshot.pendingToolApproval === null
         ? {}
         : { pendingToolApproval: snapshot.pendingToolApproval }),
+      ...(pendingContextShareApproval === undefined ? {} : { pendingContextShareApproval }),
       ...(restoredPlanArtifact === undefined ? {} : { planArtifact: restoredPlanArtifact }),
       ...(restoredFinalChangeSet === undefined ? {} : { changeSet: restoredFinalChangeSet }),
       ...(restoredRollbackReview === undefined ? {} : { rollbackReview: restoredRollbackReview })
@@ -4256,6 +4356,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       runtime.generation += 1;
       delete runtime.pendingUserInput;
       delete runtime.pendingToolApproval;
+      delete runtime.pendingContextShareApproval;
       if (runtimes.get(runId) === runtime) runtimes.delete(runId);
     }
   }
@@ -4606,6 +4707,89 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     return pending;
   }
 
+  function contextShareResultFor(
+    descriptor: AgentToolDescriptor
+  ): { readonly resultClass: AgentModelReadResultClass; readonly resultKind: string } | undefined {
+    const classified = options.contextSharing?.classifyReadResult?.(descriptor);
+    if (classified !== undefined) return classified;
+    return descriptor.effect === "read"
+      ? { resultClass: "tool_read_result", resultKind: canonicalToolId(descriptor) }
+      : undefined;
+  }
+
+  async function preflightReadSharing(input: {
+    readonly runId: string;
+    readonly runtime: RunRuntime;
+    readonly snapshot: AgentRunSnapshot;
+    readonly call: AssembledToolCall;
+    readonly descriptor: AgentToolDescriptor;
+  }): Promise<
+    | { readonly decision: "allow" }
+    | { readonly decision: "deny" }
+    | { readonly decision: "paused" }
+    | { readonly decision: "error"; readonly error: UnifiedError }
+  > {
+    const classification = contextShareResultFor(input.descriptor);
+    if (
+      options.contextSharing === undefined ||
+      classification === undefined ||
+      input.snapshot.scope.kind === "standalone"
+    ) {
+      return { decision: "allow" };
+    }
+    if (input.snapshot.schemaVersion !== "2.0") {
+      return {
+        decision: "error",
+        error: applicationError(
+          "AGENT_MODEL_SHARING_PROTOCOL_UNAVAILABLE",
+          "Context sharing approval requires the strict Agent run protocol."
+        )
+      };
+    }
+    const sharing = await options.contextSharing.readForRun({
+      runId: input.runId,
+      scope: input.snapshot.scope
+    });
+    if (!sharing.ok) return { decision: "error", error: sharing.error };
+    const preflight = preflightContextShareRead({
+      defaults: sharing.value.defaults,
+      grant: sharing.value.grant,
+      resultClass: classification.resultClass,
+      resultKind: classification.resultKind,
+      toolCallId: input.call.toolCallId
+    });
+    if (!preflight.ok) return { decision: "error", error: preflight.error };
+    if (preflight.value.decision === "allow") return { decision: "allow" };
+    if (preflight.value.decision === "deny") return { decision: "deny" };
+
+    const pending: PendingContextShareApprovalRuntime = Object.freeze({
+      approval: preflight.value.approval,
+      requestId: preflight.value.approval.approvalBinding,
+      providerToolName: input.call.name,
+      argumentsText: input.call.argumentsText
+    });
+    const recorded = await recordEvent(input.runId, {
+      runId: input.runId,
+      status: "awaiting_context_share_approval",
+      type: "context_share_approval_requested",
+      detail: {
+        requestId: pending.requestId,
+        approvalBinding: pending.approval.approvalBinding,
+        approval: asJsonObject(pending.approval),
+        toolCallId: pending.approval.toolCallId,
+        toolName: input.descriptor.name,
+        providerToolName: pending.providerToolName,
+        argumentsText: pending.argumentsText,
+        resultClass: pending.approval.resultClass,
+        resultKind: pending.approval.resultKind,
+        grantRevision: pending.approval.grantRevision
+      }
+    });
+    if (!recorded.ok) return { decision: "error", error: recorded.error };
+    input.runtime.pendingContextShareApproval = pending;
+    return { decision: "paused" };
+  }
+
   async function resolvePolicyToolApproval(input: {
     readonly runId: string;
     readonly runtime: RunRuntime;
@@ -4770,13 +4954,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     runId: string,
     runtime: RunRuntime,
     call: AssembledToolCall,
-    approvedPending?: PendingToolApproval
+    approvedPending?: PendingToolApproval,
+    approvedContextShare?: AwaitingContextShareApproval
   ): Promise<ToolCallOutcome> {
     const snapshot = coordinator.readSnapshot(runId);
     if (snapshot === undefined) return "terminal";
     const approvedReplay =
       approvedPending !== undefined && approvedPending.binding.toolCallId === call.toolCallId;
-    if (!approvedReplay) {
+    const contextShareReplay = approvedContextShare?.toolCallId === call.toolCallId;
+    if (!approvedReplay && !contextShareReplay) {
       if (runtime.toolCalls >= snapshot.limits.maxToolCalls) {
         await recordEvent(runId, {
           runId,
@@ -4918,6 +5104,38 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         profileGuard.error.code,
         profileGuard.error.message,
         profileGuard.error
+      ))
+        ? "terminal"
+        : "continue";
+    }
+
+    const sharingPreflight = await preflightReadSharing({
+      runId,
+      runtime,
+      snapshot,
+      call,
+      descriptor
+    });
+    if (sharingPreflight.decision === "paused") return "paused";
+    if (sharingPreflight.decision === "deny") {
+      return (await toolFailure(
+        runtime,
+        runId,
+        call,
+        "AGENT_MODEL_SHARING_READ_DENIED",
+        "This read result is disabled by the workspace model-sharing policy."
+      ))
+        ? "terminal"
+        : "continue";
+    }
+    if (sharingPreflight.decision === "error") {
+      return (await toolFailure(
+        runtime,
+        runId,
+        call,
+        sharingPreflight.error.code,
+        sharingPreflight.error.message,
+        sharingPreflight.error
       ))
         ? "terminal"
         : "continue";
@@ -7622,6 +7840,211 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         });
       });
     },
+    decideContextShareApproval(command) {
+      return runCommandOnce(command, async () => {
+        const prior = await priorCommandReceipt(
+          command.runId,
+          command.projectId,
+          command.commandId
+        );
+        if (prior !== undefined) return prior;
+        const hydrated = await hydrateRun(command.runId);
+        if (!hydrated.ok) return hydrated;
+        const snapshot = coordinator.readSnapshot(command.runId);
+        const invalid = validateRunCommand(snapshot, command);
+        if (invalid !== undefined) return invalid;
+        const runtime = runtimes.get(command.runId);
+        const pending = runtime?.pendingContextShareApproval;
+        if (
+          snapshot === undefined ||
+          snapshot.schemaVersion !== "2.0" ||
+          runtime === undefined ||
+          pending === undefined ||
+          snapshot.status !== "awaiting_context_share_approval" ||
+          snapshot.pending.kind !== "context_share_approval" ||
+          snapshot.pending.requestId !== command.requestId ||
+          pending.requestId !== command.requestId ||
+          pending.approval.approvalBinding !== command.approvalBinding
+        ) {
+          return failure(
+            "AGENT_MODEL_SHARING_APPROVAL_NOT_PENDING",
+            "The requested context sharing approval is no longer pending."
+          );
+        }
+        if (options.contextSharing === undefined) {
+          return failure(
+            "AGENT_MODEL_SHARING_APPROVAL_UNAVAILABLE",
+            "The context sharing approval store is unavailable."
+          );
+        }
+        const sharing = await options.contextSharing.readForRun({
+          runId: command.runId,
+          scope: snapshot.scope
+        });
+        if (!sharing.ok) {
+          return { ok: false, error: sharing.error, latestSnapshot: snapshot };
+        }
+
+        const grantWasAlreadyUpdated =
+          command.decision === "approve" &&
+          sharing.value.grant.defaultsRevision === pending.approval.defaultsRevision &&
+          sharing.value.grant.grantRevision !== pending.approval.grantRevision &&
+          sharing.value.grant.approvedResultKinds.includes(pending.approval.resultKind);
+        const resolved = grantWasAlreadyUpdated
+          ? ok(sharing.value.grant)
+          : applyContextShareApprovalDecision({
+              defaults: sharing.value.defaults,
+              grant: sharing.value.grant,
+              pending: pending.approval,
+              decision: command.decision
+            });
+        if (!resolved.ok) {
+          return { ok: false, error: resolved.error, latestSnapshot: snapshot };
+        }
+
+        let resolvedGrant = resolved.value;
+        let grantUpdatedByThisCommand = false;
+        if (command.decision === "approve") {
+          if (!grantWasAlreadyUpdated) {
+            const updated = await options.contextSharing.updateGrant({
+              runId: command.runId,
+              scope: snapshot.scope,
+              priorGrantRevision: sharing.value.grant.grantRevision,
+              grant: resolved.value
+            });
+            if (!updated.ok) {
+              return { ok: false, error: updated.error, latestSnapshot: snapshot };
+            }
+            if (
+              updated.value.grantRevision !== resolved.value.grantRevision ||
+              !updated.value.approvedResultKinds.includes(pending.approval.resultKind)
+            ) {
+              return failure(
+                "AGENT_MODEL_SHARING_GRANT_INVALID",
+                "The persisted context sharing grant does not match the approved result kind."
+              );
+            }
+            resolvedGrant = updated.value;
+            grantUpdatedByThisCommand = true;
+          }
+        }
+
+        delete runtime.pendingContextShareApproval;
+        const approvalResolved = await recordEvent(command.runId, {
+          runId: command.runId,
+          status: modelStatusFor(snapshot),
+          type: "context_share_approval_resolved",
+          detail: {
+            requestId: pending.requestId,
+            approvalBinding: pending.approval.approvalBinding,
+            toolCallId: pending.approval.toolCallId,
+            resultClass: pending.approval.resultClass,
+            resultKind: pending.approval.resultKind,
+            decision: command.decision,
+            priorGrantRevision: pending.approval.grantRevision,
+            grantRevision: resolvedGrant.grantRevision
+          }
+        });
+        if (!approvalResolved.ok) {
+          runtime.pendingContextShareApproval = pending;
+          if (grantUpdatedByThisCommand) {
+            await options.contextSharing.updateGrant({
+              runId: command.runId,
+              scope: snapshot.scope,
+              priorGrantRevision: resolvedGrant.grantRevision,
+              grant: sharing.value.grant
+            });
+          }
+          return approvalResolved;
+        }
+        if (runtime.capabilityBoundary !== undefined) {
+          runtime.capabilityBoundary = freezeCapabilityBoundary(
+            {
+              ...runtime.capabilityBoundary,
+              sharingGrantRevision: resolvedGrant.grantRevision
+            },
+            snapshot.scope
+          );
+        }
+        if (runtime.observedCapabilityBoundary !== undefined) {
+          const observed = observedCapabilityBoundary(snapshot.scope);
+          runtime.observedCapabilityBoundary =
+            observed?.sharingGrantRevision === resolvedGrant.grantRevision
+              ? observed
+              : freezeCapabilityBoundary(
+                  {
+                    ...runtime.observedCapabilityBoundary,
+                    sharingGrantRevision: resolvedGrant.grantRevision
+                  },
+                  snapshot.scope
+                );
+        }
+        if (command.decision === "approve") {
+          // The cache artifact is bound to the pre-approval grant. The next round must bypass it.
+          delete runtime.promptCacheArtifact;
+        }
+
+        if (command.decision === "deny") {
+          const deniedCall: AssembledToolCall = {
+            toolCallId: pending.approval.toolCallId,
+            name: pending.providerToolName,
+            argumentsText: pending.argumentsText
+          };
+          await toolFailure(
+            runtime,
+            command.runId,
+            deniedCall,
+            "AGENT_MODEL_SHARING_APPROVAL_DENIED",
+            "The user denied sharing this read result with the model."
+          );
+          const result: AgentRunCommandResult = {
+            ok: true,
+            value: coordinator.readSnapshot(command.runId) ?? approvalResolved.value
+          };
+          const receipt = await persistCommandReceipt(
+            command.runId,
+            command.projectId,
+            command.commandId,
+            result
+          );
+          scheduleDrive(command.runId);
+          return receipt;
+        }
+
+        const approvedCall: AssembledToolCall = {
+          toolCallId: pending.approval.toolCallId,
+          name: pending.providerToolName,
+          argumentsText: pending.argumentsText
+        };
+        const outcome = await handleToolCall(
+          command.runId,
+          runtime,
+          approvedCall,
+          undefined,
+          pending.approval
+        );
+        if (typeof outcome !== "string" && outcome.kind === "failure") {
+          return persistCommandReceipt(
+            command.runId,
+            command.projectId,
+            command.commandId,
+            outcome.result
+          );
+        }
+        const result: AgentRunCommandResult = {
+          ok: true,
+          value: coordinator.readSnapshot(command.runId) ?? approvalResolved.value
+        };
+        const receipt = await persistCommandReceipt(
+          command.runId,
+          command.projectId,
+          command.commandId,
+          result
+        );
+        if (outcome === "continue") scheduleDrive(command.runId);
+        return receipt;
+      });
+    },
     decideToolApproval(command) {
       return runCommandOnce(command, async () => {
         const prior = await priorCommandReceipt(
@@ -9614,6 +10037,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ...(runtime?.pendingUserInput === undefined
           ? {}
           : { pendingUserInput: runtime.pendingUserInput }),
+        ...(runtime?.pendingContextShareApproval === undefined
+          ? {}
+          : {
+              pendingContextShareApproval: runtime.pendingContextShareApproval.approval
+            }),
         ...(runtime?.planArtifact === undefined ? {} : { planArtifact: runtime.planArtifact }),
         ...(planExecution.value === undefined ? {} : { planExecution: planExecution.value }),
         ...(runtime?.changeSet === undefined ? {} : { changeSet: runtime.changeSet }),
@@ -9786,6 +10214,67 @@ function parseUserInputRequest(value: JsonObject): Result<AgentUserInputRequest,
     options: parsedOptions,
     allowFreeText: value["allowFreeText"] === true
   });
+}
+
+function parsePendingContextShareApprovalRuntime(
+  value: JsonObject
+): PendingContextShareApprovalRuntime | undefined {
+  const approvalValue = readObject(value, "approval");
+  const requestId = readString(value, "requestId");
+  const providerToolName = readString(value, "providerToolName");
+  const argumentsText = readString(value, "argumentsText");
+  if (
+    approvalValue === undefined ||
+    requestId === undefined ||
+    providerToolName === undefined ||
+    argumentsText === undefined
+  ) {
+    return undefined;
+  }
+  try {
+    const approval = parseAwaitingContextShareApproval(approvalValue);
+    if (
+      requestId !== approval.approvalBinding ||
+      value["approvalBinding"] !== approval.approvalBinding ||
+      value["toolCallId"] !== approval.toolCallId ||
+      value["resultClass"] !== approval.resultClass ||
+      value["resultKind"] !== approval.resultKind ||
+      value["grantRevision"] !== approval.grantRevision
+    ) {
+      return undefined;
+    }
+    return Object.freeze({ approval, requestId, providerToolName, argumentsText });
+  } catch {
+    return undefined;
+  }
+}
+
+function approvedContextSharingTransition(
+  events: readonly AgentRunEvent[]
+): { readonly initialGrantRevision: string; readonly finalGrantRevision: string } | undefined {
+  const approvals = events.filter(
+    (event) =>
+      event.type === "context_share_approval_resolved" && event.detail?.["decision"] === "approve"
+  );
+  if (approvals.length === 0) return undefined;
+  let initialGrantRevision: string | undefined;
+  let finalGrantRevision: string | undefined;
+  for (const event of approvals) {
+    const prior = event.detail?.["priorGrantRevision"];
+    const next = event.detail?.["grantRevision"];
+    if (
+      !isChecksum(prior) ||
+      !isChecksum(next) ||
+      (finalGrantRevision !== undefined && prior !== finalGrantRevision)
+    ) {
+      return undefined;
+    }
+    initialGrantRevision ??= prior;
+    finalGrantRevision = next;
+  }
+  return initialGrantRevision === undefined || finalGrantRevision === undefined
+    ? undefined
+    : { initialGrantRevision, finalGrantRevision };
 }
 
 function parsePlanArtifact(

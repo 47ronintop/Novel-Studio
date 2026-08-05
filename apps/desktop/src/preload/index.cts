@@ -11,6 +11,7 @@ import type {
   AgentSendPreviewDtoV2,
   AgentUsageQuery,
   AgentUsageReport,
+  DecideContextShareApprovalCommand,
   ClearAgentUsageCommand,
   ConfirmAgentSendPreviewCommandV2,
   AgentRunReadResult,
@@ -422,6 +423,11 @@ const api: NovelStudioApi = {
       invokeTyped<AgentRunCommandResult>("application:agent-run:decide-change-set", command),
     decideToolApproval: (command: DecideToolApprovalCommand) =>
       invokeTyped<AgentRunCommandResult>("application:agent-run:decide-tool-approval", command),
+    decideContextShareApproval: (command: DecideContextShareApprovalCommand) =>
+      invokeTyped<AgentRunCommandResult>(
+        "application:agent-run:decide-context-share-approval",
+        command
+      ),
     undoRun: (command: UndoRunCommand) =>
       invokeTyped<AgentRunCommandResult>("application:agent-run:undo", command),
     read: (runId: string) =>

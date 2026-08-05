@@ -144,7 +144,11 @@ import type {
 import type { AgentNetworkSettingsData } from "./agent-network-settings-session.js";
 import type { AgentNetworkProviderProfile } from "./agent-network-policy.js";
 import type { McpServerConfig, McpSettingsData } from "./mcp-settings-session.js";
-import type { AgentRunReadResult, AnswerAgentUserInputCommand } from "./agent-run-session.js";
+import type {
+  AgentRunReadResult,
+  AnswerAgentUserInputCommand,
+  DecideContextShareApprovalCommand
+} from "./agent-run-session.js";
 import type {
   AgentUsageQuery,
   AgentUsageReport,
@@ -457,6 +461,9 @@ export interface NovelStudioApi {
     refreshContext(command: RefreshAgentContextCommand): Promise<AgentRunCommandResult>;
     decideChangeSet(command: DecideChangeSetCommand): Promise<AgentRunCommandResult>;
     decideToolApproval(command: DecideToolApprovalCommand): Promise<AgentRunCommandResult>;
+    decideContextShareApproval(
+      command: DecideContextShareApprovalCommand
+    ): Promise<AgentRunCommandResult>;
     undoRun(command: UndoRunCommand): Promise<AgentRunCommandResult>;
     read(runId: string): Promise<Result<AgentRunReadResult, UnifiedError>>;
     list(

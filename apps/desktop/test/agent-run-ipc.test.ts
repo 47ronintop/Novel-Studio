@@ -1087,6 +1087,44 @@ describe("Agent Run IPC", () => {
     expect(result).toMatchObject({ ok: false });
   });
 
+  test("routes only strictly bound context-sharing decisions to the active session", async () => {
+    const received: Record<string, unknown>[] = [];
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      {
+        agentRunSession: {
+          async decideContextShareApproval(command: Record<string, unknown>) {
+            received.push(command);
+            return { ok: true, value: snapshot("executing_model", 9, 9) };
+          },
+          subscribe: () => () => undefined
+        }
+      } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const command = {
+      projectId: "project-01",
+      runId: "run-ipc",
+      commandId: "context-share-decision-01",
+      expectedRunRevision: 8,
+      requestId: "context-share-request-01",
+      approvalBinding: "a".repeat(64),
+      decision: "approve"
+    };
+
+    const resolved =
+      await handlers["application:agent-run:decide-context-share-approval"]?.(command);
+    const rejected = await handlers["application:agent-run:decide-context-share-approval"]?.({
+      ...command,
+      commandId: "context-share-invalid-01",
+      resultBody: "must never cross IPC"
+    });
+
+    expect(resolved).toMatchObject({ ok: true });
+    expect(rejected).toMatchObject({ ok: false });
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject(command);
+  });
+
   test("validates discriminated rollback review commands before the session boundary", async () => {
     const received: Record<string, unknown>[] = [];
     const handlers = createApplicationIpcHandlers(

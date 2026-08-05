@@ -104,6 +104,7 @@ describe("Electron security baseline", () => {
       "application:agent-run:refresh-context",
       "application:agent-run:decide-change-set",
       "application:agent-run:decide-tool-approval",
+      "application:agent-run:decide-context-share-approval",
       "application:agent-run:undo",
       "application:agent-run:read",
       "application:agent-run:list",
@@ -180,6 +181,9 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:chapter:save")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:decide-change-set")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:decide-tool-approval")).toBe(true);
+    expect(isApplicationIpcChannel("application:agent-run:decide-context-share-approval")).toBe(
+      true
+    );
     expect(isApplicationIpcChannel("application:agent-run:read-permission-summary")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:decide-plan-revision")).toBe(true);
     expect(isApplicationIpcChannel("application:agent-run:preview-packed-context")).toBe(true);
@@ -296,6 +300,15 @@ describe("Electron security baseline", () => {
       expectedRunRevision: 1,
       bindingId: "binding_security",
       decision: "reject"
+    });
+    await api.agentRuns.decideContextShareApproval({
+      projectId: "project_security",
+      runId: "run_security",
+      commandId: "deny_context_share_security",
+      expectedRunRevision: 2,
+      requestId: "context_share_security",
+      approvalBinding: "c".repeat(64),
+      decision: "deny"
     });
     await api.agentRuns.previewPackedContext({
       projectId: "project_security",
@@ -423,6 +436,7 @@ describe("Electron security baseline", () => {
       "application:ai:list-workflow-runs",
       "application:ai:read-workflow-run",
       "application:agent-run:decide-tool-approval",
+      "application:agent-run:decide-context-share-approval",
       "application:agent-run:preview-packed-context",
       "application:chapter:edit",
       "application:chapter:save",
