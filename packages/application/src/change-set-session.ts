@@ -3,11 +3,13 @@ import { randomUUID } from "node:crypto";
 import {
   appendChangeSetProposal,
   appendChangeSetProposalV2,
+  appendChangeSetProposalsV2,
   appendChangeSetOperations,
   appendChangeSetOperationsV2,
   buildApprovalDecisionProofRefV1,
   checksumChangeSetText,
   createChangeSetRevisionV2,
+  createChangeSetRevisionBatchV2,
   createOperationsChangeSetRevisionV2,
   createChangeSetRevision,
   createOperationsChangeSetRevisionBatch,
@@ -161,6 +163,24 @@ export interface ProposeOperationBatchInput {
   }[];
 }
 
+export interface ProposePreparedFileBatchInput {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly consistencyGroupId: string;
+  readonly files: readonly {
+    readonly relativePath: string;
+    readonly assetType: "chapter";
+    readonly assetId: string;
+    readonly baseContent: string;
+    readonly candidateContent: string;
+    readonly baseChecksum: string;
+    readonly candidateChecksum: string;
+  }[];
+}
+
 export interface ChangeSetSession {
   proposeChapterWrite(input: ProposeChapterWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
   proposeFileWrite(input: ProposeFileWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
@@ -172,6 +192,10 @@ export interface ChangeSetSession {
   /** Stages a complete lifecycle-operation group in one validated, persisted revision. */
   proposeOperationBatch(
     input: ProposeOperationBatchInput
+  ): Promise<Result<ChangeSet, UnifiedError>>;
+  /** Stages a repository-prepared full-document batch in one persisted revision. */
+  proposePreparedFileBatch(
+    input: ProposePreparedFileBatchInput
   ): Promise<Result<ChangeSet, UnifiedError>>;
   selectRevision(
     input: SelectChangeSetSessionRevisionInput
@@ -569,6 +593,169 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     }
   }
 
+  async function proposePreparedFileBatch(
+    input: ProposePreparedFileBatchInput
+  ): Promise<Result<ChangeSet, UnifiedError>> {
+    if (options.providerSemanticVersionSetChecksum === undefined) {
+      return failure(
+        "CHANGE_SET_V2_REQUIRED",
+        "Prepared chapter migrations require Change Set 2.0.",
+        "Recreate the Agent run with Approval Binding 2.0 available."
+      );
+    }
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(input.consistencyGroupId)) {
+      return failure(
+        "CHANGE_SET_CONSISTENCY_GROUP_INVALID",
+        "The prepared-file batch requires a stable consistency group.",
+        "Regenerate the migration preview and retry."
+      );
+    }
+    if (input.files.length === 0) {
+      return failure(
+        "CHANGE_SET_PREPARED_BATCH_INVALID",
+        "A prepared-file batch must contain at least one file.",
+        "Regenerate the complete migration plan and retry."
+      );
+    }
+
+    const paths = new Set<string>();
+    const assetIds = new Set<string>();
+    for (const file of input.files) {
+      const path = validateAgentRelativePath(file.relativePath);
+      if (!path.ok) return path;
+      if (
+        !/^[A-Za-z0-9_-]{1,128}$/u.test(file.assetId) ||
+        path.value.relativePath !== `chapters/${file.assetId}.md` ||
+        paths.has(path.value.relativePath) ||
+        assetIds.has(file.assetId) ||
+        file.baseContent.length === 0 ||
+        checksumChangeSetText(file.baseContent) !== file.baseChecksum ||
+        checksumChangeSetText(file.candidateContent) !== file.candidateChecksum
+      ) {
+        return failure(
+          "CHANGE_SET_PREPARED_BATCH_INVALID",
+          "The prepared chapter migration batch is malformed or stale.",
+          "Regenerate the complete migration plan and retry."
+        );
+      }
+      paths.add(path.value.relativePath);
+      assetIds.add(file.assetId);
+    }
+
+    const checkpointKey = checkpointBindingKey(input);
+    const activeId = activeChangeSetByCheckpoint.get(checkpointKey);
+    try {
+      let existing = activeId === undefined ? undefined : latestRevision(activeId);
+      if (existing === undefined && options.port.readLatestChangeSet !== undefined) {
+        const restored = await options.port.readLatestChangeSet({
+          runId: input.runId,
+          projectId: input.projectId,
+          checkpointId: input.checkpointId
+        });
+        if (!restored.ok) return restored;
+        if (restored.value !== undefined) {
+          const validated = validateStoredChangeSet(restored.value);
+          if (!validated.ok) return validated;
+          existing = validated.value;
+          rememberRevision(existing);
+          activeChangeSetByCheckpoint.set(checkpointKey, existing.changeSetId);
+        }
+      }
+      if (
+        existing !== undefined &&
+        (existing.schemaVersion !== "2.0" ||
+          existing.providerSemanticVersionSetChecksum !==
+            options.providerSemanticVersionSetChecksum ||
+          existing.runId !== input.runId ||
+          existing.projectId !== input.projectId ||
+          existing.checkpointId !== input.checkpointId ||
+          existing.contextSnapshotId !== input.contextSnapshotId ||
+          (existing.writePolicy ?? "write_before_confirmation") !== "write_before_confirmation")
+      ) {
+        return failure(
+          "CHANGE_SET_CONTEXT_MISMATCH",
+          "The active Change Set is not a compatible 2.0 migration proposal.",
+          "Create a new checkpoint and regenerate the migration plan."
+        );
+      }
+
+      const existingGroup =
+        existing?.files.filter((file) => file.consistencyGroupId === input.consistencyGroupId) ??
+        [];
+      if (existingGroup.length > 0) {
+        if (
+          existingGroup.length !== input.files.length ||
+          input.files.some((file) => {
+            const current = existingGroup.find(
+              (candidate) => candidate.relativePath === file.relativePath
+            );
+            return (
+              current === undefined ||
+              current.assetType !== file.assetType ||
+              current.assetId !== file.assetId ||
+              current.contentMode !== "serialized_chapter" ||
+              current.baseChecksum !== file.baseChecksum ||
+              current.candidateChecksum !== file.candidateChecksum ||
+              current.baseContent !== file.baseContent ||
+              current.candidateContent !== file.candidateContent
+            );
+          })
+        ) {
+          return failure(
+            "CHANGE_SET_PREPARED_BATCH_INCOMPLETE",
+            "The active Change Set contains a partial or different migration batch.",
+            "Discard the incomplete Change Set and regenerate the complete migration plan."
+          );
+        }
+        return ok(existing as ChangeSet);
+      }
+
+      const proposals = input.files.map((file) => ({
+        relativePath: file.relativePath,
+        assetType: file.assetType,
+        contentMode: "serialized_chapter" as const,
+        assetId: file.assetId,
+        baseContent: file.baseContent,
+        baseChecksum: file.baseChecksum,
+        range: { unit: "character" as const, start: 0, end: file.baseContent.length },
+        replacement: file.candidateContent,
+        consistencyGroupId: input.consistencyGroupId
+      }));
+      const revisionOptions = {
+        ...(options.createHunkId === undefined ? {} : { createHunkId: options.createHunkId }),
+        validateCandidate: candidateValidator(input)
+      };
+      const revision =
+        existing === undefined
+          ? await createChangeSetRevisionBatchV2(
+              {
+                changeSetId: createChangeSetId(),
+                runId: input.runId,
+                projectId: input.projectId,
+                checkpointId: input.checkpointId,
+                contextSnapshotId: input.contextSnapshotId,
+                writePolicy: "write_before_confirmation",
+                proposals,
+                createdAt: now(),
+                providerSemanticVersionSetChecksum: options.providerSemanticVersionSetChecksum
+              },
+              revisionOptions
+            )
+          : await appendChangeSetProposalsV2(
+              existing as ChangeSetV2,
+              { proposals, createdAt: now() },
+              revisionOptions
+            );
+      const persisted = await options.port.persistChangeSet(revision);
+      if (!persisted.ok) return persisted;
+      rememberRevision(revision);
+      activeChangeSetByCheckpoint.set(checkpointKey, revision.changeSetId);
+      return ok(revision);
+    } catch (error) {
+      return err(asUnifiedError(error));
+    }
+  }
+
   return {
     bindApprovalDecisionProofRepository(repository) {
       if (
@@ -684,6 +871,8 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     async proposeOperationBatch(input) {
       return proposeOperationBatch(input, input);
     },
+
+    proposePreparedFileBatch,
 
     async selectRevision(input) {
       const current = await findRevision(input.changeSetId, input.revision);

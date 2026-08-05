@@ -8,6 +8,7 @@ import type {
 import type {
   ChangeSetOperation,
   ApprovalBindingV2,
+  ChangeSetFileContentMode,
   StoryBibleApplyReceipt,
   StoryBibleStatusTransitionProof
 } from "@novel-studio/agent-engine";
@@ -292,6 +293,7 @@ export interface RollbackReviewDiffRecord {
 export interface RollbackReviewFileRecord {
   readonly relativePath: string;
   readonly assetType: AgentWriteAssetType;
+  readonly contentMode?: ChangeSetFileContentMode;
   readonly assetId?: string;
   readonly baselineContent: string;
   readonly baselineChecksum: string;
@@ -326,6 +328,7 @@ export interface RollbackReviewRecord {
 export interface AgentWriteTransactionFile {
   readonly relativePath: string;
   readonly assetType: AgentWriteAssetType;
+  readonly contentMode?: ChangeSetFileContentMode;
   readonly baseChecksum: string;
   readonly candidateChecksum: string;
   readonly baseContent: string;
@@ -462,6 +465,7 @@ export interface AgentTransactionJournalEntry {
   readonly writeId: string;
   readonly relativePath: string;
   readonly assetType: AgentWriteAssetType;
+  readonly contentMode?: ChangeSetFileContentMode;
   readonly assetId?: string;
   readonly beforeChecksum: string;
   readonly candidateChecksum: string;

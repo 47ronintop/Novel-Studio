@@ -891,13 +891,6 @@ function createDesktopAgentRuntimeServices(
           traceId: "desktop-agent-chapter"
         })
       : undefined;
-  const chapterAgentToolSession: ChapterAgentToolSession | undefined =
-    chapterRepository === undefined
-      ? undefined
-      : createChapterAgentToolSession({
-          repository: chapterRepository,
-          traceId: "desktop-agent-chapter-tool"
-        });
   const storyBible =
     options.workspaceKind === "creativeProject"
       ? new StoryBibleFileRepository({
@@ -1010,14 +1003,6 @@ function createDesktopAgentRuntimeServices(
             baseSearchToolExecutor,
             creativeGeneralSearchToolExecutor ?? baseSearchToolExecutor
           );
-  const readToolExecutor = createDesktopReadToolExecutor(
-    projectReads,
-    creativeProjectFiles,
-    readCreativeProjectFile,
-    chapterAgentToolSession,
-    chapterRepository,
-    storyBible
-  );
   const changeSetSession = createDesktopChangeSetSession({
     projectId: options.projectId,
     projectReads,
@@ -1037,6 +1022,22 @@ function createDesktopAgentRuntimeServices(
     })
   );
   if (!proofRepositoryBound.ok) throw new Error(proofRepositoryBound.error.message);
+  const chapterAgentToolSession: ChapterAgentToolSession | undefined =
+    chapterRepository === undefined
+      ? undefined
+      : createChapterAgentToolSession({
+          repository: chapterRepository,
+          changeSetSession,
+          traceId: "desktop-agent-chapter-tool"
+        });
+  const readToolExecutor = createDesktopReadToolExecutor(
+    projectReads,
+    creativeProjectFiles,
+    readCreativeProjectFile,
+    chapterAgentToolSession,
+    chapterRepository,
+    storyBible
+  );
   const versionGroupServices =
     options.projectLockOwnerId === undefined
       ? undefined
@@ -4109,6 +4110,9 @@ async function prepareTransactionInput(
   const files: AgentWriteTransactionInput["files"][number][] = [];
   for (const file of input.files) {
     if (file.assetType === "text") {
+      if (file.contentMode === "serialized_chapter") {
+        return err(runtimeError("AGENT_WRITE_CONTENT_MODE_INVALID"));
+      }
       files.push(file);
       continue;
     }
@@ -4117,6 +4121,20 @@ async function prepareTransactionInput(
     }
     if (services.chapterRepository === undefined) {
       return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+    }
+    if (file.contentMode === "serialized_chapter") {
+      const raw = await services.projectReads.readText(file.relativePath);
+      if (!raw.ok) return raw;
+      if (raw.value.content !== file.baseContent || raw.value.checksum !== file.baseChecksum) {
+        return err(
+          runtimeError("AGENT_WRITE_BASE_CONFLICT", {
+            relativePath: file.relativePath,
+            baseHashConflictPaths: [file.relativePath]
+          })
+        );
+      }
+      files.push(file);
+      continue;
     }
     const chapter = await services.chapterRepository.readChapter(file.assetId);
     if (!chapter.ok) return chapter;
@@ -4190,6 +4208,50 @@ async function validateStoryBibleTransactionCandidates(
   history: HistoryRepository,
   chapterRepository: ChapterFileRepository | undefined
 ): Promise<Result<void, UnifiedError>> {
+  const migrationFiles = input.files.filter((file) => file.contentMode === "serialized_chapter");
+  if (migrationFiles.length > 0) {
+    if (
+      chapterRepository === undefined ||
+      migrationFiles.length !== input.files.length ||
+      (input.operations?.length ?? 0) > 0
+    ) {
+      return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
+    }
+    const match = /^chapter-order-migration-([a-f0-9]{64})$/u.exec(input.consistencyGroupId ?? "");
+    if (match?.[1] === undefined) {
+      return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
+    }
+    const preview = await chapterRepository.previewChapterOrderMigration();
+    if (!preview.ok) return preview;
+    if (!preview.value.required || preview.value.checksum !== match[1]) {
+      return err(runtimeError("CHAPTER_ORDER_MIGRATION_PREVIEW_STALE"));
+    }
+    const plan = await chapterRepository.prepareChapterOrderMigration({
+      catalogRevision: preview.value.catalogRevision,
+      previewChecksum: preview.value.checksum
+    });
+    if (!plan.ok) return plan;
+    if (
+      plan.value.consistencyGroupId !== input.consistencyGroupId ||
+      plan.value.files.length !== migrationFiles.length ||
+      migrationFiles.some((file) => {
+        const prepared = plan.value.files.find(
+          (candidate) => candidate.relativePath === file.relativePath
+        );
+        return (
+          prepared === undefined ||
+          file.assetType !== "chapter" ||
+          file.assetId !== prepared.chapterId ||
+          file.baseContent !== prepared.baseContent ||
+          file.candidateContent !== prepared.candidateContent ||
+          file.baseChecksum !== prepared.baseChecksum ||
+          file.candidateChecksum !== prepared.candidateChecksum
+        );
+      })
+    ) {
+      return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
+    }
+  }
   const chapterCreates = (input.operations ?? []).flatMap((operation) => {
     if (operation.kind !== "create_file") return [];
     const match = /^chapter-create-([a-f0-9]{64})$/u.exec(operation.consistencyGroupId ?? "");

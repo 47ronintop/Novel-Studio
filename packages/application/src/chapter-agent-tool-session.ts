@@ -7,21 +7,33 @@ import {
   type ChapterCatalogPage,
   type ChapterCatalogRepositoryPort,
   type ChapterOrderMigrationPreview,
+  type ChapterOrderMigrationPlan,
   type ChapterStatus,
   type CreateAgentChapterInput,
   type CreateAgentChapterResult,
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
+import { checksumChangeSetText, type ChangeSet } from "@novel-studio/agent-engine";
 
 import { validateChapterOrderMigrationPreview } from "./chapter-order-migration.js";
+import type { ChangeSetSession } from "./change-set-session.js";
 
 export interface ChapterAgentToolSessionOptions {
   readonly repository: ChapterCatalogRepositoryPort;
+  readonly changeSetSession?: Pick<ChangeSetSession, "proposePreparedFileBatch">;
   readonly traceId?: string;
 }
 
 export type ChapterOrderMigrationApplyInput = ChapterOrderMigrationPreview;
+
+export interface ProposeChapterOrderMigrationInput {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly preview: ChapterOrderMigrationPreview;
+}
 
 export interface ChapterAgentToolSession {
   listChapters(input?: ChapterCatalogListInput): Promise<Result<ChapterCatalogPage, UnifiedError>>;
@@ -40,6 +52,18 @@ export interface ChapterAgentToolSession {
   ): Promise<Result<CreateAgentChapterResult, UnifiedError>>;
   previewChapterOrderMigration(): Promise<Result<ChapterOrderMigrationPreview, UnifiedError>>;
   previewOrderMigration(): Promise<Result<ChapterOrderMigrationPreview, UnifiedError>>;
+  prepareChapterOrderMigration(
+    input: ChapterOrderMigrationPreview
+  ): Promise<Result<ChapterOrderMigrationPlan, UnifiedError>>;
+  prepareOrderMigration(
+    input: ChapterOrderMigrationPreview
+  ): Promise<Result<ChapterOrderMigrationPlan, UnifiedError>>;
+  proposeChapterOrderMigration(
+    input: ProposeChapterOrderMigrationInput
+  ): Promise<Result<ChangeSet, UnifiedError>>;
+  proposeOrderMigration(
+    input: ProposeChapterOrderMigrationInput
+  ): Promise<Result<ChangeSet, UnifiedError>>;
   applyChapterOrderMigration(
     input: ChapterOrderMigrationApplyInput
   ): Promise<Result<void, UnifiedError>>;
@@ -146,6 +170,81 @@ export function createChapterAgentToolSession(
     );
   }
 
+  async function prepareChapterOrderMigration(
+    input: ChapterOrderMigrationPreview
+  ): Promise<Result<ChapterOrderMigrationPlan, UnifiedError>> {
+    const validated = validateChapterOrderMigrationPreview(input, traceId);
+    if (!validated.ok) return validated;
+    if (!validated.value.required) {
+      return err(
+        argumentError(
+          "CHAPTER_ORDER_MIGRATION_NOT_REQUIRED",
+          "The current chapter catalog does not require an order migration."
+        )
+      );
+    }
+    const repositoryMethod = options.repository.prepareChapterOrderMigration;
+    if (repositoryMethod === undefined) {
+      return err(
+        unavailableError(
+          "CHAPTER_ORDER_MIGRATION_PREPARE_UNAVAILABLE",
+          "Repository-backed chapter order migration preparation is unavailable."
+        )
+      );
+    }
+    const prepared = await repositoryMethod.call(options.repository, {
+      catalogRevision: validated.value.catalogRevision,
+      previewChecksum: validated.value.checksum
+    });
+    if (!prepared.ok) return prepared;
+    return validatePreparedMigrationPlan(prepared.value, validated.value);
+  }
+
+  async function proposeChapterOrderMigration(
+    input: ProposeChapterOrderMigrationInput
+  ): Promise<Result<ChangeSet, UnifiedError>> {
+    if (
+      !isRecord(input) ||
+      !isNonEmptyString(input.runId) ||
+      !isNonEmptyString(input.projectId) ||
+      !isNonEmptyString(input.checkpointId) ||
+      !isNonEmptyString(input.contextSnapshotId)
+    ) {
+      return err(
+        argumentError(
+          "CHAPTER_ORDER_MIGRATION_ARGUMENTS_INVALID",
+          "The migration proposal binding is incomplete."
+        )
+      );
+    }
+    if (options.changeSetSession === undefined) {
+      return err(
+        unavailableError(
+          "CHAPTER_ORDER_MIGRATION_CHANGE_SET_UNAVAILABLE",
+          "The approved Change Set boundary for chapter migrations is unavailable."
+        )
+      );
+    }
+    const prepared = await prepareChapterOrderMigration(input.preview);
+    if (!prepared.ok) return prepared;
+    return options.changeSetSession.proposePreparedFileBatch({
+      runId: input.runId,
+      projectId: input.projectId,
+      checkpointId: input.checkpointId,
+      contextSnapshotId: input.contextSnapshotId,
+      consistencyGroupId: prepared.value.consistencyGroupId,
+      files: prepared.value.files.map((file) => ({
+        relativePath: file.relativePath,
+        assetType: "chapter" as const,
+        assetId: file.chapterId,
+        baseContent: file.baseContent,
+        candidateContent: file.candidateContent,
+        baseChecksum: file.baseChecksum,
+        candidateChecksum: file.candidateChecksum
+      }))
+    });
+  }
+
   return {
     listChapters,
     list: listChapters,
@@ -155,6 +254,10 @@ export function createChapterAgentToolSession(
     prepareCreateChapter: prepareCreate,
     previewChapterOrderMigration,
     previewOrderMigration: previewChapterOrderMigration,
+    prepareChapterOrderMigration,
+    prepareOrderMigration: prepareChapterOrderMigration,
+    proposeChapterOrderMigration,
+    proposeOrderMigration: proposeChapterOrderMigration,
     applyChapterOrderMigration,
     applyOrderMigration: applyChapterOrderMigration
   };
@@ -279,6 +382,63 @@ export function createChapterAgentToolSession(
       traceId
     });
   }
+
+  function validatePreparedMigrationPlan(
+    plan: ChapterOrderMigrationPlan,
+    preview: ChapterOrderMigrationPreview
+  ): Result<ChapterOrderMigrationPlan, UnifiedError> {
+    const planPreview = validateChapterOrderMigrationPreview(plan?.preview, traceId);
+    if (
+      !isRecord(plan) ||
+      !planPreview.ok ||
+      JSON.stringify(planPreview.value) !== JSON.stringify(preview) ||
+      plan.consistencyGroupId !== `chapter-order-migration-${preview.checksum}` ||
+      !Array.isArray(plan.files) ||
+      plan.files.length !== preview.affected.length ||
+      plan.files.length !== preview.inverse.length
+    ) {
+      return err(
+        argumentError(
+          "CHAPTER_ORDER_MIGRATION_PLAN_INVALID",
+          "The repository returned an inconsistent chapter migration plan."
+        )
+      );
+    }
+    const paths = new Set<string>();
+    for (let index = 0; index < plan.files.length; index += 1) {
+      const file = plan.files[index];
+      const affected = preview.affected[index];
+      const inverse = preview.inverse[index];
+      if (
+        file === undefined ||
+        affected === undefined ||
+        inverse === undefined ||
+        file.stableRef !== affected.stableRef ||
+        file.chapterId !== affected.chapterId ||
+        file.relativePath !== affected.relativePath ||
+        file.relativePath !== `chapters/${file.chapterId}.md` ||
+        file.status !== affected.status ||
+        !Object.is(file.fromOrder, affected.order) ||
+        !Object.is(file.fromOrder, inverse.from) ||
+        file.toOrder !== inverse.to ||
+        typeof file.baseContent !== "string" ||
+        typeof file.candidateContent !== "string" ||
+        file.baseContent.length === 0 ||
+        checksumChangeSetText(file.baseContent) !== file.baseChecksum ||
+        checksumChangeSetText(file.candidateContent) !== file.candidateChecksum ||
+        paths.has(file.relativePath)
+      ) {
+        return err(
+          argumentError(
+            "CHAPTER_ORDER_MIGRATION_PLAN_INVALID",
+            "The repository returned an inconsistent chapter migration file."
+          )
+        );
+      }
+      paths.add(file.relativePath);
+    }
+    return ok(plan);
+  }
 }
 
 function parseChapterStableRef(value: unknown): string | undefined {
@@ -289,6 +449,10 @@ function parseChapterStableRef(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 function isChapterStatus(value: unknown): value is ChapterStatus {

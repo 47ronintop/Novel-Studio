@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -89,7 +91,8 @@ describe("Chapter Agent tool session", () => {
     [{ limit: 1.5 }, "fractional limit"],
     [{ limit: Number.NaN }, "non-finite limit"],
     [{ includeDeleted: "yes" }, "non-boolean includeDeleted"]
-  ])("rejects invalid catalog arguments: %s (%s)", async (input, _label) => {
+  ])("rejects invalid catalog arguments: %s (%s)", async (input, label) => {
+    void label;
     const listChapterCatalog = vi.fn(async () => ok(catalogPage()));
     const session = createChapterAgentToolSession({
       repository: repositoryFor({ listChapterCatalog })
@@ -133,7 +136,8 @@ describe("Chapter Agent tool session", () => {
     [{ title: "a".repeat(513) }, "oversized title"],
     [{ title: "Opening", body: 1 }, "non-string body"],
     [{ title: "Opening", volumeId: "  " }, "blank volumeId"]
-  ])("rejects invalid create arguments: %s (%s)", async (input, _label) => {
+  ])("rejects invalid create arguments: %s (%s)", async (input, label) => {
+    void label;
     const prepareAgentChapterCreate = vi.fn(async () => ok(createResult()));
     const session = createChapterAgentToolSession({
       repository: repositoryFor({ prepareAgentChapterCreate })
@@ -200,6 +204,80 @@ describe("Chapter Agent tool session", () => {
     await expect(session.previewChapterOrderMigration()).resolves.toEqual(ok(preview));
     await expect(session.previewOrderMigration()).resolves.toEqual(ok(preview));
     expect(previewChapterOrderMigration).toHaveBeenCalledTimes(2);
+  });
+
+  test("stages a repository-prepared migration through one Change Set batch", async () => {
+    const preview = duplicateOrderPreview();
+    const plan = migrationPlan(preview);
+    const prepareChapterOrderMigration = vi.fn(async () => ok(plan));
+    const staged = { changeSetId: "change-set-migration", revision: 1 };
+    const proposePreparedFileBatch = vi.fn(async () => ok(staged as never));
+    const session = createChapterAgentToolSession({
+      repository: repositoryFor({ prepareChapterOrderMigration }),
+      changeSetSession: { proposePreparedFileBatch }
+    });
+
+    const result = await session.proposeChapterOrderMigration({
+      runId: "run-1",
+      projectId: "project-1",
+      checkpointId: "checkpoint-1",
+      contextSnapshotId: "context-1",
+      preview
+    });
+
+    expect(result).toEqual(ok(staged));
+    expect(prepareChapterOrderMigration).toHaveBeenCalledWith({
+      catalogRevision: preview.catalogRevision,
+      previewChecksum: preview.checksum
+    });
+    expect(proposePreparedFileBatch).toHaveBeenCalledWith({
+      runId: "run-1",
+      projectId: "project-1",
+      checkpointId: "checkpoint-1",
+      contextSnapshotId: "context-1",
+      consistencyGroupId: plan.consistencyGroupId,
+      files: plan.files.map((file) => ({
+        relativePath: file.relativePath,
+        assetType: "chapter",
+        assetId: file.chapterId,
+        baseContent: file.baseContent,
+        candidateContent: file.candidateContent,
+        baseChecksum: file.baseChecksum,
+        candidateChecksum: file.candidateChecksum
+      }))
+    });
+  });
+
+  test("rejects repository migration plan tampering before Change Set staging", async () => {
+    const preview = duplicateOrderPreview();
+    const plan = migrationPlan(preview);
+    const prepareChapterOrderMigration = vi.fn(async () =>
+      ok({
+        ...plan,
+        files: plan.files.map((file, index) =>
+          index === 0 ? { ...file, candidateChecksum: "f".repeat(64) } : file
+        )
+      })
+    );
+    const proposePreparedFileBatch = vi.fn();
+    const session = createChapterAgentToolSession({
+      repository: repositoryFor({ prepareChapterOrderMigration }),
+      changeSetSession: { proposePreparedFileBatch }
+    });
+
+    const result = await session.proposeChapterOrderMigration({
+      runId: "run-1",
+      projectId: "project-1",
+      checkpointId: "checkpoint-1",
+      contextSnapshotId: "context-1",
+      preview
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_ORDER_MIGRATION_PLAN_INVALID" }
+    });
+    expect(proposePreparedFileBatch).not.toHaveBeenCalled();
   });
 
   test("fails closed for migration apply without transaction and approval ports", async () => {
@@ -308,4 +386,46 @@ function catalogItem(): ChapterCatalogPage["items"][number] {
     volumeId: "volume-1",
     catalogRevision: "catalog-revision-1"
   };
+}
+
+function duplicateOrderPreview() {
+  return buildChapterOrderMigrationPreview({
+    chapters: [
+      { id: "ch_a", stableRef: "chapter:ch_a", order: 1, status: "draft" as const },
+      { id: "ch_b", stableRef: "chapter:ch_b", order: 1, status: "review" as const }
+    ]
+  });
+}
+
+function migrationPlan(preview: ReturnType<typeof duplicateOrderPreview>) {
+  const files = preview.affected.map((affected, index) => {
+    const inverse = preview.inverse[index];
+    if (inverse === undefined) throw new Error("Expected a migration inverse.");
+    const baseContent = `---\nid: ${affected.chapterId}\norder: ${affected.order}\n---\n\nBody\n`;
+    const candidateContent = baseContent.replace(
+      `order: ${affected.order}`,
+      `order: ${inverse.to}`
+    );
+    return {
+      stableRef: affected.stableRef,
+      chapterId: affected.chapterId,
+      relativePath: affected.relativePath,
+      status: affected.status,
+      fromOrder: affected.order,
+      toOrder: inverse.to,
+      baseContent,
+      candidateContent,
+      baseChecksum: sha256(baseContent),
+      candidateChecksum: sha256(candidateContent)
+    };
+  });
+  return {
+    preview,
+    files,
+    consistencyGroupId: `chapter-order-migration-${preview.checksum}`
+  };
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }

@@ -3,6 +3,7 @@ import type {
   ChangeSet,
   ChangeSetApproval,
   ChangeSetApprovalV2,
+  ChangeSetFileContentMode,
   ChangeSetOperation,
   StoryBibleApplyReceipt,
   StoryBibleStatusTransitionProof,
@@ -23,6 +24,7 @@ import { consumeStoryAnalysisSafeAutoApproval } from "./story-analysis-safe-auto
 export interface VersionGroupTransactionApplyFile {
   readonly relativePath: string;
   readonly assetType: "chapter" | "text";
+  readonly contentMode?: ChangeSetFileContentMode;
   readonly assetId?: string;
   readonly baseChecksum: string;
   readonly candidateChecksum: string;
@@ -302,6 +304,7 @@ export function createVersionGroupSession(
           files: selectedFiles.map((file) => ({
             relativePath: file.relativePath,
             assetType: file.assetType,
+            ...(file.contentMode === undefined ? {} : { contentMode: file.contentMode }),
             ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
             baseChecksum: file.baseChecksum,
             candidateChecksum: file.candidateChecksum,

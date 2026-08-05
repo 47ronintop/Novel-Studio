@@ -6,10 +6,14 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   checksumChangeSetSelection,
   checksumChangeSetText,
+  createApprovalBindingV2,
   createAgentRunCoordinator,
   createChangeSetRevision,
+  createChangeSetRevisionBatchV2,
   createOperationsChangeSetRevisionBatch,
   decideChangeSetApproval,
+  decideChangeSetApprovalV2,
+  inspectChangeSetConsistencyGroups,
   type AgentToolCapabilitySnapshot,
   type ChangeSet,
   type ChangeSetApproval
@@ -19,6 +23,7 @@ import {
   AgentRunFileRepository,
   AgentSendLedgerFileRepository,
   AgentUsageFileRepository,
+  ApprovalAuthorizationLedger,
   ChapterFileRepository,
   HistoryRepository,
   ProjectLockFileRepository,
@@ -31,6 +36,7 @@ import {
   type StoryBibleV11Asset
 } from "@novel-studio/repository";
 import { err, ok, type UnifiedError } from "@novel-studio/shared";
+import { createChapterAgentToolSession } from "@novel-studio/application";
 
 import * as runtimeExports from "../src/main/agent-run-runtime.js";
 import { createAgentFeatureFlags } from "../src/main/agent-feature-flags.js";
@@ -857,6 +863,157 @@ describe("desktop Agent Run runtime", () => {
       error: { code: "CHAPTER_CATALOG_CAS_CONFLICT" }
     });
     expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
+  });
+
+  test("applies a prepared chapter order migration through v2 approval and the locked transaction", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-chapter-order-migration-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const firstBytes = chapterMigrationMarkdown("ch_migration_a", "First", 1, "draft", "Alpha");
+    const secondBytes = chapterMigrationMarkdown("ch_migration_b", "Second", 1, "review", "Beta");
+    await writeFile(join(projectRoot, "chapters", "ch_migration_a.md"), firstBytes, "utf8");
+    await writeFile(join(projectRoot, "chapters", "ch_migration_b.md"), secondBytes, "utf8");
+    const chapterRepository = new ChapterFileRepository({ projectRoot });
+    const preview = await chapterRepository.previewChapterOrderMigration();
+    if (!preview.ok) throw new Error(preview.error.message);
+    const chapterSession = createChapterAgentToolSession({ repository: chapterRepository });
+    const prepared = await chapterSession.prepareChapterOrderMigration(preview.value);
+    if (!prepared.ok) throw new Error(prepared.error.message);
+    let hunk = 0;
+    const changeSet = await createChangeSetRevisionBatchV2(
+      {
+        changeSetId: "changes-chapter-order-migration",
+        runId: "run-chapter-order-migration",
+        projectId: "project-01",
+        checkpointId: "checkpoint-chapter-order-migration",
+        contextSnapshotId: "context-chapter-order-migration",
+        writePolicy: "write_before_confirmation",
+        providerSemanticVersionSetChecksum: "a".repeat(64),
+        createdAt: "2099-01-01T00:00:00.000Z",
+        proposals: prepared.value.files.map((file) => ({
+          relativePath: file.relativePath,
+          assetType: "chapter" as const,
+          contentMode: "serialized_chapter" as const,
+          assetId: file.chapterId,
+          baseContent: file.baseContent,
+          baseChecksum: file.baseChecksum,
+          range: { unit: "character" as const, start: 0, end: file.baseContent.length },
+          replacement: file.candidateContent,
+          consistencyGroupId: prepared.value.consistencyGroupId
+        }))
+      },
+      { createHunkId: () => `migration-hunk-${++hunk}` }
+    );
+    const selection = inspectChangeSetConsistencyGroups(changeSet);
+    const selectedOperationIds = changeSet.files.map((file) => file.relativePath);
+    const binding = createApprovalBindingV2({
+      workspaceBindingId: "workspace_project_01",
+      rootBindingId: "root_project_01",
+      runId: changeSet.runId,
+      changeSetId: changeSet.changeSetId,
+      changeSetRevision: changeSet.revision,
+      changeSetChecksum: changeSet.checksum,
+      providerSemanticVersionSetChecksum: changeSet.providerSemanticVersionSetChecksum,
+      operationKind: "replace_file",
+      selectionChecksum: selection.selectionChecksum ?? "",
+      selectedOperationIds,
+      operationOrderChecksum: checksumChangeSetText(selectedOperationIds.join("\n")),
+      sourceRef: "chapter:order-migration",
+      targetRef: "chapter:order-migration",
+      baseChecksum: checksumChangeSetText(
+        prepared.value.files.map((file) => file.baseChecksum).join("\n")
+      ),
+      candidateChecksum: checksumChangeSetText(
+        prepared.value.files.map((file) => file.candidateChecksum).join("\n")
+      ),
+      baseManifestChecksum: checksumChangeSetText(
+        prepared.value.files.map((file) => file.relativePath + file.baseChecksum).join("\n")
+      ),
+      candidateManifestChecksum: checksumChangeSetText(
+        prepared.value.files.map((file) => file.relativePath + file.candidateChecksum).join("\n")
+      ),
+      encoding: "utf-8",
+      bom: "absent",
+      eol: "lf",
+      approvalRuleSetVersion: "rules-2.0",
+      approvalRuleSetChecksum: "b".repeat(64),
+      proofId: "proof_chapter_order_migration",
+      proofChecksum: "c".repeat(64),
+      executionWritePolicy: "write_before_confirmation",
+      policyRevision: "policy_chapter_order_migration",
+      capabilityRevision: "capability_chapter_order_migration",
+      approvalSource: "human_confirmation",
+      issuedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T01:00:00.000Z"
+    });
+    const authorizationLedger = new ApprovalAuthorizationLedger({
+      projectRoot,
+      now: () => "2099-01-01T00:00:10.000Z"
+    });
+    const approval = decideChangeSetApprovalV2({
+      changeSet,
+      decision: "apply_selected",
+      displayBindingChecksum: changeSet.displayBindingChecksum,
+      binding,
+      authorizationId: "auth_chapter_order_migration",
+      reservationTransactionId: "tx_chapter_order_migration",
+      resolvedAt: "2099-01-01T00:00:11.000Z",
+      now: Date.parse("2099-01-01T00:00:11.000Z")
+    });
+    if (!approval.ok) throw new Error(approval.error.message);
+    const lockOwnerId = "desktop-chapter-order-migration-lock";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const services = runtimeExports.createDesktopVersionGroupServices({
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      projectId: "project-01",
+      projectLockOwnerId: lockOwnerId,
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      }),
+      authorizationLedger,
+      requireV2Authorization: true,
+      projectReads: new AgentProjectReadRepository({ projectRoot }),
+      chapterRepository
+    });
+    expect(await services.recoverOnStartup()).toMatchObject({ ok: true });
+    expect(
+      await authorizationLedger.issue({
+        binding,
+        authorizationId: "auth_chapter_order_migration"
+      })
+    ).toMatchObject({ ok: true });
+    expect(
+      await authorizationLedger.reserve({
+        authorizationId: "auth_chapter_order_migration",
+        transactionId: "tx_chapter_order_migration"
+      })
+    ).toMatchObject({ ok: true });
+
+    const applied = await services.executor.apply({ changeSet, approval: approval.value });
+
+    if (!applied.ok) throw new Error(`${applied.error.code}: ${applied.error.message}`);
+    expect(applied).toMatchObject({ ok: true, value: { transactionStatus: "applied" } });
+    const catalog = await chapterRepository.listChapterCatalog({ includeDeleted: true });
+    if (!catalog.ok) throw new Error(catalog.error.message);
+    expect(catalog.value.items.map((item) => [item.id, item.order, item.status])).toEqual([
+      ["ch_migration_a", 1, "draft"],
+      ["ch_migration_b", 2, "review"]
+    ]);
+    expect(await chapterRepository.readChapter("ch_migration_a")).toMatchObject({
+      ok: true,
+      value: { frontmatter: { title: "First" }, body: "Alpha\n" }
+    });
+    expect(await chapterRepository.readChapter("ch_migration_b")).toMatchObject({
+      ok: true,
+      value: { frontmatter: { title: "Second" }, body: "Beta\n" }
+    });
+    expect(await chapterRepository.previewChapterOrderMigration()).toMatchObject({
+      ok: true,
+      value: { required: false }
+    });
   });
 
   test("strictly restores a Guidance 3.0 planning run and rejects tampered or mixed V20 history", async () => {
@@ -5753,6 +5910,16 @@ function createTestingReplaceLifecyclePort(projectRoot: string): AgentWriteLifec
         : err(testLifecycleError("TEST_LIFECYCLE_POSTCONDITION_FAILED"));
     }
   };
+}
+
+function chapterMigrationMarkdown(
+  chapterId: string,
+  title: string,
+  order: number,
+  status: "draft" | "review",
+  body: string
+): string {
+  return `---\nschemaVersion: "1.0"\nid: ${chapterId}\ntype: chapter\ntitle: ${title}\norder: ${order}\nstatus: ${status}\nrevision: 1\ncreatedAt: "2026-08-05T00:00:00.000Z"\nupdatedAt: "2026-08-05T00:00:00.000Z"\n---\n\n${body}\n`;
 }
 
 async function testingSnapshotsMatch(

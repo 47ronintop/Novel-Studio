@@ -957,10 +957,11 @@ describe("Agent tool registry", () => {
         includeDeleted: { type: "boolean" }
       }
     });
+    if (listChapters === undefined) throw new Error("Expected list_chapters descriptor.");
 
     const validate = (arguments_: Record<string, unknown>) =>
       engineExports.validateAgentToolArguments({
-        descriptor: listChapters!,
+        descriptor: listChapters,
         arguments: arguments_ as JsonObject,
         argumentsText: JSON.stringify(arguments_)
       }).ok;

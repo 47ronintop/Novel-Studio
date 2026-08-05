@@ -71,6 +71,47 @@ describe("AgentWriteTransaction", () => {
     expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("before");
   });
 
+  test.each([
+    {
+      label: "missing asset id",
+      relativePath: "chapters/ch_valid.md",
+      assetId: undefined
+    },
+    {
+      label: "invalid asset id",
+      relativePath: "chapters/chapter_invalid.md",
+      assetId: "chapter_invalid"
+    },
+    {
+      label: "non-canonical chapter path",
+      relativePath: "chapters/ch_other.md",
+      assetId: "ch_valid"
+    }
+  ])("rejects serialized chapter mode with $label", async ({ relativePath, assetId }) => {
+    const baseContent = "---\nid: ch_valid\norder: 0\n---\n\nBefore\n";
+    const candidateContent = baseContent.replace("order: 0", "order: 1");
+    const projectRoot = await createProject({ [relativePath]: baseContent });
+    const operations: string[] = [];
+    const transaction = createTransaction(projectRoot, {
+      operations,
+      historyRepository: recordingHistory(operations),
+      recoveryRepository: recordingRecovery(operations)
+    });
+    const file = {
+      ...fileChange(relativePath, baseContent, candidateContent, "chapter"),
+      contentMode: "serialized_chapter" as const,
+      ...(assetId === undefined ? {} : { assetId })
+    };
+
+    const result = await transaction.apply(createInput([file]));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_CONTENT_MODE_INVALID" }
+    });
+    expect(operations).not.toContainEqual(expect.stringMatching(/^(snapshot|journal|replace):/));
+  });
+
   test("rejects a Story Bible status proof attached to a non-Story-Bible path", async () => {
     const projectRoot = await createProject({ "notes/one.md": "before" });
     const operations: string[] = [];
@@ -1213,6 +1254,70 @@ describe("AgentWriteTransaction", () => {
     expect(await readFile(join(projectRoot, "notes/two.md"), "utf8")).toBe("two before");
   });
 
+  test("journals complete serialized chapter bytes and compensates the migration batch", async () => {
+    const firstBase = "---\nid: ch_a\norder: 0\n---\n\nA\n";
+    const secondBase = "---\nid: ch_b\norder: 0\n---\n\nB\n";
+    const firstCandidate = firstBase.replace("order: 0", "order: 1");
+    const secondCandidate = secondBase.replace("order: 0", "order: 2");
+    const projectRoot = await createProject({
+      "chapters/ch_a.md": firstBase,
+      "chapters/ch_b.md": secondBase
+    });
+    const historyContents: string[] = [];
+    const history = new HistoryRepository({
+      projectRoot,
+      createVersionId: (() => {
+        let id = 0;
+        return () => `ver_migration_${++id}`;
+      })(),
+      now: () => "2026-08-05T12:00:00.000Z"
+    });
+    const transaction = createTransaction(projectRoot, {
+      historyRepository: {
+        async snapshotTextAsset(input) {
+          historyContents.push(input.content);
+          return history.snapshotTextAsset(input);
+        }
+      },
+      failReplace: ({ phase, relativePath }) =>
+        phase === "apply" && relativePath === "chapters/ch_b.md"
+    });
+    const serializedFile = (chapterId: string, baseContent: string, candidateContent: string) => ({
+      ...fileChange(`chapters/${chapterId}.md`, baseContent, candidateContent, "chapter"),
+      assetId: chapterId,
+      contentMode: "serialized_chapter" as const
+    });
+
+    const result = await transaction.apply(
+      createInput([
+        serializedFile("ch_a", firstBase, firstCandidate),
+        serializedFile("ch_b", secondBase, secondCandidate)
+      ])
+    );
+
+    expect(result.ok && result.value.transactionStatus).toBe("rolled_back");
+    expect(historyContents).toEqual([firstBase, secondBase]);
+    const journals = await readJournals(projectRoot);
+    expect(journals[0]?.entries).toMatchObject([
+      {
+        relativePath: "chapters/ch_a.md",
+        contentMode: "serialized_chapter",
+        beforeContent: firstBase,
+        candidateContent: firstCandidate,
+        status: "rolled_back"
+      },
+      {
+        relativePath: "chapters/ch_b.md",
+        contentMode: "serialized_chapter",
+        beforeContent: secondBase,
+        candidateContent: secondCandidate,
+        status: "pending"
+      }
+    ]);
+    expect(await readFile(join(projectRoot, "chapters/ch_a.md"), "utf8")).toBe(firstBase);
+    expect(await readFile(join(projectRoot, "chapters/ch_b.md"), "utf8")).toBe(secondBase);
+  });
+
   test("persists explicit per-file partial failure when compensation fails", async () => {
     const projectRoot = await createProject({
       "notes/one.md": "one before",
@@ -1496,6 +1601,62 @@ describe("AgentWriteTransaction", () => {
     });
     expect(await readFile(join(projectRoot, "notes/one.md"), "utf8")).toBe("candidate");
   });
+
+  test.each([
+    {
+      label: "missing asset id",
+      relativePath: "chapters/ch_valid.md",
+      assetId: undefined
+    },
+    {
+      label: "invalid asset id",
+      relativePath: "chapters/chapter_invalid.md",
+      assetId: "chapter_invalid"
+    },
+    {
+      label: "non-canonical chapter path",
+      relativePath: "chapters/ch_other.md",
+      assetId: "ch_valid"
+    }
+  ])(
+    "rejects a serialized chapter recovery journal with $label",
+    async ({ relativePath, assetId }) => {
+      const projectRoot = await createProject({});
+      const recovery = new RecoveryRepository({ projectRoot });
+      const base = appliedJournal({
+        transactionId: "tx_invalid_serialized_chapter",
+        versionGroupId: "vg_invalid_serialized_chapter",
+        runSequence: 1,
+        beforeContent: "before",
+        candidateContent: "candidate",
+        beforeVersionId: "ver_before"
+      });
+      const journal: AgentTransactionJournal = {
+        ...base,
+        entries: base.entries.map((entry) => ({
+          ...entry,
+          relativePath,
+          assetType: "chapter" as const,
+          contentMode: "serialized_chapter" as const,
+          ...(assetId === undefined ? {} : { assetId })
+        }))
+      };
+      const journalRoot = join(projectRoot, "history", "agent-transactions");
+      await mkdir(journalRoot, { recursive: true });
+      await writeFile(
+        join(journalRoot, `${journal.transactionId}.json`),
+        `${JSON.stringify(journal, null, 2)}\n`,
+        "utf8"
+      );
+
+      const result = await recovery.readAgentTransactionJournal(journal.transactionId);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+      });
+    }
+  );
 
   test("rejects a recovery journal whose payload id differs from its file name", async () => {
     const projectRoot = await createProject({ "notes/one.md": "candidate" });
@@ -2330,6 +2491,63 @@ describe("AgentWriteTransaction", () => {
     });
   });
 
+  test("run undo preserves serialized chapter bytes and content mode", async () => {
+    const chapterId = "ch_migration_undo";
+    const relativePath = `chapters/${chapterId}.md`;
+    const baselineFile = `---\nid: ${chapterId}\norder: 0\n---\n\nBaseline body.\n`;
+    const agentFile = baselineFile.replace("order: 0", "order: 3");
+    const projectRoot = await createProject({ [relativePath]: baselineFile });
+    const snapshots: { readonly reason: string; readonly content: string }[] = [];
+    let version = 0;
+    const transaction = createTransaction(projectRoot, {
+      historyRepository: {
+        async snapshotTextAsset(input) {
+          snapshots.push({ reason: input.reason, content: input.content });
+          return ok({
+            schemaVersion: "1.0",
+            versionId: `ver_serialized_undo_${++version}`,
+            assetType: input.assetType,
+            assetId: input.assetId,
+            reason: input.reason,
+            createdBy: input.createdBy ?? "system",
+            createdAt: "2026-07-13T01:00:00.000Z",
+            checksum: `sha256:${checksum(input.content)}`
+          });
+        }
+      }
+    });
+    const applied = await transaction.apply(
+      createInput([
+        {
+          ...fileChange(relativePath, baselineFile, agentFile, "chapter"),
+          assetId: chapterId,
+          contentMode: "serialized_chapter"
+        }
+      ])
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+
+    const undone = await transaction.undoRun({ runId: "run_01" });
+
+    expect(undone.ok && undone.value.transactionStatus).toBe("applied");
+    expect(await readFile(join(projectRoot, relativePath), "utf8")).toBe(baselineFile);
+    expect(snapshots).toEqual([
+      { reason: "before-agent-write", content: baselineFile },
+      { reason: "before-agent-session-undo", content: agentFile }
+    ]);
+    const undoJournal = (await readJournals(projectRoot)).find(
+      (journal) => journal.kind === "run_undo"
+    );
+    expect(undoJournal?.entries[0]).toMatchObject({
+      relativePath,
+      assetId: chapterId,
+      contentMode: "serialized_chapter",
+      beforeContent: agentFile,
+      candidateContent: baselineFile,
+      status: "applied"
+    });
+  });
+
   test("keeps a dirty chapter editor in rollback review until the user restores baseline", async () => {
     const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D5";
     const relativePath = `chapters/${chapterId}.md`;
@@ -2402,6 +2620,109 @@ describe("AgentWriteTransaction", () => {
 });
 
 describe("AgentWriteTransaction lifecycle operations", () => {
+  test("serialized chapter rollback preserves bytes through stale review and journaled undo", async () => {
+    const chapterId = "ch_migration_rollback";
+    const relativePath = `chapters/${chapterId}.md`;
+    const baselineFile = `---\nid: ${chapterId}\norder: 0\n---\n\nBaseline body.\n`;
+    const agentFile = baselineFile.replace("order: 0", "order: 4");
+    const firstUserFile = baselineFile.replace("order: 0", "order: 8");
+    const secondUserFile = baselineFile.replace("order: 0", "order: 9");
+    const projectRoot = await createProject({
+      [relativePath]: baselineFile,
+      "notes/source.md": "source"
+    });
+    const snapshots: { readonly reason: string; readonly content: string }[] = [];
+    let version = 0;
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot),
+      historyRepository: {
+        async snapshotTextAsset(input) {
+          snapshots.push({ reason: input.reason, content: input.content });
+          return ok({
+            schemaVersion: "1.0",
+            versionId: `ver_serialized_rollback_${++version}`,
+            assetType: input.assetType,
+            assetId: input.assetId,
+            reason: input.reason,
+            createdBy: input.createdBy ?? "system",
+            createdAt: "2026-07-13T01:00:00.000Z",
+            checksum: `sha256:${checksum(input.content)}`
+          });
+        }
+      }
+    });
+    const applied = await transaction.apply(
+      createInput(
+        [
+          {
+            ...fileChange(relativePath, baselineFile, agentFile, "chapter"),
+            assetId: chapterId,
+            contentMode: "serialized_chapter"
+          }
+        ],
+        {
+          operations: [
+            {
+              kind: "delete_file",
+              operationId: "delete_serialized_rollback_source",
+              toolCallIdempotencyKey: "tool_delete_serialized_rollback_source",
+              relativePath: "notes/source.md",
+              baseChecksum: checksum("source")
+            }
+          ]
+        }
+      )
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    await writeFile(join(projectRoot, relativePath), firstUserFile, "utf8");
+
+    const pending = await transaction.undoRun({ runId: "run_01" });
+
+    expect(pending.ok && pending.value.rollbackReview?.files[0]).toMatchObject({
+      contentMode: "serialized_chapter",
+      reviewedCurrentContent: firstUserFile,
+      reviewedCurrentHistoryContent: firstUserFile,
+      status: "conflict"
+    });
+    await writeFile(join(projectRoot, relativePath), secondUserFile, "utf8");
+
+    const stale = await transaction.undoRun({
+      runId: "run_01",
+      decisions: [{ relativePath, decision: "restore_baseline" }]
+    });
+
+    expect(stale.ok && stale.value.rollbackReview?.files[0]).toMatchObject({
+      contentMode: "serialized_chapter",
+      reviewedCurrentContent: secondUserFile,
+      reviewedCurrentHistoryContent: secondUserFile,
+      status: "stale"
+    });
+
+    const restored = await transaction.undoRun({
+      runId: "run_01",
+      decisions: [{ relativePath, decision: "restore_baseline" }]
+    });
+
+    expect(restored.ok && restored.value.transactionStatus).toBe("applied");
+    expect(await readFile(join(projectRoot, relativePath), "utf8")).toBe(baselineFile);
+    expect(await readFile(join(projectRoot, "notes/source.md"), "utf8")).toBe("source");
+    expect(snapshots).toContainEqual({
+      reason: "before-agent-session-undo",
+      content: secondUserFile
+    });
+    const undoJournal = (await readJournals(projectRoot)).find(
+      (journal) => journal.kind === "run_undo"
+    );
+    expect(undoJournal?.entries[0]).toMatchObject({
+      relativePath,
+      assetId: chapterId,
+      contentMode: "serialized_chapter",
+      beforeContent: secondUserFile,
+      candidateContent: baselineFile,
+      status: "applied"
+    });
+  });
+
   test("does not mark a dirty rollback review applied until lifecycle inverses complete", async () => {
     const projectRoot = await createProject({
       "notes/one.md": "baseline",

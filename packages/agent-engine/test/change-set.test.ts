@@ -7,6 +7,7 @@ import {
   appendChangeSetOperation,
   createDirectoryOperation,
   createChangeSetRevision,
+  createChangeSetRevisionBatchV2,
   createFileOperation,
   createOperationsChangeSetRevision,
   deleteFileOperation,
@@ -26,6 +27,56 @@ const baseBinding = {
 };
 
 describe("immutable Change Set revisions", () => {
+  test("creates a serialized chapter batch as one strict v2 revision", async () => {
+    const firstBase = "---\nid: ch_a\norder: 0\n---\n\nA\n";
+    const secondBase = "---\nid: ch_b\norder: 0\n---\n\nB\n";
+    let hunk = 0;
+    const changeSet = await createChangeSetRevisionBatchV2(
+      {
+        ...baseBinding,
+        providerSemanticVersionSetChecksum: "a".repeat(64),
+        proposals: [
+          serializedChapterProposal("ch_a", firstBase, firstBase.replace("order: 0", "order: 1")),
+          serializedChapterProposal("ch_b", secondBase, secondBase.replace("order: 0", "order: 2"))
+        ]
+      },
+      { createHunkId: () => `migration-hunk-${++hunk}` }
+    );
+
+    expect(changeSet).toMatchObject({
+      schemaVersion: "2.0",
+      revision: 1,
+      files: [
+        {
+          assetId: "ch_a",
+          contentMode: "serialized_chapter",
+          candidateContent: expect.any(String)
+        },
+        { assetId: "ch_b", contentMode: "serialized_chapter", candidateContent: expect.any(String) }
+      ]
+    });
+    expect(changeSet.files).toHaveLength(2);
+    expect(changeSet.files.every((file) => file.consistencyGroupId === "migration-group")).toBe(
+      true
+    );
+  });
+
+  test("rejects serialized chapter mode on a text asset", async () => {
+    await expect(
+      createChangeSetRevisionBatchV2({
+        ...baseBinding,
+        providerSemanticVersionSetChecksum: "a".repeat(64),
+        proposals: [
+          {
+            ...serializedChapterProposal("ch_a", "old", "new"),
+            relativePath: "notes/a.md",
+            assetType: "text"
+          }
+        ]
+      })
+    ).rejects.toMatchObject({ code: "CHANGE_SET_CONTENT_MODE_INVALID" });
+  });
+
   test("creates an all-selected chapter paragraph proposal without mutating its base", async () => {
     const baseContent = "Opening.\n\nOld middle.\n\nEnding.";
     const validateCandidate = vi.fn(async () => ({
@@ -584,4 +635,22 @@ function characterProposal(
 
 function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function serializedChapterProposal(
+  chapterId: string,
+  baseContent: string,
+  candidateContent: string
+) {
+  return {
+    relativePath: `chapters/${chapterId}.md`,
+    assetType: "chapter" as const,
+    contentMode: "serialized_chapter" as const,
+    assetId: chapterId,
+    baseContent,
+    baseChecksum: sha256(baseContent),
+    range: { unit: "character" as const, start: 0, end: baseContent.length },
+    replacement: candidateContent,
+    consistencyGroupId: "migration-group"
+  };
 }

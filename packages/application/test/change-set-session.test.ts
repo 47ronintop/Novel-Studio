@@ -1035,6 +1035,90 @@ describe("Change Set application session", () => {
     expect(duplicate).toEqual(first);
     expect(persisted.map((revision) => revision.revision)).toEqual([1, 2]);
   });
+
+  test("persists one v2 revision for a complete serialized chapter batch", async () => {
+    const persisted: ChangeSet[] = [];
+    let hunk = 0;
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+      providerSemanticVersionSetChecksum: "a".repeat(64),
+      createChangeSetId: () => "change-set-chapter-migration",
+      createHunkId: () => `migration-hunk-${++hunk}`,
+      now: () => "2026-08-05T12:00:00.000Z"
+    });
+    const input = preparedChapterBatch();
+
+    const first = expectOk(await session.proposePreparedFileBatch(input));
+    const retry = expectOk(await session.proposePreparedFileBatch(input));
+
+    expect(first).toMatchObject({
+      schemaVersion: "2.0",
+      revision: 1,
+      writePolicy: "write_before_confirmation",
+      files: [
+        { assetId: "ch_a", contentMode: "serialized_chapter", selected: true },
+        { assetId: "ch_b", contentMode: "serialized_chapter", selected: true }
+      ]
+    });
+    expect(retry).toBe(first);
+    expect(persisted).toEqual([first]);
+  });
+
+  test("rejects a restored prepared batch from another provider semantic version set", async () => {
+    const persisted: ChangeSet[] = [];
+    const port = targetPort({ chapter: () => "unused", file: () => "unused", persisted });
+    const firstSession = createChangeSetSession({
+      port,
+      providerSemanticVersionSetChecksum: "a".repeat(64),
+      createChangeSetId: () => "change-set-chapter-migration",
+      createHunkId: sequence("migration-hunk-a", "migration-hunk-b"),
+      now: () => "2026-08-05T12:00:00.000Z"
+    });
+    const input = preparedChapterBatch();
+    expectOk(await firstSession.proposePreparedFileBatch(input));
+    const readLatestChangeSet = vi.fn(async () => ({
+      ok: true as const,
+      value: persisted.at(-1)
+    }));
+    const restoredSession = createChangeSetSession({
+      port: { ...port, readLatestChangeSet },
+      providerSemanticVersionSetChecksum: "b".repeat(64),
+      createChangeSetId: () => "must-not-create-a-new-change-set",
+      now: () => "2026-08-05T12:01:00.000Z"
+    });
+
+    const result = await restoredSession.proposePreparedFileBatch(input);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_CONTEXT_MISMATCH" }
+    });
+    expect(readLatestChangeSet).toHaveBeenCalledTimes(1);
+    expect(persisted).toHaveLength(1);
+  });
+
+  test("rejects a partial retry of a persisted prepared chapter batch", async () => {
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+      providerSemanticVersionSetChecksum: "a".repeat(64),
+      createChangeSetId: () => "change-set-chapter-migration",
+      createHunkId: sequence("migration-hunk-a", "migration-hunk-b"),
+      now: () => "2026-08-05T12:00:00.000Z"
+    });
+    const input = preparedChapterBatch();
+    expectOk(await session.proposePreparedFileBatch(input));
+    const firstFile = input.files[0];
+    if (firstFile === undefined) throw new Error("Expected a prepared migration file.");
+
+    const partial = await session.proposePreparedFileBatch({ ...input, files: [firstFile] });
+
+    expect(partial).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_PREPARED_BATCH_INCOMPLETE" }
+    });
+    expect(persisted).toHaveLength(1);
+  });
 });
 
 function proposalBinding() {
@@ -1107,6 +1191,31 @@ function migrationBatchInput(options: { readonly deleteDependsOn?: readonly stri
         }
       }
     ]
+  };
+}
+
+function preparedChapterBatch() {
+  const firstBase = "---\nid: ch_a\norder: 0\n---\n\nA\n";
+  const secondBase = "---\nid: ch_b\norder: 0\n---\n\nB\n";
+  return {
+    ...proposalBinding(),
+    consistencyGroupId: "chapter-order-migration-abc123",
+    files: [
+      preparedChapter("ch_a", firstBase, firstBase.replace("order: 0", "order: 1")),
+      preparedChapter("ch_b", secondBase, secondBase.replace("order: 0", "order: 2"))
+    ]
+  };
+}
+
+function preparedChapter(chapterId: string, baseContent: string, candidateContent: string) {
+  return {
+    relativePath: `chapters/${chapterId}.md`,
+    assetType: "chapter" as const,
+    assetId: chapterId,
+    baseContent,
+    candidateContent,
+    baseChecksum: sha256(baseContent),
+    candidateChecksum: sha256(candidateContent)
   };
 }
 

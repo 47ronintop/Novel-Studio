@@ -76,10 +76,12 @@ describe("ChapterFileRepository", () => {
       "chapter:ch_b"
     ]);
     expect(first.value.nextCursor).toEqual(expect.any(String));
+    const nextCursor = first.value.nextCursor;
+    if (nextCursor === null) throw new Error("Expected a catalog cursor.");
 
     const second = await repository.listChapterCatalog({
       limit: 2,
-      cursor: first.value.nextCursor!
+      cursor: nextCursor
     });
     expect(isOk(second)).toBe(true);
     if (isErr(second)) throw new Error(second.error.message);
@@ -122,7 +124,8 @@ describe("ChapterFileRepository", () => {
     const first = await repository.listChapterCatalog({ limit: 1 });
     expect(isOk(first)).toBe(true);
     if (isErr(first)) throw new Error(first.error.message);
-    const cursor = first.value.nextCursor!;
+    const cursor = first.value.nextCursor;
+    if (cursor === null) throw new Error("Expected a catalog cursor.");
 
     const mismatch = await repository.listChapterCatalog({
       limit: 1,
@@ -159,7 +162,8 @@ describe("ChapterFileRepository", () => {
     const listed = await repository.listChapterCatalog({});
     expect(isOk(listed)).toBe(true);
     if (isErr(listed)) throw new Error(listed.error.message);
-    const item = listed.value.items[0]!;
+    const item = listed.value.items[0];
+    if (item === undefined) throw new Error("Expected chapter catalog metadata.");
     expect(item.stableRef).toBe("chapter:ch_meta");
     expect(item.frontmatter).toMatchObject({ id: "ch_meta", volumeId: "vol_1", revision: 7 });
     expect(item.revision).toBe(7);
@@ -316,7 +320,9 @@ describe("ChapterFileRepository", () => {
     expect(isOk(catalog)).toBe(true);
     if (isErr(catalog)) throw new Error(catalog.error.message);
     expect(catalog.value.items.length).toBe(chapters.length);
-    const readable = await repository.readChapterForAgent(chapters[0]!.id);
+    const firstChapter = chapters[0];
+    if (firstChapter === undefined) throw new Error("Expected a migration fixture chapter.");
+    const readable = await repository.readChapterForAgent(firstChapter.id);
     expect(isOk(readable)).toBe(true);
 
     const create = await repository.createAgentChapter({ title: "Blocked" });

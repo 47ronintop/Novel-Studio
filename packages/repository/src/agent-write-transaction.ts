@@ -682,6 +682,7 @@ export class AgentWriteTransaction {
       files.push({
         relativePath: file.relativePath,
         assetType: file.assetType,
+        ...(file.contentMode === undefined ? {} : { contentMode: file.contentMode }),
         ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
         baselineContent: file.candidateContent,
         baselineChecksum: file.candidateChecksum,
@@ -697,10 +698,12 @@ export class AgentWriteTransaction {
         reviewedCurrentContent: current.value.content,
         reviewedCurrentChecksum: current.value.checksum,
         reviewedCurrentHistoryContent:
-          editorContent ?? historyContentForAsset(file.assetType, current.value.content),
+          editorContent ??
+          historyContentForAsset(file.assetType, current.value.content, file.contentMode),
         ...(editorContent === undefined ? {} : { reviewedEditorChecksum: checksum(editorContent) }),
         diff: rollbackDiff(
-          editorContent ?? historyContentForAsset(file.assetType, current.value.content),
+          editorContent ??
+            historyContentForAsset(file.assetType, current.value.content, file.contentMode),
           file.historyBaseContent ?? file.baseContent,
           file.historyCandidateContent ?? file.candidateContent
         ),
@@ -779,6 +782,7 @@ export class AgentWriteTransaction {
         assetId: historyAssetId({
           relativePath: file.relativePath,
           assetType: file.assetType,
+          ...(file.contentMode === undefined ? {} : { contentMode: file.contentMode }),
           ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
           baseChecksum: file.reviewedCurrentChecksum,
           candidateChecksum: file.baselineChecksum,
@@ -1561,6 +1565,9 @@ export class AgentWriteTransaction {
           writeId: step.writeId,
           relativePath: step.source.relativePath,
           assetType: step.source.assetType,
+          ...(step.source.contentMode === undefined
+            ? {}
+            : { contentMode: step.source.contentMode }),
           ...(step.source.assetId === undefined ? {} : { assetId: step.source.assetId }),
           beforeChecksum: before.checksum,
           candidateChecksum: after.checksum,
@@ -1734,6 +1741,7 @@ export class AgentWriteTransaction {
       return {
         relativePath,
         assetType: earliest.assetType,
+        ...(earliest.contentMode === undefined ? {} : { contentMode: earliest.contentMode }),
         ...(earliest.assetId === undefined ? {} : { assetId: earliest.assetId }),
         baseChecksum: latest.candidateChecksum,
         candidateChecksum: earliest.beforeChecksum,
@@ -1808,6 +1816,14 @@ export class AgentWriteTransaction {
   > {
     const prepared: (AgentWriteTransactionFile & { targetPath: string })[] = [];
     for (const file of files) {
+      if (
+        (file.contentMode !== undefined &&
+          file.contentMode !== "body" &&
+          file.contentMode !== "serialized_chapter") ||
+        (file.contentMode === "serialized_chapter" && !isSerializedChapterTarget(file))
+      ) {
+        return err(this.error("AGENT_WRITE_CONTENT_MODE_INVALID", "validation", file.relativePath));
+      }
       if (
         checksum(file.baseContent) !== file.baseChecksum ||
         checksum(file.candidateContent) !== file.candidateChecksum
@@ -2833,6 +2849,7 @@ function createJournal(input: {
       writeId: file.writeId,
       relativePath: file.relativePath,
       assetType: file.assetType,
+      ...(file.contentMode === undefined ? {} : { contentMode: file.contentMode }),
       ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
       beforeChecksum: file.baseChecksum,
       candidateChecksum: file.candidateChecksum,
@@ -3310,6 +3327,7 @@ function resolvedRollbackFile(
   return {
     relativePath: file.relativePath,
     assetType: file.assetType,
+    ...(file.contentMode === undefined ? {} : { contentMode: file.contentMode }),
     ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
     baselineContent: file.baselineContent,
     baselineChecksum: file.baselineChecksum,
@@ -3346,6 +3364,7 @@ function staleRollbackFile(
   return {
     relativePath: file.relativePath,
     assetType: file.assetType,
+    ...(file.contentMode === undefined ? {} : { contentMode: file.contentMode }),
     ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
     baselineContent: file.baselineContent,
     baselineChecksum: file.baselineChecksum,
@@ -3361,10 +3380,10 @@ function staleRollbackFile(
     reviewedCurrentContent: currentContent,
     reviewedCurrentChecksum: currentChecksum,
     reviewedCurrentHistoryContent:
-      editorContent ?? historyContentForAsset(file.assetType, currentContent),
+      editorContent ?? historyContentForAsset(file.assetType, currentContent, file.contentMode),
     ...(editorContent === undefined ? {} : { reviewedEditorChecksum: checksum(editorContent) }),
     diff: rollbackDiff(
-      editorContent ?? historyContentForAsset(file.assetType, currentContent),
+      editorContent ?? historyContentForAsset(file.assetType, currentContent, file.contentMode),
       file.runLastWriteHistoryContent ?? file.runLastWriteContent,
       file.baselineHistoryContent ?? file.baselineContent
     ),
@@ -3391,8 +3410,12 @@ function rollbackEditorMatches(
   return editorContent !== undefined && checksum(editorContent) === file.reviewedEditorChecksum;
 }
 
-function historyContentForAsset(assetType: AgentWriteAssetType, content: string): string {
-  if (assetType === "text") return content;
+function historyContentForAsset(
+  assetType: AgentWriteAssetType,
+  content: string,
+  contentMode?: AgentWriteTransactionFile["contentMode"]
+): string {
+  if (assetType === "text" || contentMode === "serialized_chapter") return content;
   const match = content.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
   return (match?.[1] ?? content).replace(/^\n/, "");
 }
@@ -3445,6 +3468,7 @@ function rollbackReviewBoundToSource(review: RollbackReviewRecord, source: UndoS
       sourceFile !== undefined &&
       baseline !== undefined &&
       file.assetType === sourceFile.assetType &&
+      file.contentMode === sourceFile.contentMode &&
       file.assetId === sourceFile.assetId &&
       file.baselineContent === sourceFile.candidateContent &&
       file.baselineChecksum === sourceFile.candidateChecksum &&
@@ -3482,6 +3506,7 @@ function rollbackReviewUndoWriteStep(
     writeId: rollbackWriteId(`undo_${source.writeId}`, review.relativePath),
     source: {
       ...source.source,
+      ...(review.contentMode === undefined ? {} : { contentMode: review.contentMode }),
       beforeChecksum: review.baselineChecksum,
       candidateChecksum: review.reviewedCurrentChecksum,
       beforeContent: review.baselineContent,
@@ -3491,11 +3516,22 @@ function rollbackReviewUndoWriteStep(
         : { historyBaseContent: review.baselineHistoryContent }),
       historyCandidateContent:
         review.reviewedCurrentHistoryContent ??
-        historyContentForAsset(review.assetType, currentContent)
+        historyContentForAsset(review.assetType, currentContent, review.contentMode)
     },
     before: [fileSnapshot(review.relativePath, currentContent)],
     after: [fileSnapshot(review.relativePath, review.baselineContent)]
   };
+}
+
+function isSerializedChapterTarget(
+  file: Pick<AgentWriteTransactionFile, "relativePath" | "assetType" | "assetId">
+): boolean {
+  return (
+    file.assetType === "chapter" &&
+    typeof file.assetId === "string" &&
+    /^ch_[A-Za-z0-9_-]+$/u.test(file.assetId) &&
+    file.relativePath === `chapters/${file.assetId}.md`
+  );
 }
 
 function groupFromJournal(
@@ -3615,6 +3651,7 @@ function journalMatchesGroupedInput(
         file !== undefined &&
         entry.relativePath === file.relativePath &&
         entry.assetType === file.assetType &&
+        entry.contentMode === file.contentMode &&
         entry.assetId === file.assetId &&
         entry.beforeChecksum === file.baseChecksum &&
         entry.candidateChecksum === file.candidateChecksum &&

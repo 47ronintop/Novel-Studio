@@ -537,6 +537,11 @@ function isRollbackReviewFileRecord(value: unknown): boolean {
     typeof file["relativePath"] === "string" &&
     isSafeRollbackRelativePath(file["relativePath"]) &&
     (file["assetType"] === "chapter" || file["assetType"] === "text") &&
+    (file["contentMode"] === undefined ||
+      file["contentMode"] === "body" ||
+      file["contentMode"] === "serialized_chapter") &&
+    (file["contentMode"] !== "serialized_chapter" ||
+      isSerializedChapterTarget(file["assetType"], file["assetId"], file["relativePath"])) &&
     (file["assetId"] === undefined ||
       (typeof file["assetId"] === "string" && file["assetId"].length > 0)) &&
     typeof file["baselineContent"] === "string" &&
@@ -584,15 +589,16 @@ function isRollbackReviewFileRecord(value: unknown): boolean {
   ))
     return false;
   const assetType = file["assetType"] as "chapter" | "text";
+  const contentMode = file["contentMode"] as "body" | "serialized_chapter" | undefined;
   const current =
     (file["reviewedCurrentHistoryContent"] as string | undefined) ??
-    rollbackHistoryContent(assetType, file["reviewedCurrentContent"] as string);
+    rollbackHistoryContent(assetType, file["reviewedCurrentContent"] as string, contentMode);
   const lastWrite =
     (file["runLastWriteHistoryContent"] as string | undefined) ??
-    rollbackHistoryContent(assetType, file["runLastWriteContent"] as string);
+    rollbackHistoryContent(assetType, file["runLastWriteContent"] as string, contentMode);
   const baseline =
     (file["baselineHistoryContent"] as string | undefined) ??
-    rollbackHistoryContent(assetType, file["baselineContent"] as string);
+    rollbackHistoryContent(assetType, file["baselineContent"] as string, contentMode);
   const typedDiff = diff as Record<string, unknown>;
   return (
     typedDiff["currentToLastWrite"] ===
@@ -626,8 +632,12 @@ function isSafeRollbackRelativePath(relativePath: string): boolean {
   );
 }
 
-function rollbackHistoryContent(assetType: "chapter" | "text", content: string): string {
-  if (assetType === "text") return content;
+function rollbackHistoryContent(
+  assetType: "chapter" | "text",
+  content: string,
+  contentMode?: "body" | "serialized_chapter"
+): string {
+  if (assetType === "text" || contentMode === "serialized_chapter") return content;
   const match = content.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
   return (match?.[1] ?? content).replace(/^\n/, "");
 }
@@ -1177,7 +1187,13 @@ function isAgentTransactionJournalEntry(value: unknown): boolean {
     typeof entry.writeId === "string" &&
     typeof entry.relativePath === "string" &&
     (entry.assetType === "chapter" || entry.assetType === "text") &&
+    (entry.contentMode === undefined ||
+      entry.contentMode === "body" ||
+      entry.contentMode === "serialized_chapter") &&
+    (entry.contentMode !== "serialized_chapter" || entry.assetType === "chapter") &&
     (entry.assetId === undefined || typeof entry.assetId === "string") &&
+    (entry.contentMode !== "serialized_chapter" ||
+      isSerializedChapterTarget(entry.assetType, entry.assetId, entry.relativePath)) &&
     typeof entry.beforeChecksum === "string" &&
     /^[a-f0-9]{64}$/.test(entry.beforeChecksum) &&
     typeof entry.candidateChecksum === "string" &&
@@ -1194,6 +1210,19 @@ function isAgentTransactionJournalEntry(value: unknown): boolean {
       entry.status === "applied" ||
       entry.status === "rolled_back" ||
       entry.status === "rollback_failed")
+  );
+}
+
+function isSerializedChapterTarget(
+  assetType: unknown,
+  assetId: unknown,
+  relativePath: unknown
+): boolean {
+  return (
+    assetType === "chapter" &&
+    typeof assetId === "string" &&
+    /^ch_[A-Za-z0-9_-]+$/u.test(assetId) &&
+    relativePath === `chapters/${assetId}.md`
   );
 }
 

@@ -14,6 +14,7 @@ const { load: parseYaml } = require("js-yaml") as {
 };
 
 export type ChangeSetAssetType = "chapter" | "text";
+export type ChangeSetFileContentMode = "body" | "serialized_chapter";
 export type ChangeSetRangeUnit = "character" | "line" | "paragraph";
 export type ChangeSetStatus =
   "awaiting_approval" | "approved" | "rejected" | "stale" | "applied" | "abandoned";
@@ -123,6 +124,8 @@ export interface ChangeSetHunk {
 export interface ChangeSetFileChange {
   readonly relativePath: string;
   readonly assetType: ChangeSetAssetType;
+  /** Chapter candidates normally contain body text; migrations carry complete Markdown bytes. */
+  readonly contentMode?: ChangeSetFileContentMode;
   readonly assetId?: string;
   readonly baseChecksum: string;
   readonly candidateChecksum: string;
@@ -199,6 +202,7 @@ export interface CreateOperationsChangeSetRevisionV2Input {
 export interface ChangeSetProposal {
   readonly relativePath: string;
   readonly assetType: ChangeSetAssetType;
+  readonly contentMode?: ChangeSetFileContentMode;
   readonly assetId?: string;
   readonly baseContent: string;
   readonly baseChecksum: string;
@@ -219,8 +223,28 @@ export interface CreateChangeSetRevisionInput {
   readonly createdAt: string;
 }
 
+export interface CreateChangeSetRevisionBatchInput {
+  readonly changeSetId: string;
+  readonly runId: string;
+  readonly projectId: string;
+  readonly checkpointId: string;
+  readonly contextSnapshotId: string;
+  readonly writePolicy?: AgentWritePolicy;
+  readonly proposals: readonly ChangeSetProposal[];
+  readonly createdAt: string;
+}
+
+export interface CreateChangeSetRevisionBatchV2Input extends CreateChangeSetRevisionBatchInput {
+  readonly providerSemanticVersionSetChecksum: string;
+}
+
 export interface AppendChangeSetProposalInput {
   readonly proposal: ChangeSetProposal;
+  readonly createdAt: string;
+}
+
+export interface AppendChangeSetProposalsInput {
+  readonly proposals: readonly ChangeSetProposal[];
   readonly createdAt: string;
 }
 
@@ -268,6 +292,7 @@ export interface ChangeSetRevisionOptions {
 interface DraftFileChange {
   readonly relativePath: string;
   readonly assetType: ChangeSetAssetType;
+  readonly contentMode?: ChangeSetFileContentMode;
   readonly assetId?: string;
   readonly baseChecksum: string;
   readonly baseContent: string;
@@ -287,13 +312,27 @@ export async function createChangeSetRevision(
   input: CreateChangeSetRevisionInput,
   options: ChangeSetRevisionOptions = {}
 ): Promise<ChangeSetLegacy> {
-  const draft = createDraftFile(input.proposal, options.createHunkId);
+  return createChangeSetRevisionBatch(
+    {
+      ...input,
+      proposals: [input.proposal]
+    },
+    options
+  );
+}
+
+/** Create one immutable revision from a complete prepared-file batch. */
+export async function createChangeSetRevisionBatch(
+  input: CreateChangeSetRevisionBatchInput,
+  options: ChangeSetRevisionOptions = {}
+): Promise<ChangeSetLegacy> {
+  const drafts = createDraftFiles(input.proposals, options.createHunkId);
   return finalizeChangeSet(
     {
       ...input,
       writePolicy: input.writePolicy ?? "write_before_confirmation",
       revision: 1,
-      files: [draft]
+      files: drafts
     },
     options.validateCandidate
   );
@@ -307,8 +346,22 @@ export async function createChangeSetRevisionV2(
   input: CreateChangeSetRevisionV2Input,
   options: ChangeSetRevisionOptions = {}
 ): Promise<ChangeSetV2> {
+  return createChangeSetRevisionBatchV2(
+    {
+      ...input,
+      proposals: [input.proposal]
+    },
+    options
+  );
+}
+
+/** V2 counterpart of createChangeSetRevisionBatch. */
+export async function createChangeSetRevisionBatchV2(
+  input: CreateChangeSetRevisionBatchV2Input,
+  options: ChangeSetRevisionOptions = {}
+): Promise<ChangeSetV2> {
   assertProviderSemanticVersionSetChecksum(input.providerSemanticVersionSetChecksum);
-  const legacy = await createChangeSetRevision(input, options);
+  const legacy = await createChangeSetRevisionBatch(input, options);
   return asChangeSetV2(legacy, input.providerSemanticVersionSetChecksum);
 }
 
@@ -441,6 +494,15 @@ function isChangeSetV2FileShape(value: unknown): boolean {
     !isChangeSetV2ValidationShape(file["validation"]) ||
     !(file["hunks"] as unknown[]).every(isChangeSetV2HunkShape)
   ) {
+    return false;
+  }
+  if (
+    file["contentMode"] !== undefined &&
+    file["contentMode"] !== "body" &&
+    file["contentMode"] !== "serialized_chapter"
+  )
+    return false;
+  if (file["contentMode"] === "serialized_chapter" && file["assetType"] !== "chapter") {
     return false;
   }
   if (
@@ -613,43 +675,22 @@ export async function appendChangeSetProposal(
   input: AppendChangeSetProposalInput,
   options: ChangeSetRevisionOptions = {}
 ): Promise<ChangeSetLegacy> {
-  const proposed = createDraftFile(input.proposal, options.createHunkId);
-  const existing = current.files.find((file) => file.relativePath === proposed.relativePath);
-  const files: DraftFileChange[] = current.files.map(toAllSelectedDraft);
+  return appendChangeSetProposals(
+    current,
+    { proposals: [input.proposal], createdAt: input.createdAt },
+    options
+  );
+}
 
-  if (existing === undefined) {
-    files.push(proposed);
-  } else {
-    if (
-      existing.assetType !== proposed.assetType ||
-      existing.assetId !== proposed.assetId ||
-      existing.consistencyGroupId !== proposed.consistencyGroupId ||
-      existing.baseChecksum !== proposed.baseChecksum ||
-      existing.baseContent !== proposed.baseContent
-    ) {
-      throw changeSetError(
-        "CHANGE_SET_BASE_MISMATCH",
-        "The proposal no longer matches the Change Set base.",
-        "Refresh the target and create a new proposal."
-      );
-    }
-    const newHunk = proposed.hunks[0];
-    if (newHunk === undefined) {
-      throw changeSetError(
-        "CHANGE_SET_INVALID",
-        "The proposal did not produce a reviewable hunk.",
-        "Regenerate the proposal."
-      );
-    }
-    const mergedHunks = [
-      ...existing.hunks
-        .filter((hunk) => !rangesOverlap(hunk.characterRange, newHunk.characterRange))
-        .map((hunk) => ({ ...hunk, selected: true })),
-      newHunk
-    ].sort((left, right) => left.characterRange.start - right.characterRange.start);
-    const index = files.findIndex((file) => file.relativePath === proposed.relativePath);
-    files[index] = { ...proposed, hunks: mergedHunks };
-  }
+/** Append a complete prepared-file batch as one revision. */
+export async function appendChangeSetProposals(
+  current: ChangeSetLegacy,
+  input: AppendChangeSetProposalsInput,
+  options: ChangeSetRevisionOptions = {}
+): Promise<ChangeSetLegacy> {
+  const proposed = createDraftFiles(input.proposals, options.createHunkId);
+  const files: DraftFileChange[] = current.files.map(toAllSelectedDraft);
+  for (const draft of proposed) mergeDraftFile(files, draft);
 
   const revised = await finalizeChangeSet(
     {
@@ -688,8 +729,21 @@ export async function appendChangeSetProposalV2(
   input: AppendChangeSetProposalInput,
   options: ChangeSetRevisionOptions = {}
 ): Promise<ChangeSetV2> {
+  return appendChangeSetProposalsV2(
+    current,
+    { proposals: [input.proposal], createdAt: input.createdAt },
+    options
+  );
+}
+
+/** V2 counterpart of appendChangeSetProposals. */
+export async function appendChangeSetProposalsV2(
+  current: ChangeSetV2,
+  input: AppendChangeSetProposalsInput,
+  options: ChangeSetRevisionOptions = {}
+): Promise<ChangeSetV2> {
   const legacyCurrent = asLegacyChangeSetForInternal(current);
-  const revised = await appendChangeSetProposal(legacyCurrent, input, options);
+  const revised = await appendChangeSetProposals(legacyCurrent, input, options);
   return asChangeSetV2(revised, current.providerSemanticVersionSetChecksum);
 }
 
@@ -858,6 +912,24 @@ function createDraftFile(
 ): DraftFileChange {
   const path = validateAgentRelativePath(proposal.relativePath);
   if (!path.ok) throw path.error;
+  if (
+    proposal.contentMode !== undefined &&
+    proposal.contentMode !== "body" &&
+    proposal.contentMode !== "serialized_chapter"
+  ) {
+    throw changeSetError(
+      "CHANGE_SET_CONTENT_MODE_INVALID",
+      "The proposal content mode is not supported.",
+      "Regenerate the proposal using a supported content mode."
+    );
+  }
+  if (proposal.contentMode === "serialized_chapter" && proposal.assetType !== "chapter") {
+    throw changeSetError(
+      "CHANGE_SET_CONTENT_MODE_INVALID",
+      "Serialized chapter content is only valid for chapter assets.",
+      "Regenerate the proposal as a chapter migration."
+    );
+  }
   if (checksumChangeSetText(proposal.baseContent) !== proposal.baseChecksum) {
     throw changeSetError(
       "CHANGE_SET_BASE_MISMATCH",
@@ -869,6 +941,7 @@ function createDraftFile(
   return {
     relativePath: path.value.relativePath,
     assetType: proposal.assetType,
+    ...(proposal.contentMode === undefined ? {} : { contentMode: proposal.contentMode }),
     ...(proposal.assetId === undefined ? {} : { assetId: proposal.assetId }),
     ...(proposal.consistencyGroupId === undefined
       ? {}
@@ -889,6 +962,70 @@ function createDraftFile(
       }
     ]
   };
+}
+
+function createDraftFiles(
+  proposals: readonly ChangeSetProposal[],
+  createHunkId: (() => string) | undefined
+): readonly DraftFileChange[] {
+  if (proposals.length === 0) {
+    throw changeSetError(
+      "CHANGE_SET_INVALID",
+      "A prepared-file batch must contain at least one proposal.",
+      "Regenerate the complete prepared-file batch."
+    );
+  }
+  const drafts = proposals.map((proposal) => createDraftFile(proposal, createHunkId));
+  const paths = new Set<string>();
+  for (const draft of drafts) {
+    if (paths.has(draft.relativePath)) {
+      throw changeSetError(
+        "CHANGE_SET_INVALID",
+        "A prepared-file batch contains the same path more than once.",
+        "Regenerate the complete prepared-file batch with unique paths."
+      );
+    }
+    paths.add(draft.relativePath);
+  }
+  return drafts;
+}
+
+function mergeDraftFile(files: DraftFileChange[], proposed: DraftFileChange): void {
+  const existing = files.find((file) => file.relativePath === proposed.relativePath);
+  if (existing === undefined) {
+    files.push(proposed);
+    return;
+  }
+  if (
+    existing.assetType !== proposed.assetType ||
+    existing.contentMode !== proposed.contentMode ||
+    existing.assetId !== proposed.assetId ||
+    existing.consistencyGroupId !== proposed.consistencyGroupId ||
+    existing.baseChecksum !== proposed.baseChecksum ||
+    existing.baseContent !== proposed.baseContent
+  ) {
+    throw changeSetError(
+      "CHANGE_SET_BASE_MISMATCH",
+      "The proposal no longer matches the Change Set base.",
+      "Refresh the target and create a new proposal."
+    );
+  }
+  const newHunk = proposed.hunks[0];
+  if (newHunk === undefined) {
+    throw changeSetError(
+      "CHANGE_SET_INVALID",
+      "The proposal did not produce a reviewable hunk.",
+      "Regenerate the proposal."
+    );
+  }
+  const mergedHunks = [
+    ...existing.hunks
+      .filter((hunk) => !rangesOverlap(hunk.characterRange, newHunk.characterRange))
+      .map((hunk) => ({ ...hunk, selected: true })),
+    newHunk
+  ].sort((left, right) => left.characterRange.start - right.characterRange.start);
+  const index = files.findIndex((file) => file.relativePath === proposed.relativePath);
+  files[index] = { ...proposed, hunks: mergedHunks };
 }
 
 async function finalizeChangeSet(
@@ -917,6 +1054,7 @@ async function finalizeChangeSet(
       files: files.map((file) => ({
         relativePath: file.relativePath,
         assetType: file.assetType,
+        contentMode: file.contentMode ?? null,
         assetId: file.assetId ?? null,
         consistencyGroupId: file.consistencyGroupId ?? null,
         storyBibleStatusProof: file.storyBibleStatusProof ?? null,
@@ -936,7 +1074,10 @@ async function finalizeChangeSet(
   const approvalToken = checksumChangeSetText(`${input.changeSetId}:${input.revision}:${checksum}`);
   return deepFreeze({
     schemaVersion: files.some(
-      (file) => file.consistencyGroupId !== undefined || file.storyBibleStatusProof !== undefined
+      (file) =>
+        file.contentMode !== undefined ||
+        file.consistencyGroupId !== undefined ||
+        file.storyBibleStatusProof !== undefined
     )
       ? "1.1"
       : "1.0",
@@ -973,6 +1114,7 @@ async function finalizeFile(
   return {
     relativePath: draft.relativePath,
     assetType: draft.assetType,
+    ...(draft.contentMode === undefined ? {} : { contentMode: draft.contentMode }),
     ...(draft.assetId === undefined ? {} : { assetId: draft.assetId }),
     ...(draft.consistencyGroupId === undefined
       ? {}
@@ -1105,6 +1247,7 @@ function toDraft(file: ChangeSetFileChange): DraftFileChange {
   return {
     relativePath: file.relativePath,
     assetType: file.assetType,
+    ...(file.contentMode === undefined ? {} : { contentMode: file.contentMode }),
     ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
     ...(file.consistencyGroupId === undefined
       ? {}
@@ -1895,6 +2038,7 @@ function serializeChangeSetFiles(files: readonly ChangeSetFileChange[]): readonl
   return files.map((file) => ({
     relativePath: file.relativePath,
     assetType: file.assetType,
+    contentMode: file.contentMode ?? null,
     assetId: file.assetId ?? null,
     consistencyGroupId: file.consistencyGroupId ?? null,
     storyBibleStatusProof: file.storyBibleStatusProof ?? null,

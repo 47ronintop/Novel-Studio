@@ -874,6 +874,7 @@ export type {
   ProposeFileWriteInput,
   ProposeOperationBatchInput,
   ProposeOperationInput,
+  ProposePreparedFileBatchInput,
   SelectChangeSetSessionRevisionInput
 } from "./change-set-session.js";
 export type {
@@ -1062,7 +1063,8 @@ export { createStoryBibleAgentToolSession } from "./story-bible-agent-tool-sessi
 export {
   createChapterAgentToolSession,
   type ChapterAgentToolSession,
-  type ChapterAgentToolSessionOptions
+  type ChapterAgentToolSessionOptions,
+  type ProposeChapterOrderMigrationInput
 } from "./chapter-agent-tool-session.js";
 export {
   checksumStoryAnalysisSelectors,
