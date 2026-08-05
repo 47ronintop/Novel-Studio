@@ -16,6 +16,7 @@ import {
 import {
   AgentProjectReadRepository,
   AgentRunFileRepository,
+  AgentSendLedgerFileRepository,
   AgentUsageFileRepository,
   ChapterFileRepository,
   HistoryRepository,
@@ -4933,6 +4934,197 @@ describe("desktop Agent Run runtime", () => {
       });
     });
     expect(observedToolLists[0]).toContain("search_project");
+  });
+
+  test("guards Desktop read results before execution and refreshes the send manifest after approval", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-jit-sharing-"));
+    roots.push(projectRoot);
+    const readContent = "JIT protected project content.\n";
+    const sharingDefaultsRevision = "a".repeat(64);
+    await mkdir(join(projectRoot, "notes"), { recursive: true });
+    await writeFile(join(projectRoot, "notes", "jit.md"), readContent, "utf8");
+    let readerCalls = 0;
+    let modelRounds = 0;
+
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      featureFlags: createAgentFeatureFlags({
+        agentGuidanceV3: true,
+        revision: "desktop-jit-sharing-test"
+      }),
+      sharingDefaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "ask",
+        toolReadResults: "ask"
+      },
+      sharingDefaultsRevision,
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-desktop-jit-sharing",
+        provider: "demo",
+        modelName: "desktop-jit-sharing-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden" as const, reason: "test model" }
+      }),
+      readCreativeProjectFile: async (relativePath: string) => {
+        readerCalls += 1;
+        return ok({
+          schemaVersion: "1.0" as const,
+          projectId: "project-01",
+          workspaceId: "project-01",
+          path: relativePath,
+          content: readContent,
+          checksum: sha256(readContent),
+          byteLength: Buffer.byteLength(readContent, "utf8"),
+          nodeRevision: "jit-reader-node-1"
+        });
+      },
+      modelDriver: {
+        async *streamRound(input) {
+          modelRounds += 1;
+          if (modelRounds === 1) {
+            yield runtimeToolCall("desktop-jit-read", "read_resource", {
+              ref: "file:notes/jit.md"
+            });
+          } else {
+            const evidenceRef = `run-event/${String(
+              input.snapshot.lastSequence
+            )}/tool_completed/desktop-jit-read`;
+            yield runtimeToolCall("desktop-jit-finish", "finish", {
+              outcome: "completed",
+              report: {
+                result: "JIT sharing approval completed.",
+                appliedChanges: [],
+                verification: [evidenceRef],
+                residualRisks: []
+              },
+              evidenceRefs: [evidenceRef]
+            });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-desktop-jit-sharing-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-desktop-jit-sharing",
+      userRequest: "Read the protected project file.",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-desktop-jit-sharing",
+      contextRefs: []
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+
+    const packedPreview = await previewDraftStart(
+      runtime,
+      prepared.value,
+      "preview-desktop-jit-sharing-context"
+    );
+    const preview = await runtime.prepareAgentSendPreview({
+      schemaVersion: "2.0",
+      commandId: "prepare-desktop-jit-sharing-send",
+      startCommand: {
+        ...packedPreview.command,
+        commandId: "start-desktop-jit-sharing"
+      }
+    });
+    expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true });
+    if (!preview.ok) return;
+
+    const confirmed = await runtime.confirmAgentSendPreview({
+      schemaVersion: "2.0",
+      previewId: preview.value.previewId,
+      canonicalPayloadChecksum: preview.value.canonicalPayloadChecksum
+    });
+    expect(confirmed).toMatchObject({ ok: true });
+    if (!confirmed.ok) return;
+    const runId = confirmed.value.runId;
+
+    await vi.waitFor(async () => {
+      const read = await runtime.agentRunSession.readAgentRun(runId);
+      if (read.ok && read.value.snapshot.status === "failed") {
+        throw new Error("Desktop JIT run unexpectedly failed");
+      }
+      expect(read).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: {
+            status: "awaiting_context_share_approval",
+            pending: { kind: "context_share_approval", requestId: expect.any(String) }
+          },
+          pendingContextShareApproval: {
+            resultKind: "tool:read_resource",
+            toolCallId: "desktop-jit-read"
+          }
+        }
+      });
+    });
+    expect(readerCalls).toBe(0);
+
+    const pendingRead = await runtime.agentRunSession.readAgentRun(runId);
+    expect(pendingRead).toMatchObject({ ok: true });
+    if (!pendingRead.ok || pendingRead.value.pendingContextShareApproval === undefined) return;
+    const pending = pendingRead.value.pendingContextShareApproval;
+    const approved = await runtime.agentRunSession.decideContextShareApproval({
+      projectId: "project-01",
+      runId,
+      commandId: "approve-desktop-jit-sharing",
+      expectedRunRevision: pendingRead.value.snapshot.runRevision,
+      requestId: pending.approvalBinding,
+      approvalBinding: pending.approvalBinding,
+      decision: "approve"
+    });
+    expect(approved).toMatchObject({ ok: true });
+
+    await vi.waitFor(async () => {
+      const read = await runtime.agentRunSession.readAgentRun(runId);
+      if (read.ok && read.value.snapshot.status === "failed") {
+        throw new Error("Desktop JIT run unexpectedly failed");
+      }
+      expect(read).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+    expect(readerCalls).toBe(1);
+    expect(modelRounds).toBe(2);
+
+    const ledgerRepository = new AgentSendLedgerFileRepository({ projectRoot });
+    const ledger = await ledgerRepository.readEntries(runId);
+    expect(ledger).toMatchObject({ ok: true });
+    if (!ledger.ok) return;
+    expect(ledger.value).toHaveLength(2);
+    const firstManifest = JSON.parse(ledger.value[0].canonicalRoundManifestJson) as {
+      readonly sharing: { readonly runGrantRevision: string };
+    };
+    const secondManifest = JSON.parse(ledger.value[1].canonicalRoundManifestJson) as {
+      readonly sharing: { readonly runGrantRevision: string };
+    };
+    expect(secondManifest.sharing.runGrantRevision).not.toBe(
+      firstManifest.sharing.runGrantRevision
+    );
   });
 
   test("forwards Main's search-query auto-approval policy into the run session", async () => {
