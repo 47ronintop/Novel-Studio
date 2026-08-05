@@ -231,9 +231,6 @@ export function createAgentFileOperationSession(
 ): AgentFileOperationSession {
   const createOperationId =
     options.createOperationId ?? (() => `op_${randomUUID().replaceAll("-", "")}`);
-  const createChapterId =
-    options.createChapterId ?? (() => `ch_${randomUUID().replaceAll("-", "")}`);
-  const now = options.now ?? (() => new Date().toISOString());
   const traceId = options.traceId ?? "agent-file-operation-session";
 
   const proposals = new Map<string, FileOperationProposal>();
@@ -357,30 +354,13 @@ export function createAgentFileOperationSession(
     },
 
     proposeChapterCreate(input) {
-      if (input.title.length === 0 || input.title.length > 512)
-        return err(operationError("FILE_OP_TITLE_INVALID", "Chapter title must be 1–512 chars."));
-      const existing = proposals.get(input.toolCallId);
-      if (existing !== undefined) return ok(existing);
-      const chapterId = createChapterId();
-      const createdAt = now();
-      if (!/^ch_[A-Za-z0-9_-]+$/u.test(chapterId) || !Number.isFinite(Date.parse(createdAt))) {
-        return err(
-          operationError(
-            "FILE_OP_CHAPTER_ID_INVALID",
-            "The generated chapter identity or timestamp is invalid."
-          )
-        );
-      }
-      const body = input.content ?? "";
-      const operation: ChangeSetCreateFileOperation = {
-        kind: "create_file",
-        operationId: createOperationId(),
-        relativePath: `chapters/${chapterId}.md`,
-        content: formatCreatedChapter(chapterId, input.title, body, createdAt),
-        toolCallIdempotencyKey: input.toolCallId,
-        ...(input.dependsOn === undefined ? {} : { dependsOn: Object.freeze([...input.dependsOn]) })
-      };
-      return ok(store(input.toolCallId, operation));
+      void input;
+      return err(
+        operationError(
+          "FILE_OP_CHAPTER_CREATE_UNAVAILABLE",
+          "Formal chapter creation requires the chapter Agent session."
+        )
+      );
     },
 
     proposeStoryBibleWrite(input) {
@@ -477,29 +457,4 @@ export function storyBibleAssetRelativePath(
 ): string | undefined {
   if (!isStoryBibleAssetType(assetType)) return undefined;
   return STORY_BIBLE_ASSET_PATH_RESOLVERS[assetType](assetId);
-}
-
-function formatCreatedChapter(
-  chapterId: string,
-  title: string,
-  body: string,
-  createdAt: string
-): string {
-  const wordCount = body.trim().length === 0 ? 0 : body.trim().split(/\s+/u).length;
-  return [
-    "---",
-    'schemaVersion: "1.0"',
-    `id: ${chapterId}`,
-    "type: chapter",
-    `title: ${JSON.stringify(title)}`,
-    "order: 1",
-    "status: draft",
-    `wordCount: ${wordCount}`,
-    `createdAt: ${JSON.stringify(createdAt)}`,
-    `updatedAt: ${JSON.stringify(createdAt)}`,
-    "---",
-    "",
-    body.replace(/\s*$/u, ""),
-    ""
-  ].join("\n");
 }

@@ -5646,6 +5646,20 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? "terminal"
           : "continue";
       }
+      if (
+        dispatchName === "propose_chapter_create" &&
+        options.chapterAgentToolSession === undefined
+      ) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "AGENT_CHAPTER_SESSION_UNAVAILABLE",
+          "Formal chapter creation is unavailable without a chapter Agent session."
+        ))
+          ? "terminal"
+          : "continue";
+      }
       const dependsOn = readStringArray(dispatchArguments, "dependsOn");
       const proposalResult =
         dispatchName === "propose_chapter_create" && options.chapterAgentToolSession !== undefined

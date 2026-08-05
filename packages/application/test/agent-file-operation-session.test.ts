@@ -163,25 +163,20 @@ describe("AgentFileOperationSession", () => {
     expect(result.value.operation.kind).toBe("create_directory");
   });
 
-  test("proposeChapterCreate returns a create_file operation with chapter path", () => {
-    const session = createAgentFileOperationSession({
-      createChapterId: () => "ch_test_create",
-      now: () => "2026-07-26T00:00:00.000Z"
-    });
+  test("proposeChapterCreate rejects without the formal chapter session", () => {
+    const session = createAgentFileOperationSession();
     const result = session.proposeChapterCreate({
       toolCallId: "call-chapter",
       title: "第一章",
       content: "雨夜里，故事开始了。"
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.operation.kind).toBe("create_file");
-    if (result.value.operation.kind !== "create_file") return;
-    expect(result.value.operation.relativePath).toBe("chapters/ch_test_create.md");
-    expect(result.value.operation.content).toContain("id: ch_test_create");
-    expect(result.value.operation.content).toContain('title: "第一章"');
-    expect(result.value.operation.content).toContain('createdAt: "2026-07-26T00:00:00.000Z"');
-    expect(result.value.operation.content).toContain("雨夜里，故事开始了。");
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "FILE_OP_CHAPTER_CREATE_UNAVAILABLE"
+      }
+    });
+    expect(session.listPendingOperations()).toEqual([]);
   });
 
   test("proposeChapterCreate rejects empty title", () => {

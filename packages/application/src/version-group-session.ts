@@ -172,6 +172,12 @@ export interface VersionGroupSession {
 export interface CreateVersionGroupSessionOptions {
   readonly transaction: VersionGroupSessionTransactionPort;
   readonly hooks: VersionGroupSessionHooks;
+  /**
+   * Optional Main-owned Approval Binding 2.0 capability override. An explicit
+   * `false` disables mutation apply; `true` permits V2 validation. Omitting the
+   * value preserves the legacy caller contract during staged migration.
+   */
+  readonly approvalBindingV2Available?: boolean;
 }
 
 const BATCH_APPROVAL_VALIDATED = Symbol("batch-approval-validated");
@@ -184,6 +190,9 @@ export function createVersionGroupSession(
 ): VersionGroupSession {
   const session: VersionGroupSession = {
     async applyApproved(input) {
+      if (options.approvalBindingV2Available === false) {
+        return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
+      }
       const internalInput = input as InternalVersionGroupApplyApprovedInput;
       const binding = internalInput[BATCH_APPROVAL_VALIDATED]
         ? ok(undefined)
@@ -359,6 +368,9 @@ export function createVersionGroupSession(
     },
 
     async applyApprovedBatch(input) {
+      if (options.approvalBindingV2Available === false) {
+        return err(versionGroupError("VERSION_GROUP_APPROVAL_MISMATCH"));
+      }
       const consistencyGroups = inspectChangeSetConsistencyGroups(input.changeSet);
       const suggestionEntries = Object.entries(input.storyBibleSuggestionIdsByGroup ?? {});
       const suggestionIds = suggestionEntries.flatMap(([, ids]) => [...ids]);

@@ -1014,6 +1014,7 @@ function createDesktopAgentRuntimeServices(
     projectReads,
     creativeProjectFiles,
     readCreativeProjectFile,
+    chapterAgentToolSession,
     chapterRepository,
     storyBible
   );
@@ -5583,6 +5584,7 @@ function createDesktopReadToolExecutor(
   readCreativeProjectFile:
     | ((relativePath: string) => Promise<Result<CreativeProjectFileDocument, UnifiedError>>)
     | undefined,
+  chapterAgentToolSession: ChapterAgentToolSession | undefined,
   chapterRepository: ChapterFileRepository | undefined,
   storyBible: StoryBibleFileRepository | undefined
 ): AgentReadToolExecutor {
@@ -5602,7 +5604,7 @@ function createDesktopReadToolExecutor(
           : listed;
       }
       if (input.name === "list_chapters") {
-        if (chapterRepository === undefined) {
+        if (chapterAgentToolSession === undefined) {
           return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
         }
         const rawStatuses = readOptionalStringArray(input.arguments, "statuses");
@@ -5625,7 +5627,7 @@ function createDesktopReadToolExecutor(
         ) {
           return invalidToolArguments(input.name);
         }
-        const listed = await chapterRepository.listChapterCatalog({
+        const listed = await chapterAgentToolSession.listChapters({
           ...(statuses.length === 0 ? {} : { statuses }),
           ...(cursor === undefined ? {} : { cursor }),
           ...(typeof limit === "number" ? { limit } : {}),
@@ -5639,13 +5641,13 @@ function createDesktopReadToolExecutor(
           : listed;
       }
       if (input.name === "read_chapter") {
-        if (chapterRepository === undefined) {
+        if (chapterAgentToolSession === undefined) {
           return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
         }
         const chapterId = readRequiredId(input.arguments, "chapterId");
         if (chapterId === undefined) return invalidToolArguments(input.name);
         const relativePath = `chapters/${chapterId}.md`;
-        const chapter = await chapterRepository.readChapterForAgent(chapterId);
+        const chapter = await chapterAgentToolSession.readChapter(`chapter:${chapterId}`);
         return chapter.ok
           ? ok({
               summary: `已读取章节 ${chapterId}`,

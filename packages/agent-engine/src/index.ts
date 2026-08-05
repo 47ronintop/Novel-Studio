@@ -190,6 +190,34 @@ export type {
   ProviderVisibleConditionalApprovalRuleId,
   RegisteredApprovalRuleSetV1
 } from "./approval-rule-registry.js";
+export {
+  CHAPTER_STATUS_TRANSITION_PROOF_SCHEMA_VERSION,
+  assertChapterStatusTransitionProof,
+  chapterStatusTransitionProofChecksum,
+  chapterStatusTransitionProofChecksumV1,
+  checksumChapterStatusTransitionProof,
+  createChapterStatusTransitionProof,
+  createChapterStatusTransitionProofV1,
+  isChapterStatusTransitionProof,
+  isChapterStatusTransitionProofComplete,
+  parseChapterStatusTransitionProof,
+  parseChapterStatusTransitionProofV1,
+  parseChapterStatusTransitionProofJson,
+  parseChapterStatusTransitionProofV1Json,
+  serializeChapterStatusTransitionProof,
+  serializeChapterStatusTransitionProofV1,
+  serializeChapterStatusTransitionProofJson,
+  validateChapterStatusTransitionProof,
+  verifyChapterStatusTransitionProof
+} from "./chapter-status-transition-proof.js";
+export type {
+  ChapterNeighborRefs,
+  ChapterRestoreStatus,
+  ChapterStatusTransitionAction,
+  ChapterStatusTransitionProof,
+  ChapterTransitionStatus,
+  CreateChapterStatusTransitionProofInput
+} from "./chapter-status-transition-proof.js";
 export type {
   CapabilityRevocationReason,
   EffectiveCapabilityState,

@@ -32,6 +32,17 @@ export type {
 } from "./agent-write-transaction.js";
 export { CacheRepository } from "./cache-repository.js";
 export { ChapterFileRepository } from "./chapter-repository.js";
+export { ChapterWriteCoordinator, chapterLifecycleChecksum } from "./chapter-write-coordinator.js";
+export type {
+  ChapterDeleteInput,
+  ChapterRestoreInput,
+  ChapterReorderInput,
+  ChapterStatusInput,
+  ChapterWriteCoordinatorOptions,
+  ChapterWriteCoordinatorRepository,
+  ChapterWriteInverse,
+  ChapterWriteReceipt
+} from "./chapter-write-coordinator.js";
 export { ConfigAssetRepository } from "./config-asset-repository.js";
 export type {
   ConfigAssetType,

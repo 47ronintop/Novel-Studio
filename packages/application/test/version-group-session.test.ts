@@ -928,12 +928,31 @@ describe("VersionGroupSession", () => {
     expect(!result.ok && result.error.code).toBe("VERSION_GROUP_APPROVAL_MISMATCH");
     expect(operations).toEqual([]);
   });
+
+  test("fails closed when Approval Binding 2.0 is unavailable", async () => {
+    const operations: string[] = [];
+    const apply = vi.fn(async () => ok(appliedGroup()));
+    const session = createSession(operations, { apply }, {}, false);
+
+    const result = await session.applyApproved({
+      changeSet: changeSet(),
+      approval: approval()
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "VERSION_GROUP_APPROVAL_MISMATCH" }
+    });
+    expect(apply).not.toHaveBeenCalled();
+    expect(operations).toEqual([]);
+  });
 });
 
 function createSession(
   operations: string[],
   transactionOverrides: Partial<VersionGroupSessionTransactionPort> = {},
-  hookOverrides: Partial<VersionGroupSessionHooks> = {}
+  hookOverrides: Partial<VersionGroupSessionHooks> = {},
+  approvalBindingV2Available = true
 ) {
   const transaction: VersionGroupSessionTransactionPort = {
     async listIncompleteTransactionPaths() {
@@ -959,6 +978,7 @@ function createSession(
   };
   return createVersionGroupSession({
     transaction,
+    approvalBindingV2Available,
     hooks: {
       async pauseAutosave(relativePaths) {
         operations.push(`pause:${relativePaths.join(",")}`);

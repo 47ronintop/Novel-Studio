@@ -7966,6 +7966,50 @@ describe("AgentRunSession v2 tool facade", () => {
     });
   });
 
+  test("fails closed for v2 chapter creation when the formal chapter session is missing", async () => {
+    const runId = "run_v2_create_chapter_without_formal_session";
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("v2-create-chapter", "create_resource", {
+            kind: "chapter",
+            title: "第一章",
+            content: "正文"
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      fileOperationSession: {
+        proposeChapterCreate() {
+          throw new Error("legacy chapter create must not be called");
+        }
+      },
+      changeSetSession: {
+        async proposeOperation() {
+          throw new Error("chapter create must fail before staging");
+        }
+      }
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun(runId);
+      const value = read["value"] as Record<string, unknown> | undefined;
+      const events = value?.["events"] as Record<string, unknown>[] | undefined;
+      const failed = events?.find((event) => event["type"] === "tool_failed");
+      expect(failed?.["detail"]).toMatchObject({
+        toolCallId: "v2-create-chapter",
+        code: "AGENT_CHAPTER_SESSION_UNAVAILABLE"
+      });
+    });
+  });
+
   test("maps v2 move operations and keeps them awaiting human review when preapproved", async () => {
     const moveProposals: Record<string, unknown>[] = [];
     const runId = "run_v2_move_file";
