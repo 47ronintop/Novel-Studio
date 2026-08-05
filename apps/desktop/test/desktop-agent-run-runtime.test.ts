@@ -8,6 +8,7 @@ import {
   checksumChangeSetText,
   createAgentRunCoordinator,
   createChangeSetRevision,
+  createOperationsChangeSetRevisionBatch,
   decideChangeSetApproval,
   type AgentToolCapabilitySnapshot,
   type ChangeSet,
@@ -790,6 +791,71 @@ describe("desktop Agent Run runtime", () => {
       content: expect.stringContaining("title: Prepared chapter")
     });
     expect(operation?.content).toContain("Repository-owned order and metadata.");
+    expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
+  });
+
+  test("rejects multiple formal chapter creates before duplicate orders can be written", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-chapter-create-batch-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterRepository = new ChapterFileRepository({ projectRoot });
+    const first = await chapterRepository.prepareAgentChapterCreate({ title: "First" });
+    const second = await chapterRepository.prepareAgentChapterCreate({ title: "Second" });
+    if (!first.ok || !second.ok) throw new Error("Failed to prepare chapter create fixtures.");
+    expect(first.value.chapter.frontmatter.order).toBe(second.value.chapter.frontmatter.order);
+    const consistencyGroupId = `chapter-create-${first.value.item.catalogRevision}`;
+    const changeSet = createOperationsChangeSetRevisionBatch({
+      changeSetId: "changes-chapter-create-batch",
+      runId: "run-chapter-create-batch",
+      projectId: "project-01",
+      checkpointId: "checkpoint-chapter-create-batch",
+      contextSnapshotId: "context-chapter-create-batch",
+      createdAt: "2026-08-05T00:00:00.000Z",
+      operations: [first, second].map((prepared, index) => ({
+        kind: "create_file" as const,
+        operationId: `create-chapter-${index + 1}`,
+        toolCallIdempotencyKey: `tool-create-chapter-${index + 1}`,
+        relativePath: prepared.value.relativePath,
+        content: prepared.value.serializedContent,
+        consistencyGroupId
+      }))
+    });
+    const approval = decideChangeSetApproval({
+      changeSet,
+      decision: "apply_selected",
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      resolvedAt: "2026-08-05T00:01:00.000Z"
+    });
+    if (!approval.ok) throw new Error(approval.error.message);
+
+    const lockOwnerId = "desktop-chapter-create-batch-lock";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const services = runtimeExports.createDesktopVersionGroupServices({
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      projectId: "project-01",
+      projectLockOwnerId: lockOwnerId,
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      }),
+      projectReads: new AgentProjectReadRepository({ projectRoot }),
+      chapterRepository
+    });
+
+    await expect(
+      services.versionGroupSession.applyApproved({
+        changeSet,
+        approval: approval.value,
+        group: { applyBatchId: "apply-chapter-create-batch", consistencyGroupId }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_CATALOG_CAS_CONFLICT" }
+    });
     expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
   });
 

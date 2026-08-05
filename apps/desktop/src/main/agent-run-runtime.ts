@@ -3776,7 +3776,7 @@ export function createDesktopVersionGroupServices(input: {
     }),
     historyRepository,
     recoveryRepository,
-    ...(storyBible === undefined
+    ...(storyBible === undefined && input.chapterRepository === undefined
       ? {}
       : {
           validateApply: (transactionInput: AgentWriteTransactionInput) =>
@@ -4186,10 +4186,31 @@ async function prepareTransactionInput(
 
 async function validateStoryBibleTransactionCandidates(
   input: AgentWriteTransactionInput,
-  storyBible: StoryBibleFileRepository,
+  storyBible: StoryBibleFileRepository | undefined,
   history: HistoryRepository,
   chapterRepository: ChapterFileRepository | undefined
 ): Promise<Result<void, UnifiedError>> {
+  const chapterCreates = (input.operations ?? []).flatMap((operation) => {
+    if (operation.kind !== "create_file") return [];
+    const match = /^chapter-create-([a-f0-9]{64})$/u.exec(operation.consistencyGroupId ?? "");
+    return match?.[1] === undefined ? [] : [{ operation, catalogRevision: match[1] }];
+  });
+  if (chapterCreates.length > 1) {
+    return err(
+      runtimeError("CHAPTER_CATALOG_CAS_CONFLICT", {
+        formalChapterCreateCount: chapterCreates.length
+      })
+    );
+  }
+  for (const chapterCreate of chapterCreates) {
+    if (chapterRepository === undefined) return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+    const validated = await chapterRepository.validateAgentChapterCreateOperation({
+      relativePath: chapterCreate.operation.relativePath,
+      content: chapterCreate.operation.content,
+      catalogRevision: chapterCreate.catalogRevision
+    });
+    if (!validated.ok) return validated;
+  }
   const candidates = [
     ...input.files.flatMap((file) =>
       isStoryBibleTransactionPath(file.relativePath)
@@ -4203,6 +4224,7 @@ async function validateStoryBibleTransactionCandidates(
     )
   ];
   if (candidates.length === 0) return ok(undefined);
+  if (storyBible === undefined) return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
 
   const chapters =
     chapterRepository === undefined ? ok(undefined) : await chapterRepository.listChapters();

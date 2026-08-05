@@ -9,6 +9,7 @@ import {
 } from "@novel-studio/shared";
 
 import { createChapterAgentToolSession } from "../src/chapter-agent-tool-session.js";
+import { buildChapterOrderMigrationPreview } from "../src/chapter-order-migration.js";
 
 describe("Chapter Agent tool session", () => {
   test("delegates normalized catalog queries through both list methods", async () => {
@@ -181,6 +182,61 @@ describe("Chapter Agent tool session", () => {
     });
     expect(repository.listChapters).not.toHaveBeenCalled();
     expect(repository.createChapter).not.toHaveBeenCalled();
+  });
+
+  test("delegates and validates the repository migration preview", async () => {
+    const preview = buildChapterOrderMigrationPreview({
+      chapters: [
+        { id: "ch_a", stableRef: "chapter:ch_a", order: 1, status: "draft" as const },
+        { id: "ch_b", stableRef: "chapter:ch_b", order: 1, status: "review" as const }
+      ]
+    });
+    const previewChapterOrderMigration = vi.fn(async () => ok(preview));
+    const session = createChapterAgentToolSession({
+      repository: repositoryFor({ previewChapterOrderMigration }),
+      traceId: "trace-migration"
+    });
+
+    await expect(session.previewChapterOrderMigration()).resolves.toEqual(ok(preview));
+    await expect(session.previewOrderMigration()).resolves.toEqual(ok(preview));
+    expect(previewChapterOrderMigration).toHaveBeenCalledTimes(2);
+  });
+
+  test("fails closed for migration apply without transaction and approval ports", async () => {
+    const preview = buildChapterOrderMigrationPreview({
+      chapters: [
+        { id: "ch_a", stableRef: "chapter:ch_a", order: 1, status: "draft" as const },
+        { id: "ch_b", stableRef: "chapter:ch_b", order: 1, status: "review" as const }
+      ]
+    });
+    const session = createChapterAgentToolSession({ repository: repositoryFor() });
+
+    await expect(session.applyChapterOrderMigration(preview)).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "CHAPTER_ORDER_MIGRATION_APPLY_UNAVAILABLE",
+        category: "UserError",
+        traceId: "chapter-agent-tool-session"
+      }
+    });
+    await expect(session.applyOrderMigration(preview)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_ORDER_MIGRATION_APPLY_UNAVAILABLE" }
+    });
+  });
+
+  test("reports unavailable preview support without falling back to chapter reads", async () => {
+    const repository = repositoryFor();
+    const session = createChapterAgentToolSession({ repository, traceId: "trace-migration" });
+
+    await expect(session.previewChapterOrderMigration()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "CHAPTER_ORDER_MIGRATION_PREVIEW_UNAVAILABLE",
+        traceId: "trace-migration"
+      }
+    });
+    expect(repository.listChapters).not.toHaveBeenCalled();
   });
 });
 

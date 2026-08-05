@@ -1,11 +1,12 @@
 import { describe, expect, test } from "vitest";
 
-import { isErr, isOk } from "@novel-studio/shared";
+import { isErr, isOk, ok } from "@novel-studio/shared";
 
 import {
   buildChapterOrderMigrationPreview,
   detectChapterOrderMigration,
-  requireValidChapterOrdering
+  requireValidChapterOrdering,
+  validateChapterOrderMigrationPreview
 } from "../src/chapter-order-migration.js";
 
 describe("chapter order migration", () => {
@@ -67,5 +68,32 @@ describe("chapter order migration", () => {
       "trace-valid"
     );
     expect(isOk(valid)).toBe(true);
+  });
+
+  test("strictly validates preview shape, inverse binding, and checksum", () => {
+    const preview = buildChapterOrderMigrationPreview({ chapters: legacyChapters });
+    expect(validateChapterOrderMigrationPreview(preview, "trace-preview")).toEqual(ok(preview));
+
+    expect(
+      validateChapterOrderMigrationPreview(
+        { ...preview, checksum: "0".repeat(64) },
+        "trace-preview"
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_ORDER_MIGRATION_PREVIEW_INVALID", traceId: "trace-preview" }
+    });
+    expect(
+      validateChapterOrderMigrationPreview(
+        {
+          ...preview,
+          affected: preview.affected.map((item) => ({ ...item, relativePath: "../outside.md" }))
+        },
+        "trace-preview"
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_ORDER_MIGRATION_PREVIEW_INVALID" }
+    });
   });
 });

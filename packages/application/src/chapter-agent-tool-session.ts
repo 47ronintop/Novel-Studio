@@ -6,6 +6,7 @@ import {
   type ChapterCatalogListInput,
   type ChapterCatalogPage,
   type ChapterCatalogRepositoryPort,
+  type ChapterOrderMigrationPreview,
   type ChapterStatus,
   type CreateAgentChapterInput,
   type CreateAgentChapterResult,
@@ -13,10 +14,14 @@ import {
   type UnifiedError
 } from "@novel-studio/shared";
 
+import { validateChapterOrderMigrationPreview } from "./chapter-order-migration.js";
+
 export interface ChapterAgentToolSessionOptions {
   readonly repository: ChapterCatalogRepositoryPort;
   readonly traceId?: string;
 }
+
+export type ChapterOrderMigrationApplyInput = ChapterOrderMigrationPreview;
 
 export interface ChapterAgentToolSession {
   listChapters(input?: ChapterCatalogListInput): Promise<Result<ChapterCatalogPage, UnifiedError>>;
@@ -33,6 +38,12 @@ export interface ChapterAgentToolSession {
   prepareCreateChapter(
     input: CreateAgentChapterInput
   ): Promise<Result<CreateAgentChapterResult, UnifiedError>>;
+  previewChapterOrderMigration(): Promise<Result<ChapterOrderMigrationPreview, UnifiedError>>;
+  previewOrderMigration(): Promise<Result<ChapterOrderMigrationPreview, UnifiedError>>;
+  applyChapterOrderMigration(
+    input: ChapterOrderMigrationApplyInput
+  ): Promise<Result<void, UnifiedError>>;
+  applyOrderMigration(input: ChapterOrderMigrationApplyInput): Promise<Result<void, UnifiedError>>;
 }
 
 /**
@@ -105,13 +116,47 @@ export function createChapterAgentToolSession(
     return repositoryMethod.call(options.repository, normalized.value);
   }
 
+  async function previewChapterOrderMigration(): Promise<
+    Result<ChapterOrderMigrationPreview, UnifiedError>
+  > {
+    const repositoryMethod = options.repository.previewChapterOrderMigration;
+    if (repositoryMethod === undefined) {
+      return err(
+        unavailableError(
+          "CHAPTER_ORDER_MIGRATION_PREVIEW_UNAVAILABLE",
+          "The chapter order migration preview is not available for this repository."
+        )
+      );
+    }
+    const result = await repositoryMethod.call(options.repository);
+    if (!result.ok) return result;
+    return validateChapterOrderMigrationPreview(result.value, traceId);
+  }
+
+  async function applyChapterOrderMigration(
+    input: ChapterOrderMigrationApplyInput
+  ): Promise<Result<void, UnifiedError>> {
+    const validated = validateChapterOrderMigrationPreview(input, traceId);
+    if (!validated.ok) return validated;
+    return err(
+      unavailableError(
+        "CHAPTER_ORDER_MIGRATION_APPLY_UNAVAILABLE",
+        "Applying a chapter order migration requires an approved atomic transaction port."
+      )
+    );
+  }
+
   return {
     listChapters,
     list: listChapters,
     readChapter,
     read: readChapter,
     prepareCreate,
-    prepareCreateChapter: prepareCreate
+    prepareCreateChapter: prepareCreate,
+    previewChapterOrderMigration,
+    previewOrderMigration: previewChapterOrderMigration,
+    applyChapterOrderMigration,
+    applyOrderMigration: applyChapterOrderMigration
   };
 
   function normalizeListInput(

@@ -217,6 +217,83 @@ describe("ChapterFileRepository", () => {
     expect(created.value.chapter.frontmatter.order).toBe(10);
   });
 
+  test("rejects a prepared create when the catalog changed before apply", async () => {
+    const projectRoot = await createChapterProject([
+      { id: "ch_existing", title: "Existing", order: 1, status: "draft", body: "body" }
+    ]);
+    const repository = new ChapterFileRepository({ projectRoot, traceId: "trace_create_cas" });
+    const prepared = await repository.prepareAgentChapterCreate({ title: "Prepared" });
+    expect(isOk(prepared)).toBe(true);
+    if (isErr(prepared)) throw new Error(prepared.error.message);
+
+    const competing = await repository.createChapter({
+      chapterId: "ch_competing",
+      title: "Competing",
+      order: 2,
+      body: "winner"
+    });
+    expect(isOk(competing)).toBe(true);
+
+    const applied = await repository.applyPreparedAgentChapterCreate(prepared.value);
+    expect(!applied.ok && applied.error.code).toBe("CHAPTER_CATALOG_CAS_CONFLICT");
+    await expect(
+      readFile(join(projectRoot, prepared.value.relativePath), "utf8")
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("rejects prepared bytes that alter repository-owned metadata", async () => {
+    const projectRoot = await createChapterProject([]);
+    const repository = new ChapterFileRepository({ projectRoot, traceId: "trace_create_metadata" });
+    const prepared = await repository.prepareAgentChapterCreate({
+      title: "Prepared",
+      body: "body"
+    });
+    expect(isOk(prepared)).toBe(true);
+    if (isErr(prepared)) throw new Error(prepared.error.message);
+    const tampered = {
+      ...prepared.value,
+      chapter: {
+        ...prepared.value.chapter,
+        frontmatter: { ...prepared.value.chapter.frontmatter, order: 99 }
+      }
+    };
+    const applied = await repository.applyPreparedAgentChapterCreate(tampered);
+    expect(!applied.ok && applied.error.code).toBe("CHAPTER_CREATE_METADATA_INVALID");
+  });
+
+  test("validates a serialized create operation against the current catalog revision", async () => {
+    const projectRoot = await createChapterProject([]);
+    const repository = new ChapterFileRepository({
+      projectRoot,
+      traceId: "trace_create_operation"
+    });
+    const prepared = await repository.prepareAgentChapterCreate({ title: "Prepared" });
+    expect(isOk(prepared)).toBe(true);
+    if (isErr(prepared)) throw new Error(prepared.error.message);
+
+    expect(
+      await repository.validateAgentChapterCreateOperation({
+        relativePath: prepared.value.relativePath,
+        content: prepared.value.serializedContent,
+        catalogRevision: prepared.value.item.catalogRevision
+      })
+    ).toMatchObject({ ok: true });
+
+    const competing = await repository.createChapter({
+      chapterId: "ch_competing",
+      title: "Competing",
+      order: 1
+    });
+    expect(isOk(competing)).toBe(true);
+    expect(
+      await repository.validateAgentChapterCreateOperation({
+        relativePath: prepared.value.relativePath,
+        content: prepared.value.serializedContent,
+        catalogRevision: prepared.value.item.catalogRevision
+      })
+    ).toMatchObject({ ok: false, error: { code: "CHAPTER_CATALOG_CAS_CONFLICT" } });
+  });
+
   test.each([
     {
       name: "duplicate",

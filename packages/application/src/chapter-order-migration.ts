@@ -32,6 +32,151 @@ export interface ChapterOrderMigrationReport {
   }[];
 }
 
+/**
+ * Validate a repository-supplied migration preview before it crosses the application boundary.
+ * Repository implementations are still treated as an untrusted dependency at runtime: a typed
+ * return value does not protect callers from malformed adapters or IPC payloads.
+ */
+export function validateChapterOrderMigrationPreview(
+  value: unknown,
+  traceId = "chapter-order-migration"
+): Result<ChapterOrderMigrationPreview, UnifiedError> {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["required", "catalogRevision", "checksum", "affected", "inverse"])
+  ) {
+    return err(invalidPreviewError(traceId, "The chapter order migration preview is malformed."));
+  }
+
+  const required = value.required;
+  const catalogRevision = value.catalogRevision;
+  const checksum = value.checksum;
+  const affected = value.affected;
+  const inverse = value.inverse;
+  if (
+    typeof required !== "boolean" ||
+    typeof catalogRevision !== "string" ||
+    catalogRevision.length === 0 ||
+    catalogRevision.length > 512 ||
+    typeof checksum !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(checksum) ||
+    !Array.isArray(affected) ||
+    !Array.isArray(inverse)
+  ) {
+    return err(
+      invalidPreviewError(traceId, "The chapter order migration preview fields are invalid.")
+    );
+  }
+
+  const parsedAffected: ChapterOrderMigrationAffectedItem[] = [];
+  const stableRefs = new Set<string>();
+  const chapterIds = new Set<string>();
+  for (let index = 0; index < affected.length; index += 1) {
+    const item = affected[index];
+    if (
+      !isRecord(item) ||
+      !hasExactKeys(item, [
+        "stableRef",
+        "chapterId",
+        "order",
+        "status",
+        "relativePath",
+        "reason"
+      ]) ||
+      typeof item.stableRef !== "string" ||
+      item.stableRef.length === 0 ||
+      item.stableRef.length > 256 ||
+      typeof item.chapterId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,128}$/u.test(item.chapterId) ||
+      stableRefs.has(item.stableRef) ||
+      chapterIds.has(item.chapterId) ||
+      typeof item.order !== "number" ||
+      !isChapterStatus(item.status) ||
+      typeof item.relativePath !== "string" ||
+      !isSafeRelativePath(item.relativePath) ||
+      !isMigrationReason(item.reason) ||
+      !reasonMatchesOrder(item.reason, item.order)
+    ) {
+      return err(
+        invalidPreviewError(traceId, `The affected migration item at index ${index} is invalid.`)
+      );
+    }
+    const previous = index > 0 ? parsedAffected[index - 1] : undefined;
+    if (
+      previous !== undefined &&
+      compareAffected(previous, { order: item.order, chapterId: item.chapterId }) > 0
+    ) {
+      return err(
+        invalidPreviewError(traceId, "Affected migration items are not deterministically ordered.")
+      );
+    }
+    stableRefs.add(item.stableRef);
+    chapterIds.add(item.chapterId);
+    parsedAffected.push({
+      stableRef: item.stableRef,
+      chapterId: item.chapterId,
+      order: item.order,
+      status: item.status,
+      relativePath: item.relativePath,
+      reason: item.reason
+    });
+  }
+
+  if (inverse.length !== parsedAffected.length) {
+    return err(
+      invalidPreviewError(traceId, "The migration inverse does not match the affected items.")
+    );
+  }
+  const targetOrders = new Set<number>();
+  const parsedInverse: { stableRef: string; from: number; to: number }[] = [];
+  for (let index = 0; index < inverse.length; index += 1) {
+    const item = inverse[index];
+    const affectedItem = parsedAffected[index];
+    if (
+      !isRecord(item) ||
+      !hasExactKeys(item, ["stableRef", "from", "to"]) ||
+      typeof item.stableRef !== "string" ||
+      typeof item.from !== "number" ||
+      typeof item.to !== "number" ||
+      !Number.isSafeInteger(item.to) ||
+      item.to < 1 ||
+      affectedItem === undefined ||
+      item.stableRef !== affectedItem.stableRef ||
+      !Object.is(item.from, affectedItem.order) ||
+      targetOrders.has(item.to)
+    ) {
+      return err(
+        invalidPreviewError(traceId, `The migration inverse item at index ${index} is invalid.`)
+      );
+    }
+    targetOrders.add(item.to);
+    parsedInverse.push({ stableRef: item.stableRef, from: item.from, to: item.to });
+  }
+
+  if (required !== parsedAffected.length > 0) {
+    return err(
+      invalidPreviewError(
+        traceId,
+        "The migration required flag is inconsistent with affected items."
+      )
+    );
+  }
+  const canonical = {
+    required,
+    catalogRevision,
+    checksum,
+    affected: parsedAffected,
+    inverse: parsedInverse
+  } satisfies ChapterOrderMigrationPreview;
+  const expectedChecksum = migrationPreviewChecksum(catalogRevision, parsedAffected, parsedInverse);
+  if (checksum !== expectedChecksum) {
+    return err(
+      invalidPreviewError(traceId, "The chapter order migration preview checksum is invalid.")
+    );
+  }
+  return ok(canonical);
+}
+
 /** Detect legacy duplicate/invalid order metadata without rewriting any chapter. */
 export function detectChapterOrderMigration(
   chapters: readonly ChapterOrderMigrationInput[]
@@ -64,16 +209,7 @@ export function buildChapterOrderMigrationPreview(input: {
 }): ChapterOrderMigrationPreview {
   const report = detectChapterOrderMigration(input.chapters);
   const catalogRevision = input.catalogRevision ?? chapterOrderingChecksum(input.chapters);
-  const checksum = createHash("sha256")
-    .update(
-      JSON.stringify({
-        catalogRevision,
-        affected: report.affected,
-        inverse: report.inverse
-      }),
-      "utf8"
-    )
-    .digest("hex");
+  const checksum = migrationPreviewChecksum(catalogRevision, report.affected, report.inverse);
   return {
     required: report.required,
     catalogRevision,
@@ -81,6 +217,16 @@ export function buildChapterOrderMigrationPreview(input: {
     affected: report.affected,
     inverse: report.inverse
   };
+}
+
+function migrationPreviewChecksum(
+  catalogRevision: string,
+  affected: readonly ChapterOrderMigrationAffectedItem[],
+  inverse: readonly { readonly stableRef: string; readonly from: number; readonly to: number }[]
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ catalogRevision, affected, inverse }), "utf8")
+    .digest("hex");
 }
 
 export const previewChapterOrderMigration = buildChapterOrderMigrationPreview;
@@ -143,4 +289,75 @@ function buildDeterministicRepair(
 
 function compareIds(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareAffected(
+  left: Pick<ChapterOrderMigrationAffectedItem, "order" | "chapterId">,
+  right: Pick<ChapterOrderMigrationAffectedItem, "order" | "chapterId">
+): number {
+  return left.order - right.order || compareIds(left.chapterId, right.chapterId);
+}
+
+function isMigrationReason(value: unknown): value is ChapterOrderMigrationAffectedItem["reason"] {
+  return (
+    value === "duplicate" ||
+    value === "non_positive" ||
+    value === "non_integer" ||
+    value === "non_finite"
+  );
+}
+
+function reasonMatchesOrder(
+  reason: ChapterOrderMigrationAffectedItem["reason"],
+  order: number
+): boolean {
+  if (reason === "non_finite") return !Number.isFinite(order);
+  if (reason === "non_integer") return Number.isFinite(order) && !Number.isInteger(order);
+  if (reason === "non_positive")
+    return Number.isFinite(order) && Number.isInteger(order) && order < 1;
+  return Number.isFinite(order) && Number.isInteger(order) && order > 0;
+}
+
+function isChapterStatus(value: unknown): value is ChapterOrderMigrationAffectedItem["status"] {
+  return (
+    value === "draft" ||
+    value === "revision" ||
+    value === "review" ||
+    value === "done" ||
+    value === "archived" ||
+    value === "deleted"
+  );
+}
+
+function isSafeRelativePath(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 512 &&
+    !value.startsWith("/") &&
+    !value.includes("\\") &&
+    !value.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const expected = new Set(keys);
+  return (
+    Object.keys(value).every((key) => expected.has(key)) &&
+    expected.size === Object.keys(value).length
+  );
+}
+
+function invalidPreviewError(traceId: string, message: string): UnifiedError {
+  return createUnifiedError({
+    code: "CHAPTER_ORDER_MIGRATION_PREVIEW_INVALID",
+    category: "ValidationError",
+    message,
+    recoverability: "user-action",
+    suggestedAction: "Refresh the chapter order migration preview and retry.",
+    traceId
+  });
 }

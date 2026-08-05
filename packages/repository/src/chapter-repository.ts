@@ -26,6 +26,7 @@ import type {
 import { writeTextAtomically } from "./atomic-write.js";
 import { storageError, validationError } from "./errors.js";
 import { validateWithSchema } from "./schema-validation.js";
+import { withStoryBibleProjectWriteLock } from "./story-bible-write-coordinator.js";
 
 const require = createRequire(import.meta.url);
 const { dump: dumpYaml, load: loadYaml } = require("js-yaml") as {
@@ -40,6 +41,24 @@ export interface ChapterFileRepositoryOptions {
   projectRoot: string;
   traceId?: string;
   now?: () => string;
+}
+
+/**
+ * Repository-owned proof used when a prepared Agent create crosses the Change Set boundary.
+ * The catalog revision is checked again immediately before the write, and the exact bytes are
+ * parsed and checked against the repository's metadata invariants.
+ */
+export interface PreparedAgentChapterCreateInput {
+  readonly chapter: ChapterDocument;
+  readonly item: ChapterAgentCatalogItem;
+  readonly serializedContent: string;
+  readonly relativePath: string;
+}
+
+export interface AgentChapterCreateOperationInput {
+  readonly relativePath: string;
+  readonly content: string;
+  readonly catalogRevision: string;
 }
 
 export class ChapterFileRepository
@@ -357,16 +376,162 @@ export class ChapterFileRepository
   ): Promise<Result<CreateAgentChapterResult, UnifiedError>> {
     const prepared = await this.prepareAgentChapterCreate(input);
     if (!prepared.ok) return prepared;
-    const written = await this.writeChapter(prepared.value.chapter);
-    if (!written.ok) return written;
-    const read = await this.readChapterForAgent(prepared.value.chapter.frontmatter.id);
-    if (!read.ok) return read;
-    return ok({
-      chapter: written.value,
-      item: read.value,
-      serializedContent: prepared.value.serializedContent,
-      relativePath: prepared.value.relativePath
+    return this.applyPreparedAgentChapterCreate(prepared.value);
+  }
+
+  /**
+   * Apply a prepared formal create with a catalog/order CAS. This is the repository-owned path
+   * that callers should use after approval; generic file creation does not carry these checks.
+   */
+  public async applyPreparedAgentChapterCreate(
+    input: PreparedAgentChapterCreateInput
+  ): Promise<Result<CreateAgentChapterResult, UnifiedError>> {
+    return withStoryBibleProjectWriteLock(this.options.projectRoot, async () => {
+      const validated = await this.validatePreparedAgentChapterCreate(input);
+      if (!validated.ok) return validated;
+      try {
+        await mkdir(join(this.options.projectRoot, "chapters"), { recursive: true });
+      } catch (error) {
+        return err(
+          storageError({
+            code: "CHAPTER_CREATE_FAILED",
+            message: "Chapter directory could not be created.",
+            suggestedAction: "Choose a writable project folder and retry.",
+            traceId: this.traceId,
+            redactedDetail: {
+              reason: error instanceof Error ? error.message : "Unknown mkdir error"
+            }
+          })
+        );
+      }
+      const written = await this.writeChapter(input.chapter);
+      if (!written.ok) return written;
+      const read = await this.readChapterForAgent(input.chapter.frontmatter.id);
+      if (!read.ok) return read;
+      return ok({
+        chapter: written.value,
+        item: read.value,
+        serializedContent: input.serializedContent,
+        relativePath: input.relativePath
+      });
     });
+  }
+
+  /** Validate a prepared create without mutating files (safe for a transaction validate hook). */
+  public async validatePreparedAgentChapterCreate(
+    input: PreparedAgentChapterCreateInput
+  ): Promise<Result<void, UnifiedError>> {
+    const records = await this.readChapterCatalogRecords();
+    if (!records.ok) return records;
+    const migration = buildLocalOrderMigrationPreview(records.value);
+    if (migration.required) {
+      return err(
+        validationError({
+          code: "CHAPTER_ORDER_MIGRATION_REQUIRED",
+          message: "Chapter order metadata requires an explicit migration before creation.",
+          suggestedAction: "Review and apply the chapter order migration, then retry.",
+          traceId: this.traceId,
+          redactedDetail: {
+            preview: JSON.parse(JSON.stringify(migration)) as unknown as JsonObject
+          }
+        })
+      );
+    }
+    const currentCatalogRevision = chapterCatalogRevision(records.value);
+    if (input.item.catalogRevision !== currentCatalogRevision) {
+      return err(
+        validationError({
+          code: "CHAPTER_CATALOG_CAS_CONFLICT",
+          message: "The chapter catalog changed after this chapter was prepared.",
+          suggestedAction: "Refresh the chapter catalog and prepare a new chapter create.",
+          traceId: this.traceId,
+          redactedDetail: {
+            expectedCatalogRevision: input.item.catalogRevision,
+            actualCatalogRevision: currentCatalogRevision
+          }
+        })
+      );
+    }
+    if (!isValidChapterId(input.chapter.frontmatter.id)) {
+      return this.createValidationFailure("CHAPTER_ID_INVALID", "Prepared chapter id is invalid.");
+    }
+    if (input.relativePath !== `chapters/${input.chapter.frontmatter.id}.md`) {
+      return this.createValidationFailure(
+        "CHAPTER_CREATE_PATH_INVALID",
+        "Prepared chapter path is not repository-owned."
+      );
+    }
+    if (input.item.relativePath !== input.relativePath) {
+      return this.createValidationFailure(
+        "CHAPTER_CREATE_METADATA_INVALID",
+        "Prepared chapter metadata does not match its path."
+      );
+    }
+    if (input.chapter.frontmatter.status !== "draft" || input.chapter.frontmatter.revision !== 1) {
+      return this.createValidationFailure(
+        "CHAPTER_CREATE_METADATA_INVALID",
+        "Prepared chapter status and revision must use repository defaults."
+      );
+    }
+    if (
+      input.chapter.frontmatter.order !== nextChapterAppendOrder(records.value) ||
+      input.chapter.frontmatter.wordCount !== countWords(input.chapter.body) ||
+      input.chapter.frontmatter.createdAt !== input.chapter.frontmatter.updatedAt
+    ) {
+      return this.createValidationFailure(
+        "CHAPTER_CREATE_METADATA_INVALID",
+        "Prepared chapter order or metadata is no longer repository-owned."
+      );
+    }
+    if (records.value.some((record) => record.id === input.chapter.frontmatter.id)) {
+      return this.createValidationFailure(
+        "CHAPTER_ALREADY_EXISTS",
+        "Prepared chapter id already exists in the catalog."
+      );
+    }
+    const expectedContent = formatChapterDocument(input.chapter);
+    if (input.serializedContent !== expectedContent) {
+      return this.createValidationFailure(
+        "CHAPTER_CREATE_CONTENT_INVALID",
+        "Prepared chapter bytes do not match repository serialization."
+      );
+    }
+    const parsed = parseChapterDocument(input.serializedContent, this.traceId);
+    if (!parsed.ok) return parsed;
+    const schema = await validateWithSchema("chapter-frontmatter", parsed.value.frontmatter);
+    if (!schema.valid) {
+      return this.createValidationFailure(
+        "CHAPTER_CREATE_CONTENT_INVALID",
+        "Prepared chapter frontmatter failed schema validation."
+      );
+    }
+    return ok(undefined);
+  }
+
+  /** Validate the serialized create operation while the transaction holds its exclusive gate. */
+  public async validateAgentChapterCreateOperation(
+    input: AgentChapterCreateOperationInput
+  ): Promise<Result<void, UnifiedError>> {
+    const parsed = parseChapterDocument(input.content, this.traceId);
+    if (!parsed.ok) return parsed;
+    const record = recordFromChapter(parsed.value, input.content);
+    return this.validatePreparedAgentChapterCreate({
+      chapter: parsed.value,
+      item: chapterCatalogItem(record, input.catalogRevision),
+      serializedContent: input.content,
+      relativePath: input.relativePath
+    });
+  }
+
+  private createValidationFailure(code: string, message: string): Result<never, UnifiedError> {
+    return err(
+      validationError({
+        code,
+        message,
+        suggestedAction: "Refresh the chapter catalog and prepare a new chapter create.",
+        traceId: this.traceId
+      })
+    );
   }
 
   /** Read-only migration preview; applying it is intentionally a separate approved operation. */

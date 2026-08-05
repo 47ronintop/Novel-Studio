@@ -9529,6 +9529,34 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             );
           }
         }
+        if (command.decision === "apply_selected") {
+          const chapterCatalog = await validateFormalChapterCreateCatalogCas(
+            changeSet,
+            options.chapterAgentToolSession
+          );
+          if (!chapterCatalog.ok) {
+            runtime.changeSet = { ...changeSet, status: "stale" };
+            const stale = await recordEvent(command.runId, {
+              runId: command.runId,
+              status: "awaiting_context_refresh",
+              type: "context_stale",
+              detail: {
+                staleRefs: [],
+                reason: "chapter_catalog_changed",
+                changeSetId: changeSet.changeSetId,
+                revision: changeSet.revision,
+                checksum: changeSet.checksum,
+                errorCode: chapterCatalog.error.code
+              }
+            });
+            const latestSnapshot = stale.ok ? stale.value : snapshot;
+            return persistCommandReceipt(command.runId, command.projectId, command.commandId, {
+              ok: false,
+              error: chapterCatalog.error,
+              latestSnapshot
+            });
+          }
+        }
         if (command.decision === "update_selection") {
           const selected = await options.changeSetSession.selectRevision({
             runId: command.runId,
@@ -11109,10 +11137,72 @@ async function buildFormalChapterCreateProposal(
     relativePath: prepared.value.relativePath,
     content: prepared.value.serializedContent,
     toolCallIdempotencyKey: toolCallId,
-    consistencyGroupId: `chapter-create-${prepared.value.item.chapterId}`,
+    // Bind the proposal to the exact catalog used to allocate its order. The catalog revision is
+    // already a stable 64-character identifier, so it remains a valid consistency-group ID.
+    consistencyGroupId: `chapter-create-${prepared.value.item.catalogRevision}`,
     ...(dependsOn.length === 0 ? {} : { dependsOn: Object.freeze([...dependsOn]) })
   };
   return ok({ operation });
+}
+
+async function validateFormalChapterCreateCatalogCas(
+  changeSet: ChangeSet,
+  session: ChapterAgentToolSession | undefined
+): Promise<Result<void, UnifiedError>> {
+  const formalCreates = (changeSet.operations ?? []).filter(
+    (operation) =>
+      operation.selected !== false &&
+      operation.kind === "create_file" &&
+      parseFormalChapterCreateBinding(operation.consistencyGroupId) !== undefined
+  );
+  if (formalCreates.length === 0) return ok(undefined);
+  if (formalCreates.length > 1) {
+    return err(
+      applicationError(
+        "CHAPTER_CATALOG_CAS_CONFLICT",
+        "A Change Set may apply only one formal chapter create at a time until batch order reservation is available."
+      )
+    );
+  }
+  if (session === undefined) {
+    return err(
+      applicationError(
+        "AGENT_CHAPTER_CAS_UNAVAILABLE",
+        "Formal chapter creation cannot be applied without the chapter catalog CAS boundary."
+      )
+    );
+  }
+  const catalog = await session.listChapters({ includeDeleted: true, limit: 100 });
+  if (!catalog.ok) return catalog;
+  if (catalog.value.nextCursor !== null) {
+    return err(
+      applicationError(
+        "AGENT_CHAPTER_CATALOG_INCOMPLETE",
+        "Formal chapter creation requires a complete chapter catalog for CAS validation."
+      )
+    );
+  }
+  for (const operation of formalCreates) {
+    if (operation.kind !== "create_file") continue;
+    const binding = parseFormalChapterCreateBinding(operation.consistencyGroupId);
+    if (binding === undefined || binding.catalogRevision === catalog.value.catalogRevision)
+      continue;
+    return err(
+      applicationError(
+        "CHAPTER_CATALOG_CAS_CONFLICT",
+        "The chapter catalog changed after this chapter was prepared. Refresh and prepare a new create."
+      )
+    );
+  }
+  return ok(undefined);
+}
+
+function parseFormalChapterCreateBinding(
+  consistencyGroupId: string | undefined
+): { readonly catalogRevision: string } | undefined {
+  if (typeof consistencyGroupId !== "string") return undefined;
+  const match = /^chapter-create-([a-f0-9]{64})$/u.exec(consistencyGroupId);
+  return match?.[1] === undefined ? undefined : { catalogRevision: match[1] };
 }
 
 /** Task B.3 — routes a file lifecycle tool call to the matching AgentFileOperationSessionPort method. */
