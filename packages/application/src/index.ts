@@ -1060,6 +1060,11 @@ export {
 } from "./agent-file-operation-session.js";
 export { createStoryBibleAgentToolSession } from "./story-bible-agent-tool-session.js";
 export {
+  createChapterAgentToolSession,
+  type ChapterAgentToolSession,
+  type ChapterAgentToolSessionOptions
+} from "./chapter-agent-tool-session.js";
+export {
   checksumStoryAnalysisSelectors,
   materializeStoryObserverOutput,
   refreshStoryAnalysisStaleness,

@@ -907,4 +907,83 @@ describe("Agent tool registry", () => {
       engineering.filter((tool) => tool.effect === "propose").map((tool) => tool.writeOperation)
     ).toEqual(["replace_file", "create_file", "move_file", "delete_file", "create_directory"]);
   });
+
+  test("exposes the dedicated read-only list_chapters contract only in Catalog 2.0 writing", () => {
+    const baseInput = {
+      facadeVersion: "v2" as const,
+      catalogSchemaVersion: "2.0" as const,
+      operationMode: "planning" as const,
+      contextMode: "writing" as const,
+      writePolicy: "write_before_confirmation" as const,
+      capabilitySnapshot: {
+        workspaceKind: "creativeProject" as const,
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "list-chapters-contract"
+      }
+    };
+    const catalog = engineExports.listAgentTools(baseInput);
+    const listChapters = catalog.find((tool) => tool.name === "list_chapters");
+    expect(listChapters).toMatchObject({
+      name: "list_chapters",
+      providerName: "list_chapters",
+      kind: "file_tool",
+      effect: "read",
+      destructive: false,
+      retrySemantics: "safe"
+    });
+    expect(listChapters?.writeOperation).toBeUndefined();
+    expect(listChapters?.description).toContain("includeDeleted");
+    expect(catalog.map((tool) => tool.name)).not.toContain("list_project_entries");
+    expect(listChapters?.inputSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        statuses: {
+          type: "array",
+          maxItems: 6,
+          uniqueItems: true,
+          items: {
+            enum: ["draft", "revision", "review", "done", "archived", "deleted"]
+          }
+        },
+        cursor: { type: "string", minLength: 1, maxLength: 4096 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+        includeDeleted: { type: "boolean" }
+      }
+    });
+
+    const validate = (arguments_: Record<string, unknown>) =>
+      engineExports.validateAgentToolArguments({
+        descriptor: listChapters!,
+        arguments: arguments_ as JsonObject,
+        argumentsText: JSON.stringify(arguments_)
+      }).ok;
+    expect(validate({ statuses: ["draft", "deleted"], cursor: "cursor_01", limit: 25 })).toBe(true);
+    expect(validate({ includeDeleted: true })).toBe(true);
+    expect(validate({ statuses: ["unknown"] })).toBe(false);
+    expect(validate({ limit: 0 })).toBe(false);
+    expect(validate({ includeDeleted: "yes" })).toBe(false);
+    expect(validate({ unexpected: true })).toBe(false);
+
+    expect(
+      engineExports
+        .listAgentTools({
+          ...baseInput,
+          catalogSchemaVersion: "2.0",
+          contextMode: "general_file"
+        })
+        .map((tool) => tool.name)
+    ).not.toContain("list_chapters");
+    expect(
+      engineExports
+        .listAgentTools({ ...baseInput, catalogSchemaVersion: "1.0" })
+        .map((tool) => tool.name)
+    ).not.toContain("list_chapters");
+  });
 });

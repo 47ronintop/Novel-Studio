@@ -300,13 +300,21 @@ export type {
   SearchSourceRef
 } from "./search-index-repository.js";
 export type {
+  ChapterAgentCatalogItem,
+  ChapterAgentRead,
+  ChapterCatalogListInput,
+  ChapterCatalogPage,
   ChapterDocument,
   ChapterDraftRepositoryPort,
   ChapterFrontmatter,
   ChapterHistoryRepositoryPort,
+  ChapterOrderMigrationAffectedItem,
+  ChapterOrderMigrationPreview,
   ChapterVersionContent,
   ChapterVersionSnapshotInput,
-  ChapterVersionSummary
+  ChapterVersionSummary,
+  CreateAgentChapterInput,
+  CreateAgentChapterResult
 } from "@novel-studio/shared";
 export { ProjectTaskCatalogRepository } from "./project-task-catalog-repository.js";
 export type { AuthorizedTask, ProjectTaskCandidate } from "./project-task-catalog-repository.js";

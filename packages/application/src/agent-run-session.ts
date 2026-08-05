@@ -228,6 +228,7 @@ import type {
   StoryBibleAgentWriteToolName,
   StoryBiblePreparedAgentProposal
 } from "./story-bible-agent-tool-session.js";
+import type { ChapterAgentToolSession } from "./chapter-agent-tool-session.js";
 
 export type AgentModelMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -893,6 +894,8 @@ export interface CreateAgentRunSessionOptions {
   ) => Result<string, UnifiedError>;
   /** Phase B: file lifecycle operation session. When absent, lifecycle tools return UNAVAILABLE. */
   readonly fileOperationSession?: AgentFileOperationSessionPort;
+  /** Formal writing-domain chapter proposal session. It prepares without touching project files. */
+  readonly chapterAgentToolSession?: ChapterAgentToolSession;
   /** Structured Story Bible proposals, prepared through the shared candidate validator. */
   readonly storyBibleToolExecutor?: AgentStoryBibleToolExecutor;
   /**
@@ -1052,6 +1055,7 @@ type ToolCallOutcome =
 
 const readToolNames = new Set<string>([
   "list_project_entries",
+  "list_chapters",
   "read_chapter",
   "read_story_bible",
   "describe_story_bible_type",
@@ -1870,15 +1874,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     }
     const frozen = runtime.capabilityBoundary;
     if (
-      effectiveCapabilityStateBoundaryChecksum(state) !==
-      frozen.effectiveCapabilityStateChecksum
+      effectiveCapabilityStateBoundaryChecksum(state) !== frozen.effectiveCapabilityStateChecksum
     ) {
       return "effective_capability_state_changed";
     }
-    if (
-      snapshot.providerSemanticVersionSetChecksum !==
-      frozen.providerSemanticVersionSetChecksum
-    ) {
+    if (snapshot.providerSemanticVersionSetChecksum !== frozen.providerSemanticVersionSetChecksum) {
       return "provider_semantic_version_set_changed";
     }
     const catalog = toolCatalogs.get(snapshot.runId);
@@ -1900,10 +1900,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (observed === undefined || initialObserved === undefined) {
       return observed === initialObserved ? undefined : "capability_boundary_source_changed";
     }
-    if (
-      observed.canonicalRootIdentityChecksum !==
-      initialObserved.canonicalRootIdentityChecksum
-    ) {
+    if (observed.canonicalRootIdentityChecksum !== initialObserved.canonicalRootIdentityChecksum) {
       return "canonical_root_changed";
     }
     if (
@@ -1922,8 +1919,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       return "provider_semantic_version_set_changed";
     }
     if (
-      observed.providerToolProjectionChecksum !==
-      initialObserved.providerToolProjectionChecksum
+      observed.providerToolProjectionChecksum !== initialObserved.providerToolProjectionChecksum
     ) {
       return "provider_tool_projection_changed";
     }
@@ -2930,10 +2926,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             snapshot.providerSemanticVersionSetChecksum ||
           artifact.providerSemanticVersionSetChecksum !==
             prompt.guidanceProof.providerSemanticVersionSetChecksum ||
-          artifact.canonicalRootIdentityChecksum !==
-            boundary.canonicalRootIdentityChecksum ||
-          artifact.effectiveCapabilityStateChecksum !==
-            boundary.effectiveCapabilityStateChecksum ||
+          artifact.canonicalRootIdentityChecksum !== boundary.canonicalRootIdentityChecksum ||
+          artifact.effectiveCapabilityStateChecksum !== boundary.effectiveCapabilityStateChecksum ||
           artifact.sharingDefaultsRevision !== boundary.sharingDefaultsRevision ||
           artifact.policyRevision !== boundary.policyRevision ||
           artifact.providerToolProjectionChecksum !== boundary.providerToolProjectionChecksum
@@ -5637,7 +5631,11 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
 
     // ── Phase B: file lifecycle tools ────────────────────────────────────────
     if (fileLifecycleToolNames.has(dispatchName)) {
-      if (options.fileOperationSession === undefined || options.changeSetSession === undefined) {
+      if (
+        (options.fileOperationSession === undefined &&
+          options.chapterAgentToolSession === undefined) ||
+        options.changeSetSession === undefined
+      ) {
         return (await toolFailure(
           runtime,
           runId,
@@ -5649,13 +5647,21 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           : "continue";
       }
       const dependsOn = readStringArray(dispatchArguments, "dependsOn");
-      const proposalResult = buildFileOperationProposal(
-        options.fileOperationSession,
-        dispatchName,
-        call.toolCallId,
-        dispatchArguments,
-        dependsOn
-      );
+      const proposalResult =
+        dispatchName === "propose_chapter_create" && options.chapterAgentToolSession !== undefined
+          ? await buildFormalChapterCreateProposal(
+              options.chapterAgentToolSession,
+              call.toolCallId,
+              dispatchArguments,
+              dependsOn
+            )
+          : buildFileOperationProposal(
+              options.fileOperationSession as AgentFileOperationSessionPort,
+              dispatchName,
+              call.toolCallId,
+              dispatchArguments,
+              dependsOn
+            );
       if (!proposalResult.ok) {
         return (await toolFailure(
           runtime,
@@ -7028,8 +7034,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                 initialCapabilityBoundary.frozen.canonicalRootIdentityChecksum,
               effectiveCapabilityStateChecksum:
                 initialCapabilityBoundary.frozen.effectiveCapabilityStateChecksum,
-              sharingDefaultsRevision:
-                initialCapabilityBoundary.frozen.sharingDefaultsRevision,
+              sharingDefaultsRevision: initialCapabilityBoundary.frozen.sharingDefaultsRevision,
               sharingGrantRevision: initialCapabilityBoundary.frozen.sharingGrantRevision,
               policyRevision: initialCapabilityBoundary.frozen.policyRevision,
               providerToolProjectionChecksum:
@@ -7140,9 +7145,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       // run and round identity. The canonical prompt is checked against the preflight prompt so
       // this step cannot silently change the provider payload.
       let runPromptMaterialization = initialMaterialization;
-      let initialCanonicalRound:
-        | ReturnType<typeof materializeCanonicalAgentRound>
-        | undefined;
+      let initialCanonicalRound: ReturnType<typeof materializeCanonicalAgentRound> | undefined;
       if (initialGuidanceV3 !== undefined && initialCapabilityBoundary !== undefined) {
         try {
           const canonical = materializeCanonicalAgentRound({
@@ -7293,7 +7296,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           : createAgentPromptMaterializationArtifact({
               ...promptArtifactInput,
               guidanceMaterialization: initialGuidanceV3
-      });
+            });
       runtime.promptArtifact = promptArtifact;
       const createdAt = new Date().toISOString();
       const promptBinding =
@@ -7522,12 +7525,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         effectiveCapabilityState().revision,
         reason
       );
-      return persistCommandReceipt(
-        command.runId,
-        scopeKey,
-        command.commandId,
-        changed
-      );
+      return persistCommandReceipt(command.runId, scopeKey, command.commandId, changed);
     },
     async compactContext(command) {
       const commandScope = resolveSessionRunCommandScope(command);
@@ -8616,10 +8614,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                   executionCapabilityBoundary.frozen.canonicalRootIdentityChecksum,
                 effectiveCapabilityStateChecksum:
                   executionCapabilityBoundary.frozen.effectiveCapabilityStateChecksum,
-                sharingDefaultsRevision:
-                  executionCapabilityBoundary.frozen.sharingDefaultsRevision,
-                sharingGrantRevision:
-                  executionCapabilityBoundary.frozen.sharingGrantRevision,
+                sharingDefaultsRevision: executionCapabilityBoundary.frozen.sharingDefaultsRevision,
+                sharingGrantRevision: executionCapabilityBoundary.frozen.sharingGrantRevision,
                 policyRevision: executionCapabilityBoundary.frozen.policyRevision,
                 providerToolProjectionChecksum:
                   executionCapabilityBoundary.frozen.providerToolProjectionChecksum
@@ -11066,6 +11062,45 @@ function invalidV2ResourceRef(toolName: string): UnifiedError {
   );
 }
 
+/** Prepare a chapter-domain create without mutating the project. */
+async function buildFormalChapterCreateProposal(
+  session: ChapterAgentToolSession,
+  toolCallId: string,
+  args: JsonObject,
+  dependsOn: readonly string[]
+): Promise<Result<{ readonly operation: ChangeSetOperation }, UnifiedError>> {
+  const title = readString(args, "title");
+  if (title === undefined) {
+    return err(
+      createUnifiedError({
+        code: "AGENT_TOOL_ARGUMENTS_INVALID",
+        category: "ValidationError",
+        message: "propose_chapter_create requires title.",
+        recoverability: "user-action",
+        suggestedAction: "Provide a non-empty chapter title.",
+        traceId: "agent-run-chapter-create"
+      })
+    );
+  }
+  const content = readString(args, "content") ?? "";
+  const prepared = await session.prepareCreate({ title, body: content });
+  if (!prepared.ok) return prepared;
+  const operationId = `op_${createHash("sha256")
+    .update(`${toolCallId}\n${prepared.value.item.stableRef}`, "utf8")
+    .digest("hex")
+    .slice(0, 32)}`;
+  const operation: ChangeSetOperation = {
+    kind: "create_file",
+    operationId,
+    relativePath: prepared.value.relativePath,
+    content: prepared.value.serializedContent,
+    toolCallIdempotencyKey: toolCallId,
+    consistencyGroupId: `chapter-create-${prepared.value.item.chapterId}`,
+    ...(dependsOn.length === 0 ? {} : { dependsOn: Object.freeze([...dependsOn]) })
+  };
+  return ok({ operation });
+}
+
 /** Task B.3 — routes a file lifecycle tool call to the matching AgentFileOperationSessionPort method. */
 function buildFileOperationProposal(
   session: AgentFileOperationSessionPort,
@@ -11224,10 +11259,7 @@ function parseContextSnapshot(
   run: AgentRunSnapshot
 ): AgentContextSnapshot | undefined {
   if (value?.["schemaVersion"] === "2.0") {
-    if (
-      value["runId"] !== run.runId ||
-      value["contextSnapshotId"] !== run.contextSnapshotId
-    ) {
+    if (value["runId"] !== run.runId || value["contextSnapshotId"] !== run.contextSnapshotId) {
       return undefined;
     }
     try {
@@ -11796,7 +11828,11 @@ function usageMetricChangeSetOutcome(
   events: readonly AgentRunEvent[]
 ): AgentUsageMetricRecord["changeSetOutcome"] {
   if (events.some((event) => event.type === "write_applied")) return "applied";
-  if (events.some((event) => event.type === "approval_resolved" && event.detail?.["decision"] === "reject_all")) {
+  if (
+    events.some(
+      (event) => event.type === "approval_resolved" && event.detail?.["decision"] === "reject_all"
+    )
+  ) {
     return "rejected";
   }
   if (events.some((event) => event.type === "change_set_ready")) return "generated";
@@ -11918,10 +11954,7 @@ function nextPromptCacheIdentityChecksum(
   snapshot: AgentRunSnapshot,
   logicalPrefixChecksum: string
 ): string {
-  if (
-    !isChecksum(snapshot.promptCacheIdentityBaseChecksum) ||
-    !isChecksum(logicalPrefixChecksum)
-  ) {
+  if (!isChecksum(snapshot.promptCacheIdentityBaseChecksum) || !isChecksum(logicalPrefixChecksum)) {
     return "legacy";
   }
   return snapshot.schemaVersion === "2.0"

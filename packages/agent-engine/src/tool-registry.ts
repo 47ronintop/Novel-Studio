@@ -65,6 +65,7 @@ export type NetworkAgentToolName = "web_search" | "fetch_url";
 
 /** Compact model-facing facade used by new Agent runs. */
 export type V2AgentToolName =
+  | "list_chapters"
   | "read_resource"
   | "search_project"
   | "edit_text"
@@ -410,7 +411,9 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
   const searchTools =
     cap?.searchEnabled === true ? [coreTool("search_project", "search_tool", "read")] : [];
   const reads = [
-    coreTool("list_project_entries", "file_tool", "read"),
+    ...(writing
+      ? [coreTool("list_chapters", "file_tool", "read")]
+      : [coreTool("list_project_entries", "file_tool", "read")]),
     coreTool("read_resource", "file_tool", "read", {
       description: writing
         ? "按稳定 chapter: 引用读取章节正文和当前版本信息。"
@@ -724,6 +727,7 @@ function isDestructive(name: StaticAgentToolName): boolean {
 
 function displayNameFor(name: StaticAgentToolName): string {
   const labels: Partial<Record<StaticAgentToolName, string>> = {
+    list_chapters: "列出章节",
     list_project_entries: "列出项目条目",
     read_chapter: "读取章节",
     read_story_bible: "读取 Story Bible",
@@ -768,6 +772,8 @@ function displayNameFor(name: StaticAgentToolName): string {
 
 function descriptionFor(name: StaticAgentToolName): string {
   const descs: Partial<Record<StaticAgentToolName, string>> = {
+    list_chapters:
+      "只读稳定分页列出完整章节目录；支持 statuses、cursor、limit 和 includeDeleted，默认隐藏 deleted tombstone，并返回可继续读取的 stable ref、revision 与 checksum。",
     list_project_entries: "列出指定目录下的项目文件条目。",
     read_chapter: "按章节 ID 读取章节正文。",
     read_story_bible: "按资产 ID 读取 Story Bible 条目。",
@@ -827,6 +833,7 @@ export function validateAgentToolArguments(input: {
 
 function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
   if (name === "finish_plan") return finishPlanInputSchema();
+  if (name === "list_chapters") return listChaptersSchema();
   if (name === "read_resource") return strictStableRefObject("ref");
   if (name === "search_project") return v2SearchSchema();
   if (name === "edit_text") return v2EditSchema();
@@ -1184,6 +1191,27 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
     };
   }
   return { type: "object", additionalProperties: true };
+}
+
+function listChaptersSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      statuses: {
+        type: "array",
+        items: {
+          type: "string",
+          enum: ["draft", "revision", "review", "done", "archived", "deleted"]
+        },
+        maxItems: 6,
+        uniqueItems: true
+      },
+      cursor: { type: "string", minLength: 1, maxLength: 4096 },
+      limit: { type: "integer", minimum: 1, maximum: 100 },
+      includeDeleted: { type: "boolean" }
+    }
+  };
 }
 
 function finishPlanInputSchema(): JsonObject {

@@ -515,7 +515,9 @@ describe("desktop Agent Run runtime", () => {
       value: { snapshot: { usageId: expect.any(String) } }
     });
     if (!completed.ok || completed.value.snapshot.usageId === null) return;
-    expect(await runtime.agentUsageSession?.getAgentUsage(completed.value.snapshot.usageId)).toMatchObject({
+    expect(
+      await runtime.agentUsageSession?.getAgentUsage(completed.value.snapshot.usageId)
+    ).toMatchObject({
       ok: true,
       value: {
         schemaVersion: "2.0",
@@ -542,6 +544,253 @@ describe("desktop Agent Run runtime", () => {
       contextWindow: 128000,
       safeInputBudget: expect.any(Number)
     });
+  });
+
+  test("dispatches Catalog 2.0 list_chapters through the full desktop chapter projection", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-list-chapters-v2-"));
+    roots.push(projectRoot);
+    const chapterRepository = new ChapterFileRepository({
+      projectRoot,
+      now: () => "2026-08-05T00:00:00.000Z"
+    });
+    await expect(
+      chapterRepository.createChapter({
+        chapterId: "ch_desktop_list_alpha",
+        title: "Alpha",
+        order: 1,
+        status: "draft",
+        body: "Alpha body."
+      })
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      chapterRepository.createChapter({
+        chapterId: "ch_desktop_list_beta",
+        title: "Beta",
+        order: 2,
+        status: "review",
+        body: "Beta body."
+      })
+    ).resolves.toMatchObject({ ok: true });
+    const deleted = await chapterRepository.createChapter({
+      chapterId: "ch_desktop_list_deleted",
+      title: "Deleted",
+      order: 3,
+      status: "deleted",
+      body: "Deleted body."
+    });
+    expect(deleted).toMatchObject({ ok: true });
+
+    const runId = "run-desktop-list-chapters-v2";
+    let round = 0;
+    let providerToolNames: string[] = [];
+    let observedToolPayload = "";
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "ch_desktop_list_alpha",
+      createRunId: () => runId,
+      featureFlags: createAgentFeatureFlags({
+        agentGuidanceV3: true,
+        revision: "desktop-list-chapters-v2"
+      }),
+      resolveModelStartFacts: async () => ({
+        profileId: "desktop-list-chapters-profile",
+        provider: "demo",
+        modelName: "desktop-list-chapters-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden" as const, reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound(input) {
+          providerToolNames = input.tools.map((tool) => tool.name);
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("desktop-list-chapters", "list_chapters", {
+              statuses: ["draft", "review"],
+              limit: 10
+            });
+          } else {
+            observedToolPayload = input.messages
+              .filter((message) => message.role === "tool")
+              .map((message) => message.content)
+              .join("\n");
+            const listEvidenceRef = `run-event/${String(
+              input.snapshot.lastSequence
+            )}/tool_completed/desktop-list-chapters`;
+            yield runtimeToolCall("desktop-list-chapters-finish", "finish", {
+              outcome: "completed",
+              report: {
+                result: "Chapter catalog read completed.",
+                appliedChanges: [],
+                verification: [listEvidenceRef],
+                residualRisks: []
+              },
+              evidenceRefs: [listEvidenceRef]
+            });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-desktop-list-chapters-v2"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-desktop-list-chapters-v2",
+      userRequest: "Review the current chapter catalog.",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "desktop-list-chapters-profile",
+      contextRefs: []
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const previewed = await previewDraftStart(
+      runtime,
+      prepared.value,
+      "start-desktop-list-chapters-v2"
+    );
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: true
+    });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "completed" } }
+      });
+    });
+
+    expect(providerToolNames).toContain("list_chapters");
+    expect(providerToolNames).not.toContain("list_project_entries");
+    expect(observedToolPayload).toContain("ch_desktop_list_alpha");
+    expect(observedToolPayload).toContain("ch_desktop_list_beta");
+    expect(observedToolPayload).toContain("catalogRevision");
+    expect(observedToolPayload).not.toContain("ch_desktop_list_deleted");
+  });
+
+  test("stages Catalog 2.0 chapter creation from repository-prepared Markdown without writing", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-create-chapter-v2-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const lockOwnerId = "desktop-create-chapter-v2-lock";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const runId = "run-desktop-create-chapter-v2";
+    let round = 0;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: "chapter-unused",
+      projectLockOwnerId: lockOwnerId,
+      providerSemanticVersionSetChecksum: "a".repeat(64),
+      createRunId: () => runId,
+      featureFlags: createAgentFeatureFlags({
+        agentGuidanceV3: true,
+        approvalBindingV2: true,
+        writingDomainCrudV2: true,
+        revision: "desktop-create-chapter-v2"
+      }),
+      resolveModelStartFacts: async () => ({
+        profileId: "desktop-create-chapter-profile",
+        provider: "demo",
+        modelName: "desktop-create-chapter-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden" as const, reason: "test model" }
+      }),
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield runtimeToolCall("desktop-create-chapter", "create_resource", {
+              kind: "chapter",
+              title: "Prepared chapter",
+              content: "Repository-owned order and metadata."
+            });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-desktop-create-chapter-v2"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-desktop-create-chapter-v2",
+      userRequest: "Create a new chapter.",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "desktop-create-chapter-profile",
+      contextRefs: []
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const previewed = await previewDraftStart(
+      runtime,
+      prepared.value,
+      "start-desktop-create-chapter-v2"
+    );
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: true
+    });
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: { status: "awaiting_write_approval" },
+          changeSet: {
+            operations: [
+              expect.objectContaining({
+                kind: "create_file",
+                relativePath: expect.stringMatching(/^chapters\/ch_[A-Za-z0-9]+\.md$/u)
+              })
+            ]
+          }
+        }
+      });
+    });
+    const pending = await runtime.agentRunSession.readAgentRun(runId);
+    expect(pending).toMatchObject({ ok: true });
+    if (!pending.ok || pending.value.changeSet === undefined) return;
+    const operation = pending.value.changeSet.operations.find(
+      (candidate) => candidate.kind === "create_file"
+    );
+    expect(operation).toMatchObject({
+      kind: "create_file",
+      relativePath: expect.stringMatching(/^chapters\/ch_[A-Za-z0-9]+\.md$/u),
+      content: expect.stringContaining("title: Prepared chapter")
+    });
+    expect(operation?.content).toContain("Repository-owned order and metadata.");
+    expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
   });
 
   test("strictly restores a Guidance 3.0 planning run and rejects tampered or mixed V20 history", async () => {

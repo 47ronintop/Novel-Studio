@@ -2,6 +2,7 @@ import {
   createAgentConversationSession,
   createAgentContextSession,
   createAgentFileOperationSession,
+  createChapterAgentToolSession,
   createAgentPricingRegistry,
   createAgentPermissionSession,
   createAgentPlanExecutionSession,
@@ -66,6 +67,7 @@ import {
   type AgentNetworkPolicy,
   type AgentExternalToolExecutor,
   type AgentFileOperationSessionPort,
+  type ChapterAgentToolSession,
   type AgentRunModelDriver,
   type AgentRunContextSharingPort,
   type AgentRunSession,
@@ -889,6 +891,13 @@ function createDesktopAgentRuntimeServices(
           traceId: "desktop-agent-chapter"
         })
       : undefined;
+  const chapterAgentToolSession: ChapterAgentToolSession | undefined =
+    chapterRepository === undefined
+      ? undefined
+      : createChapterAgentToolSession({
+          repository: chapterRepository,
+          traceId: "desktop-agent-chapter-tool"
+        });
   const storyBible =
     options.workspaceKind === "creativeProject"
       ? new StoryBibleFileRepository({
@@ -1462,6 +1471,7 @@ function createDesktopAgentRuntimeServices(
       ? {}
       : { dataEgressPolicy: options.dataEgressPolicy }),
     ...(fileOperationSession === undefined ? {} : { fileOperationSession }),
+    ...(chapterAgentToolSession === undefined ? {} : { chapterAgentToolSession }),
     ...(storyBibleToolExecutor === undefined ? {} : { storyBibleToolExecutor }),
     ...(options.externalToolExecutor === undefined
       ? {}
@@ -5591,6 +5601,43 @@ function createDesktopReadToolExecutor(
             })
           : listed;
       }
+      if (input.name === "list_chapters") {
+        if (chapterRepository === undefined) {
+          return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+        }
+        const rawStatuses = readOptionalStringArray(input.arguments, "statuses");
+        const statuses = rawStatuses.filter(
+          (status): status is import("@novel-studio/shared").ChapterStatus =>
+            status === "draft" ||
+            status === "revision" ||
+            status === "review" ||
+            status === "done" ||
+            status === "archived" ||
+            status === "deleted"
+        );
+        if (statuses.length !== rawStatuses.length) return invalidToolArguments(input.name);
+        const cursor = readOptionalString(input.arguments, "cursor");
+        const limit = input.arguments["limit"];
+        const includeDeleted = input.arguments["includeDeleted"];
+        if (
+          (limit !== undefined && typeof limit !== "number") ||
+          (includeDeleted !== undefined && typeof includeDeleted !== "boolean")
+        ) {
+          return invalidToolArguments(input.name);
+        }
+        const listed = await chapterRepository.listChapterCatalog({
+          ...(statuses.length === 0 ? {} : { statuses }),
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(typeof limit === "number" ? { limit } : {}),
+          ...(typeof includeDeleted === "boolean" ? { includeDeleted } : {})
+        });
+        return listed.ok
+          ? ok({
+              summary: `已列出 ${listed.value.items.length} 个章节`,
+              data: listed.value as unknown as JsonObject
+            })
+          : listed;
+      }
       if (input.name === "read_chapter") {
         if (chapterRepository === undefined) {
           return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
@@ -5598,13 +5645,23 @@ function createDesktopReadToolExecutor(
         const chapterId = readRequiredId(input.arguments, "chapterId");
         if (chapterId === undefined) return invalidToolArguments(input.name);
         const relativePath = `chapters/${chapterId}.md`;
-        const chapter = await chapterRepository.readChapter(chapterId);
+        const chapter = await chapterRepository.readChapterForAgent(chapterId);
         return chapter.ok
           ? ok({
               summary: `已读取章节 ${chapterId}`,
               data: {
                 content: chapter.value.body,
-                checksum: checksumText(chapter.value.body)
+                checksum: chapter.value.bodyChecksum,
+                stableRef: chapter.value.stableRef,
+                frontmatter: chapter.value.frontmatter,
+                order: chapter.value.order,
+                status: chapter.value.status,
+                revision: chapter.value.revision,
+                resourceRevision: chapter.value.resourceRevision,
+                catalogRevision: chapter.value.catalogRevision,
+                ...(chapter.value.volumeId === undefined
+                  ? {}
+                  : { volumeId: chapter.value.volumeId })
               },
               source: {
                 refId: `chapter:${chapterId}`,

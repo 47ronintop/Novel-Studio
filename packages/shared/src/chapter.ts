@@ -27,6 +27,8 @@ export interface ChapterFrontmatter extends JsonObject {
   timelineEventIds?: string[];
   tags?: string[];
   wordCount?: number;
+  /** Optional application-owned metadata revision. Legacy files may omit it. */
+  revision?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -43,6 +45,87 @@ export interface ChapterSummary extends JsonObject {
   status: ChapterStatus;
   updatedAt: string;
   wordCount?: number;
+}
+
+/**
+ * Main-owned, stable chapter catalog query.  The legacy `listChapters()` port remains the
+ * compact UI projection; Agent callers use this query so tombstones, revisions and pagination
+ * cannot be confused with the outline summary.
+ */
+export interface ChapterCatalogListInput {
+  statuses?: readonly ChapterStatus[];
+  cursor?: string;
+  limit?: number;
+  includeDeleted?: boolean;
+}
+
+/** Complete, provider-safe chapter projection returned by the Agent catalog. */
+export interface ChapterAgentCatalogItem {
+  stableRef: string;
+  chapterId: string;
+  id: string;
+  title: string;
+  order: number;
+  status: ChapterStatus;
+  updatedAt: string;
+  frontmatter: ChapterFrontmatter;
+  resourceRevision: string;
+  /** Numeric metadata revision used by lifecycle tools; legacy files default to 1. */
+  revision: number;
+  /** Hash of the chapter body, kept separate from the persisted-byte revision. */
+  bodyChecksum: string;
+  /** Backward-compatible short name for bodyChecksum. */
+  checksum: string;
+  /** Hash of the exact persisted Markdown bytes. */
+  persistedChecksum: string;
+  relativePath: string;
+  volumeId?: string;
+  wordCount?: number;
+  catalogRevision: string;
+}
+
+export interface ChapterCatalogPage {
+  items: readonly ChapterAgentCatalogItem[];
+  catalogRevision: string;
+  nextCursor: string | null;
+}
+
+/** Full chapter read used by Agent tools and stale-base checks. */
+export interface ChapterAgentRead extends ChapterAgentCatalogItem {
+  body: string;
+}
+
+/** Application-owned chapter creation input.  ID, path, order and timestamps are not model input. */
+export interface CreateAgentChapterInput {
+  title: string;
+  body?: string;
+  volumeId?: string;
+}
+
+export interface CreateAgentChapterResult {
+  chapter: ChapterDocument;
+  item: ChapterAgentCatalogItem;
+  /** Exact Markdown bytes that the Change Set should create. */
+  serializedContent: string;
+  relativePath: string;
+}
+
+export interface ChapterOrderMigrationAffectedItem {
+  stableRef: string;
+  chapterId: string;
+  order: number;
+  status: ChapterStatus;
+  relativePath: string;
+  reason: "duplicate" | "non_positive" | "non_integer" | "non_finite";
+}
+
+export interface ChapterOrderMigrationPreview {
+  required: boolean;
+  catalogRevision: string;
+  checksum: string;
+  affected: readonly ChapterOrderMigrationAffectedItem[];
+  /** Deterministic inverse/repair suggestions; no files are changed by preview. */
+  inverse: readonly { readonly stableRef: string; readonly from: number; readonly to: number }[];
 }
 
 export interface CreateChapterInput extends JsonObject {
@@ -76,6 +159,19 @@ export interface ChapterDraftRepositoryPort {
 export interface ChapterCatalogRepositoryPort {
   listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
   createChapter(input: CreateChapterInput): Promise<Result<ChapterDocument, UnifiedError>>;
+  /** Agent-only catalog; optional to preserve lightweight test and UI adapters. */
+  listChapterCatalog?(
+    input?: ChapterCatalogListInput
+  ): Promise<Result<ChapterCatalogPage, UnifiedError>>;
+  readChapterForAgent?(chapterId: string): Promise<Result<ChapterAgentRead, UnifiedError>>;
+  createAgentChapter?(
+    input: CreateAgentChapterInput
+  ): Promise<Result<CreateAgentChapterResult, UnifiedError>>;
+  /** Prepare a create proposal without touching project files. */
+  prepareAgentChapterCreate?(
+    input: CreateAgentChapterInput
+  ): Promise<Result<CreateAgentChapterResult, UnifiedError>>;
+  previewChapterOrderMigration?(): Promise<Result<ChapterOrderMigrationPreview, UnifiedError>>;
 }
 
 export interface ChapterMaintenanceRepositoryPort {
