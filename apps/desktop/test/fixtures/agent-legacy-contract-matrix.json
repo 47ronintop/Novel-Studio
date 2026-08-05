@@ -77,7 +77,7 @@
       "tests": [
         {
           "path": "packages/application/test/agent-prompt-materializer.test.ts",
-          "title": "places stable project data before the request and current file in the dynamic suffix"
+          "title": "places prior summary before outline and keeps the current request last in the initial turn"
         }
       ],
       "readerDisposition": "replay_only",

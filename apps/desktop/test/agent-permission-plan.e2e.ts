@@ -98,6 +98,7 @@ test("binds compact permissions to a persisted plan execution and restores revis
     const page = await firstApp.firstWindow();
     await queueDirectorySelection(firstApp, projectRoot);
     await openAgentPanel(page);
+    await chooseWorkspaceModelSharing(page);
     await configureLocalModel(page, baseUrl);
     const composer = page.getByLabel("会话输入区");
     await selectOperationMode(page, composer, "planning");
@@ -130,6 +131,16 @@ test("binds compact permissions to a persisted plan execution and restores revis
     await expect(permissionSummary).toContainText("服务端事实");
     await permissionMenu.press("Escape");
     await selectOperationMode(page, composer, "planning");
+    await composer.getByLabel("启动 Agent 运行").click();
+    await expect(
+      page
+        .getByLabel("Agent 会话主视图")
+        .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
+        .filter({ hasText: "先规划，再核对开篇" })
+    ).toBeVisible();
+    await composer.getByTitle("查看上下文").click();
+    await page.getByRole("tab", { name: "实际发送预览" }).click();
+    await expect(page.getByLabel("实际发送预览")).toBeVisible();
     await composer.getByLabel("启动 Agent 运行").click();
 
     const planReview = page.getByLabel("Plan Artifact 审阅");
@@ -386,6 +397,28 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
       .filter({ hasText: "Connected to openai-compatible/local-agent" })
   ).toContainText("Connected to openai-compatible/local-agent");
   await page.getByRole("button", { name: "关闭设置" }).click();
+}
+
+async function chooseWorkspaceModelSharing(page: Page): Promise<void> {
+  const result = await page.evaluate(async () => {
+    const api = (window as unknown as {
+      novelStudio?: {
+        workspace?: {
+          updateContextPolicy?: (update: unknown) => Promise<{ readonly ok: boolean }>;
+        };
+      };
+    }).novelStudio;
+    return api?.workspace?.updateContextPolicy?.({
+      action: "set_sharing_defaults",
+      defaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "allow",
+        toolReadResults: "allow"
+      }
+    });
+  });
+  expect(result).toMatchObject({ ok: true });
 }
 
 function toolNames(body: Record<string, unknown>): string[] {

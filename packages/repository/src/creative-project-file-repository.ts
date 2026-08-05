@@ -60,6 +60,7 @@ const DEFAULT_MANAGED_PATH_SEGMENTS = [
   "agents",
   "workflow",
   "workflows",
+  "agent-model-sharing",
   "plugins",
   "history",
   "cache",

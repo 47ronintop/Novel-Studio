@@ -372,8 +372,13 @@ test("sends profile-specific conventions and outlines in real workspace provider
     if ((await notesToggle.getAttribute("aria-expanded")) !== "true") await notesToggle.click();
     await navigator.getByRole("button", { name: "打开文件：brief.md" }).click();
     await expect(page.getByRole("region", { name: "普通文件编辑器" })).toBeVisible();
-    await page.getByRole("button", { name: "新建会话" }).first().click();
-    await expect(page.getByLabel("会话输入区")).toBeVisible();
+    const newConversation = page.getByRole("button", { name: "新建会话" }).first();
+    await newConversation.click();
+    await expect(newConversation).toBeEnabled();
+    const creativeComposer = page.getByLabel("会话输入区");
+    await expect(creativeComposer).toBeVisible();
+    await expect(creativeComposer.getByLabel(/^模型与推理：/)).toBeVisible();
+    await expect(creativeComposer.getByLabel("Agent 请求")).toBeEnabled();
 
     const creativeRequest = "CREATIVE_GENERAL_CONTEXT_E2E_REQUEST";
     await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
