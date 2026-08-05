@@ -98,6 +98,22 @@ export type {
   StoryBibleTimelineValidationIssue
 } from "./story-bible-timeline.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
+export {
+  AgentCapabilitySummary,
+  approvalReasonLabel,
+  approvalRequirementLabel,
+  capabilityModeLabel,
+  contextProfileIdFor,
+  describeAgentCapabilities,
+  effectRuleLabel,
+  operationLabel,
+  profileLabelFor
+} from "./agent-capability-summary.js";
+export type {
+  AgentApprovalRuleDescription,
+  AgentCapabilityDescription,
+  AgentCapabilitySummaryProps
+} from "./agent-capability-summary.js";
 export { AgentErrorCard } from "./agent-error-card.js";
 export type { AgentErrorCardProps } from "./agent-error-card.js";
 export { AgentActivitySummary } from "./agent-activity-summary.js";
@@ -177,6 +193,9 @@ export type {
   AgentConversationTurnProps,
   AgentConversationViewProps,
   AgentConversationWorkspaceShellProps,
+  AgentCapabilityApprovalSource,
+  AgentCapabilityFacts,
+  AgentProposalApprovalSummary,
   AgentComposerProps,
   AgentComposerQuickAction,
   AgentComposerContextPreferenceScope,

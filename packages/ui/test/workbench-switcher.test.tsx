@@ -40,7 +40,7 @@ describe("WorkbenchSwitcher", () => {
     expect(host.querySelector('[role="menuitemradio"]')).not.toBeNull();
 
     const engineering = host.querySelector<HTMLElement>(
-      '[role="menuitemradio"][aria-label="工程工作台"]'
+      '[role="menuitemradio"][aria-label="工程工作区"]'
     );
     act(() =>
       engineering?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
@@ -63,7 +63,7 @@ describe("WorkbenchSwitcher", () => {
       );
     });
     const trigger = host.querySelector<HTMLButtonElement>(
-      'button[aria-label="当前工作台：工程工作台"]'
+      'button[aria-label="当前工作台：工程工作区"]'
     );
     act(() => trigger?.click());
 
@@ -71,7 +71,7 @@ describe("WorkbenchSwitcher", () => {
       '[role="menuitemradio"][aria-label="创作工作台"]'
     );
     const engineering = host.querySelector<HTMLElement>(
-      '[role="menuitemradio"][aria-label="工程工作台"]'
+      '[role="menuitemradio"][aria-label="工程工作区"]'
     );
     expect(creative?.getAttribute("aria-disabled")).toBe("true");
     expect(engineering?.getAttribute("data-selected")).toBe("true");

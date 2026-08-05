@@ -187,6 +187,7 @@ describe("Agent Conversation workspace", () => {
     const automaticWrite = Array.from(editor?.querySelectorAll("label") ?? [])
       .find((label) => label.textContent?.includes("本次运行自动修改"))
       ?.querySelector<HTMLInputElement>('input[type="radio"]');
+    expect(automaticWrite?.disabled).toBe(true);
     act(() => automaticWrite?.click());
     expect(editor?.textContent).not.toContain("我理解本次运行可自动修改");
     expect(editor?.querySelector('input[type="checkbox"]')).toBeNull();
@@ -200,11 +201,6 @@ describe("Agent Conversation workspace", () => {
     expect(aiPanel?.querySelector('[aria-label="Agent 会话主视图"]')).not.toBeNull();
     act(() => editor?.querySelector<HTMLButtonElement>('[aria-label="拒绝计划"]')?.click());
     act(() => editor?.querySelector<HTMLButtonElement>('[aria-label="按此方案执行"]')?.click());
-    expect(onDecision).toHaveBeenCalledWith("approve", {
-      executionContextMode: "writing",
-      executionWritePolicy: "user_preapproved_run",
-      executionWritePolicyAcknowledged: true
-    });
     expect(onDecision).toHaveBeenCalledWith("reject");
     expect(onDecision).toHaveBeenCalledWith("approve", {
       executionContextMode: "writing",

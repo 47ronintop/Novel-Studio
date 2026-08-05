@@ -14,6 +14,7 @@ import {
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { AgentPermissionMenu } from "./agent-permission-menu.js";
+import { AgentCapabilitySummary } from "./agent-capability-summary.js";
 import { AgentPopover, rovePopoverOptions } from "./agent-popover.js";
 import { AgentContextMenu } from "./agent-context-menu.js";
 import type { AgentComposerProps } from "./workspace-shell-types.js";
@@ -304,6 +305,9 @@ export function AgentComposer(props: AgentComposerProps) {
     <section className="ns-agent-conversation-composer ns-agent-composer" aria-label="会话输入区">
       {props.disabledReason === undefined ? null : (
         <p className="ns-agent-conversation-composer-note">{props.disabledReason}</p>
+      )}
+      {props.capability === undefined || props.active ? null : (
+        <AgentCapabilitySummary facts={props.capability} compact />
       )}
       <div className="ns-agent-composer-surface">
         <textarea

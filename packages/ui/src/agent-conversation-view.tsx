@@ -12,6 +12,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { AgentComposer } from "./agent-composer.js";
 import { AgentActivitySummary } from "./agent-activity-summary.js";
+import { AgentCapabilitySummary } from "./agent-capability-summary.js";
 import { AgentConversationHistoryDrawer } from "./agent-conversation-history-drawer.js";
 import { AgentRunPanel } from "./agent-run-panel.js";
 import type {
@@ -23,6 +24,7 @@ import type {
 export function AgentConversationView(props: AgentConversationViewProps) {
   const conversation = props.conversation;
   const contextSummary = visibleContextSummary(conversation?.contextSummary);
+  const capability = props.agentRun?.capability ?? props.composer?.capability;
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const closeHistory = useCallback(() => {
@@ -139,6 +141,10 @@ export function AgentConversationView(props: AgentConversationViewProps) {
         <p className="ns-project-feedback" data-kind="error" role="alert">
           {props.errorMessage}
         </p>
+      )}
+
+      {props.agentRun !== undefined || capability === undefined ? null : (
+        <AgentCapabilitySummary facts={capability} compact />
       )}
 
       {props.activeConversationId !== undefined &&

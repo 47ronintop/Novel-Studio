@@ -10,7 +10,7 @@ export interface WorkbenchSwitcherProps {
 
 const modes: readonly { mode: WorkbenchMode; label: string }[] = [
   { mode: "creative", label: "创作工作台" },
-  { mode: "engineering", label: "工程工作台" }
+  { mode: "engineering", label: "工程工作区" }
 ];
 
 export function WorkbenchSwitcher({
@@ -165,5 +165,5 @@ export function WorkbenchSwitcher({
 }
 
 function labelFor(mode: WorkbenchMode): string {
-  return mode === "engineering" ? "工程工作台" : "创作工作台";
+  return mode === "engineering" ? "工程工作区" : "创作工作台";
 }

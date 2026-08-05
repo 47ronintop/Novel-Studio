@@ -3488,7 +3488,7 @@ describe("WorkspaceShell", () => {
     }
     expect(html.indexOf("1. 雨夜入城")).toBeLessThan(html.indexOf("2. 无名档案"));
     expect(html).toContain("无法保存伏笔");
-    expect(html).toContain("必须选择实际回收章节");
+    expect(html).toContain("已回收伏笔尚未选择实际回收章节；这不会阻止保存。");
     expect(html).toContain("已存在于伏笔“门后的人”");
     expect(save?.props.disabled).toBe(true);
   });

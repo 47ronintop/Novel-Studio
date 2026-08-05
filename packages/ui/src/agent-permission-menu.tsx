@@ -2,6 +2,7 @@ import { Check, ShieldAlert, ShieldCheck } from "lucide-react";
 import type { AgentWritePolicy } from "@novel-studio/application";
 
 import type { AgentComposerPermissionControl } from "./workspace-shell-types.js";
+import { AgentCapabilitySummary, operationLabel } from "./agent-capability-summary.js";
 
 export interface AgentPermissionMenuProps {
   readonly writePolicy: AgentWritePolicy;
@@ -69,7 +70,7 @@ function PermissionSummaryDetails({
 }: {
   readonly control?: AgentComposerPermissionControl;
 }) {
-  const summary = control?.summary;
+  const summary = control?.summary ?? control?.capability?.permissionSummary;
   return (
     <details aria-label="本次权限摘要" className="ns-agent-permission-summary">
       <summary>
@@ -82,6 +83,12 @@ function PermissionSummaryDetails({
         <p className="ns-project-feedback" data-kind="error" role="alert">
           {control.errorMessage}
         </p>
+      )}
+      {control?.capability === undefined ? null : (
+        <AgentCapabilitySummary
+          ariaLabel="能力目录与审批规则"
+          facts={control.capability}
+        />
       )}
       {summary === undefined ? (
         <p>{control?.loading ? "正在读取权限摘要…" : "发送前打开此菜单即可生成摘要。"}</p>
@@ -109,11 +116,31 @@ function PermissionSummaryDetails({
               {summary.proposalCapabilities.length > 0 ? "允许生成，仍需走审批管线" : "不适用"}
             </dd>
           </div>
-          {summary.schemaVersion === "1.1" ? (
+          {summary.schemaVersion === "1.1" || summary.schemaVersion === "2.0" ? (
             <div>
               <dt>写入后端</dt>
               <dd>{writeMutationTrustLabel(summary.writeMutationTrust)}</dd>
             </div>
+          ) : null}
+          {summary.schemaVersion === "2.0" ? (
+            <>
+              <div>
+                <dt>写作操作</dt>
+                <dd>{summary.writingOperations.map(operationLabel).join("、") || "无"}</dd>
+              </div>
+              <div>
+                <dt>文件操作</dt>
+                <dd>{summary.workspaceFileOperations.map(operationLabel).join("、") || "无"}</dd>
+              </div>
+              <div>
+                <dt>规则集</dt>
+                <dd>
+                  {summary.approvalRuleSetVersion === "not_applicable"
+                    ? "不适用"
+                    : `${summary.approvalRuleSetVersion} · ${summary.approvalRules.length} 项`}
+                </dd>
+              </div>
+            </>
           ) : null}
           <div>
             <dt>审批状态</dt>
@@ -121,7 +148,7 @@ function PermissionSummaryDetails({
           </div>
           <div>
             <dt>明确不可用</dt>
-            <dd>{summary.forbiddenCapabilities.map(forbiddenLabel).join("、")}</dd>
+            <dd>{summary.forbiddenCapabilities.map(forbiddenLabel).join("、") || "无"}</dd>
           </div>
           <div>
             <dt>事实绑定</dt>
@@ -167,7 +194,7 @@ function approvalLabel(source: AgentComposerPermissionControl["approvalSource"])
     case "human_confirmation":
       return "人工确认";
     case "user_preapproved_run":
-      return "本次运行预授权";
+      return "本次运行有限预授权";
     default:
       return "尚未批准";
   }

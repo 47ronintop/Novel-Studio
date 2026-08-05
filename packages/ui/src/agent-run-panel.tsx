@@ -2,6 +2,7 @@ import { Check, CircleCheck, LoaderCircle, Play, RefreshCw, RotateCcw, X } from 
 import { useEffect, useState } from "react";
 
 import { AgentActivitySummary } from "./agent-activity-summary.js";
+import { AgentCapabilitySummary } from "./agent-capability-summary.js";
 import { AgentErrorCard } from "./agent-error-card.js";
 import { AgentRunTimeline } from "./agent-run-timeline.js";
 import { ChangeSetReview } from "./change-set-review.js";
@@ -32,6 +33,14 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
         <RunStatusIndicator status={props.status} />
         <span className="ns-agent-status">{statusLabel(props.status)}</span>
       </header>
+
+      {props.capability === undefined ? null : (
+        <AgentCapabilitySummary
+          ariaLabel="运行能力摘要"
+          blockedTargets={changeSetBlockers(props.changeSetReview)}
+          facts={props.capability}
+        />
+      )}
 
       {props.contextSourceNotice === undefined ? null : (
         <p className="ns-agent-context-notice">{props.contextSourceNotice}</p>
@@ -250,6 +259,17 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
       </div>
     </section>
   );
+}
+
+function changeSetBlockers(
+  review: AgentRunPanelProps["changeSetReview"]
+): readonly string[] {
+  if (review === undefined) return [];
+  return [
+    ...(review.dirtyTargetPaths ?? []).map((path) => `${path} · 未保存`),
+    ...(review.baseHashConflictPaths ?? []).map((path) => `${path} · 基线已变化`),
+    ...(review.stale ? ["Change Set · 需要刷新"] : [])
+  ];
 }
 
 function RunStatusIndicator({ status }: { readonly status: AgentRunPanelProps["status"] }) {

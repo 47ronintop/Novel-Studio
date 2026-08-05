@@ -232,6 +232,11 @@ describe("Agent Run renderer bridge", () => {
       contextMode: "standalone_chat",
       availableContextModes: ["standalone_chat"]
     });
+    expect(bridge.getComposerProps()?.capability).toMatchObject({
+      profileId: "standalone",
+      operationMode: "conversation",
+      contextMode: "standalone_chat"
+    });
     expect(bridge.getComposerProps()?.references).toBeUndefined();
     expect(bridge.getComposerProps()?.permission).toBeUndefined();
     expect(bridge.getPlanReviewProps()).toBeUndefined();
@@ -2473,6 +2478,10 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     });
 
     await vi.waitFor(() => expect(bridge.getComposerProps()?.model).toBeDefined());
+    expect(bridge.getComposerProps()?.capability).toMatchObject({
+      profileId: "engineering",
+      contextMode: "general_file"
+    });
     await bridge.send("检查工程文件");
 
     expect(preparedCommand).toMatchObject({ contextMode: "general_file" });

@@ -50,6 +50,7 @@ type PersistedPlanExecutionRecord = PlanExecutionRecord | PlanExecutionRecordV20
 type PersistedPlanArtifact = PlanArtifact | PlanArtifactV20;
 import type {
   AgentComposerContextStatusControl,
+  AgentCapabilityFacts,
   AgentComposerContextPreferenceScope,
   AgentComposerContextSourceRow,
   AgentComposerModelControl,
@@ -71,6 +72,7 @@ import type {
   RollbackReviewDecision,
   RollbackReviewModel
 } from "@novel-studio/ui";
+import { contextProfileIdFor } from "@novel-studio/ui";
 import type { UnifiedError } from "@novel-studio/shared";
 
 import type { StoryBibleSnapshotBinding } from "./story-bible-bridge.js";
@@ -1332,6 +1334,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           }
         : {}),
       ...(state.errorMessage === undefined ? {} : { errorMessage: state.errorMessage }),
+      capability: capabilityFacts(),
       ...providerLabel(state.snapshot, context?.settings),
       ...(!standalone && context?.chapterEditor?.dirty === true
         ? { contextSourceNotice: "使用未保存编辑器内容 · editor_buffer / dirty" }
@@ -2321,12 +2324,29 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   function permissionControl(): AgentComposerPermissionControl {
+    const capability = capabilityFacts();
     return {
       ...(state.permissionSummary === undefined ? {} : { summary: state.permissionSummary }),
+      capability,
       loading: state.permissionPending,
       ...(state.permissionError === undefined ? {} : { errorMessage: state.permissionError }),
       approvalSource: permissionApprovalSource(),
       onOpen: () => void loadPermissionSummary()
+    };
+  }
+
+  function capabilityFacts(): AgentCapabilityFacts {
+    const scope = context?.scope;
+    const workspaceKind = scope?.kind === "workspace" ? scope.workspaceKind : undefined;
+    return {
+      profileId: contextProfileIdFor(state.contextMode, workspaceKind),
+      operationMode: state.operationMode,
+      contextMode: state.contextMode,
+      ...(state.permissionSummary === undefined
+        ? {}
+        : { permissionSummary: state.permissionSummary }),
+      executionWritePolicy: state.executionWritePolicy,
+      approvalSource: permissionApprovalSource()
     };
   }
 
@@ -2468,6 +2488,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           ? ["general_file"]
           : ["writing", "general_file"],
       ...composerDraftGroups(),
+      capability: capabilityFacts(),
       ...(standalone ||
       (stage5BApi.readPermissionSummary === undefined && state.permissionSummary === undefined)
         ? {}

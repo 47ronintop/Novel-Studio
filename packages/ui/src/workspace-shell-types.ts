@@ -1,6 +1,7 @@
 import type {
   ActivityId,
   AgentContextMode,
+  AgentContextProfileId,
   AgentOperationMode,
   AgentRunErrorRecord,
   AgentRunEvent,
@@ -332,6 +333,8 @@ export interface AgentComposerProps {
   readonly contextStatus?: AgentComposerContextStatusControl;
   /** Server-owned capability facts and the execution-only Change Set approval policy. */
   readonly permission?: AgentComposerPermissionControl;
+  /** Frozen profile and Permission Summary projection used for user-facing capability labels. */
+  readonly capability?: AgentCapabilityFacts;
   readonly onRequestChange: (request: string) => void;
   readonly onOperationModeChange: (mode: AgentOperationMode) => void;
   readonly onContextModeChange: (mode: AgentContextMode) => void;
@@ -560,11 +563,39 @@ export interface AgentComposerContextStatusControl {
 
 export interface AgentComposerPermissionControl {
   readonly summary?: PermissionSummary;
+  readonly capability?: AgentCapabilityFacts;
   readonly loading: boolean;
   readonly errorMessage?: string;
   readonly approvalSource:
     "not_applicable" | "not_approved" | "human_confirmation" | "user_preapproved_run";
   readonly onOpen: () => void;
+}
+
+export type AgentCapabilityApprovalSource =
+  | "not_applicable"
+  | "not_approved"
+  | "human_confirmation"
+  | "user_preapproved_run";
+
+export interface AgentProposalApprovalSummary {
+  readonly operation: string;
+  readonly approvalRequirement: "auto_review_eligible" | "human_confirmation" | "rejected";
+  readonly reasonCodes: readonly string[];
+  readonly proofChecksum?: string;
+}
+
+/**
+ * Main-owned facts projected to the renderer for capability copy.  The renderer may format these
+ * facts, but it cannot widen the underlying catalog or approval state.
+ */
+export interface AgentCapabilityFacts {
+  readonly profileId: AgentContextProfileId;
+  readonly operationMode: AgentOperationMode;
+  readonly contextMode: AgentContextMode;
+  readonly permissionSummary?: PermissionSummary;
+  readonly executionWritePolicy?: AgentWritePolicy;
+  readonly approvalSource?: AgentCapabilityApprovalSource;
+  readonly proposalApprovals?: readonly AgentProposalApprovalSummary[];
 }
 
 export type AgentPlanReviewProps = PlanArtifactReviewProps;
@@ -588,6 +619,8 @@ export interface AgentRunPanelProps {
   readonly diagnostic?: AgentRunErrorRecord;
   readonly errorMessage?: string;
   readonly providerLabel?: string;
+  /** Frozen profile/catalog facts for the run-level capability summary. */
+  readonly capability?: AgentCapabilityFacts;
   readonly contextSourceNotice?: string;
   readonly changeSetReview?: ChangeSetReviewProps;
   readonly rollbackReview?: RollbackReviewProps;

@@ -40,10 +40,10 @@ test("switches a creative project into the engineering explorer without losing t
     }
 
     await workbenchTrigger.click();
-    await page.getByRole("menuitemradio", { name: "工程工作台" }).click();
+    await page.getByRole("menuitemradio", { name: "工程工作区" }).click();
 
     await expect(page.getByRole("navigation", { name: "工程资源管理器" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "当前工作台：工程工作台" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "当前工作台：工程工作区" })).toBeVisible();
     await expect(page.getByRole("button", { name: "搜索" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "创作系统" })).toHaveCount(0);
 
@@ -54,7 +54,7 @@ test("switches a creative project into the engineering explorer without losing t
     await expect(page.getByText(/只读：由 Novel Studio 管理的资产/)).toBeVisible();
     await expect(page.getByRole("button", { name: "保存当前文档" })).toHaveCount(0);
 
-    await page.getByRole("button", { name: "当前工作台：工程工作台" }).click();
+    await page.getByRole("button", { name: "当前工作台：工程工作区" }).click();
     await page.getByRole("menuitemradio", { name: "创作工作台" }).click();
 
     await expect(page.getByRole("tablist", { name: "创作导航模式" })).toBeVisible();

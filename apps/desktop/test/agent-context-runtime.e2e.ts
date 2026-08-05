@@ -550,7 +550,7 @@ async function openQueuedEngineeringWorkspace(page: Page): Promise<void> {
     throw new Error(`Engineering workspace activation failed: ${JSON.stringify(opened)}`);
   }
   await page.reload();
-  await expect(page.getByRole("button", { name: "当前工作台：工程工作台" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "当前工作台：工程工作区" })).toBeVisible({
     timeout: 15_000
   });
 }
