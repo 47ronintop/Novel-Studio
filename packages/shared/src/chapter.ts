@@ -128,6 +128,29 @@ export interface ChapterOrderMigrationPreview {
   inverse: readonly { readonly stableRef: string; readonly from: number; readonly to: number }[];
 }
 
+/** Exact repository-owned bytes for one chapter in an order migration plan. */
+export interface ChapterOrderMigrationPreparedFile {
+  readonly stableRef: string;
+  readonly chapterId: string;
+  readonly relativePath: string;
+  readonly status: ChapterStatus;
+  readonly fromOrder: number;
+  readonly toOrder: number;
+  /** Complete Markdown bytes read from disk before the migration. */
+  readonly baseContent: string;
+  /** Complete Markdown bytes serialized by the repository for the target order. */
+  readonly candidateContent: string;
+  readonly baseChecksum: string;
+  readonly candidateChecksum: string;
+}
+
+/** Immutable, no-write preparation result for an approved chapter order migration. */
+export interface ChapterOrderMigrationPlan {
+  readonly preview: ChapterOrderMigrationPreview;
+  readonly files: readonly ChapterOrderMigrationPreparedFile[];
+  readonly consistencyGroupId: string;
+}
+
 export interface CreateChapterInput extends JsonObject {
   chapterId: string;
   title: string;
@@ -172,6 +195,11 @@ export interface ChapterCatalogRepositoryPort {
     input: CreateAgentChapterInput
   ): Promise<Result<CreateAgentChapterResult, UnifiedError>>;
   previewChapterOrderMigration?(): Promise<Result<ChapterOrderMigrationPreview, UnifiedError>>;
+  /** Prepare complete chapter bytes for an order migration without touching project files. */
+  prepareChapterOrderMigration?(input: {
+    readonly catalogRevision: string;
+    readonly previewChecksum: string;
+  }): Promise<Result<ChapterOrderMigrationPlan, UnifiedError>>;
 }
 
 export interface ChapterMaintenanceRepositoryPort {

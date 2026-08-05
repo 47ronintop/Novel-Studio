@@ -13,6 +13,8 @@ import type {
   ChapterDocument,
   ChapterDraftRepositoryPort,
   ChapterMaintenanceRepositoryPort,
+  ChapterOrderMigrationPlan,
+  ChapterOrderMigrationPreparedFile,
   ChapterSummary,
   ChapterOrderMigrationPreview,
   CreateAgentChapterInput,
@@ -541,6 +543,162 @@ export class ChapterFileRepository
     const records = await this.readChapterCatalogRecords();
     if (!records.ok) return records;
     return ok(buildLocalOrderMigrationPreview(records.value));
+  }
+
+  /**
+   * Re-read and bind a migration preview to repository-owned chapter paths and serialized bytes.
+   * This method is deliberately read-only; the returned files must still cross approval and the
+   * atomic transaction boundary before any project file can change.
+   */
+  public async prepareChapterOrderMigration(input: {
+    readonly catalogRevision: string;
+    readonly previewChecksum: string;
+  }): Promise<Result<ChapterOrderMigrationPlan, UnifiedError>> {
+    if (!isChapterOrderMigrationPreparationInput(input)) {
+      return this.migrationPreparationFailure(
+        "CHAPTER_ORDER_MIGRATION_INPUT_INVALID",
+        "The chapter order migration preparation input is malformed."
+      );
+    }
+
+    const records = await this.readChapterCatalogRecords();
+    if (!records.ok) return records;
+    const currentCatalogRevision = chapterCatalogRevision(records.value);
+    if (input.catalogRevision !== currentCatalogRevision) {
+      return this.migrationPreparationFailure(
+        "CHAPTER_CATALOG_CAS_CONFLICT",
+        "The chapter catalog changed after the migration preview was created.",
+        {
+          expectedCatalogRevision: input.catalogRevision,
+          actualCatalogRevision: currentCatalogRevision
+        }
+      );
+    }
+
+    const preview = buildLocalOrderMigrationPreview(records.value);
+    if (input.previewChecksum !== preview.checksum) {
+      return this.migrationPreparationFailure(
+        "CHAPTER_ORDER_MIGRATION_PREVIEW_STALE",
+        "The chapter order migration preview no longer matches the current catalog.",
+        {
+          expectedPreviewChecksum: input.previewChecksum,
+          actualPreviewChecksum: preview.checksum
+        }
+      );
+    }
+
+    const recordsById = new Map(records.value.map((record) => [record.id, record]));
+    const affectedIds = new Set(preview.affected.map((item) => item.chapterId));
+    const occupiedOrders = new Set(
+      records.value
+        .filter((record) => !affectedIds.has(record.id))
+        .map((record) => record.order)
+        .filter((order) => Number.isSafeInteger(order) && order > 0)
+    );
+    const files: ChapterOrderMigrationPreparedFile[] = [];
+    const targetOrders = new Set<number>();
+    for (let index = 0; index < preview.affected.length; index += 1) {
+      const affected = preview.affected[index];
+      const inverse = preview.inverse[index];
+      const record = affected === undefined ? undefined : recordsById.get(affected.chapterId);
+      if (
+        affected === undefined ||
+        inverse === undefined ||
+        record === undefined ||
+        affected.stableRef !== `chapter:${record.id}` ||
+        affected.relativePath !== record.relativePath ||
+        affected.relativePath !== `chapters/${record.id}.md` ||
+        affected.status !== record.status ||
+        !Object.is(affected.order, record.order) ||
+        inverse.stableRef !== affected.stableRef ||
+        !Object.is(inverse.from, affected.order) ||
+        !Number.isSafeInteger(inverse.to) ||
+        inverse.to < 1 ||
+        occupiedOrders.has(inverse.to) ||
+        targetOrders.has(inverse.to) ||
+        record.frontmatter.id !== record.id ||
+        record.frontmatter.status !== record.status ||
+        !Object.is(record.frontmatter.order, record.order) ||
+        checksumText(record.raw) !== record.resourceRevision
+      ) {
+        return this.migrationPreparationFailure(
+          "CHAPTER_ORDER_MIGRATION_PREVIEW_INVALID",
+          "The repository migration preview is inconsistent with the chapter catalog."
+        );
+      }
+      targetOrders.add(inverse.to);
+
+      const candidateDocument: ChapterDocument = {
+        frontmatter: {
+          ...cloneJsonObject(record.frontmatter),
+          order: inverse.to
+        },
+        body: record.body
+      };
+      const candidateContent = formatChapterDocument(candidateDocument);
+      const candidate = parseChapterDocument(candidateContent, this.traceId);
+      if (
+        !candidate.ok ||
+        candidate.value.frontmatter.id !== record.id ||
+        candidate.value.frontmatter.status !== record.status ||
+        candidate.value.frontmatter.order !== inverse.to ||
+        candidate.value.body !== record.body.replace(/\s*$/, "") + "\n"
+      ) {
+        return this.migrationPreparationFailure(
+          "CHAPTER_ORDER_MIGRATION_CANDIDATE_INVALID",
+          "The repository could not produce a valid serialized chapter migration candidate."
+        );
+      }
+      const schema = await validateWithSchema("chapter-frontmatter", candidate.value.frontmatter);
+      if (!schema.valid) {
+        return this.migrationPreparationFailure(
+          "CHAPTER_ORDER_MIGRATION_CANDIDATE_INVALID",
+          "The serialized chapter migration candidate failed schema validation."
+        );
+      }
+
+      files.push({
+        stableRef: affected.stableRef,
+        chapterId: affected.chapterId,
+        relativePath: affected.relativePath,
+        status: affected.status,
+        fromOrder: affected.order,
+        toOrder: inverse.to,
+        baseContent: record.raw,
+        candidateContent,
+        baseChecksum: record.resourceRevision,
+        candidateChecksum: checksumText(candidateContent)
+      });
+    }
+
+    if (files.length !== preview.affected.length || preview.inverse.length !== files.length) {
+      return this.migrationPreparationFailure(
+        "CHAPTER_ORDER_MIGRATION_PREVIEW_INVALID",
+        "The repository migration preview is incomplete."
+      );
+    }
+
+    return ok({
+      preview,
+      files,
+      consistencyGroupId: `chapter-order-migration-${preview.checksum}`
+    });
+  }
+
+  private migrationPreparationFailure(
+    code: string,
+    message: string,
+    redactedDetail?: JsonObject
+  ): Result<never, UnifiedError> {
+    return err(
+      validationError({
+        code,
+        message,
+        suggestedAction: "Refresh the chapter catalog and prepare the migration again.",
+        traceId: this.traceId,
+        ...(redactedDetail === undefined ? {} : { redactedDetail })
+      })
+    );
   }
 
   public async createChapter(
@@ -1176,6 +1334,24 @@ function isChapterStatus(value: unknown): value is ChapterDocument["frontmatter"
 
 function checksumText(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function isChapterOrderMigrationPreparationInput(value: unknown): value is {
+  readonly catalogRevision: string;
+  readonly previewChecksum: string;
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const input = value as Record<string, unknown>;
+  const keys = Object.keys(input).sort(compareIds);
+  return (
+    keys.length === 2 &&
+    keys[0] === "catalogRevision" &&
+    keys[1] === "previewChecksum" &&
+    typeof input["catalogRevision"] === "string" &&
+    /^[a-f0-9]{64}$/u.test(input["catalogRevision"]) &&
+    typeof input["previewChecksum"] === "string" &&
+    /^[a-f0-9]{64}$/u.test(input["previewChecksum"])
+  );
 }
 
 function cloneJsonObject<T extends Record<string, unknown>>(value: T): T {

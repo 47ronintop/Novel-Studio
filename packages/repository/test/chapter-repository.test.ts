@@ -322,6 +322,120 @@ describe("ChapterFileRepository", () => {
     const create = await repository.createAgentChapter({ title: "Blocked" });
     expect(!create.ok && create.error.code).toBe("CHAPTER_ORDER_MIGRATION_REQUIRED");
   });
+
+  test("prepares repository-owned migration bytes without writing chapter files", async () => {
+    const projectRoot = await createChapterProject([
+      { id: "ch_one", title: "One", order: 0, status: "draft", body: "one body" },
+      { id: "ch_two", title: "Two", order: 0, status: "review", body: "two body" },
+      { id: "ch_kept", title: "Kept", order: 1, status: "deleted", body: "kept body" }
+    ]);
+    const repository = new ChapterFileRepository({
+      projectRoot,
+      traceId: "trace_prepare_order_migration"
+    });
+    const preview = await repository.previewChapterOrderMigration();
+    expect(isOk(preview)).toBe(true);
+    if (isErr(preview)) throw new Error(preview.error.message);
+    const before = new Map(
+      await Promise.all(
+        ["ch_one", "ch_two", "ch_kept"].map(
+          async (chapterId) =>
+            [
+              chapterId,
+              await readFile(join(projectRoot, "chapters", `${chapterId}.md`), "utf8")
+            ] as const
+        )
+      )
+    );
+
+    const prepared = await repository.prepareChapterOrderMigration({
+      catalogRevision: preview.value.catalogRevision,
+      previewChecksum: preview.value.checksum
+    });
+    expect(isOk(prepared)).toBe(true);
+    if (isErr(prepared)) throw new Error(prepared.error.message);
+
+    expect(prepared.value.preview).toEqual(preview.value);
+    expect(prepared.value.consistencyGroupId).toBe(
+      `chapter-order-migration-${preview.value.checksum}`
+    );
+    expect(
+      prepared.value.files.map((file) => [file.chapterId, file.fromOrder, file.toOrder])
+    ).toEqual([
+      ["ch_one", 0, 2],
+      ["ch_two", 0, 3]
+    ]);
+    for (const file of prepared.value.files) {
+      expect(file.baseContent).toBe(before.get(file.chapterId));
+      expect(file.baseChecksum).toBe(
+        createHash("sha256").update(file.baseContent, "utf8").digest("hex")
+      );
+      expect(file.candidateChecksum).toBe(
+        createHash("sha256").update(file.candidateContent, "utf8").digest("hex")
+      );
+      expect(file.candidateContent).toContain(`\nid: ${file.chapterId}\n`);
+      expect(file.candidateContent).toContain(`\norder: ${file.toOrder}\n`);
+      expect(file.candidateContent).toContain(`\nstatus: ${file.status}\n`);
+      expect(
+        file.candidateContent.endsWith(`${file.chapterId === "ch_one" ? "one" : "two"} body\n`)
+      ).toBe(true);
+    }
+    expect(prepared.value.files.some((file) => file.chapterId === "ch_kept")).toBe(false);
+    for (const [chapterId, content] of before) {
+      expect(await readFile(join(projectRoot, "chapters", `${chapterId}.md`), "utf8")).toBe(
+        content
+      );
+    }
+  });
+
+  test("rejects migration preparation when the chapter catalog changed after preview", async () => {
+    const projectRoot = await createChapterProject([
+      { id: "ch_one", title: "One", order: 1, status: "draft" },
+      { id: "ch_two", title: "Two", order: 1, status: "draft" }
+    ]);
+    const repository = new ChapterFileRepository({ projectRoot, traceId: "trace_migration_cas" });
+    const preview = await repository.previewChapterOrderMigration();
+    expect(isOk(preview)).toBe(true);
+    if (isErr(preview)) throw new Error(preview.error.message);
+
+    await writeChapterFile(projectRoot, {
+      id: "ch_two",
+      title: "Two changed",
+      order: 1,
+      status: "draft"
+    });
+    const prepared = await repository.prepareChapterOrderMigration({
+      catalogRevision: preview.value.catalogRevision,
+      previewChecksum: preview.value.checksum
+    });
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_CATALOG_CAS_CONFLICT" }
+    });
+  });
+
+  test("rejects a migration preparation bound to a different preview checksum", async () => {
+    const projectRoot = await createChapterProject([
+      { id: "ch_one", title: "One", order: 1, status: "draft" },
+      { id: "ch_two", title: "Two", order: 1, status: "draft" }
+    ]);
+    const repository = new ChapterFileRepository({
+      projectRoot,
+      traceId: "trace_migration_preview_checksum"
+    });
+    const preview = await repository.previewChapterOrderMigration();
+    expect(isOk(preview)).toBe(true);
+    if (isErr(preview)) throw new Error(preview.error.message);
+
+    const prepared = await repository.prepareChapterOrderMigration({
+      catalogRevision: preview.value.catalogRevision,
+      previewChecksum: "0".repeat(64)
+    });
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_ORDER_MIGRATION_PREVIEW_STALE" }
+    });
+  });
 });
 
 type TestChapter = {

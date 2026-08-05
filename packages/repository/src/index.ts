@@ -324,6 +324,8 @@ export type {
   ChapterFrontmatter,
   ChapterHistoryRepositoryPort,
   ChapterOrderMigrationAffectedItem,
+  ChapterOrderMigrationPlan,
+  ChapterOrderMigrationPreparedFile,
   ChapterOrderMigrationPreview,
   ChapterVersionContent,
   ChapterVersionSnapshotInput,

@@ -31,6 +31,8 @@ export type {
   CreateAgentChapterInput,
   CreateAgentChapterResult,
   ChapterOrderMigrationAffectedItem,
+  ChapterOrderMigrationPlan,
+  ChapterOrderMigrationPreparedFile,
   ChapterOrderMigrationPreview,
   ChapterDocument,
   ChapterDraftRepositoryPort,
