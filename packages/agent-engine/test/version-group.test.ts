@@ -5,6 +5,7 @@ import {
   createFailedVersionGroup,
   type VersionGroupWrite
 } from "../src/version-group.js";
+import { createChapterStatusTransitionProof } from "../src/chapter-status-transition-proof.js";
 import {
   createTransactionJournal,
   updateTransactionJournalEntry
@@ -131,6 +132,77 @@ describe("Version Group", () => {
     expect(group.chapterCreateReceipt).toEqual(chapterCreateReceipt);
     expect(Object.isFrozen(group.chapterCreateReceipt)).toBe(true);
     expect(Object.isFrozen(group.chapterCreateReceipt?.inverse)).toBe(true);
+  });
+
+  test("retains a chapter transition proof only when it is bound to the grouped chapter write", () => {
+    const proof = createChapterStatusTransitionProof({
+      proofId: "proof_chapter_status_01",
+      stableRef: "chapter:one",
+      chapterId: "one",
+      action: "delete",
+      beforeStatus: "review",
+      afterStatus: "deleted",
+      restoreStatus: "review",
+      beforeRevision: 3,
+      afterRevision: 4,
+      beforeChecksum: "d".repeat(64),
+      afterChecksum: "e".repeat(64),
+      outlineRevision: 5,
+      outlineChecksum: "f".repeat(64),
+      originalVolumeRef: "volume:volume_01",
+      beforeNeighborRefs: { before: null, after: null },
+      afterNeighborRefs: { before: null, after: null },
+      referenceImpactChecksum: "0".repeat(64),
+      createdAt: "2026-08-06T01:00:00.000Z"
+    });
+    const input = {
+      versionGroupId: "vg_chapter_status",
+      runId: "run_01",
+      checkpointId: "checkpoint_01",
+      changeSetId: "changes_chapter_status",
+      changeSetRevision: 1,
+      changeSetChecksum: "c".repeat(64),
+      approvalSource: "human_confirmation" as const,
+      applyBatchId: "batch_01",
+      consistencyGroupId: "chapter_status_01",
+      selectionChecksum: "a".repeat(64),
+      createdAt: "2026-08-06T01:00:00.000Z",
+      writes,
+      baselineByPath: {
+        "chapters/one.md": {
+          relativePath: "chapters/one.md",
+          checksum: "a".repeat(64),
+          beforeVersionId: "ver_before_one"
+        }
+      },
+      chapterStatusTransitionProof: proof
+    };
+    const group = createAppliedVersionGroup(input);
+
+    expect(group.schemaVersion).toBe("1.1");
+    expect(group.chapterStatusTransitionProof).toEqual(proof);
+    expect(Object.isFrozen(group.chapterStatusTransitionProof)).toBe(true);
+    expect(() =>
+      createAppliedVersionGroup({
+        ...input,
+        writes: [{ ...writes[0], relativePath: "chapters/other.md" }]
+      })
+    ).toThrow("Version Group chapter transition proof binding is invalid.");
+    expect(() =>
+      createAppliedVersionGroup({
+        versionGroupId: input.versionGroupId,
+        runId: input.runId,
+        checkpointId: input.checkpointId,
+        changeSetId: input.changeSetId,
+        changeSetRevision: input.changeSetRevision,
+        changeSetChecksum: input.changeSetChecksum,
+        approvalSource: input.approvalSource,
+        createdAt: input.createdAt,
+        writes: input.writes,
+        baselineByPath: input.baselineByPath,
+        chapterStatusTransitionProof: input.chapterStatusTransitionProof
+      })
+    ).toThrow("Version Group chapter transition proof binding is invalid.");
   });
 });
 

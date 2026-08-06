@@ -908,6 +908,154 @@ describe("Agent tool registry", () => {
     ).toEqual(["replace_file", "create_file", "move_file", "delete_file", "create_directory"]);
   });
 
+  test("qualifies the four chapter lifecycle tools independently with strict schemas", () => {
+    const lifecycleOperations = [
+      "chapter_rename",
+      "chapter_reorder",
+      "chapter_status",
+      "chapter_restore"
+    ] as const;
+    const baseInput = {
+      facadeVersion: "v2" as const,
+      catalogSchemaVersion: "2.0" as const,
+      operationMode: "execution" as const,
+      contextMode: "writing" as const,
+      writePolicy: "write_before_confirmation" as const,
+      capabilitySnapshot: {
+        workspaceKind: "creativeProject" as const,
+        searchEnabled: false,
+        fileLifecycleEnabled: false,
+        writingOperations: lifecycleOperations,
+        workspaceFileOperations: [],
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "chapter-lifecycle-catalog"
+      }
+    };
+    const catalog = engineExports.listAgentTools(baseInput);
+    const lifecycle = catalog.filter((tool) => tool.effect === "propose");
+    expect(
+      lifecycle.map(({ name, kind, effect, writeOperation, destructive }) => ({
+        name,
+        kind,
+        effect,
+        writeOperation,
+        destructive
+      }))
+    ).toEqual([
+      {
+        name: "rename_chapter",
+        kind: "file_tool",
+        effect: "propose",
+        writeOperation: "chapter_rename",
+        destructive: false
+      },
+      {
+        name: "reorder_chapter",
+        kind: "file_tool",
+        effect: "propose",
+        writeOperation: "chapter_reorder",
+        destructive: true
+      },
+      {
+        name: "set_chapter_status",
+        kind: "file_tool",
+        effect: "propose",
+        writeOperation: "chapter_status",
+        destructive: true
+      },
+      {
+        name: "restore_chapter",
+        kind: "file_tool",
+        effect: "propose",
+        writeOperation: "chapter_restore",
+        destructive: false
+      }
+    ]);
+
+    const names = catalog.map((tool) => tool.name);
+    expect(names).not.toEqual(
+      expect.arrayContaining([
+        "manage_path",
+        "propose_chapter_write",
+        "propose_chapter_create",
+        "propose_story_bible_write"
+      ])
+    );
+    expect(
+      engineExports
+        .listAgentTools({ ...baseInput, operationMode: "planning" })
+        .filter((tool) => tool.effect === "propose")
+    ).toEqual([]);
+    expect(
+      engineExports
+        .listAgentTools({ ...baseInput, contextMode: "general_file" })
+        .filter((tool) => tool.effect === "propose")
+    ).toEqual([]);
+
+    for (const [operation, expectedName] of [
+      ["chapter_rename", "rename_chapter"],
+      ["chapter_reorder", "reorder_chapter"],
+      ["chapter_status", "set_chapter_status"],
+      ["chapter_restore", "restore_chapter"]
+    ] as const) {
+      expect(
+        engineExports
+          .listAgentTools({
+            ...baseInput,
+            capabilitySnapshot: {
+              ...baseInput.capabilitySnapshot,
+              writingOperations: [operation]
+            }
+          })
+          .filter((tool) => tool.effect === "propose")
+          .map((tool) => tool.name)
+      ).toEqual([expectedName]);
+    }
+
+    const isValid = (name: string, arguments_: JsonObject) => {
+      const descriptor = catalog.find((tool) => tool.name === name);
+      if (descriptor === undefined) throw new Error(`Missing ${name} descriptor.`);
+      return engineExports.validateAgentToolArguments({
+        descriptor,
+        arguments: arguments_,
+        argumentsText: JSON.stringify(arguments_)
+      }).ok;
+    };
+    const base = { chapterRef: "chapter:ch_01", baseRevision: 3 };
+    expect(isValid("rename_chapter", { ...base, title: "A new title" })).toBe(true);
+    expect(isValid("rename_chapter", { ...base, title: "   " })).toBe(false);
+    expect(isValid("rename_chapter", { ...base, title: "Title", path: "chapters/ch_01.md" })).toBe(
+      false
+    );
+    expect(
+      isValid("reorder_chapter", {
+        ...base,
+        beforeChapterRef: "chapter:ch_00",
+        afterChapterRef: "chapter:ch_02",
+        targetVolumeRef: "story_bible:outline.volume-01"
+      })
+    ).toBe(true);
+    expect(isValid("reorder_chapter", { ...base, order: 7 })).toBe(false);
+    expect(isValid("reorder_chapter", { ...base, beforeChapterRef: "ch_00" })).toBe(false);
+    for (const status of ["draft", "revision", "review", "done", "archived", "deleted"]) {
+      expect(isValid("set_chapter_status", { ...base, status })).toBe(true);
+    }
+    expect(isValid("set_chapter_status", { ...base, status: "active" })).toBe(false);
+    expect(isValid("restore_chapter", base)).toBe(true);
+    expect(isValid("restore_chapter", { ...base, status: "draft" })).toBe(false);
+    expect(isValid("restore_chapter", { chapterRef: "file:ch_01", baseRevision: 3 })).toBe(false);
+    expect(
+      isValid("restore_chapter", {
+        chapterRef: `chapter:${"a".repeat(129)}`,
+        baseRevision: 3
+      })
+    ).toBe(false);
+  });
+
   test("exposes the dedicated read-only list_chapters contract only in Catalog 2.0 writing", () => {
     const baseInput = {
       facadeVersion: "v2" as const,

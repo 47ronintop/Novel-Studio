@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
+import { parseChapterStatusTransitionProof } from "@novel-studio/agent-engine";
 import {
   isStoryBibleV11AssetType,
   validateStoryAnalysisBundle,
@@ -71,6 +72,29 @@ export class HistoryRepository
     if (!assetValidation.ok) {
       return assetValidation;
     }
+    let chapterStatusTransitionProof: VersionRecord["chapterStatusTransitionProof"];
+    if (input.chapterStatusTransitionProof !== undefined) {
+      try {
+        const proof = parseChapterStatusTransitionProof(input.chapterStatusTransitionProof);
+        if (
+          input.assetType !== "chapter" ||
+          input.assetId !== proof.chapterId ||
+          proof.stableRef !== `chapter:${proof.chapterId}`
+        ) {
+          throw new Error("Chapter transition proof target mismatch.");
+        }
+        chapterStatusTransitionProof = proof as VersionRecord["chapterStatusTransitionProof"];
+      } catch {
+        return err(
+          validationError({
+            code: "CHAPTER_STATUS_TRANSITION_PROOF_INVALID",
+            message: "Chapter transition history proof failed validation.",
+            suggestedAction: "Regenerate the chapter lifecycle proposal and retry.",
+            traceId: this.traceId
+          })
+        );
+      }
+    }
     const versionId = this.createVersionId();
     const storyBibleStatusTransition = createStoryBibleStatusTransition(
       input.assetId,
@@ -90,7 +114,8 @@ export class HistoryRepository
         kind: "text",
         path: this.snapshotRelativePath(input.assetType, input.assetId, versionId)
       },
-      ...(storyBibleStatusTransition === undefined ? {} : { storyBibleStatusTransition })
+      ...(storyBibleStatusTransition === undefined ? {} : { storyBibleStatusTransition }),
+      ...(chapterStatusTransitionProof === undefined ? {} : { chapterStatusTransitionProof })
     };
 
     if (input.parentVersionId !== undefined) {

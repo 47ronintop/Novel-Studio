@@ -9,6 +9,7 @@ import type {
   ChangeSetOperation,
   ApprovalBindingV2,
   ChapterCreateApplyReceipt,
+  ChapterStatusTransitionProof,
   ChangeSetFileContentMode,
   StoryBibleApplyReceipt,
   StoryBibleStatusTransitionProof
@@ -128,6 +129,7 @@ export interface VersionRecord extends JsonObject {
   writeId?: string;
   targetRelativePath?: string;
   storyBibleStatusTransition?: StoryBibleStatusTransitionRecord;
+  chapterStatusTransitionProof?: ChapterStatusTransitionProof & JsonObject;
 }
 
 export interface StoryBibleStatusTransitionRecord extends JsonObject {
@@ -338,6 +340,7 @@ export interface AgentWriteTransactionFile {
   readonly historyBaseContent?: string;
   readonly historyCandidateContent?: string;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface AgentWriteTransactionInput {
@@ -445,6 +448,7 @@ export interface VersionGroupRecord {
   readonly selectionChecksum?: string;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWriteRecord[];
   /** v1.1 filesystem lifecycle outcomes, independent of text writes. */
@@ -478,6 +482,7 @@ export interface AgentTransactionJournalEntry {
   readonly beforeVersionId: string;
   readonly status: AgentTransactionJournalEntryStatus;
   readonly errorCode?: string;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 /**
@@ -527,6 +532,7 @@ export interface AgentTransactionJournal {
   readonly selectionChecksum?: string;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly transactionStatus: AgentTransactionJournalStatus;
@@ -578,6 +584,8 @@ export interface SnapshotTextAssetInput {
   content: string;
   /** Optional post-write content used only to bind status-transition metadata to this snapshot. */
   candidateContent?: string;
+  /** Authenticated lifecycle evidence stored with the matching chapter snapshot. */
+  chapterStatusTransitionProof?: ChapterStatusTransitionProof;
   createdBy?: CreatedBy;
   parentVersionId?: string | null;
   relativePath?: string;

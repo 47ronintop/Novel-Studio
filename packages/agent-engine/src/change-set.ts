@@ -7,6 +7,11 @@ import { createUnifiedError, type UnifiedError } from "@novel-studio/shared";
 
 import { validateAgentRelativePath } from "./path-guard.js";
 import type { AgentWritePolicy } from "./agent-run-types.js";
+import {
+  isChapterStatusTransitionProof,
+  parseChapterStatusTransitionProof,
+  type ChapterStatusTransitionProof
+} from "./chapter-status-transition-proof.js";
 
 const require = createRequire(import.meta.url);
 const { load: parseYaml } = require("js-yaml") as {
@@ -136,6 +141,7 @@ export interface ChangeSetFileChange {
   readonly selected: boolean;
   readonly consistencyGroupId?: string;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface ChangeSet {
@@ -210,6 +216,7 @@ export interface ChangeSetProposal {
   readonly replacement: string;
   readonly consistencyGroupId?: string;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface CreateChangeSetRevisionInput {
@@ -299,6 +306,7 @@ interface DraftFileChange {
   readonly hunks: readonly ChangeSetHunk[];
   readonly consistencyGroupId?: string;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface ChangeSetConsistencyGroupSelection {
@@ -516,8 +524,9 @@ function isChangeSetV2FileShape(value: unknown): boolean {
   )
     return false;
   return (
-    file["storyBibleStatusProof"] === undefined ||
-    isStoryBibleStatusProofShape(file["storyBibleStatusProof"])
+    (file["storyBibleStatusProof"] === undefined ||
+      isStoryBibleStatusProofShape(file["storyBibleStatusProof"])) &&
+    isChapterStatusProofShape(file)
   );
 }
 
@@ -949,6 +958,14 @@ function createDraftFile(
     ...(proposal.storyBibleStatusProof === undefined
       ? {}
       : { storyBibleStatusProof: cloneStoryBibleStatusProof(proposal.storyBibleStatusProof) }),
+    ...(proposal.chapterStatusTransitionProof === undefined
+      ? {}
+      : {
+          chapterStatusTransitionProof: cloneChapterStatusTransitionProof(
+            proposal.chapterStatusTransitionProof,
+            proposal
+          )
+        }),
     baseChecksum: proposal.baseChecksum,
     baseContent: proposal.baseContent,
     hunks: [
@@ -1001,6 +1018,8 @@ function mergeDraftFile(files: DraftFileChange[], proposed: DraftFileChange): vo
     existing.contentMode !== proposed.contentMode ||
     existing.assetId !== proposed.assetId ||
     existing.consistencyGroupId !== proposed.consistencyGroupId ||
+    existing.chapterStatusTransitionProof?.proofChecksum !==
+      proposed.chapterStatusTransitionProof?.proofChecksum ||
     existing.baseChecksum !== proposed.baseChecksum ||
     existing.baseContent !== proposed.baseContent
   ) {
@@ -1058,6 +1077,7 @@ async function finalizeChangeSet(
         assetId: file.assetId ?? null,
         consistencyGroupId: file.consistencyGroupId ?? null,
         storyBibleStatusProof: file.storyBibleStatusProof ?? null,
+        chapterStatusTransitionProof: file.chapterStatusTransitionProof ?? null,
         baseChecksum: file.baseChecksum,
         candidateChecksum: file.candidateChecksum,
         selected: file.selected,
@@ -1077,7 +1097,8 @@ async function finalizeChangeSet(
       (file) =>
         file.contentMode !== undefined ||
         file.consistencyGroupId !== undefined ||
-        file.storyBibleStatusProof !== undefined
+        file.storyBibleStatusProof !== undefined ||
+        file.chapterStatusTransitionProof !== undefined
     )
       ? "1.1"
       : "1.0",
@@ -1122,6 +1143,14 @@ async function finalizeFile(
     ...(draft.storyBibleStatusProof === undefined
       ? {}
       : { storyBibleStatusProof: cloneStoryBibleStatusProof(draft.storyBibleStatusProof) }),
+    ...(draft.chapterStatusTransitionProof === undefined
+      ? {}
+      : {
+          chapterStatusTransitionProof: cloneChapterStatusTransitionProof(
+            draft.chapterStatusTransitionProof,
+            draft
+          )
+        }),
     baseChecksum: draft.baseChecksum,
     candidateChecksum: checksumChangeSetText(candidateContent),
     baseContent: draft.baseContent,
@@ -1255,6 +1284,14 @@ function toDraft(file: ChangeSetFileChange): DraftFileChange {
     ...(file.storyBibleStatusProof === undefined
       ? {}
       : { storyBibleStatusProof: cloneStoryBibleStatusProof(file.storyBibleStatusProof) }),
+    ...(file.chapterStatusTransitionProof === undefined
+      ? {}
+      : {
+          chapterStatusTransitionProof: cloneChapterStatusTransitionProof(
+            file.chapterStatusTransitionProof,
+            file
+          )
+        }),
     baseChecksum: file.baseChecksum,
     baseContent: file.baseContent,
     hunks: file.hunks.map((hunk) => ({ ...hunk }))
@@ -2042,6 +2079,7 @@ function serializeChangeSetFiles(files: readonly ChangeSetFileChange[]): readonl
     assetId: file.assetId ?? null,
     consistencyGroupId: file.consistencyGroupId ?? null,
     storyBibleStatusProof: file.storyBibleStatusProof ?? null,
+    chapterStatusTransitionProof: file.chapterStatusTransitionProof ?? null,
     baseChecksum: file.baseChecksum,
     candidateChecksum: file.candidateChecksum,
     selected: file.selected,
@@ -2065,6 +2103,38 @@ function cloneStoryBibleStatusProof(
         expectedStatus: proof.expectedStatus,
         historyAuthorizationChecksum: proof.historyAuthorizationChecksum
       };
+}
+
+function cloneChapterStatusTransitionProof(
+  proof: ChapterStatusTransitionProof,
+  file: Pick<ChangeSetProposal, "relativePath" | "assetType" | "assetId">
+): ChapterStatusTransitionProof {
+  const parsed = parseChapterStatusTransitionProof(proof);
+  if (
+    file.assetType !== "chapter" ||
+    file.assetId !== parsed.chapterId ||
+    file.relativePath !== `chapters/${parsed.chapterId}.md` ||
+    parsed.stableRef !== `chapter:${parsed.chapterId}`
+  ) {
+    throw changeSetError(
+      "CHANGE_SET_CHAPTER_STATUS_PROOF_INVALID",
+      "The chapter transition proof does not match its Change Set target.",
+      "Regenerate the chapter lifecycle proposal from the current chapter."
+    );
+  }
+  return parsed;
+}
+
+function isChapterStatusProofShape(file: Record<string, unknown>): boolean {
+  const value = file["chapterStatusTransitionProof"];
+  if (value === undefined) return true;
+  if (!isChapterStatusTransitionProof(value)) return false;
+  return (
+    file["assetType"] === "chapter" &&
+    file["assetId"] === value.chapterId &&
+    file["relativePath"] === `chapters/${value.chapterId}.md` &&
+    value.stableRef === `chapter:${value.chapterId}`
+  );
 }
 
 function assertConsistencyGroupsAreIndivisible(

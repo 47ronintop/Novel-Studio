@@ -9,6 +9,11 @@ import {
   validateApprovalBindingV2,
   type ApprovalBindingV2
 } from "./approval-binding-v2.js";
+import {
+  isChapterStatusTransitionProof,
+  parseChapterStatusTransitionProof,
+  type ChapterStatusTransitionProof
+} from "./chapter-status-transition-proof.js";
 
 export type TransactionJournalKind = "apply" | "version_group_undo" | "run_undo";
 export type TransactionJournalStatus =
@@ -27,6 +32,7 @@ export interface TransactionJournalEntry {
   readonly beforeVersionId: string;
   readonly status: TransactionJournalEntryStatus;
   readonly errorCode?: string;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface TransactionJournal {
@@ -53,6 +59,7 @@ export interface TransactionJournal {
   readonly selectionChecksum?: string;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly transactionStatus: TransactionJournalStatus;
@@ -204,6 +211,12 @@ export function validateTransactionJournalV2(
       error: new Error("Prepared WAL must name the same reservation transaction.")
     };
   }
+  if (!hasValidChapterStatusTransitionProof(record)) {
+    return {
+      ok: false,
+      error: new Error("Transaction Journal 2.0 chapter transition proof is invalid.")
+    };
+  }
   return { ok: true, value: value as TransactionJournalV2 };
 }
 
@@ -239,9 +252,25 @@ export function setTransactionJournalStatus(
 }
 
 function freezeJournal(journal: TransactionJournal): TransactionJournal {
+  if (!hasValidChapterStatusTransitionProof(journal as unknown as Record<string, unknown>)) {
+    throw new Error("Transaction Journal chapter transition proof binding is invalid.");
+  }
   return Object.freeze({
     ...journal,
-    entries: Object.freeze(journal.entries.map((entry) => Object.freeze({ ...entry }))),
+    entries: Object.freeze(
+      journal.entries.map((entry) =>
+        Object.freeze({
+          ...entry,
+          ...(entry.chapterStatusTransitionProof === undefined
+            ? {}
+            : {
+                chapterStatusTransitionProof: parseChapterStatusTransitionProof(
+                  entry.chapterStatusTransitionProof
+                )
+              })
+        })
+      )
+    ),
     ...(journal.undoOfVersionGroupIds === undefined
       ? {}
       : { undoOfVersionGroupIds: Object.freeze([...journal.undoOfVersionGroupIds]) }),
@@ -274,6 +303,13 @@ function freezeJournal(journal: TransactionJournal): TransactionJournal {
             inverse: Object.freeze({ ...journal.chapterCreateReceipt.inverse })
           })
         }),
+    ...(journal.chapterStatusTransitionProof === undefined
+      ? {}
+      : {
+          chapterStatusTransitionProof: parseChapterStatusTransitionProof(
+            journal.chapterStatusTransitionProof
+          )
+        }),
     ...(journal.approvalBinding === undefined
       ? {}
       : {
@@ -283,4 +319,41 @@ function freezeJournal(journal: TransactionJournal): TransactionJournal {
           })
         })
   });
+}
+
+function hasValidChapterStatusTransitionProof(record: Record<string, unknown>): boolean {
+  const proof = record["chapterStatusTransitionProof"];
+  const entries = record["entries"];
+  if (!Array.isArray(entries)) return false;
+  const proofEntries = entries.filter(
+    (entry) =>
+      typeof entry === "object" &&
+      entry !== null &&
+      !Array.isArray(entry) &&
+      (entry as Record<string, unknown>)["chapterStatusTransitionProof"] !== undefined
+  );
+  if (proof === undefined) return proofEntries.length === 0;
+  if (!isChapterStatusTransitionProof(proof)) return false;
+  const entry = proofEntries[0] as Record<string, unknown> | undefined;
+  const entryProof = entry?.["chapterStatusTransitionProof"];
+  return (
+    record["kind"] === "apply" &&
+    (record["schemaVersion"] === "1.1" || record["schemaVersion"] === "2.0") &&
+    record["approvalSource"] === "human_confirmation" &&
+    isNonEmptyString(record["applyBatchId"]) &&
+    isNonEmptyString(record["consistencyGroupId"]) &&
+    typeof record["selectionChecksum"] === "string" &&
+    /^[a-f0-9]{64}$/u.test(record["selectionChecksum"] as string) &&
+    proof.stableRef === `chapter:${proof.chapterId}` &&
+    proofEntries.length === 1 &&
+    entry !== undefined &&
+    entry["assetType"] === "chapter" &&
+    entry["relativePath"] === `chapters/${proof.chapterId}.md` &&
+    isChapterStatusTransitionProof(entryProof) &&
+    entryProof.proofChecksum === proof.proofChecksum
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }

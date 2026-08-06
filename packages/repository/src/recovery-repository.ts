@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { validateStoryBibleV11Asset } from "@novel-studio/schemas";
-import { validateApprovalBindingV2 } from "@novel-studio/agent-engine";
+import {
+  isChapterStatusTransitionProof,
+  validateApprovalBindingV2
+} from "@novel-studio/agent-engine";
 import type { ApprovalAuthorizationLedgerPort } from "./approval-authorization-ledger.js";
 import {
   createProjectPathGuard,
@@ -751,6 +754,7 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
   }
   if (!isValidStoryBibleReceipt(journal)) return false;
   if (!isValidChapterCreateReceipt(journal)) return false;
+  if (!isValidChapterStatusTransitionProof(journal)) return false;
   if (journal.approvalSource === "project_safe_auto_update" && !isValidSafeAutoJournal(journal)) {
     return false;
   }
@@ -804,6 +808,35 @@ function isValidChapterCreateReceipt(journal: Partial<AgentTransactionJournal>):
     operation,
     afterChecksum: after.checksum
   });
+}
+
+function isValidChapterStatusTransitionProof(journal: Partial<AgentTransactionJournal>): boolean {
+  const proof = journal.chapterStatusTransitionProof;
+  const entries = journal.entries ?? [];
+  const proofEntries = entries.filter((entry) => entry.chapterStatusTransitionProof !== undefined);
+  if (proof === undefined) return proofEntries.length === 0;
+  if (
+    journal.kind !== "apply" ||
+    (journal.schemaVersion !== "1.1" && journal.schemaVersion !== "2.0") ||
+    journal.approvalSource !== "human_confirmation" ||
+    typeof journal.consistencyGroupId !== "string" ||
+    !isChapterStatusTransitionProof(proof) ||
+    proofEntries.length !== 1
+  ) {
+    return false;
+  }
+  const entry = proofEntries[0];
+  const entryProof = entry?.chapterStatusTransitionProof;
+  return (
+    entry !== undefined &&
+    entryProof !== undefined &&
+    isChapterStatusTransitionProof(entryProof) &&
+    entryProof.proofChecksum === proof.proofChecksum &&
+    entry.assetType === "chapter" &&
+    entry.assetId === proof.chapterId &&
+    entry.relativePath === `chapters/${proof.chapterId}.md` &&
+    proof.stableRef === `chapter:${proof.chapterId}`
+  );
 }
 
 function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): boolean {
@@ -1257,6 +1290,13 @@ function isAgentTransactionJournalEntry(value: unknown): boolean {
     (entry.historyBaseContent === undefined || typeof entry.historyBaseContent === "string") &&
     (entry.historyCandidateContent === undefined ||
       typeof entry.historyCandidateContent === "string") &&
+    (entry.chapterStatusTransitionProof === undefined ||
+      (isChapterStatusTransitionProof(entry.chapterStatusTransitionProof) &&
+        entry.assetType === "chapter" &&
+        entry.assetId === entry.chapterStatusTransitionProof.chapterId &&
+        entry.relativePath === `chapters/${entry.chapterStatusTransitionProof.chapterId}.md` &&
+        entry.chapterStatusTransitionProof.stableRef ===
+          `chapter:${entry.chapterStatusTransitionProof.chapterId}`)) &&
     typeof entry.beforeVersionId === "string" &&
     (entry.status === "pending" ||
       entry.status === "applied" ||

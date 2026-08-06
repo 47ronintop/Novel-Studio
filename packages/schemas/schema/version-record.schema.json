@@ -64,7 +64,75 @@
       },
       "additionalProperties": false
     },
+    "chapterStatusTransitionProof": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "proofId",
+        "stableRef",
+        "chapterId",
+        "action",
+        "beforeStatus",
+        "afterStatus",
+        "restoreStatus",
+        "beforeRevision",
+        "afterRevision",
+        "beforeChecksum",
+        "afterChecksum",
+        "outlineRevision",
+        "outlineChecksum",
+        "originalVolumeRef",
+        "beforeNeighborRefs",
+        "afterNeighborRefs",
+        "referenceImpactChecksum",
+        "createdAt",
+        "proofChecksum"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "proofId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "stableRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "chapterId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "action": { "type": "string", "enum": ["archive", "delete", "restore"] },
+        "beforeStatus": {
+          "type": "string",
+          "enum": ["draft", "revision", "review", "done", "archived", "deleted"]
+        },
+        "afterStatus": {
+          "type": "string",
+          "enum": ["draft", "revision", "review", "done", "archived", "deleted"]
+        },
+        "restoreStatus": {
+          "type": ["string", "null"],
+          "enum": ["draft", "revision", "review", "done", "archived", null]
+        },
+        "beforeRevision": { "type": "integer", "minimum": 0 },
+        "afterRevision": { "type": "integer", "minimum": 0 },
+        "beforeChecksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "afterChecksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "outlineRevision": { "type": "integer", "minimum": 0 },
+        "outlineChecksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "originalVolumeRef": { "type": ["string", "null"], "maxLength": 256 },
+        "beforeNeighborRefs": { "$ref": "#/definitions/chapterNeighborRefs" },
+        "afterNeighborRefs": { "$ref": "#/definitions/chapterNeighborRefs" },
+        "referenceImpactChecksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "proofChecksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "additionalProperties": false
+    },
     "snapshot": {}
+  },
+  "definitions": {
+    "chapterNeighborRefs": {
+      "type": "object",
+      "required": ["before", "after"],
+      "properties": {
+        "before": { "type": ["string", "null"], "maxLength": 256 },
+        "after": { "type": ["string", "null"], "maxLength": 256 }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": true
 }

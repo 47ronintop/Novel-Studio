@@ -1492,7 +1492,7 @@ function renameChapterSchema(): JsonObject {
     properties: {
       chapterRef: stableChapterRefSchema(),
       baseRevision: { type: "integer", minimum: 1 },
-      title: { type: "string", minLength: 1, maxLength: 512 }
+      title: { type: "string", minLength: 1, maxLength: 512, pattern: "\\S" }
     }
   };
 }
@@ -1525,7 +1525,10 @@ function setChapterStatusSchema(): JsonObject {
     properties: {
       chapterRef: stableChapterRefSchema(),
       baseRevision: { type: "integer", minimum: 1 },
-      status: { type: "string", enum: ["active", "draft", "archived", "deleted"] }
+      status: {
+        type: "string",
+        enum: ["draft", "revision", "review", "done", "archived", "deleted"]
+      }
     }
   };
 }
@@ -1546,8 +1549,8 @@ function stableChapterRefSchema(): JsonObject {
   return {
     type: "string",
     minLength: 9,
-    maxLength: 1036,
-    pattern: STABLE_CHAPTER_REF_PATTERN
+    maxLength: 136,
+    pattern: "^chapter:[A-Za-z0-9_-]{1,128}$"
   };
 }
 

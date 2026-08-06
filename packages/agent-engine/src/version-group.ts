@@ -1,5 +1,9 @@
 import type { JsonValue } from "@novel-studio/shared";
 import type { AgentWritePolicy } from "./agent-run-types.js";
+import {
+  parseChapterStatusTransitionProof,
+  type ChapterStatusTransitionProof
+} from "./chapter-status-transition-proof.js";
 
 export type VersionGroupAssetType = "chapter" | "text";
 export type VersionGroupTransactionStatus =
@@ -194,6 +198,7 @@ export interface VersionGroup {
   readonly synchronization?: VersionGroupSynchronization;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 interface VersionGroupBaseInput {
@@ -215,6 +220,7 @@ interface VersionGroupBaseInput {
   readonly undoOfVersionGroupIds?: readonly string[];
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface FailedVersionGroupInput extends VersionGroupBaseInput {
@@ -284,7 +290,10 @@ function baseGroup(
       : { storyBibleReceipt: input.storyBibleReceipt }),
     ...(input.chapterCreateReceipt === undefined
       ? {}
-      : { chapterCreateReceipt: input.chapterCreateReceipt })
+      : { chapterCreateReceipt: input.chapterCreateReceipt }),
+    ...(input.chapterStatusTransitionProof === undefined
+      ? {}
+      : { chapterStatusTransitionProof: input.chapterStatusTransitionProof })
   };
 }
 
@@ -363,6 +372,16 @@ function freezeVersionGroup(group: VersionGroup): VersionGroup {
           ...group.chapterCreateReceipt,
           inverse: Object.freeze({ ...group.chapterCreateReceipt.inverse })
         });
+  const chapterStatusTransitionProof =
+    group.chapterStatusTransitionProof === undefined
+      ? undefined
+      : parseChapterStatusTransitionProof(group.chapterStatusTransitionProof);
+  if (
+    chapterStatusTransitionProof !== undefined &&
+    !isBoundChapterStatusTransitionProof(group, chapterStatusTransitionProof)
+  ) {
+    throw new Error("Version Group chapter transition proof binding is invalid.");
+  }
   return Object.freeze({
     ...group,
     writes,
@@ -371,6 +390,28 @@ function freezeVersionGroup(group: VersionGroup): VersionGroup {
     ...(rollbackReview === undefined ? {} : { rollbackReview }),
     ...(synchronization === undefined ? {} : { synchronization }),
     ...(storyBibleReceipt === undefined ? {} : { storyBibleReceipt }),
-    ...(chapterCreateReceipt === undefined ? {} : { chapterCreateReceipt })
+    ...(chapterCreateReceipt === undefined ? {} : { chapterCreateReceipt }),
+    ...(chapterStatusTransitionProof === undefined ? {} : { chapterStatusTransitionProof })
   });
+}
+
+function isBoundChapterStatusTransitionProof(
+  group: VersionGroup,
+  proof: ChapterStatusTransitionProof
+): boolean {
+  const matchingWrites = group.writes.filter(
+    (write) =>
+      write.assetType === "chapter" && write.relativePath === `chapters/${proof.chapterId}.md`
+  );
+  return (
+    group.approvalSource === "human_confirmation" &&
+    typeof group.applyBatchId === "string" &&
+    group.applyBatchId.length > 0 &&
+    typeof group.consistencyGroupId === "string" &&
+    group.consistencyGroupId.length > 0 &&
+    typeof group.selectionChecksum === "string" &&
+    /^[a-f0-9]{64}$/u.test(group.selectionChecksum) &&
+    proof.stableRef === `chapter:${proof.chapterId}` &&
+    matchingWrites.length === 1
+  );
 }

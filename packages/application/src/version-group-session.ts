@@ -6,6 +6,7 @@ import type {
   ChangeSetFileContentMode,
   ChangeSetOperation,
   ChapterCreateApplyReceipt,
+  ChapterStatusTransitionProof,
   StoryBibleApplyReceipt,
   StoryBibleStatusTransitionProof,
   VersionGroup,
@@ -32,6 +33,7 @@ export interface VersionGroupTransactionApplyFile {
   readonly baseContent: string;
   readonly candidateContent: string;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface VersionGroupTransactionApplyInput {
@@ -128,6 +130,7 @@ export interface VersionGroupApplyBatchGroupResult {
   readonly error?: UnifiedError;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
   readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface VersionGroupApplyBatchResult {
@@ -314,7 +317,10 @@ export function createVersionGroupSession(
             candidateContent: file.candidateContent,
             ...(file.storyBibleStatusProof === undefined
               ? {}
-              : { storyBibleStatusProof: file.storyBibleStatusProof })
+              : { storyBibleStatusProof: file.storyBibleStatusProof }),
+            ...(file.chapterStatusTransitionProof === undefined
+              ? {}
+              : { chapterStatusTransitionProof: file.chapterStatusTransitionProof })
           })),
           ...(selectedOperations.length === 0 ? {} : { operations: selectedOperations })
         });
@@ -431,7 +437,13 @@ export function createVersionGroupSession(
                   : { storyBibleReceipt: result.value.storyBibleReceipt }),
                 ...(result.value.chapterCreateReceipt === undefined
                   ? {}
-                  : { chapterCreateReceipt: result.value.chapterCreateReceipt })
+                  : { chapterCreateReceipt: result.value.chapterCreateReceipt }),
+                ...(result.value.chapterStatusTransitionProof === undefined
+                  ? {}
+                  : {
+                      chapterStatusTransitionProof:
+                        result.value.chapterStatusTransitionProof
+                    })
               })
             : Object.freeze({
                 consistencyGroupId,

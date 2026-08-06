@@ -32,6 +32,7 @@ import {
   type ChangeSetOperationSelection,
   type ChangeSetRange,
   type ChangeSetFileSelection,
+  type ChapterStatusTransitionProof,
   type DecideChangeSetCommand,
   type MainOnlyApprovalDecisionProofV1,
   type StoryBibleStatusTransitionProof,
@@ -115,10 +116,12 @@ interface ChangeSetProposalBinding {
 interface InternalChangeSetProposalBinding extends ChangeSetProposalBinding {
   readonly writePolicy?: AgentWritePolicy;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface ProposeChapterWriteInput extends ChangeSetProposalBinding {
   readonly chapterId: string;
+  readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
 }
 
 export interface ProposeFileWriteInput extends ChangeSetProposalBinding {
@@ -178,6 +181,7 @@ export interface ProposePreparedFileBatchInput {
     readonly candidateContent: string;
     readonly baseChecksum: string;
     readonly candidateChecksum: string;
+    readonly chapterStatusTransitionProof?: ChapterStatusTransitionProof;
   }[];
 }
 
@@ -302,7 +306,10 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           : { consistencyGroupId: binding.consistencyGroupId }),
         ...(binding.storyBibleStatusProof === undefined
           ? {}
-          : { storyBibleStatusProof: binding.storyBibleStatusProof })
+          : { storyBibleStatusProof: binding.storyBibleStatusProof }),
+        ...(binding.chapterStatusTransitionProof === undefined
+          ? {}
+          : { chapterStatusTransitionProof: binding.chapterStatusTransitionProof })
       };
       const validateCandidate = candidateValidator(binding);
       const revisionOptions = {
@@ -697,7 +704,9 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
               current.baseChecksum !== file.baseChecksum ||
               current.candidateChecksum !== file.candidateChecksum ||
               current.baseContent !== file.baseContent ||
-              current.candidateContent !== file.candidateContent
+              current.candidateContent !== file.candidateContent ||
+              current.chapterStatusTransitionProof?.proofChecksum !==
+                file.chapterStatusTransitionProof?.proofChecksum
             );
           })
         ) {
@@ -719,7 +728,10 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
         baseChecksum: file.baseChecksum,
         range: { unit: "character" as const, start: 0, end: file.baseContent.length },
         replacement: file.candidateContent,
-        consistencyGroupId: input.consistencyGroupId
+        consistencyGroupId: input.consistencyGroupId,
+        ...(file.chapterStatusTransitionProof === undefined
+          ? {}
+          : { chapterStatusTransitionProof: file.chapterStatusTransitionProof })
       }));
       const revisionOptions = {
         ...(options.createHunkId === undefined ? {} : { createHunkId: options.createHunkId }),

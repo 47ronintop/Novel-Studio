@@ -13,6 +13,8 @@ import {
 import {
   approvalBindingV2Checksum,
   deriveChangeSetGroupApprovalToken,
+  isChapterStatusTransitionProof,
+  parseChapterStatusTransitionProof,
   validateApprovalBindingV2,
   type ChapterCreateApplyReceipt,
   type StoryBibleApplyReceipt,
@@ -1004,6 +1006,9 @@ export class AgentWriteTransaction {
         reason: transactionOptions.snapshotReason,
         content: file.historyBaseContent ?? file.baseContent,
         candidateContent: file.historyCandidateContent ?? file.candidateContent,
+        ...(file.chapterStatusTransitionProof === undefined
+          ? {}
+          : { chapterStatusTransitionProof: file.chapterStatusTransitionProof }),
         createdBy: "system",
         relativePath: file.relativePath,
         runId: input.runId,
@@ -2356,6 +2361,16 @@ function validateTransactionInput(
             !hasCompleteGroupBinding || candidate.consistencyGroupId !== input.consistencyGroupId
         )
       : formalChapterCreates.length > 0);
+  const chapterStatusTransitionProofs = input.files.flatMap((file) =>
+    file.chapterStatusTransitionProof === undefined ? [] : [file.chapterStatusTransitionProof]
+  );
+  const chapterStatusTransitionBindingInvalid =
+    chapterStatusTransitionProofs.length > 1 ||
+    (chapterStatusTransitionProofs.length === 1 &&
+      (kind !== "apply" ||
+        !hasCompleteGroupBinding ||
+        !("approvalSource" in input) ||
+        input.approvalSource !== "human_confirmation"));
   const approvalBindingInvalid =
     kind === "apply"
       ? hasV2Approval(input)
@@ -2407,6 +2422,7 @@ function validateTransactionInput(
     groupBindingInvalid ||
     storyBibleSuggestionBindingInvalid ||
     chapterCreateBindingInvalid ||
+    chapterStatusTransitionBindingInvalid ||
     new Set(paths).size !== paths.length ||
     paths.some((path) => operationPathSet.has(path)) ||
     new Set(operations.map((operation) => operation.operationId)).size !== operations.length ||
@@ -2419,7 +2435,8 @@ function validateTransactionInput(
         !sha256Pattern.test(file.candidateChecksum) ||
         !isStoryBibleStatusProof(file.storyBibleStatusProof) ||
         (file.storyBibleStatusProof !== undefined &&
-          !isStoryBibleTransactionRelativePath(file.relativePath))
+          !isStoryBibleTransactionRelativePath(file.relativePath)) ||
+        !isChapterStatusTransitionFile(file)
     )
   ) {
     return err(
@@ -2480,6 +2497,18 @@ function isStoryBibleStatusProof(value: unknown): boolean {
       proof["expectedStatus"] === "archived") &&
     typeof proof["historyAuthorizationChecksum"] === "string" &&
     sha256Pattern.test(proof["historyAuthorizationChecksum"])
+  );
+}
+
+function isChapterStatusTransitionFile(file: AgentWriteTransactionFile): boolean {
+  const proof = file.chapterStatusTransitionProof;
+  if (proof === undefined) return true;
+  if (!isChapterStatusTransitionProof(proof)) return false;
+  return (
+    file.assetType === "chapter" &&
+    file.assetId === proof.chapterId &&
+    file.relativePath === `chapters/${proof.chapterId}.md` &&
+    proof.stableRef === `chapter:${proof.chapterId}`
   );
 }
 
@@ -2821,6 +2850,9 @@ function createJournal(input: {
   readonly createdAt: string;
   readonly undoOfVersionGroupIds?: readonly string[];
 }): AgentTransactionJournal {
+  const chapterStatusTransitionProof = input.preparedFiles.find(
+    (file) => file.chapterStatusTransitionProof !== undefined
+  )?.chapterStatusTransitionProof;
   const storyBibleReceipt = createStoryBibleApplyReceipt({
     kind: input.kind,
     changeSetId: input.input.changeSetId,
@@ -2903,6 +2935,9 @@ function createJournal(input: {
       ...(file.historyCandidateContent === undefined
         ? {}
         : { historyCandidateContent: file.historyCandidateContent }),
+      ...(file.chapterStatusTransitionProof === undefined
+        ? {}
+        : { chapterStatusTransitionProof: file.chapterStatusTransitionProof }),
       beforeVersionId: file.beforeVersionId,
       status: "pending"
     })),
@@ -2929,6 +2964,7 @@ function createJournal(input: {
     ],
     ...(storyBibleReceipt === undefined ? {} : { storyBibleReceipt }),
     ...(chapterCreateReceipt === undefined ? {} : { chapterCreateReceipt }),
+    ...(chapterStatusTransitionProof === undefined ? {} : { chapterStatusTransitionProof }),
     ...(input.undoOfVersionGroupIds === undefined
       ? {}
       : { undoOfVersionGroupIds: input.undoOfVersionGroupIds })
@@ -3270,7 +3306,20 @@ function abortPreparedJournal(
 function freezeJournal(journal: AgentTransactionJournal): AgentTransactionJournal {
   return Object.freeze({
     ...journal,
-    entries: Object.freeze(journal.entries.map((entry) => Object.freeze({ ...entry }))),
+    entries: Object.freeze(
+      journal.entries.map((entry) =>
+        Object.freeze({
+          ...entry,
+          ...(entry.chapterStatusTransitionProof === undefined
+            ? {}
+            : {
+                chapterStatusTransitionProof: parseChapterStatusTransitionProof(
+                  entry.chapterStatusTransitionProof
+                )
+              })
+        })
+      )
+    ),
     ...(journal.operations === undefined
       ? {}
       : {
@@ -3310,6 +3359,13 @@ function freezeJournal(journal: AgentTransactionJournal): AgentTransactionJourna
     ...(journal.chapterCreateReceipt === undefined
       ? {}
       : { chapterCreateReceipt: freezeChapterCreateReceipt(journal.chapterCreateReceipt) }),
+    ...(journal.chapterStatusTransitionProof === undefined
+      ? {}
+      : {
+          chapterStatusTransitionProof: parseChapterStatusTransitionProof(
+            journal.chapterStatusTransitionProof
+          )
+        }),
     ...(journal.approvalBindingV2 === undefined
       ? {}
       : {
@@ -3669,6 +3725,9 @@ function groupFromJournal(
     ...(journal.chapterCreateReceipt === undefined
       ? {}
       : { chapterCreateReceipt: journal.chapterCreateReceipt }),
+    ...(journal.chapterStatusTransitionProof === undefined
+      ? {}
+      : { chapterStatusTransitionProof: journal.chapterStatusTransitionProof }),
     createdAt: journal.createdAt,
     writes,
     ...(operations.length === 0 ? {} : { operations }),
@@ -3731,7 +3790,9 @@ function journalMatchesGroupedInput(
         entry.beforeChecksum === file.baseChecksum &&
         entry.candidateChecksum === file.candidateChecksum &&
         entry.beforeContent === file.baseContent &&
-        entry.candidateContent === file.candidateContent
+        entry.candidateContent === file.candidateContent &&
+        entry.chapterStatusTransitionProof?.proofChecksum ===
+          file.chapterStatusTransitionProof?.proofChecksum
       );
     }) &&
     JSON.stringify((journal.operations ?? []).map((entry) => entry.operation)) ===
@@ -3790,7 +3851,14 @@ function freezeGroup(group: VersionGroupRecord): VersionGroupRecord {
       ...(group.undoMetadata.undoOfVersionGroupIds === undefined
         ? {}
         : { undoOfVersionGroupIds: Object.freeze([...group.undoMetadata.undoOfVersionGroupIds]) })
-    })
+    }),
+    ...(group.chapterStatusTransitionProof === undefined
+      ? {}
+      : {
+          chapterStatusTransitionProof: parseChapterStatusTransitionProof(
+            group.chapterStatusTransitionProof
+          )
+        })
   });
 }
 
