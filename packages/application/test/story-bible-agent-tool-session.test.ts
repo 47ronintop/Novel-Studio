@@ -58,7 +58,18 @@ describe("Story Bible Agent tool session", () => {
             beforeValue: "",
             afterValue: "调查旧港失踪案"
           }
-        ]
+        ],
+        approvalProof: {
+          operation: "story_bible_patch",
+          effectRuleId: "no_reference_impact_story_bible_patch_v1",
+          evidence: {
+            createOnly: "not_applicable",
+            referenceImpact: "none",
+            limits: "within",
+            stateBoundary: "ordinary"
+          },
+          reviewRequirement: "conditional_candidate"
+        }
       }
     });
     expect(candidateInputs).toEqual([
@@ -89,6 +100,31 @@ describe("Story Bible Agent tool session", () => {
     });
 
     expect(prepared.ok).toBe(true);
+    expect(prepared).toMatchObject({
+      ok: true,
+      value: {
+        approvalProof: {
+          schemaVersion: "1.0",
+          policyId: "bounded-story-bible-proposal@1.0",
+          operation: "story_bible_create",
+          effectRuleId: "bounded_story_bible_create_v1",
+          measurements: { relationCount: 0 },
+          thresholds: {
+            maxFieldCount: 128,
+            maxRelationCount: 16,
+            maxTotalBytes: 65_536
+          },
+          evidence: {
+            createOnly: "proven",
+            referenceImpact: "none",
+            limits: "within",
+            stateBoundary: "ordinary"
+          },
+          reviewRequirement: "conditional_candidate",
+          referenceImpactChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+        }
+      }
+    });
     expect(createInputs).toEqual([
       expect.objectContaining({ deferProjectRelationPairValidation: true })
     ]);
@@ -259,8 +295,43 @@ describe("Story Bible Agent tool session", () => {
         storyBibleStatusProof: {
           action: "delete",
           deletionImpactChecksum
+        },
+        approvalProof: {
+          operation: "story_bible_status",
+          evidence: {
+            referenceImpact: "present",
+            stateBoundary: "delete"
+          },
+          reviewRequirement: "always_human"
         }
       }
+    });
+  });
+
+  test("rejects deleted-boundary reference evidence for another asset", async () => {
+    const asset = characterAsset();
+    const repository = repositoryFor(asset, {
+      assetId: "chr_other",
+      deletionImpactChecksum,
+      incoming: [],
+      outgoing: [],
+      canSetDeleted: true,
+      deletionImpact: {
+        affectedReferenceCount: 0,
+        affectedAssetIds: [],
+        cascades: false
+      }
+    });
+    const session = createStoryBibleAgentToolSession({ repository });
+
+    await expect(
+      session.prepare({
+        toolName: "set_story_bible_status",
+        arguments: { assetId: asset.id, baseRevision: 1, baseChecksum: checksum, status: "deleted" }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "STORY_BIBLE_REFERENCE_IMPACT_INVALID" }
     });
   });
 
@@ -309,6 +380,36 @@ describe("Story Bible Agent tool session", () => {
           action: "restore",
           expectedStatus: "draft",
           historyAuthorizationChecksum
+        },
+        approvalProof: {
+          operation: "story_bible_restore",
+          evidence: { stateBoundary: "restore" },
+          reviewRequirement: "always_human"
+        }
+      }
+    });
+  });
+
+  test("marks both directions across the archive boundary for human review", async () => {
+    const asset = characterAsset({ status: "archived" });
+    const session = createStoryBibleAgentToolSession({ repository: repositoryFor(asset) });
+
+    await expect(
+      session.prepare({
+        toolName: "set_story_bible_status",
+        arguments: {
+          assetId: asset.id,
+          baseRevision: asset.revision,
+          baseChecksum: checksum,
+          status: "active"
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        approvalProof: {
+          evidence: { stateBoundary: "archive" },
+          reviewRequirement: "always_human"
         }
       }
     });
@@ -430,6 +531,162 @@ describe("Story Bible Agent tool session", () => {
         }
       }
     });
+  });
+
+  test("classifies changed relations as reference impact and malformed impact as unknown", async () => {
+    const asset = characterAsset();
+    const relation = characterRelation("rel_22222222222222222222222222222222");
+    const referencePatch = createStoryBibleAgentToolSession({ repository: repositoryFor(asset) });
+
+    await expect(
+      referencePatch.prepare({
+        toolName: "patch_story_bible",
+        arguments: {
+          assetId: asset.id,
+          baseRevision: asset.revision,
+          baseChecksum: checksum,
+          operations: [{ op: "replace", path: "/relations", value: [relation] }]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        approvalProof: {
+          evidence: { referenceImpact: "present" },
+          reviewRequirement: "always_human",
+          referenceImpactChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+        }
+      }
+    });
+
+    const unknownImpactPatch = createStoryBibleAgentToolSession({
+      repository: repositoryFor(asset, {})
+    });
+    await expect(
+      unknownImpactPatch.prepare({
+        toolName: "patch_story_bible",
+        arguments: {
+          assetId: asset.id,
+          baseRevision: asset.revision,
+          baseChecksum: checksum,
+          operations: [{ op: "replace", path: "/details", value: asset.details }]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        approvalProof: {
+          evidence: { referenceImpact: "unknown" },
+          reviewRequirement: "always_human"
+        }
+      }
+    });
+
+    const mismatchedImpactPatch = createStoryBibleAgentToolSession({
+      repository: repositoryFor(asset, {
+        assetId: "chr_other",
+        deletionImpactChecksum,
+        incoming: [],
+        outgoing: [],
+        canSetDeleted: true,
+        deletionImpact: {
+          affectedReferenceCount: 0,
+          affectedAssetIds: [],
+          cascades: false
+        }
+      })
+    });
+    await expect(
+      mismatchedImpactPatch.prepare({
+        toolName: "patch_story_bible",
+        arguments: {
+          assetId: asset.id,
+          baseRevision: asset.revision,
+          baseChecksum: checksum,
+          operations: [{ op: "replace", path: "/details", value: asset.details }]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        approvalProof: {
+          evidence: { referenceImpact: "unknown" },
+          reviewRequirement: "always_human"
+        }
+      }
+    });
+  });
+
+  test("binds exact create measurements and marks every exceeded safety threshold", async () => {
+    const base = characterAsset();
+    const oversized = characterAsset({
+      summary: "x".repeat(66_000),
+      relations: Array.from({ length: 17 }, (_, index) =>
+        characterRelation(`rel_${String(index).padStart(32, "0")}`)
+      ),
+      details: Object.fromEntries(
+        Array.from({ length: 129 }, (_, index) => [`field_${index}`, index])
+      )
+    });
+    const baseRepository = repositoryFor(base);
+    const repository: StoryBibleAgentToolRepositoryPort = {
+      ...baseRepository,
+      async prepareCreateStoryAsset() {
+        return ok({
+          asset: oversized,
+          relativePath: `characters/${oversized.id}.json`,
+          content: `${JSON.stringify(oversized)}\n`
+        });
+      }
+    };
+    const session = createStoryBibleAgentToolSession({ repository });
+    const prepared = await session.prepare({
+      toolName: "create_story_bible",
+      arguments: { type: "character", value: { title: "Oversized" } }
+    });
+
+    expect(prepared).toMatchObject({
+      ok: true,
+      value: {
+        approvalProof: {
+          measurements: {
+            fieldCount: 134,
+            relationCount: 17,
+            totalBytes: expect.any(Number)
+          },
+          evidence: {
+            referenceImpact: "present",
+            limits: "exceeded"
+          },
+          reviewRequirement: "always_human"
+        }
+      }
+    });
+    if (!prepared.ok) return;
+    expect(prepared.value.approvalProof.measurements.totalBytes).toBeGreaterThan(65_536);
+  });
+
+  test("produces identical approval proof inputs for identical frozen proposals", async () => {
+    const asset = characterAsset();
+    const session = createStoryBibleAgentToolSession({ repository: repositoryFor(asset) });
+    const input = {
+      toolName: "patch_story_bible" as const,
+      arguments: {
+        assetId: asset.id,
+        baseRevision: asset.revision,
+        baseChecksum: checksum,
+        operations: [{ op: "replace", path: "/summary", value: "Deterministic" }]
+      }
+    };
+
+    const first = await session.prepare(input);
+    const second = await session.prepare(input);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(first.value.approvalProof).toEqual(second.value.approvalProof);
+    expect(Object.isFrozen(first.value.approvalProof)).toBe(true);
+    expect(Object.isFrozen(first.value.approvalProof.measurements)).toBe(true);
   });
 
   test("carries the shared paid-off warning in structured proposals", async () => {
@@ -559,6 +816,23 @@ function foreshadowAsset(): StoryBibleAgentToolAsset {
         }
       ]
     }
+  };
+}
+
+function characterRelation(relationId: string): JsonObject {
+  return {
+    relationId,
+    sourceId: "chr_11111111111111111111111111111111",
+    targetId: "chr_22222222222222222222222222222222",
+    relationType: "character.ally",
+    direction: "directed",
+    status: "active",
+    validFromChapterId: null,
+    validToChapterId: null,
+    inversePolicy: "none",
+    inverseRelationId: null,
+    evidence: [],
+    note: ""
   };
 }
 

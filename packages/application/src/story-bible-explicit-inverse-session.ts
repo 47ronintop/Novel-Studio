@@ -12,6 +12,10 @@ import type { ChapterCatalogRepositoryPort, JsonObject } from "@novel-studio/sha
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import type { ChangeSetSession } from "./change-set-session.js";
+import {
+  buildStoryBibleProposalApprovalProof,
+  type StoryBibleProposalApprovalProof
+} from "./story-bible-agent-tool-session.js";
 import { validateStoryBibleCandidate } from "./story-bible-candidate.js";
 import type {
   SaveStoryBibleAssetCandidateCommand,
@@ -76,6 +80,7 @@ export interface StoryBibleExplicitInversePreview {
   readonly expiresAt: string;
   readonly sourceAssetId: string;
   readonly affectedAssetIds: readonly string[];
+  readonly approvalProofs: readonly StoryBibleProposalApprovalProof[];
   readonly changeSet: ChangeSet;
 }
 
@@ -262,6 +267,17 @@ export function createStoryBibleExplicitInverseSession(
         );
       }
       const expectedAssetIds = prepared.map((candidate) => candidate.asset.id);
+      const approvalProofs = Object.freeze(
+        prepared.map((candidate) =>
+          buildStoryBibleProposalApprovalProof({
+            action: "patch",
+            beforeAsset: candidate.current.asset,
+            afterAsset: candidate.asset,
+            content: candidate.content,
+            forceReferenceImpact: "present"
+          })
+        )
+      );
       const binding = validatePreparedChangeSet(changeSet, {
         runId,
         projectId: options.projectId,
@@ -295,6 +311,7 @@ export function createStoryBibleExplicitInverseSession(
         expiresAt: new Date(expiresAtMs).toISOString(),
         sourceAssetId: input.source.candidate.id,
         affectedAssetIds: expectedAssetIds,
+        approvalProofs,
         changeSet
       });
     },

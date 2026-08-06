@@ -31,6 +31,24 @@ describe("StoryBibleExplicitInverseSession", () => {
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
     expect(preview.value.affectedAssetIds).toEqual(["chr_source", "chr_target"]);
+    expect(preview.value.approvalProofs).toHaveLength(2);
+    expect(Object.isFrozen(preview.value.approvalProofs)).toBe(true);
+    for (const proof of preview.value.approvalProofs) {
+      expect(proof).toMatchObject({
+        schemaVersion: "1.0",
+        policyId: "bounded-story-bible-proposal@1.0",
+        operation: "story_bible_patch",
+        effectRuleId: "no_reference_impact_story_bible_patch_v1",
+        evidence: {
+          createOnly: "not_applicable",
+          referenceImpact: "present",
+          limits: "within",
+          stateBoundary: "ordinary"
+        },
+        reviewRequirement: "always_human",
+        referenceImpactChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      });
+    }
     expect(preview.value.changeSet.files).toHaveLength(2);
     expect(new Set(preview.value.changeSet.files.map((file) => file.consistencyGroupId)).size).toBe(
       1

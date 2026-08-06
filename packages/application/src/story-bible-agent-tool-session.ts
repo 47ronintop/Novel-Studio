@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+
 import {
+  collectStoryBibleDeclaredChapterReferences,
   isStoryBibleV11AssetType,
   type StoryBibleReferenceTargetType,
   type StoryBibleV11AssetType
@@ -15,7 +18,10 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
-import type { StoryBibleStatusTransitionProof } from "@novel-studio/agent-engine";
+import {
+  canonicalizeApprovalDecisionProofJson,
+  type StoryBibleStatusTransitionProof
+} from "@novel-studio/agent-engine";
 
 import {
   prepareStoryBiblePatch,
@@ -41,6 +47,37 @@ export interface StoryBibleAgentFieldDiff extends JsonObject {
   readonly afterValue?: JsonValue;
 }
 
+export type StoryBibleProposalReferenceImpact = "none" | "present" | "unknown";
+export type StoryBibleProposalStateBoundary = "ordinary" | "archive" | "delete" | "restore";
+
+export interface StoryBibleProposalApprovalProof {
+  readonly schemaVersion: "1.0";
+  readonly policyId: "bounded-story-bible-proposal@1.0";
+  readonly operation:
+    "story_bible_create" | "story_bible_patch" | "story_bible_status" | "story_bible_restore";
+  readonly effectRuleId?:
+    "bounded_story_bible_create_v1" | "no_reference_impact_story_bible_patch_v1";
+  readonly measurements: {
+    readonly fieldCount: number | null;
+    readonly relationCount: number | null;
+    readonly totalBytes: number | null;
+  };
+  readonly thresholds: {
+    readonly maxFieldCount: 128;
+    readonly maxRelationCount: 16;
+    readonly maxTotalBytes: 65536;
+  };
+  readonly evidence: {
+    readonly createOnly: "proven" | "not_applicable";
+    readonly referenceImpact: StoryBibleProposalReferenceImpact;
+    readonly limits: "within" | "exceeded" | "unknown";
+    readonly stateBoundary: StoryBibleProposalStateBoundary;
+  };
+  /** This is a floor for Main's final decision; editor/policy facts may only make it stricter. */
+  readonly reviewRequirement: "conditional_candidate" | "always_human";
+  readonly referenceImpactChecksum: string;
+}
+
 export interface StoryBiblePreparedAgentProposal {
   readonly kind: "create" | "replace";
   readonly action: "create" | "patch" | "status" | "restore";
@@ -57,6 +94,8 @@ export interface StoryBiblePreparedAgentProposal {
   readonly changedPaths: readonly string[];
   readonly fieldDiffs: readonly StoryBibleAgentFieldDiff[];
   readonly rebased: boolean;
+  /** App-owned, deterministic inputs for the final Main-only approval decision proof. */
+  readonly approvalProof: StoryBibleProposalApprovalProof;
   readonly consistencyGroupId?: string;
   readonly referenceImpact?: JsonObject;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
@@ -218,6 +257,11 @@ export function createStoryBibleAgentToolSession(
         }
       ],
       rebased: false,
+      approvalProof: buildStoryBibleProposalApprovalProof({
+        action: "create",
+        afterAsset: prepared.value.asset,
+        content: prepared.value.content
+      }),
       warnings: storyBibleContractWarnings(prepared.value.asset),
       ...(consistencyGroupId === undefined ? {} : { consistencyGroupId })
     });
@@ -322,6 +366,15 @@ export function createStoryBibleAgentToolSession(
     if (status === "deleted") {
       const impact = await readReferenceImpact(assetId);
       if (!impact.ok) return impact;
+      if (!isKnownReferenceImpact(impact.value, assetId)) {
+        return err(
+          toolError(
+            traceId,
+            "STORY_BIBLE_REFERENCE_IMPACT_INVALID",
+            "Story Bible deletion impact is not bound to the requested asset."
+          )
+        );
+      }
       if (impact.value["canSetDeleted"] !== true) {
         return err(
           toolError(
@@ -420,6 +473,15 @@ export function createStoryBibleAgentToolSession(
     }
     const impact = await readReferenceImpact(assetId);
     if (!impact.ok) return impact;
+    if (!isKnownReferenceImpact(impact.value, assetId)) {
+      return err(
+        toolError(
+          traceId,
+          "STORY_BIBLE_REFERENCE_IMPACT_INVALID",
+          "Story Bible restore impact is not bound to the requested asset."
+        )
+      );
+    }
     return prepareExisting({
       assetId,
       baseRevision,
@@ -522,6 +584,15 @@ export function createStoryBibleAgentToolSession(
       input.operations,
       patched.value.changedPaths
     );
+    const approvalProof = buildStoryBibleProposalApprovalProof({
+      action: input.action,
+      beforeAsset: read.value.asset,
+      afterAsset: prepared.value.asset,
+      content: prepared.value.content,
+      ...(input.referenceImpact === undefined
+        ? {}
+        : { referenceImpact: input.referenceImpact, referenceImpactRequired: true })
+    });
     return ok({
       kind: "replace",
       action: input.action,
@@ -540,6 +611,7 @@ export function createStoryBibleAgentToolSession(
       changedPaths: patched.value.changedPaths,
       fieldDiffs,
       rebased: patched.value.rebased,
+      approvalProof,
       warnings: storyBibleContractWarnings(prepared.value.asset),
       ...(input.consistencyGroupId === undefined
         ? {}
@@ -573,6 +645,306 @@ export function createStoryBibleAgentToolSession(
     const chapters = await options.chapterCatalog.listChapters();
     return chapters.ok ? ok(chapters.value.map((chapter) => chapter.id)) : chapters;
   }
+}
+
+const STORY_BIBLE_PROPOSAL_THRESHOLDS = Object.freeze({
+  maxFieldCount: 128,
+  maxRelationCount: 16,
+  maxTotalBytes: 65_536
+} as const);
+
+export function buildStoryBibleProposalApprovalProof(input: {
+  readonly action: "create" | "patch" | "status" | "restore";
+  readonly beforeAsset?: JsonObject;
+  readonly afterAsset: JsonObject;
+  readonly content: string;
+  readonly referenceImpact?: JsonObject;
+  readonly referenceImpactRequired?: boolean;
+  readonly forceReferenceImpact?: Exclude<StoryBibleProposalReferenceImpact, "none">;
+}): StoryBibleProposalApprovalProof {
+  const beforeReferences =
+    input.beforeAsset === undefined
+      ? emptyReferenceFacts()
+      : collectReferenceFacts(input.beforeAsset);
+  const afterReferences = collectReferenceFacts(input.afterAsset);
+  const referenceImpact = classifyProposalReferenceImpact({
+    action: input.action,
+    beforeReferences,
+    afterReferences,
+    ...(typeof input.afterAsset["id"] === "string"
+      ? { expectedAssetId: input.afterAsset["id"] }
+      : {}),
+    referenceImpactRequired: input.referenceImpactRequired === true,
+    ...(input.referenceImpact === undefined ? {} : { referenceImpact: input.referenceImpact }),
+    ...(input.forceReferenceImpact === undefined
+      ? {}
+      : { forceReferenceImpact: input.forceReferenceImpact })
+  });
+  const measurements = Object.freeze({
+    fieldCount: countCandidateFields(input.afterAsset),
+    relationCount: countCandidateRelations(input.afterAsset),
+    totalBytes: utf8ByteLength(input.content)
+  });
+  const limits = classifyProposalLimits(measurements);
+  const operation = storyBibleOperationForAction(input.action);
+  const stateBoundary = classifyStateBoundary(input.action, input.beforeAsset, input.afterAsset);
+  const reviewRequirement =
+    (operation === "story_bible_create" || operation === "story_bible_patch") &&
+    referenceImpact === "none" &&
+    limits === "within" &&
+    stateBoundary === "ordinary"
+      ? "conditional_candidate"
+      : "always_human";
+  const referenceImpactChecksum = checksumCanonicalValue({
+    state: referenceImpact,
+    before: beforeReferences,
+    after: afterReferences,
+    snapshot: input.referenceImpact ?? null
+  });
+
+  return deepFreeze({
+    schemaVersion: "1.0",
+    policyId: "bounded-story-bible-proposal@1.0",
+    operation,
+    ...(operation === "story_bible_create"
+      ? { effectRuleId: "bounded_story_bible_create_v1" as const }
+      : operation === "story_bible_patch"
+        ? { effectRuleId: "no_reference_impact_story_bible_patch_v1" as const }
+        : {}),
+    measurements,
+    thresholds: STORY_BIBLE_PROPOSAL_THRESHOLDS,
+    evidence: {
+      createOnly: input.action === "create" ? "proven" : "not_applicable",
+      referenceImpact,
+      limits,
+      stateBoundary
+    },
+    reviewRequirement,
+    referenceImpactChecksum
+  });
+}
+
+interface StoryBibleReferenceFacts {
+  readonly relations: readonly string[];
+  readonly chapterReferences: readonly string[];
+}
+
+function emptyReferenceFacts(): StoryBibleReferenceFacts {
+  return { relations: [], chapterReferences: [] };
+}
+
+function collectReferenceFacts(asset: JsonObject): StoryBibleReferenceFacts | null {
+  if (!Array.isArray(asset["relations"]) || !asset["relations"].every(isRecord)) return null;
+  try {
+    const relations = asset["relations"].map((relation) => canonicalJson(relation)).sort();
+    const chapterReferences = collectStoryBibleDeclaredChapterReferences(asset)
+      .map((reference) =>
+        canonicalJson({
+          constraintKey: reference.constraintKey,
+          path: reference.path,
+          chapterId: reference.chapterId
+        })
+      )
+      .sort();
+    return { relations, chapterReferences };
+  } catch {
+    return null;
+  }
+}
+
+function classifyProposalReferenceImpact(input: {
+  readonly action: "create" | "patch" | "status" | "restore";
+  readonly beforeReferences: StoryBibleReferenceFacts | null;
+  readonly afterReferences: StoryBibleReferenceFacts | null;
+  readonly expectedAssetId?: string;
+  readonly referenceImpact?: JsonObject;
+  readonly referenceImpactRequired: boolean;
+  readonly forceReferenceImpact?: Exclude<StoryBibleProposalReferenceImpact, "none">;
+}): StoryBibleProposalReferenceImpact {
+  if (input.forceReferenceImpact !== undefined) return input.forceReferenceImpact;
+  if (input.beforeReferences === null || input.afterReferences === null) return "unknown";
+  if (
+    (input.referenceImpactRequired || input.referenceImpact !== undefined) &&
+    !isKnownReferenceImpact(input.referenceImpact, input.expectedAssetId)
+  ) {
+    return "unknown";
+  }
+  if (input.action === "create") {
+    return hasReferences(input.afterReferences) ? "present" : "none";
+  }
+  if (input.action === "patch") {
+    return canonicalJson(input.beforeReferences) === canonicalJson(input.afterReferences)
+      ? "none"
+      : "present";
+  }
+  if (input.referenceImpact !== undefined) {
+    return referenceImpactHasAffectedTargets(input.referenceImpact) ? "present" : "none";
+  }
+  return input.referenceImpactRequired ? "unknown" : "none";
+}
+
+function isKnownReferenceImpact(
+  value: JsonObject | undefined,
+  expectedAssetId?: string
+): value is JsonObject {
+  if (value === undefined) return false;
+  const assetId = value["assetId"];
+  const incoming = value["incoming"];
+  const outgoing = value["outgoing"];
+  const deletionImpact = value["deletionImpact"];
+  if (
+    typeof assetId !== "string" ||
+    (expectedAssetId !== undefined && assetId !== expectedAssetId) ||
+    !Array.isArray(incoming) ||
+    !Array.isArray(outgoing) ||
+    !incoming.every(isRecord) ||
+    !outgoing.every(isRecord)
+  ) {
+    return false;
+  }
+  const incomingSources = incoming.map((reference) => reference["sourceAssetId"]);
+  const outgoingTargets = outgoing.map((reference) => reference["targetAssetId"]);
+  const affectedAssetIds = isRecord(deletionImpact)
+    ? deletionImpact["affectedAssetIds"]
+    : undefined;
+  return (
+    incoming.every(
+      (reference) =>
+        reference["targetAssetId"] === assetId && typeof reference["sourceAssetId"] === "string"
+    ) &&
+    outgoing.every(
+      (reference) =>
+        reference["sourceAssetId"] === assetId && typeof reference["targetAssetId"] === "string"
+    ) &&
+    typeof value["deletionImpactChecksum"] === "string" &&
+    /^[a-f0-9]{64}$/u.test(value["deletionImpactChecksum"]) &&
+    typeof value["canSetDeleted"] === "boolean" &&
+    isRecord(deletionImpact) &&
+    Number.isSafeInteger(deletionImpact["affectedReferenceCount"]) &&
+    Number(deletionImpact["affectedReferenceCount"]) >= 0 &&
+    Number(deletionImpact["affectedReferenceCount"]) === incoming.length &&
+    Array.isArray(affectedAssetIds) &&
+    affectedAssetIds.every((id) => typeof id === "string") &&
+    new Set(affectedAssetIds).size === affectedAssetIds.length &&
+    [...affectedAssetIds].sort().every((id, index) => id === affectedAssetIds[index]) &&
+    [...new Set(incomingSources)].sort().length === affectedAssetIds.length &&
+    [...new Set(incomingSources)].sort().every((id, index) => id === affectedAssetIds[index]) &&
+    outgoingTargets.every((id) => typeof id === "string") &&
+    deletionImpact["cascades"] === false
+  );
+}
+
+function referenceImpactHasAffectedTargets(value: JsonObject): boolean {
+  const deletionImpact = value["deletionImpact"] as JsonObject;
+  return (
+    (value["incoming"] as unknown[]).length > 0 ||
+    (value["outgoing"] as unknown[]).length > 0 ||
+    Number(deletionImpact["affectedReferenceCount"]) > 0 ||
+    (deletionImpact["affectedAssetIds"] as unknown[]).length > 0 ||
+    deletionImpact["cascades"] === true
+  );
+}
+
+function hasReferences(value: StoryBibleReferenceFacts): boolean {
+  return value.relations.length > 0 || value.chapterReferences.length > 0;
+}
+
+function countCandidateFields(asset: JsonObject): number | null {
+  const authorFields = ["title", "summary", "aliases", "details", "extensions"] as const;
+  try {
+    return authorFields.reduce<number>(
+      (count, key) => count + (key in asset ? 1 + countNestedFields(asset[key] as JsonValue) : 0),
+      0
+    );
+  } catch {
+    return null;
+  }
+}
+
+function countNestedFields(value: JsonValue): number {
+  if (Array.isArray(value)) {
+    return value.reduce<number>((count, entry) => count + countNestedFields(entry), 0);
+  }
+  if (!isRecord(value)) return 0;
+  return Object.entries(value).reduce(
+    (count, [, child]) => count + 1 + countNestedFields(child),
+    0
+  );
+}
+
+function countCandidateRelations(asset: JsonObject): number | null {
+  const relations = asset["relations"];
+  return Array.isArray(relations) && relations.every(isRecord) ? relations.length : null;
+}
+
+function utf8ByteLength(value: string): number | null {
+  try {
+    return Buffer.byteLength(value, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function classifyProposalLimits(measurements: {
+  readonly fieldCount: number | null;
+  readonly relationCount: number | null;
+  readonly totalBytes: number | null;
+}): "within" | "exceeded" | "unknown" {
+  if (
+    measurements.fieldCount === null ||
+    measurements.relationCount === null ||
+    measurements.totalBytes === null
+  ) {
+    return "unknown";
+  }
+  return measurements.fieldCount > STORY_BIBLE_PROPOSAL_THRESHOLDS.maxFieldCount ||
+    measurements.relationCount > STORY_BIBLE_PROPOSAL_THRESHOLDS.maxRelationCount ||
+    measurements.totalBytes > STORY_BIBLE_PROPOSAL_THRESHOLDS.maxTotalBytes
+    ? "exceeded"
+    : "within";
+}
+
+function storyBibleOperationForAction(
+  action: "create" | "patch" | "status" | "restore"
+): StoryBibleProposalApprovalProof["operation"] {
+  if (action === "create") return "story_bible_create";
+  if (action === "patch") return "story_bible_patch";
+  if (action === "status") return "story_bible_status";
+  return "story_bible_restore";
+}
+
+function classifyStateBoundary(
+  action: "create" | "patch" | "status" | "restore",
+  beforeAsset: JsonObject | undefined,
+  afterAsset: JsonObject
+): StoryBibleProposalStateBoundary {
+  if (action === "restore") return "restore";
+  const beforeStatus = beforeAsset?.["status"];
+  const afterStatus = afterAsset["status"];
+  if (afterStatus === "deleted") return "delete";
+  if (beforeStatus === "deleted" && afterStatus !== "deleted") return "restore";
+  if (beforeStatus === "archived" || afterStatus === "archived") return "archive";
+  return "ordinary";
+}
+
+function checksumCanonicalValue(value: unknown): string {
+  try {
+    return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+  } catch {
+    return createHash("sha256").update("unserializable", "utf8").digest("hex");
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  return canonicalizeApprovalDecisionProofJson(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function storyBibleContractWarnings(
