@@ -661,6 +661,7 @@ export type {
   VersionGroupUndoStatus,
   VersionGroupWrite,
   VersionGroupWriteStatus,
+  ChapterCreateApplyReceipt,
   StoryBibleApplyReceipt,
   StoryBibleApplyReceiptAsset,
   StoryBibleLegacyMigrationReceipt,

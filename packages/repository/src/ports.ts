@@ -8,11 +8,12 @@ import type {
 import type {
   ChangeSetOperation,
   ApprovalBindingV2,
+  ChapterCreateApplyReceipt,
   ChangeSetFileContentMode,
   StoryBibleApplyReceipt,
   StoryBibleStatusTransitionProof
 } from "@novel-studio/agent-engine";
-export type { StoryBibleApplyReceipt } from "@novel-studio/agent-engine";
+export type { ChapterCreateApplyReceipt, StoryBibleApplyReceipt } from "@novel-studio/agent-engine";
 import type { StoryAnalysisBundle } from "@novel-studio/schemas";
 
 export type {
@@ -443,6 +444,7 @@ export interface VersionGroupRecord {
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
+  readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
   readonly createdAt: string;
   readonly writes: readonly VersionGroupWriteRecord[];
   /** v1.1 filesystem lifecycle outcomes, independent of text writes. */
@@ -524,6 +526,7 @@ export interface AgentTransactionJournal {
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
+  readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly transactionStatus: AgentTransactionJournalStatus;

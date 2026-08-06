@@ -61,7 +61,6 @@ describe("Chapter Agent tool session", () => {
     const modelInput = {
       title: "Opening",
       body: "First line",
-      volumeId: "volume-1",
       chapterId: "model-owned-id",
       order: 99,
       relativePath: "outside.md",
@@ -73,8 +72,7 @@ describe("Chapter Agent tool session", () => {
     expect(result).toEqual(ok(prepared));
     expect(prepareAgentChapterCreate).toHaveBeenCalledWith({
       title: "Opening",
-      body: "First line",
-      volumeId: "volume-1"
+      body: "First line"
     });
     expect(repository.createChapter).not.toHaveBeenCalled();
     expect(createAgentChapter).not.toHaveBeenCalled();
@@ -135,7 +133,8 @@ describe("Chapter Agent tool session", () => {
     [{ title: "   " }, "blank title"],
     [{ title: "a".repeat(513) }, "oversized title"],
     [{ title: "Opening", body: 1 }, "non-string body"],
-    [{ title: "Opening", volumeId: "  " }, "blank volumeId"]
+    [{ title: "Opening", volumeId: "  " }, "blank volumeId"],
+    [{ title: "Opening", volumeId: "volume-1" }, "volume assignment without outline transaction"]
   ])("rejects invalid create arguments: %s (%s)", async (input, label) => {
     void label;
     const prepareAgentChapterCreate = vi.fn(async () => ok(createResult()));

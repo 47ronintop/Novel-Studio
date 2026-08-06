@@ -200,6 +200,7 @@ export type {
   VersionGroupUndoStatus,
   VersionGroupWriteRecord,
   VersionGroupWriteStatus,
+  ChapterCreateApplyReceipt,
   StoryBibleApplyReceipt,
   WorkflowRunContextSummary,
   WorkflowRunCostSummary,

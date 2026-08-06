@@ -11,6 +11,27 @@ import {
 } from "../src/transaction-journal.js";
 import { checksumChangeSetText } from "../src/change-set.js";
 
+const chapterCreateReceipt = {
+  schemaVersion: "1.0",
+  changeSetId: "changes_chapter_create",
+  consistencyGroupId: `chapter-create-${"d".repeat(64)}`,
+  operationId: "operation_chapter_create",
+  chapterId: "ch_created",
+  relativePath: "chapters/ch_created.md",
+  catalogRevision: "d".repeat(64),
+  order: 2,
+  status: "draft",
+  revision: 1,
+  volumeId: "volume_01",
+  persistedChecksum: "e".repeat(64),
+  historyVersionId: null,
+  inverse: {
+    kind: "delete_file",
+    relativePath: "chapters/ch_created.md",
+    expectedChecksum: "e".repeat(64)
+  }
+} as const;
+
 const writes = [
   {
     writeId: "write_01",
@@ -92,6 +113,25 @@ describe("Version Group", () => {
     expect(group.failureKind).toBe("partial_failure");
     expect(group.undoStatus).toBe("partial_failure");
   });
+
+  test("retains and deep-freezes a chapter create receipt", () => {
+    const group = createAppliedVersionGroup({
+      versionGroupId: "vg_chapter_create",
+      runId: "run_01",
+      checkpointId: "checkpoint_01",
+      changeSetId: "changes_chapter_create",
+      changeSetRevision: 1,
+      changeSetChecksum: "c".repeat(64),
+      createdAt: "2026-08-06T01:00:00.000Z",
+      writes: [],
+      baselineByPath: {},
+      chapterCreateReceipt
+    });
+
+    expect(group.chapterCreateReceipt).toEqual(chapterCreateReceipt);
+    expect(Object.isFrozen(group.chapterCreateReceipt)).toBe(true);
+    expect(Object.isFrozen(group.chapterCreateReceipt?.inverse)).toBe(true);
+  });
 });
 
 describe("Transaction Journal", () => {
@@ -161,5 +201,29 @@ describe("Transaction Journal", () => {
 
     expect(journal.writePolicy).toBe("user_preapproved_run");
     expect(journal.approvalSource).toBe("user_preapproved_run");
+  });
+
+  test("retains and deep-freezes a chapter create receipt", () => {
+    const journal = createTransactionJournal({
+      transactionId: "tx_chapter_create",
+      versionGroupId: "vg_chapter_create",
+      kind: "apply",
+      runId: "run_01",
+      runSequence: 1,
+      checkpointId: "checkpoint_01",
+      changeSetId: "changes_chapter_create",
+      changeSetRevision: 1,
+      changeSetChecksum: "c".repeat(64),
+      writePolicy: "write_before_confirmation",
+      approvalSource: "human_confirmation",
+      approvalToken: checksumChangeSetText(`changes_chapter_create:1:${"c".repeat(64)}`),
+      createdAt: "2026-08-06T01:00:00.000Z",
+      entries: [],
+      chapterCreateReceipt
+    });
+
+    expect(journal.chapterCreateReceipt).toEqual(chapterCreateReceipt);
+    expect(Object.isFrozen(journal.chapterCreateReceipt)).toBe(true);
+    expect(Object.isFrozen(journal.chapterCreateReceipt?.inverse)).toBe(true);
   });
 });

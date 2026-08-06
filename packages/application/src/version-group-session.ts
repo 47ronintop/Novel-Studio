@@ -5,6 +5,7 @@ import type {
   ChangeSetApprovalV2,
   ChangeSetFileContentMode,
   ChangeSetOperation,
+  ChapterCreateApplyReceipt,
   StoryBibleApplyReceipt,
   StoryBibleStatusTransitionProof,
   VersionGroup,
@@ -126,6 +127,7 @@ export interface VersionGroupApplyBatchGroupResult {
   readonly versionGroup?: VersionGroup;
   readonly error?: UnifiedError;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
+  readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
 }
 
 export interface VersionGroupApplyBatchResult {
@@ -426,7 +428,10 @@ export function createVersionGroupSession(
                 versionGroup: result.value,
                 ...(result.value.storyBibleReceipt === undefined
                   ? {}
-                  : { storyBibleReceipt: result.value.storyBibleReceipt })
+                  : { storyBibleReceipt: result.value.storyBibleReceipt }),
+                ...(result.value.chapterCreateReceipt === undefined
+                  ? {}
+                  : { chapterCreateReceipt: result.value.chapterCreateReceipt })
               })
             : Object.freeze({
                 consistencyGroupId,

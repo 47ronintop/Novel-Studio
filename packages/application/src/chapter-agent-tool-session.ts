@@ -343,21 +343,17 @@ export function createChapterAgentToolSession(
         argumentError("CHAPTER_AGENT_CREATE_ARGUMENTS_INVALID", "create_chapter body is invalid.")
       );
     }
-    if (
-      input.volumeId !== undefined &&
-      (typeof input.volumeId !== "string" || input.volumeId.trim() === "")
-    ) {
+    if (input.volumeId !== undefined) {
       return err(
         argumentError(
           "CHAPTER_AGENT_CREATE_ARGUMENTS_INVALID",
-          "create_chapter volumeId is invalid."
+          "create_chapter volume assignment requires an atomic outline transaction."
         )
       );
     }
     return ok({
       title: input.title,
-      ...(input.body === undefined ? {} : { body: input.body }),
-      ...(input.volumeId === undefined ? {} : { volumeId: input.volumeId })
+      ...(input.body === undefined ? {} : { body: input.body })
     });
   }
 

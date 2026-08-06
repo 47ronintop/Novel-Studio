@@ -11,6 +11,7 @@ import {
   createChangeSetRevision,
   createChangeSetRevisionBatchV2,
   createOperationsChangeSetRevisionBatch,
+  createOperationsChangeSetRevisionV2,
   decideChangeSetApproval,
   decideChangeSetApprovalV2,
   inspectChangeSetConsistencyGroups,
@@ -798,6 +799,175 @@ describe("desktop Agent Run runtime", () => {
     });
     expect(operation?.content).toContain("Repository-owned order and metadata.");
     expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
+  });
+
+  test("applies a prepared chapter create with the same receipt in the Version Group and recovery journal", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-chapter-create-receipt-"));
+    roots.push(projectRoot);
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterRepository = new ChapterFileRepository({
+      projectRoot,
+      now: () => "2026-08-05T00:00:00.000Z"
+    });
+    const prepared = await chapterRepository.prepareAgentChapterCreate({
+      title: "Receipt chapter",
+      body: "Repository-owned chapter body."
+    });
+    if (!prepared.ok) throw new Error(prepared.error.message);
+    const consistencyGroupId = `chapter-create-${prepared.value.item.catalogRevision}`;
+    const operationId = "create-chapter-receipt";
+    const providerSemanticVersionSetChecksum = "a".repeat(64);
+    const changeSet = createOperationsChangeSetRevisionV2({
+      changeSetId: "changes-chapter-create-receipt",
+      runId: "run-chapter-create-receipt",
+      projectId: "project-01",
+      checkpointId: "checkpoint-chapter-create-receipt",
+      contextSnapshotId: "context-chapter-create-receipt",
+      providerSemanticVersionSetChecksum,
+      createdAt: "2099-01-01T00:00:00.000Z",
+      operations: [
+        {
+          kind: "create_file",
+          operationId,
+          toolCallIdempotencyKey: "tool-create-chapter-receipt",
+          relativePath: prepared.value.relativePath,
+          content: prepared.value.serializedContent,
+          consistencyGroupId
+        }
+      ]
+    });
+    const selection = inspectChangeSetConsistencyGroups(changeSet);
+    const binding = createApprovalBindingV2({
+      workspaceBindingId: "workspace_project_01",
+      rootBindingId: "root_project_01",
+      runId: changeSet.runId,
+      changeSetId: changeSet.changeSetId,
+      changeSetRevision: changeSet.revision,
+      changeSetChecksum: changeSet.checksum,
+      providerSemanticVersionSetChecksum,
+      operationKind: "chapter_create",
+      selectionChecksum: selection.selectionChecksum ?? "",
+      selectedOperationIds: [operationId],
+      operationOrderChecksum: checksumChangeSetText(operationId),
+      sourceRef: `catalog:${prepared.value.item.catalogRevision}`,
+      targetRef: `chapter:${prepared.value.chapter.frontmatter.id}`,
+      baseChecksum: checksumChangeSetText(""),
+      candidateChecksum: checksumChangeSetText(prepared.value.serializedContent),
+      baseManifestChecksum: checksumChangeSetText(""),
+      candidateManifestChecksum: checksumChangeSetText(
+        `${prepared.value.relativePath}:${checksumChangeSetText(prepared.value.serializedContent)}`
+      ),
+      encoding: "utf-8",
+      bom: "absent",
+      eol: "lf",
+      approvalRuleSetVersion: "rules-2.0",
+      approvalRuleSetChecksum: "b".repeat(64),
+      proofId: "proof_chapter_create_receipt",
+      proofChecksum: "c".repeat(64),
+      executionWritePolicy: "write_before_confirmation",
+      policyRevision: "policy_chapter_create_receipt",
+      capabilityRevision: "capability_chapter_create_receipt",
+      approvalSource: "human_confirmation",
+      issuedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T01:00:00.000Z"
+    });
+    const authorizationLedger = new ApprovalAuthorizationLedger({
+      projectRoot,
+      now: () => "2099-01-01T00:00:10.000Z"
+    });
+    const approval = decideChangeSetApprovalV2({
+      changeSet,
+      decision: "apply_selected",
+      displayBindingChecksum: changeSet.displayBindingChecksum,
+      binding,
+      authorizationId: "auth_chapter_create_receipt",
+      reservationTransactionId: "tx_chapter_create_receipt",
+      resolvedAt: "2099-01-01T00:00:11.000Z",
+      now: Date.parse("2099-01-01T00:00:11.000Z")
+    });
+    if (!approval.ok) throw new Error(approval.error.message);
+
+    const lockOwnerId = "desktop-chapter-create-receipt-lock";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const services = runtimeExports.createDesktopVersionGroupServices({
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      projectId: "project-01",
+      projectLockOwnerId: lockOwnerId,
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      }),
+      authorizationLedger,
+      requireV2Authorization: true,
+      projectReads: new AgentProjectReadRepository({ projectRoot }),
+      chapterRepository
+    });
+    expect(await services.recoverOnStartup()).toMatchObject({ ok: true });
+    expect(
+      await authorizationLedger.issue({
+        binding,
+        authorizationId: "auth_chapter_create_receipt"
+      })
+    ).toMatchObject({ ok: true });
+    expect(
+      await authorizationLedger.reserve({
+        authorizationId: "auth_chapter_create_receipt",
+        transactionId: "tx_chapter_create_receipt"
+      })
+    ).toMatchObject({ ok: true });
+
+    const applied = await services.versionGroupSession.applyApproved({
+      changeSet,
+      approval: approval.value,
+      group: { applyBatchId: "apply-chapter-create-receipt", consistencyGroupId }
+    });
+    if (!applied.ok) throw new Error(`${applied.error.code}: ${applied.error.message}`);
+
+    const persistedBytes = await readFile(join(projectRoot, prepared.value.relativePath), "utf8");
+    const persistedChecksum = sha256(persistedBytes);
+    expect(applied.value).toMatchObject({
+      transactionStatus: "applied",
+      chapterCreateReceipt: {
+        schemaVersion: "1.0",
+        changeSetId: changeSet.changeSetId,
+        consistencyGroupId,
+        operationId,
+        chapterId: prepared.value.chapter.frontmatter.id,
+        relativePath: prepared.value.relativePath,
+        catalogRevision: prepared.value.item.catalogRevision,
+        order: 1,
+        status: "draft",
+        revision: 1,
+        persistedChecksum,
+        historyVersionId: null,
+        inverse: {
+          kind: "delete_file",
+          relativePath: prepared.value.relativePath,
+          expectedChecksum: persistedChecksum
+        }
+      }
+    });
+    expect(persistedBytes).toBe(prepared.value.serializedContent);
+
+    const journals = await new RecoveryRepository({
+      projectRoot
+    }).listAgentTransactionJournals();
+    if (!journals.ok || journals.value.length !== 1) {
+      throw new Error("Expected one recovery journal for the chapter create.");
+    }
+    expect(journals.value[0]?.chapterCreateReceipt).toEqual(applied.value.chapterCreateReceipt);
+    expect(journals.value[0]?.chapterCreateReceipt?.persistedChecksum).toBe(persistedChecksum);
+    expect(
+      await chapterRepository.readChapter(prepared.value.chapter.frontmatter.id)
+    ).toMatchObject({
+      ok: true,
+      value: {
+        frontmatter: { title: "Receipt chapter", status: "draft", order: 1 },
+        body: "Repository-owned chapter body.\n"
+      }
+    });
   });
 
   test("rejects multiple formal chapter creates before duplicate orders can be written", async () => {

@@ -16,7 +16,11 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { err, ok } from "@novel-studio/shared";
-import { deriveChangeSetGroupApprovalToken } from "@novel-studio/agent-engine";
+import {
+  createApprovalBindingV2,
+  deriveChangeSetGroupApprovalToken,
+  type ApprovalBindingV2
+} from "@novel-studio/agent-engine";
 
 import {
   AgentWriteTransaction,
@@ -25,8 +29,10 @@ import {
   type AgentWriteTransactionOptions,
   type AgentWriteTrustedCreativeMutationPort
 } from "../src/agent-write-transaction.js";
+import { ApprovalAuthorizationLedger } from "../src/approval-authorization-ledger.js";
 import { writeTextAtomically } from "../src/atomic-write.js";
 import { HistoryRepository } from "../src/history-repository.js";
+import { ChapterFileRepository } from "../src/chapter-repository.js";
 import { ProjectLockFileRepository } from "../src/project-lock-repository.js";
 import type {
   AgentTransactionJournal,
@@ -714,6 +720,176 @@ describe("AgentWriteTransaction", () => {
         }
       ]
     });
+  });
+
+  test("persists and recovers a formal chapter create receipt", async () => {
+    const projectRoot = await createProject({});
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterRepository = new ChapterFileRepository({ projectRoot });
+    const prepared = await chapterRepository.prepareAgentChapterCreate({
+      title: "Receipt Chapter",
+      body: "A durable chapter create receipt."
+    });
+    if (!prepared.ok) throw new Error(prepared.error.message);
+
+    const consistencyGroupId = `chapter-create-${prepared.value.item.catalogRevision}`;
+    const selectionChecksum = "e".repeat(64);
+    const applyBatchId = "apply_batch_chapter_create_receipt";
+    const operationId = "create_receipt_chapter";
+    const authorization = await reserveChapterCreateV2Authorization({
+      operationId,
+      relativePath: prepared.value.relativePath,
+      content: prepared.value.serializedContent,
+      consistencyGroupId,
+      selectionChecksum
+    });
+    const transaction = createTransaction(projectRoot, {
+      authorizationLedger: authorization.ledger
+    });
+    const applied = await transaction.apply(
+      createV2Input([], {
+        applyBatchId,
+        consistencyGroupId,
+        selectionChecksum,
+        ...authorization.input,
+        operations: [
+          {
+            kind: "create_file",
+            operationId,
+            toolCallIdempotencyKey: "tool_create_receipt_chapter",
+            relativePath: prepared.value.relativePath,
+            content: prepared.value.serializedContent,
+            consistencyGroupId
+          }
+        ]
+      })
+    );
+
+    expect(applied).toMatchObject({
+      ok: true,
+      value: {
+        chapterCreateReceipt: {
+          schemaVersion: "1.0",
+          changeSetId: "changes_01",
+          consistencyGroupId,
+          operationId: "create_receipt_chapter",
+          chapterId: prepared.value.chapter.frontmatter.id,
+          relativePath: prepared.value.relativePath,
+          catalogRevision: prepared.value.item.catalogRevision,
+          order: 1,
+          status: "draft",
+          revision: 1,
+          persistedChecksum: expect.any(String),
+          historyVersionId: null,
+          inverse: {
+            kind: "delete_file",
+            relativePath: prepared.value.relativePath,
+            expectedChecksum: expect.any(String)
+          }
+        }
+      }
+    });
+    if (!applied.ok) throw new Error(applied.error.message);
+    expect(applied.value.chapterCreateReceipt?.persistedChecksum).toBe(
+      checksum(prepared.value.serializedContent)
+    );
+    expect(Object.isFrozen(applied.value.chapterCreateReceipt)).toBe(true);
+    expect(Object.isFrozen(applied.value.chapterCreateReceipt?.inverse)).toBe(true);
+    await expect(readFile(join(projectRoot, prepared.value.relativePath), "utf8")).resolves.toBe(
+      prepared.value.serializedContent
+    );
+
+    const listed = await new RecoveryRepository({ projectRoot }).listAgentTransactionJournals();
+    expect(listed).toMatchObject({
+      ok: true,
+      value: [
+        expect.objectContaining({
+          transactionStatus: "applied",
+          schemaVersion: "2.0",
+          applyBatchId,
+          consistencyGroupId,
+          chapterCreateReceipt: expect.objectContaining({
+            chapterId: prepared.value.chapter.frontmatter.id,
+            persistedChecksum: checksum(prepared.value.serializedContent)
+          })
+        })
+      ]
+    });
+    if (!listed.ok || listed.value[0] === undefined) {
+      throw new Error("Expected the chapter create journal to round-trip.");
+    }
+    const journal = listed.value[0];
+    const { chapterCreateReceipt: omittedReceipt, ...missingReceipt } = journal;
+    if (omittedReceipt === undefined) throw new Error("Expected a chapter create receipt.");
+    const forgedReceipt: AgentTransactionJournal = {
+      ...journal,
+      chapterCreateReceipt: {
+        ...omittedReceipt,
+        persistedChecksum: "f".repeat(64)
+      }
+    };
+    const malformedOperations = {
+      ...journal,
+      operations: [{}]
+    } as unknown as AgentTransactionJournal;
+    const recovery = new RecoveryRepository({ projectRoot });
+    for (const invalidJournal of [missingReceipt, forgedReceipt, malformedOperations]) {
+      await expect(recovery.writeAgentTransactionJournal(invalidJournal)).resolves.toMatchObject({
+        ok: false,
+        error: { code: "AGENT_TRANSACTION_JOURNAL_INVALID" }
+      });
+    }
+  });
+
+  test("requires Approval Binding and Ledger 2.0 for a formal chapter create", async () => {
+    const projectRoot = await createProject({});
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterRepository = new ChapterFileRepository({ projectRoot });
+    const prepared = await chapterRepository.prepareAgentChapterCreate({ title: "Legacy create" });
+    if (!prepared.ok) throw new Error(prepared.error.message);
+    const consistencyGroupId = `chapter-create-${prepared.value.item.catalogRevision}`;
+    const applyBatchId = "apply_batch_legacy_chapter_create";
+    const selectionChecksum = "d".repeat(64);
+    const observed: string[] = [];
+    const transaction = createTransaction(projectRoot, {
+      operations: observed,
+      recoveryRepository: recordingRecovery(observed)
+    });
+
+    const rejected = await transaction.apply(
+      createInput([], {
+        applyBatchId,
+        consistencyGroupId,
+        selectionChecksum,
+        approvalToken: deriveChangeSetGroupApprovalToken({
+          changeSetId: "changes_01",
+          revision: 1,
+          checksum: "c".repeat(64),
+          applyBatchId,
+          consistencyGroupId,
+          selectionChecksum
+        }),
+        operations: [
+          {
+            kind: "create_file",
+            operationId: "create_legacy_chapter",
+            toolCallIdempotencyKey: "tool_create_legacy_chapter",
+            relativePath: prepared.value.relativePath,
+            content: prepared.value.serializedContent,
+            consistencyGroupId
+          }
+        ]
+      })
+    );
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_V2_AUTHORIZATION_REQUIRED" }
+    });
+    expect(observed).toEqual([]);
+    await expect(
+      readFile(join(projectRoot, prepared.value.relativePath), "utf8")
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("projects Story Bible revisions, History identity, suggestions, and inverse patch", async () => {
@@ -3087,6 +3263,145 @@ describe("AgentWriteTransaction lifecycle operations", () => {
     });
   });
 
+  test("persists a chapter create receipt before apply and carries it through undo", async () => {
+    const projectRoot = await createProject({});
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterId = "ch_receipt_apply";
+    const relativePath = `chapters/${chapterId}.md`;
+    const content = formalChapterCreateContent(chapterId, 4, "Receipt chapter");
+    const catalogRevision = "a".repeat(64);
+    const consistencyGroupId = `chapter-create-${catalogRevision}`;
+    const applyBatchId = "apply_chapter_create_receipt";
+    const selectionChecksum = "b".repeat(64);
+    const changeSetChecksum = "d".repeat(64);
+    const operationId = "create_chapter_receipt";
+    const authorization = await reserveChapterCreateV2Authorization({
+      operationId,
+      relativePath,
+      content,
+      consistencyGroupId,
+      selectionChecksum,
+      changeSetChecksum
+    });
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot),
+      authorizationLedger: authorization.ledger
+    });
+
+    const applied = await transaction.apply(
+      createV2Input([], {
+        checksum: changeSetChecksum,
+        applyBatchId,
+        consistencyGroupId,
+        selectionChecksum,
+        ...authorization.input,
+        operations: [
+          {
+            kind: "create_file",
+            operationId,
+            toolCallIdempotencyKey: "tool_create_chapter_receipt",
+            consistencyGroupId,
+            relativePath,
+            content
+          }
+        ]
+      })
+    );
+
+    expect(applied.ok).toBe(true);
+    if (!applied.ok) throw new Error(applied.error.message);
+    const expectedReceipt = {
+      schemaVersion: "1.0",
+      changeSetId: "changes_01",
+      consistencyGroupId,
+      operationId: "create_chapter_receipt",
+      chapterId,
+      relativePath,
+      catalogRevision,
+      order: 4,
+      status: "draft",
+      revision: 1,
+      persistedChecksum: checksum(content),
+      historyVersionId: null,
+      inverse: {
+        kind: "delete_file",
+        relativePath,
+        expectedChecksum: checksum(content)
+      }
+    };
+    expect(applied.value.chapterCreateReceipt).toEqual(expectedReceipt);
+    expect(Object.isFrozen(applied.value.chapterCreateReceipt)).toBe(true);
+    expect(Object.isFrozen(applied.value.chapterCreateReceipt?.inverse)).toBe(true);
+    const applyJournal = (await readJournals(projectRoot)).find(
+      (journal) => journal.kind === "apply"
+    );
+    expect(applyJournal?.chapterCreateReceipt).toEqual(expectedReceipt);
+    expect(await readFile(join(projectRoot, relativePath), "utf8")).toBe(content);
+
+    const undone = await transaction.undoVersionGroup({
+      versionGroupId: applied.value.versionGroupId
+    });
+
+    expect(undone.ok && undone.value.transactionStatus).toBe("applied");
+    await expect(readFile(join(projectRoot, relativePath), "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+  });
+
+  test("chapter create undo refuses to delete user-modified bytes", async () => {
+    const projectRoot = await createProject({});
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    const chapterId = "ch_receipt_conflict";
+    const relativePath = `chapters/${chapterId}.md`;
+    const content = formalChapterCreateContent(chapterId, 2, "Conflict chapter");
+    const consistencyGroupId = `chapter-create-${"c".repeat(64)}`;
+    const applyBatchId = "apply_chapter_create_conflict";
+    const selectionChecksum = "e".repeat(64);
+    const changeSetChecksum = "f".repeat(64);
+    const operationId = "create_chapter_conflict";
+    const authorization = await reserveChapterCreateV2Authorization({
+      operationId,
+      relativePath,
+      content,
+      consistencyGroupId,
+      selectionChecksum,
+      changeSetChecksum
+    });
+    const transaction = createTransaction(projectRoot, {
+      lifecycleOperations: createTestingLifecyclePort(projectRoot),
+      authorizationLedger: authorization.ledger
+    });
+    const applied = await transaction.apply(
+      createV2Input([], {
+        checksum: changeSetChecksum,
+        applyBatchId,
+        consistencyGroupId,
+        selectionChecksum,
+        ...authorization.input,
+        operations: [
+          {
+            kind: "create_file",
+            operationId,
+            toolCallIdempotencyKey: "tool_create_chapter_conflict",
+            consistencyGroupId,
+            relativePath,
+            content
+          }
+        ]
+      })
+    );
+    if (!applied.ok) throw new Error(applied.error.message);
+    const userContent = content.replace("Receipt body.", "User edit after apply.");
+    await writeFile(join(projectRoot, relativePath), userContent, "utf8");
+
+    const undone = await transaction.undoVersionGroup({
+      versionGroupId: applied.value.versionGroupId
+    });
+
+    expect(undone.ok && undone.value.transactionStatus).not.toBe("applied");
+    expect(await readFile(join(projectRoot, relativePath), "utf8")).toBe(userContent);
+  });
+
   test("uses the standard trusted creative lifecycle port for apply and undo", async () => {
     const projectRoot = await createProject({
       "notes/source.md": "source",
@@ -3503,6 +3818,8 @@ interface TransactionTestOptions {
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
   readonly validateApply?: AgentWriteTransactionOptions["validateApply"];
+  readonly authorizationLedger?: AgentWriteTransactionOptions["authorizationLedger"];
+  readonly requireV2Authorization?: boolean;
   readonly disableNativeFileMutations?: boolean;
 }
 
@@ -3546,6 +3863,12 @@ function createTransaction(
       ? {}
       : { trustedCreativeMutations: options.trustedCreativeMutations }),
     ...(options.validateApply === undefined ? {} : { validateApply: options.validateApply }),
+    ...(options.authorizationLedger === undefined
+      ? {}
+      : { authorizationLedger: options.authorizationLedger }),
+    ...(options.requireV2Authorization === undefined
+      ? {}
+      : { requireV2Authorization: options.requireV2Authorization }),
     allowUnsafeReplaceFileForTesting: true,
     replaceFile: async (input) => {
       operations.push(`replace:${input.phase}:${input.relativePath}`);
@@ -3807,6 +4130,101 @@ function createInput(
   };
 }
 
+function createV2Input(
+  files: AgentWriteTransactionInput["files"],
+  overrides: Partial<AgentWriteTransactionInput> = {}
+): AgentWriteTransactionInput {
+  return {
+    runId: "run_01",
+    checkpointId: "checkpoint_01",
+    changeSetId: "changes_01",
+    revision: 1,
+    checksum: "c".repeat(64),
+    changeSetSchemaVersion: "2.0",
+    writePolicy: "write_before_confirmation",
+    approvalSource: "human_confirmation",
+    files,
+    ...overrides
+  };
+}
+
+async function reserveChapterCreateV2Authorization(input: {
+  readonly operationId: string;
+  readonly relativePath: string;
+  readonly content: string;
+  readonly consistencyGroupId: string;
+  readonly selectionChecksum: string;
+  readonly changeSetChecksum?: string;
+}): Promise<{
+  readonly ledger: ApprovalAuthorizationLedger;
+  readonly binding: ApprovalBindingV2;
+  readonly input: Pick<
+    AgentWriteTransactionInput,
+    | "changeSetSchemaVersion"
+    | "authorizationId"
+    | "reservationTransactionId"
+    | "providerSemanticVersionSetChecksum"
+    | "approvalBindingV2"
+  >;
+}> {
+  const authorizationId = `auth_${input.operationId}`;
+  const reservationTransactionId = `tx_${input.operationId}`;
+  const providerSemanticVersionSetChecksum = "a".repeat(64);
+  const binding = createApprovalBindingV2({
+    workspaceBindingId: "workspace_test_project",
+    rootBindingId: "root_test_project",
+    runId: "run_01",
+    changeSetId: "changes_01",
+    changeSetRevision: 1,
+    changeSetChecksum: input.changeSetChecksum ?? "c".repeat(64),
+    providerSemanticVersionSetChecksum,
+    operationKind: "chapter_create",
+    selectionChecksum: input.selectionChecksum,
+    selectedOperationIds: [input.operationId],
+    operationOrderChecksum: checksum(input.operationId),
+    sourceRef: `catalog:${input.consistencyGroupId}`,
+    targetRef: `file:${input.relativePath}`,
+    baseChecksum: checksum(""),
+    candidateChecksum: checksum(input.content),
+    baseManifestChecksum: checksum(""),
+    candidateManifestChecksum: checksum(`${input.relativePath}:${checksum(input.content)}`),
+    encoding: "utf-8",
+    bom: "absent",
+    eol: "lf",
+    approvalRuleSetVersion: "rules-2.0",
+    approvalRuleSetChecksum: "b".repeat(64),
+    proofId: `proof_${input.operationId}`,
+    proofChecksum: "c".repeat(64),
+    executionWritePolicy: "write_before_confirmation",
+    policyRevision: "policy_test_chapter_create",
+    capabilityRevision: "capability_test_chapter_create",
+    approvalSource: "human_confirmation",
+    issuedAt: "2026-07-13T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z"
+  });
+  const ledger = new ApprovalAuthorizationLedger({
+    now: () => "2026-07-13T01:00:00.000Z"
+  });
+  const issued = await ledger.issue({ binding, authorizationId });
+  if (!issued.ok) throw new Error(issued.error.message);
+  const reserved = await ledger.reserve({
+    authorizationId,
+    transactionId: reservationTransactionId
+  });
+  if (!reserved.ok) throw new Error(reserved.error.message);
+  return {
+    ledger,
+    binding,
+    input: {
+      changeSetSchemaVersion: "2.0",
+      authorizationId,
+      reservationTransactionId,
+      providerSemanticVersionSetChecksum,
+      approvalBindingV2: binding
+    }
+  };
+}
+
 function createTestingLifecyclePort(
   projectRoot: string,
   options: {
@@ -3955,6 +4373,24 @@ async function historyReasons(projectRoot: string): Promise<string[]> {
     recordPaths.map(async (path) => JSON.parse(await readFile(path, "utf8")) as { reason?: string })
   );
   return records.flatMap((record) => (record.reason === undefined ? [] : [record.reason]));
+}
+
+function formalChapterCreateContent(chapterId: string, order: number, title: string): string {
+  return `---
+schemaVersion: '1.0'
+id: ${chapterId}
+type: chapter
+title: ${title}
+order: ${order}
+status: draft
+wordCount: 2
+revision: 1
+createdAt: '2026-08-06T01:00:00.000Z'
+updatedAt: '2026-08-06T01:00:00.000Z'
+---
+
+Receipt body.
+`;
 }
 
 function checksum(content: string): string {

@@ -192,21 +192,36 @@ describe("ChapterFileRepository", () => {
     const before = await readdir(join(projectRoot, "chapters"));
     const prepared = await repository.prepareAgentChapterCreate({
       title: "Prepared",
-      body: "new body",
-      volumeId: "vol_2"
+      body: "new body"
     });
     expect(isOk(prepared)).toBe(true);
     if (isErr(prepared)) throw new Error(prepared.error.message);
     expect(await readdir(join(projectRoot, "chapters"))).toEqual(before);
     expect(prepared.value.chapter.frontmatter.order).toBe(2);
     expect(prepared.value.serializedContent).toBe(
-      `---\nschemaVersion: '1.0'\nid: ${prepared.value.chapter.frontmatter.id}\ntype: chapter\ntitle: Prepared\norder: 2\nstatus: draft\nvolumeId: vol_2\nwordCount: 2\nrevision: 1\ncreatedAt: '2026-08-05T00:00:00.000Z'\nupdatedAt: '2026-08-05T00:00:00.000Z'\n---\n\nnew body\n`
+      `---\nschemaVersion: '1.0'\nid: ${prepared.value.chapter.frontmatter.id}\ntype: chapter\ntitle: Prepared\norder: 2\nstatus: draft\nwordCount: 2\nrevision: 1\ncreatedAt: '2026-08-05T00:00:00.000Z'\nupdatedAt: '2026-08-05T00:00:00.000Z'\n---\n\nnew body\n`
     );
     await expect(
       readFile(join(projectRoot, prepared.value.relativePath), "utf8")
     ).rejects.toMatchObject({
       code: "ENOENT"
     });
+  });
+
+  test("rejects volume-bound agent creates until outline membership can be transacted", async () => {
+    const projectRoot = await createChapterProject([]);
+    const repository = new ChapterFileRepository({ projectRoot, traceId: "trace_create_volume" });
+
+    const prepared = await repository.prepareAgentChapterCreate({
+      title: "Volume chapter",
+      volumeId: "vol_2"
+    });
+
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_CREATE_VOLUME_REQUIRES_OUTLINE_TRANSACTION" }
+    });
+    expect(await readdir(join(projectRoot, "chapters"))).toEqual([]);
   });
 
   test("allocates after a deleted highest-order chapter", async () => {

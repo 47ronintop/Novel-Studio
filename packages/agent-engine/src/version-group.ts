@@ -61,6 +61,28 @@ export interface StoryBibleApplyReceipt {
   readonly assets: readonly StoryBibleApplyReceiptAsset[];
 }
 
+/** Durable metadata for a formal chapter create committed by an Agent transaction. */
+export interface ChapterCreateApplyReceipt {
+  readonly schemaVersion: "1.0";
+  readonly changeSetId: string;
+  readonly consistencyGroupId: string;
+  readonly operationId: string;
+  readonly chapterId: string;
+  readonly relativePath: string;
+  readonly catalogRevision: string;
+  readonly order: number;
+  readonly status: "draft";
+  readonly revision: 1;
+  readonly volumeId?: string;
+  readonly persistedChecksum: string;
+  readonly historyVersionId: null;
+  readonly inverse: {
+    readonly kind: "delete_file";
+    readonly relativePath: string;
+    readonly expectedChecksum: string;
+  };
+}
+
 export interface VersionGroupWrite {
   readonly writeId: string;
   readonly relativePath: string;
@@ -171,6 +193,7 @@ export interface VersionGroup {
   readonly failureKind?: VersionGroupFailureKind;
   readonly synchronization?: VersionGroupSynchronization;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
+  readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
 }
 
 interface VersionGroupBaseInput {
@@ -191,6 +214,7 @@ interface VersionGroupBaseInput {
   readonly baselineByPath: Readonly<Record<string, VersionGroupBaseline>>;
   readonly undoOfVersionGroupIds?: readonly string[];
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
+  readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
 }
 
 export interface FailedVersionGroupInput extends VersionGroupBaseInput {
@@ -255,7 +279,12 @@ function baseGroup(
         ? {}
         : { undoOfVersionGroupIds: input.undoOfVersionGroupIds })
     },
-    ...(input.storyBibleReceipt === undefined ? {} : { storyBibleReceipt: input.storyBibleReceipt })
+    ...(input.storyBibleReceipt === undefined
+      ? {}
+      : { storyBibleReceipt: input.storyBibleReceipt }),
+    ...(input.chapterCreateReceipt === undefined
+      ? {}
+      : { chapterCreateReceipt: input.chapterCreateReceipt })
   };
 }
 
@@ -327,6 +356,13 @@ function freezeVersionGroup(group: VersionGroup): VersionGroup {
             )
           )
         });
+  const chapterCreateReceipt =
+    group.chapterCreateReceipt === undefined
+      ? undefined
+      : Object.freeze({
+          ...group.chapterCreateReceipt,
+          inverse: Object.freeze({ ...group.chapterCreateReceipt.inverse })
+        });
   return Object.freeze({
     ...group,
     writes,
@@ -334,6 +370,7 @@ function freezeVersionGroup(group: VersionGroup): VersionGroup {
     undoMetadata,
     ...(rollbackReview === undefined ? {} : { rollbackReview }),
     ...(synchronization === undefined ? {} : { synchronization }),
-    ...(storyBibleReceipt === undefined ? {} : { storyBibleReceipt })
+    ...(storyBibleReceipt === undefined ? {} : { storyBibleReceipt }),
+    ...(chapterCreateReceipt === undefined ? {} : { chapterCreateReceipt })
   });
 }

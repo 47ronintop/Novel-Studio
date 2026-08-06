@@ -14,6 +14,7 @@ import {
   approvalBindingV2Checksum,
   deriveChangeSetGroupApprovalToken,
   validateApprovalBindingV2,
+  type ChapterCreateApplyReceipt,
   type StoryBibleApplyReceipt,
   type ApprovalBindingV2,
   type StoryBibleApplyReceiptAsset,
@@ -22,6 +23,10 @@ import {
 import { isStoryBibleV11AssetType, validateStoryBibleV11Asset } from "@novel-studio/schemas";
 
 import { storageError, validationError } from "./errors.js";
+import {
+  buildChapterCreateApplyReceipt,
+  inspectChapterCreateCandidate
+} from "./chapter-create-receipt.js";
 import { withStoryBibleProjectWriteLock } from "./story-bible-write-coordinator.js";
 import type { ApprovalAuthorizationLedgerPort } from "./approval-authorization-ledger.js";
 import type {
@@ -263,9 +268,15 @@ export class AgentWriteTransaction {
     input: AgentWriteTransactionInput
   ): Promise<Result<VersionGroupRecord, UnifiedError>> {
     return this.exclusive(async () => {
+      if (formalChapterCreateCount(input) > 1) {
+        return err(this.error("CHAPTER_CATALOG_CAS_CONFLICT", "validation"));
+      }
       const validation = validateTransactionInput(input, "apply");
       if (!validation.ok) return validation;
-      if (this.options.requireV2Authorization === true && !hasV2Approval(input)) {
+      if (
+        (this.options.requireV2Authorization === true || hasFormalChapterCreate(input)) &&
+        !hasV2Approval(input)
+      ) {
         return err(this.error("AGENT_WRITE_V2_AUTHORIZATION_REQUIRED", "validation"));
       }
       const authorization = await this.validateV2Authorization(input);
@@ -2331,6 +2342,20 @@ function validateTransactionInput(
           new Set(input.storyBibleSuggestionIds).size !== input.storyBibleSuggestionIds.length ||
           input.storyBibleSuggestionIds.some((id) => !/^sug_[A-Za-z0-9_-]{1,128}$/u.test(id)))
       : input.storyBibleSuggestionIds !== undefined;
+  const chapterCreateCandidates = operations.map((operation) =>
+    inspectChapterCreateCandidate(operation)
+  );
+  const formalChapterCreates = chapterCreateCandidates.filter(
+    (candidate) => candidate.kind === "valid"
+  );
+  const chapterCreateBindingInvalid =
+    chapterCreateCandidates.some((candidate) => candidate.kind === "invalid") ||
+    (kind === "apply"
+      ? formalChapterCreates.some(
+          (candidate) =>
+            !hasCompleteGroupBinding || candidate.consistencyGroupId !== input.consistencyGroupId
+        )
+      : formalChapterCreates.length > 0);
   const approvalBindingInvalid =
     kind === "apply"
       ? hasV2Approval(input)
@@ -2381,6 +2406,7 @@ function validateTransactionInput(
     approvalBindingInvalid ||
     groupBindingInvalid ||
     storyBibleSuggestionBindingInvalid ||
+    chapterCreateBindingInvalid ||
     new Set(paths).size !== paths.length ||
     paths.some((path) => operationPathSet.has(path)) ||
     new Set(operations.map((operation) => operation.operationId)).size !== operations.length ||
@@ -2415,6 +2441,16 @@ function hasV2Approval(input: TransactionExecutionInput): input is AgentWriteTra
   readonly providerSemanticVersionSetChecksum: string;
 } {
   return "approvalBindingV2" in input && input.approvalBindingV2 !== undefined;
+}
+
+function hasFormalChapterCreate(input: AgentWriteTransactionInput): boolean {
+  return formalChapterCreateCount(input) > 0;
+}
+
+function formalChapterCreateCount(input: AgentWriteTransactionInput): number {
+  return (input.operations ?? []).filter(
+    (operation) => inspectChapterCreateCandidate(operation).kind === "valid"
+  ).length;
 }
 
 function isStoryBibleTransactionRelativePath(relativePath: string): boolean {
@@ -2797,6 +2833,12 @@ function createJournal(input: {
     files: input.preparedFiles,
     operations: input.preparedOperations
   });
+  const chapterCreateReceipt = createChapterCreateReceipt({
+    kind: input.kind,
+    changeSetId: input.input.changeSetId,
+    consistencyGroupId: input.input.consistencyGroupId,
+    operations: input.preparedOperations
+  });
   const v2 = input.kind === "apply" && hasV2Approval(input.input) ? input.input : undefined;
   return freezeJournal({
     schemaVersion:
@@ -2886,10 +2928,30 @@ function createJournal(input: {
       }))
     ],
     ...(storyBibleReceipt === undefined ? {} : { storyBibleReceipt }),
+    ...(chapterCreateReceipt === undefined ? {} : { chapterCreateReceipt }),
     ...(input.undoOfVersionGroupIds === undefined
       ? {}
       : { undoOfVersionGroupIds: input.undoOfVersionGroupIds })
   });
+}
+
+function createChapterCreateReceipt(input: {
+  readonly kind: AgentTransactionJournalKind;
+  readonly changeSetId: string;
+  readonly consistencyGroupId: string | undefined;
+  readonly operations: readonly PreparedOperation[];
+}): ChapterCreateApplyReceipt | undefined {
+  if (input.kind !== "apply") return undefined;
+  const formal = input.operations.find(
+    (prepared) => inspectChapterCreateCandidate(prepared.operation).kind === "valid"
+  );
+  return formal === undefined
+    ? undefined
+    : buildChapterCreateApplyReceipt({
+        changeSetId: input.changeSetId,
+        consistencyGroupId: input.consistencyGroupId,
+        operation: formal.operation
+      });
 }
 
 function createStoryBibleApplyReceipt(input: {
@@ -3124,6 +3186,13 @@ function freezeStoryBibleReceipt(receipt: StoryBibleApplyReceipt): StoryBibleApp
   });
 }
 
+function freezeChapterCreateReceipt(receipt: ChapterCreateApplyReceipt): ChapterCreateApplyReceipt {
+  return Object.freeze({
+    ...receipt,
+    inverse: Object.freeze({ ...receipt.inverse })
+  });
+}
+
 function updateJournalEntry(
   journal: AgentTransactionJournal,
   writeId: string,
@@ -3238,6 +3307,9 @@ function freezeJournal(journal: AgentTransactionJournal): AgentTransactionJourna
     ...(journal.storyBibleReceipt === undefined
       ? {}
       : { storyBibleReceipt: freezeStoryBibleReceipt(journal.storyBibleReceipt) }),
+    ...(journal.chapterCreateReceipt === undefined
+      ? {}
+      : { chapterCreateReceipt: freezeChapterCreateReceipt(journal.chapterCreateReceipt) }),
     ...(journal.approvalBindingV2 === undefined
       ? {}
       : {
@@ -3594,6 +3666,9 @@ function groupFromJournal(
     ...(journal.storyBibleReceipt === undefined
       ? {}
       : { storyBibleReceipt: journal.storyBibleReceipt }),
+    ...(journal.chapterCreateReceipt === undefined
+      ? {}
+      : { chapterCreateReceipt: journal.chapterCreateReceipt }),
     createdAt: journal.createdAt,
     writes,
     ...(operations.length === 0 ? {} : { operations }),

@@ -326,6 +326,17 @@ export class ChapterFileRepository
         })
       );
     }
+    if (input.volumeId !== undefined) {
+      return err(
+        validationError({
+          code: "CHAPTER_CREATE_VOLUME_REQUIRES_OUTLINE_TRANSACTION",
+          message: "Chapter volume assignment requires an atomic outline transaction.",
+          suggestedAction:
+            "Create the chapter without a volume, then use the reviewed reorder flow.",
+          traceId: this.traceId
+        })
+      );
+    }
     const records = await this.readChapterCatalogRecords();
     if (!records.ok) return records;
     const migration = buildLocalOrderMigrationPreview(records.value);
@@ -353,7 +364,6 @@ export class ChapterFileRepository
         title,
         order,
         status: "draft",
-        ...(input.volumeId === undefined ? {} : { volumeId: input.volumeId }),
         wordCount: countWords(input.body ?? ""),
         revision: 1,
         createdAt: now,
@@ -473,6 +483,12 @@ export class ChapterFileRepository
       return this.createValidationFailure(
         "CHAPTER_CREATE_METADATA_INVALID",
         "Prepared chapter status and revision must use repository defaults."
+      );
+    }
+    if (input.chapter.frontmatter.volumeId !== undefined) {
+      return this.createValidationFailure(
+        "CHAPTER_CREATE_VOLUME_REQUIRES_OUTLINE_TRANSACTION",
+        "Prepared chapter volume assignment is not bound to an outline transaction."
       );
     }
     if (

@@ -14,6 +14,10 @@ import {
 import { storageError, validationError } from "./errors.js";
 import { HistoryRepository } from "./history-repository.js";
 import { isSafeProjectRelativePath } from "./no-follow-file-operations.js";
+import {
+  inspectChapterCreateCandidate,
+  isChapterCreateReceiptBound
+} from "./chapter-create-receipt.js";
 import type {
   AgentOperationPathSnapshot,
   AgentTransactionJournal,
@@ -727,7 +731,6 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
     return false;
   }
   if (!hasValidApprovalBinding(journal)) return false;
-  if (!isValidStoryBibleReceipt(journal)) return false;
   if (!journal.entries.every(isAgentTransactionJournalEntry)) return false;
   if (journal.operations !== undefined) {
     if (
@@ -746,12 +749,61 @@ function isAgentTransactionJournal(value: unknown): value is AgentTransactionJou
       return false;
     }
   }
+  if (!isValidStoryBibleReceipt(journal)) return false;
+  if (!isValidChapterCreateReceipt(journal)) return false;
   if (journal.approvalSource === "project_safe_auto_update" && !isValidSafeAutoJournal(journal)) {
     return false;
   }
   if (!hasValidMutationOrder(journal)) return false;
   const writeIds = new Set(journal.entries.map((entry) => entry.writeId));
   return writeIds.size === journal.entries.length;
+}
+
+function isValidChapterCreateReceipt(journal: Partial<AgentTransactionJournal>): boolean {
+  const operations = journal.operations ?? [];
+  const inspected = operations.map((entry) => ({
+    entry,
+    candidate: inspectChapterCreateCandidate(entry.operation)
+  }));
+  if (inspected.some(({ candidate }) => candidate.kind === "invalid")) return false;
+  const formal = inspected.filter(({ candidate }) => candidate.kind === "valid");
+  if (formal.length === 0) return journal.chapterCreateReceipt === undefined;
+  if (
+    formal.length !== 1 ||
+    journal.chapterCreateReceipt === undefined ||
+    journal.kind !== "apply" ||
+    (journal.schemaVersion !== "1.1" && journal.schemaVersion !== "2.0") ||
+    typeof journal.changeSetId !== "string" ||
+    typeof journal.consistencyGroupId !== "string"
+  ) {
+    return false;
+  }
+  const source = formal[0];
+  if (source === undefined || source.candidate.kind !== "valid") return false;
+  const candidate = source.candidate;
+  const operation = source.entry.operation;
+  if (operation.kind !== "create_file") return false;
+  const before = source.entry.before.find(
+    (snapshot) => snapshot.relativePath === candidate.relativePath
+  );
+  const after = source.entry.after.find(
+    (snapshot) => snapshot.relativePath === candidate.relativePath
+  );
+  if (
+    before?.kind !== "missing" ||
+    after?.kind !== "file" ||
+    after.content !== operation.content ||
+    checksum(after.content) !== after.checksum
+  ) {
+    return false;
+  }
+  return isChapterCreateReceiptBound({
+    receipt: journal.chapterCreateReceipt,
+    changeSetId: journal.changeSetId,
+    consistencyGroupId: journal.consistencyGroupId,
+    operation,
+    afterChecksum: after.checksum
+  });
 }
 
 function isValidStoryBibleReceipt(journal: Partial<AgentTransactionJournal>): boolean {

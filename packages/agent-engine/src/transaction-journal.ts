@@ -1,5 +1,9 @@
 import type { AgentWritePolicy } from "./agent-run-types.js";
-import type { StoryBibleApplyReceipt, VersionGroupAssetType } from "./version-group.js";
+import type {
+  ChapterCreateApplyReceipt,
+  StoryBibleApplyReceipt,
+  VersionGroupAssetType
+} from "./version-group.js";
 import {
   parseApprovalBindingV2,
   validateApprovalBindingV2,
@@ -48,6 +52,7 @@ export interface TransactionJournal {
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
   readonly storyBibleReceipt?: StoryBibleApplyReceipt;
+  readonly chapterCreateReceipt?: ChapterCreateApplyReceipt;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly transactionStatus: TransactionJournalStatus;
@@ -259,6 +264,14 @@ function freezeJournal(journal: TransactionJournal): TransactionJournal {
                 })
               )
             )
+          })
+        }),
+    ...(journal.chapterCreateReceipt === undefined
+      ? {}
+      : {
+          chapterCreateReceipt: Object.freeze({
+            ...journal.chapterCreateReceipt,
+            inverse: Object.freeze({ ...journal.chapterCreateReceipt.inverse })
           })
         }),
     ...(journal.approvalBinding === undefined
