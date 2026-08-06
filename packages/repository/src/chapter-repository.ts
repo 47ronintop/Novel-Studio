@@ -1503,7 +1503,8 @@ function parseChapterDocument(
   text: string,
   traceId: string
 ): Result<ChapterDocument, UnifiedError> {
-  const frontmatterMatch = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  const normalizedText = text.replace(/\r\n?/g, "\n");
+  const frontmatterMatch = normalizedText.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (frontmatterMatch === null) {
     return err(
       storageError({
