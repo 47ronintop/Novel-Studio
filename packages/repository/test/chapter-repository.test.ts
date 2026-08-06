@@ -159,6 +159,19 @@ describe("ChapterFileRepository", () => {
       }
     ]);
     const repository = new ChapterFileRepository({ projectRoot, traceId: "trace_metadata" });
+    await mkdir(join(projectRoot, "outline"), { recursive: true });
+    await writeFile(
+      join(projectRoot, "outline", "outline.json"),
+      JSON.stringify({
+        schemaVersion: "1.1",
+        id: "outline_main",
+        type: "outline",
+        details: {
+          volumes: [{ volumeId: "vol_truth", chapterIds: ["ch_meta"] }]
+        }
+      }),
+      "utf8"
+    );
     const listed = await repository.listChapterCatalog({});
     expect(isOk(listed)).toBe(true);
     if (isErr(listed)) throw new Error(listed.error.message);
@@ -166,10 +179,15 @@ describe("ChapterFileRepository", () => {
     if (item === undefined) throw new Error("Expected chapter catalog metadata.");
     expect(item.stableRef).toBe("chapter:ch_meta");
     expect(item.frontmatter).toMatchObject({ id: "ch_meta", volumeId: "vol_1", revision: 7 });
+    expect(item.volumeId).toBe("vol_1");
+    expect(item.effectiveVolumeId).toBe("vol_truth");
+    expect(item.effectiveOutlineRevision).toMatch(/^[a-f0-9]{64}$/u);
     expect(item.revision).toBe(7);
     const agentRead = await repository.readChapterForAgent("ch_meta");
     expect(isOk(agentRead)).toBe(true);
     if (isErr(agentRead)) throw new Error(agentRead.error.message);
+    expect(agentRead.value.effectiveVolumeId).toBe("vol_truth");
+    expect(agentRead.value.effectiveOutlineRevision).toBe(item.effectiveOutlineRevision);
     expect(item.bodyChecksum).toBe(
       createHash("sha256").update(agentRead.value.body, "utf8").digest("hex")
     );
@@ -178,6 +196,34 @@ describe("ChapterFileRepository", () => {
     expect(item.persistedChecksum).toBe(item.resourceRevision);
     expect(item.relativePath).toBe("chapters/ch_meta.md");
     expect(item.catalogRevision).toBe(listed.value.catalogRevision);
+  });
+
+  test("rejects ambiguous outline volume membership instead of guessing", async () => {
+    const projectRoot = await createChapterProject([
+      { id: "ch_ambiguous", title: "Ambiguous", order: 1, status: "draft", body: "body" }
+    ]);
+    await mkdir(join(projectRoot, "outline"), { recursive: true });
+    await writeFile(
+      join(projectRoot, "outline", "outline.json"),
+      JSON.stringify({
+        schemaVersion: "1.1",
+        id: "outline_main",
+        type: "outline",
+        details: {
+          volumes: [
+            { volumeId: "vol_a", chapterIds: ["ch_ambiguous"] },
+            { volumeId: "vol_b", chapterIds: ["ch_ambiguous"] }
+          ]
+        }
+      }),
+      "utf8"
+    );
+    const repository = new ChapterFileRepository({ projectRoot, traceId: "trace_outline_volume" });
+
+    await expect(repository.listChapterCatalog()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_OUTLINE_VOLUME_AMBIGUOUS" }
+    });
   });
 
   test("prepares an agent create without writing and returns exact serialized markdown", async () => {

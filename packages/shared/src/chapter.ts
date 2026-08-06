@@ -79,6 +79,10 @@ export interface ChapterAgentCatalogItem {
   /** Hash of the exact persisted Markdown bytes. */
   persistedChecksum: string;
   relativePath: string;
+  /** Volume assignment derived from the Story Bible outline, which is the ownership truth. */
+  effectiveVolumeId?: string;
+  /** Hash of the exact persisted outline bytes used to derive effectiveVolumeId. */
+  effectiveOutlineRevision?: string;
   volumeId?: string;
   wordCount?: number;
   catalogRevision: string;

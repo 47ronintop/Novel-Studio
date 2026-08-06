@@ -5756,6 +5756,12 @@ export function createDesktopReadToolExecutor(
                 revision: chapter.value.revision,
                 resourceRevision: chapter.value.resourceRevision,
                 catalogRevision: chapter.value.catalogRevision,
+                ...(chapter.value.effectiveVolumeId === undefined
+                  ? {}
+                  : { effectiveVolumeId: chapter.value.effectiveVolumeId }),
+                ...(chapter.value.effectiveOutlineRevision === undefined
+                  ? {}
+                  : { effectiveOutlineRevision: chapter.value.effectiveOutlineRevision }),
                 ...(chapter.value.volumeId === undefined
                   ? {}
                   : { volumeId: chapter.value.volumeId })

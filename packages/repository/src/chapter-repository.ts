@@ -200,6 +200,8 @@ export class ChapterFileRepository
     if (!normalized.ok) return normalized;
     const records = await this.readChapterCatalogRecords();
     if (!records.ok) return records;
+    const outline = await this.readEffectiveOutlineProjection();
+    if (!outline.ok) return outline;
     const catalogRevision = chapterCatalogRevision(records.value);
     const filtered = records.value
       .filter((record) => {
@@ -263,7 +265,7 @@ export class ChapterFileRepository
           })
         : null;
     return ok({
-      items: page.map((record) => chapterCatalogItem(record, catalogRevision)),
+      items: page.map((record) => chapterCatalogItem(record, catalogRevision, outline.value)),
       catalogRevision,
       nextCursor
     });
@@ -285,6 +287,8 @@ export class ChapterFileRepository
     }
     const records = await this.readChapterCatalogRecords();
     if (!records.ok) return records;
+    const outline = await this.readEffectiveOutlineProjection();
+    if (!outline.ok) return outline;
     const record = records.value.find((candidate) => candidate.id === chapterId);
     if (record === undefined) {
       return err(
@@ -298,7 +302,10 @@ export class ChapterFileRepository
       );
     }
     const catalogRevision = chapterCatalogRevision(records.value);
-    return ok({ ...chapterCatalogItem(record, catalogRevision), body: record.body });
+    return ok({
+      ...chapterCatalogItem(record, catalogRevision, outline.value),
+      body: record.body
+    });
   }
 
   /** Alias retained for adapters that name the operation as an Agent catalog read. */
@@ -548,6 +555,81 @@ export class ChapterFileRepository
         message,
         suggestedAction: "Refresh the chapter catalog and prepare a new chapter create.",
         traceId: this.traceId
+      })
+    );
+  }
+
+  private async readEffectiveOutlineProjection(): Promise<
+    Result<EffectiveOutlineProjection, UnifiedError>
+  > {
+    const relativePath = "outline/outline.json";
+    let raw: string;
+    try {
+      raw = await readFile(join(this.options.projectRoot, "outline", "outline.json"), "utf8");
+    } catch (error) {
+      if (isMissingPathError(error)) return ok({ volumeByChapterId: new Map() });
+      return err(
+        storageError({
+          code: "CHAPTER_OUTLINE_READ_FAILED",
+          message: "The Story Bible outline could not be read for chapter projection.",
+          suggestedAction: "Restore outline/outline.json and refresh the chapter catalog.",
+          traceId: this.traceId,
+          redactedDetail: { relativePath }
+        })
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return this.invalidOutlineProjection(relativePath);
+    }
+    if (!isRecord(parsed) || parsed["type"] !== "outline" || !isRecord(parsed["details"])) {
+      return this.invalidOutlineProjection(relativePath);
+    }
+    const volumes = parsed["details"]["volumes"];
+    if (!Array.isArray(volumes)) return this.invalidOutlineProjection(relativePath);
+    const volumeByChapterId = new Map<string, string>();
+    for (const volume of volumes) {
+      if (!isRecord(volume)) return this.invalidOutlineProjection(relativePath);
+      const volumeId = volume["volumeId"] ?? volume["id"];
+      const chapterIds = volume["chapterIds"];
+      if (
+        typeof volumeId !== "string" ||
+        !/^[A-Za-z0-9_-]{1,128}$/u.test(volumeId) ||
+        !Array.isArray(chapterIds) ||
+        chapterIds.some(
+          (chapterId) => typeof chapterId !== "string" || !isValidChapterId(chapterId)
+        )
+      ) {
+        return this.invalidOutlineProjection(relativePath);
+      }
+      for (const chapterId of chapterIds as string[]) {
+        if (volumeByChapterId.has(chapterId)) {
+          return err(
+            validationError({
+              code: "CHAPTER_OUTLINE_VOLUME_AMBIGUOUS",
+              message: "A chapter is assigned to more than one outline volume.",
+              suggestedAction: "Repair the outline volume memberships and refresh the catalog.",
+              traceId: this.traceId,
+              redactedDetail: { chapterId }
+            })
+          );
+        }
+        volumeByChapterId.set(chapterId, volumeId);
+      }
+    }
+    return ok({ volumeByChapterId, revision: checksumText(raw) });
+  }
+
+  private invalidOutlineProjection(relativePath: string): Result<never, UnifiedError> {
+    return err(
+      validationError({
+        code: "CHAPTER_OUTLINE_INVALID",
+        message: "The Story Bible outline cannot provide authoritative chapter volume membership.",
+        suggestedAction: "Repair outline/outline.json and refresh the chapter catalog.",
+        traceId: this.traceId,
+        redactedDetail: { relativePath }
       })
     );
   }
@@ -1041,6 +1123,11 @@ interface ChapterCatalogRecord {
   readonly bodyChecksum: string;
 }
 
+interface EffectiveOutlineProjection {
+  readonly volumeByChapterId: ReadonlyMap<string, string>;
+  readonly revision?: string;
+}
+
 interface NormalizedChapterCatalogInput {
   readonly statuses: readonly ChapterDocument["frontmatter"]["status"][];
   readonly includeDeleted: boolean;
@@ -1154,8 +1241,10 @@ function compareChapterCatalogRecords(
 
 function chapterCatalogItem(
   record: ChapterCatalogRecord,
-  catalogRevision: string
+  catalogRevision: string,
+  outline?: EffectiveOutlineProjection
 ): ChapterAgentCatalogItem {
+  const effectiveVolumeId = outline?.volumeByChapterId.get(record.id);
   return {
     stableRef: `chapter:${record.id}`,
     chapterId: record.id,
@@ -1171,6 +1260,8 @@ function chapterCatalogItem(
     checksum: record.bodyChecksum,
     persistedChecksum: record.resourceRevision,
     relativePath: record.relativePath,
+    ...(effectiveVolumeId === undefined ? {} : { effectiveVolumeId }),
+    ...(outline?.revision === undefined ? {} : { effectiveOutlineRevision: outline.revision }),
     ...(record.volumeId === undefined ? {} : { volumeId: record.volumeId }),
     ...(record.wordCount === undefined ? {} : { wordCount: record.wordCount }),
     catalogRevision
@@ -1389,6 +1480,10 @@ function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
     "code" in error &&
     (error as NodeJS.ErrnoException).code === "ENOENT"
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
