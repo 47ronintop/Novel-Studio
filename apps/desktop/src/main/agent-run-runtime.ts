@@ -4649,6 +4649,13 @@ function runtimeErrorDescriptor(code: string): {
         "Open a compatible project or choose a context mode supported by this workspace."
     };
   }
+  if (code === "CHAPTER_DELETED_LIST_REQUIRES_RESTORE_INTENT") {
+    return {
+      category: "ValidationError",
+      message: "Deleted chapters can only be listed for an app-authorized restore task.",
+      suggestedAction: "Start a chapter restore workflow before requesting deleted chapters."
+    };
+  }
   if (code === "AGENT_CONTEXT_STALE") {
     return {
       category: "ValidationError",
@@ -5662,7 +5669,8 @@ function storyBibleRestoreStatusUnavailable(): UnifiedError {
   });
 }
 
-function createDesktopReadToolExecutor(
+/** @internal Exported for direct Main-boundary contract tests. */
+export function createDesktopReadToolExecutor(
   projectReads: AgentProjectReadRepository,
   creativeProjectFiles: CreativeProjectFileRepository | undefined,
   readCreativeProjectFile:
@@ -5710,6 +5718,9 @@ function createDesktopReadToolExecutor(
           (includeDeleted !== undefined && typeof includeDeleted !== "boolean")
         ) {
           return invalidToolArguments(input.name);
+        }
+        if (includeDeleted === true) {
+          return err(runtimeError("CHAPTER_DELETED_LIST_REQUIRES_RESTORE_INTENT"));
         }
         const listed = await chapterAgentToolSession.listChapters({
           ...(statuses.length === 0 ? {} : { statuses }),

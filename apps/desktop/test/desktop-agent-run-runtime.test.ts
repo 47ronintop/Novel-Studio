@@ -691,6 +691,42 @@ describe("desktop Agent Run runtime", () => {
     expect(observedToolPayload).not.toContain("ch_desktop_list_deleted");
   });
 
+  test("requires app-authorized restore intent before listing deleted chapters", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-deleted-chapter-list-guard-"));
+    roots.push(projectRoot);
+    const chapterRepository = new ChapterFileRepository({ projectRoot });
+    await expect(
+      chapterRepository.createChapter({
+        chapterId: "ch_deleted_guard",
+        title: "Deleted",
+        order: 1,
+        status: "deleted"
+      })
+    ).resolves.toMatchObject({ ok: true });
+    const executor = runtimeExports.createDesktopReadToolExecutor(
+      new AgentProjectReadRepository({ projectRoot }),
+      undefined,
+      undefined,
+      createChapterAgentToolSession({ repository: chapterRepository }),
+      chapterRepository,
+      undefined
+    );
+
+    await expect(
+      executor.execute({
+        runId: "run-deleted-chapter-list-guard",
+        projectId: "project-01",
+        contextMode: "writing",
+        name: "list_chapters",
+        arguments: { statuses: ["deleted"], includeDeleted: true, limit: 10 },
+        signal: new AbortController().signal
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_DELETED_LIST_REQUIRES_RESTORE_INTENT" }
+    });
+  });
+
   test("stages Catalog 2.0 chapter creation from repository-prepared Markdown without writing", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-create-chapter-v2-"));
     roots.push(projectRoot);
