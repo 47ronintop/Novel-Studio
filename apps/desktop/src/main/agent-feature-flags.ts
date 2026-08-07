@@ -77,7 +77,8 @@ export const DEFAULT_AGENT_FEATURE_FLAGS: AgentFeatureFlags = Object.freeze<Agen
 
 export function createAgentFeatureFlags(
   overrides?: Partial<AgentFeatureFlags>,
-  engineeringQualification?: EngineeringFileQualificationAttestationV1
+  engineeringQualification?: EngineeringFileQualificationAttestationV1,
+  observedAt: string = new Date().toISOString()
 ): AgentFeatureFlags {
   if (overrides === undefined) return DEFAULT_AGENT_FEATURE_FLAGS;
   const merged = { ...DEFAULT_AGENT_FEATURE_FLAGS, ...overrides };
@@ -91,13 +92,14 @@ export function createAgentFeatureFlags(
     merged.engineeringDirectoryCreateV1;
   const accessEnabled =
     merged.engineeringHardenedAccessV1 &&
-    hasMainOwnedEngineeringFileQualification(engineeringQualification, "root") &&
-    hasMainOwnedEngineeringFileQualification(engineeringQualification, "access");
+    hasMainOwnedEngineeringFileQualification(engineeringQualification, "root", observedAt) &&
+    hasMainOwnedEngineeringFileQualification(engineeringQualification, "access", observedAt);
   const mutationEnabled =
-    accessEnabled && hasMainOwnedEngineeringFileQualification(engineeringQualification, "mutation");
+    accessEnabled &&
+    hasMainOwnedEngineeringFileQualification(engineeringQualification, "mutation", observedAt);
   const recoveryEnabled =
     mutationEnabled &&
-    hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery");
+    hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery", observedAt);
   const flags: AgentFeatureFlags = {
     ...merged,
     approvalBindingV2,
@@ -116,7 +118,8 @@ export function createAgentFeatureFlags(
       approvalBindingV2 && merged.engineeringDirectoryCreateV1 && mutationEnabled,
     revision: engineeringRequested
       ? `${merged.revision}:engineering-native:${mainOwnedEngineeringFileQualificationRevision(
-          engineeringQualification
+          engineeringQualification,
+          observedAt
         )}`
       : merged.revision
   };
@@ -162,7 +165,8 @@ export function createProductionAgentFeatureFlags(
       creativeFileDeleteV2:
         creativeQualified("delete_file") && overrides.creativeFileDeleteV2 === true
     },
-    engineeringQualification
+    engineeringQualification,
+    observedAt
   );
   const creativeRevision =
     creativeQualifications === undefined

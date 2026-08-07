@@ -205,6 +205,7 @@ function syntheticAvailableAttestation(): EngineeringFileQualificationAttestatio
     artifactSha256: "a".repeat(64),
     artifactManifestSha256: "b".repeat(64),
     probeReportChecksum: "c".repeat(64),
+    expiresAt: "2099-02-01T00:00:00.000Z",
     failureReasons: [] as const,
     checkedAt: "2026-08-02T00:30:00.000Z"
   };

@@ -47,6 +47,8 @@ interface DesktopAgentRuntimeSessions {
   readonly revokeSettingsCapabilities?: () => void;
   /** Synchronously removes approval-backed mutation capabilities before a deferred rebuild. */
   readonly revokeApprovalCapabilities?: () => void;
+  /** Root identity drift terminates the current engineering capability boundary. */
+  readonly revokeEngineeringAccessCapabilities?: () => void;
 }
 
 export interface DesktopAgentRuntime extends DesktopAgentRuntimeSessions {

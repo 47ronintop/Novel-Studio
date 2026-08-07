@@ -6520,7 +6520,7 @@ describe("desktop Agent Run runtime", () => {
     const observedToolLists: string[][] = [];
     let round = 0;
     const runtime = runtimeExports.createDesktopAgentRuntime({
-      workspaceKind: "engineeringWorkspace",
+      workspaceKind: "creativeProject",
       projectId: "project-01",
       contentRoot: projectRoot,
       stateRoot: projectRoot,
@@ -6961,7 +6961,7 @@ describe("desktop Agent Run runtime", () => {
     let round = 0;
     let searches = 0;
     const session = createDesktopRuntime({
-      workspaceKind: "engineeringWorkspace",
+      workspaceKind: "creativeProject",
       projectId: "project-01",
       contentRoot: projectRoot,
       stateRoot: projectRoot,
@@ -7019,7 +7019,7 @@ describe("desktop Agent Run runtime", () => {
     roots.push(projectRoot);
     const observedToolLists: string[][] = [];
     const runtime = runtimeExports.createDesktopAgentRuntime({
-      workspaceKind: "engineeringWorkspace",
+      workspaceKind: "creativeProject",
       projectId: "project-01",
       contentRoot: projectRoot,
       stateRoot: projectRoot,
