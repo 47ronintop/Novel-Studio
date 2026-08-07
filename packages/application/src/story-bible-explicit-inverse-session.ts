@@ -4,9 +4,13 @@ import {
   createFileOperation,
   deleteFileOperation,
   inspectChangeSetConsistencyGroups,
+  validateApprovalBindingV2,
+  type ApprovalDecisionProofRefV1,
   type ChangeSet,
   type ChangeSetApproval,
-  type ChangeSetOperation
+  type ChangeSetApprovalV2,
+  type ChangeSetOperation,
+  type ProviderVisibleApprovalDecisionSummaryV1
 } from "@novel-studio/agent-engine";
 import type { ChapterCatalogRepositoryPort, JsonObject } from "@novel-studio/shared";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -17,6 +21,7 @@ import {
   type StoryBibleProposalApprovalProof
 } from "./story-bible-agent-tool-session.js";
 import { validateStoryBibleCandidate } from "./story-bible-candidate.js";
+import type { StoryBibleApprovalProofFinalization } from "./story-bible-approval-proof-session.js";
 import type {
   SaveStoryBibleAssetCandidateCommand,
   StoryBibleRelation,
@@ -80,7 +85,10 @@ export interface StoryBibleExplicitInversePreview {
   readonly expiresAt: string;
   readonly sourceAssetId: string;
   readonly affectedAssetIds: readonly string[];
-  readonly approvalProofs: readonly StoryBibleProposalApprovalProof[];
+  /** Main-only proof reference; the proof payload itself never crosses this session boundary. */
+  readonly approvalProofRef?: ApprovalDecisionProofRefV1;
+  /** Sanitized decision projection suitable for UI/provider-facing status. */
+  readonly providerApproval?: ProviderVisibleApprovalDecisionSummaryV1;
   readonly changeSet: ChangeSet;
 }
 
@@ -123,12 +131,38 @@ export interface StoryBibleExplicitInverseSession {
 
 export interface StoryBibleExplicitInverseSessionOptions {
   readonly projectId: string;
+  /** Legacy apply is available only to explicitly marked historical V1 sessions. */
+  readonly approvalMode: "legacy_v1_historical" | "v2_production";
   readonly repository: StoryBibleExplicitInverseRepositoryPort;
   readonly changeSets: Pick<
     ChangeSetSession,
     "proposeStoryBibleWrite" | "proposeOperationBatch" | "readChangeSet" | "decide"
   >;
   readonly versionGroups: Pick<VersionGroupSession, "applyApprovedBatch">;
+  /** Main-only proof finalizer bound to the desktop composition's proof repository. */
+  readonly approvalProofFinalizer?: {
+    finalize(input: {
+      readonly runId: string;
+      readonly changeSetId: string;
+      readonly revision: number;
+      readonly checksum: string;
+      readonly consistencyGroupId: string;
+      readonly proposals: readonly StoryBibleProposalApprovalProof[];
+    }): Promise<Result<StoryBibleApprovalProofFinalization, UnifiedError>>;
+  };
+  /**
+   * ADR-0004 Main-only V2 boundary for all new production explicit-inverse entry points.
+   * Omission is reserved for the preserved V1 historical-session reader; it must never be
+   * omitted by Desktop production composition.
+   */
+  readonly approvalV2?: {
+    ensureAvailable(): Promise<Result<void, UnifiedError>>;
+    approve(input: {
+      readonly changeSet: ChangeSet;
+      readonly consistencyGroupId: string;
+      readonly proofRef: ApprovalDecisionProofRefV1;
+    }): Promise<Result<ChangeSetApprovalV2, UnifiedError>>;
+  };
   readonly chapterCatalog?: Pick<ChapterCatalogRepositoryPort, "listChapters">;
   readonly createId?: (
     kind: "run" | "checkpoint" | "context" | "group" | "preview" | "relation"
@@ -149,6 +183,7 @@ interface PreviewReceipt {
   readonly checksum: string;
   readonly expectedAssetIds: readonly string[];
   readonly migrations: readonly ExplicitInverseMigrationPlan[];
+  readonly approvalProof?: StoryBibleApprovalProofFinalization;
   state: "ready" | "applying" | "consumed";
 }
 
@@ -174,6 +209,26 @@ export function createStoryBibleExplicitInverseSession(
   return {
     async prepareStoryBibleExplicitInverseChange(input) {
       pruneExpiredReceipts(receipts, Date.parse(now()));
+      if (options.approvalMode === "v2_production") {
+        if (options.approvalProofFinalizer === undefined) {
+          return err(
+            explicitInverseError(
+              "STORY_BIBLE_EXPLICIT_INVERSE_V2_PROOF_UNAVAILABLE",
+              "The Main-owned approval proof finalizer is unavailable; mutation remains read-only."
+            )
+          );
+        }
+        if (options.approvalV2 === undefined) {
+          return err(
+            explicitInverseError(
+              "STORY_BIBLE_EXPLICIT_INVERSE_V2_APPROVAL_UNAVAILABLE",
+              "The Main-owned V2 approval boundary is unavailable; mutation remains read-only."
+            )
+          );
+        }
+        const available = await options.approvalV2.ensureAvailable();
+        if (!available.ok) return available;
+      }
       const sourceRead = await options.repository.readCompatibleStoryAsset(
         input.source.candidate.id
       );
@@ -287,6 +342,18 @@ export function createStoryBibleExplicitInverseSession(
         migrations
       });
       if (!binding.ok) return binding;
+      const finalized =
+        options.approvalProofFinalizer === undefined
+          ? undefined
+          : await options.approvalProofFinalizer.finalize({
+              runId,
+              changeSetId: changeSet.changeSetId,
+              revision: changeSet.revision,
+              checksum: changeSet.checksum,
+              consistencyGroupId,
+              proposals: approvalProofs
+            });
+      if (finalized !== undefined && !finalized.ok) return finalized;
 
       const previewId = normalizeGeneratedId("preview", createId("preview"));
       const createdAtMs = Date.parse(now());
@@ -303,6 +370,7 @@ export function createStoryBibleExplicitInverseSession(
         checksum: changeSet.checksum,
         expectedAssetIds,
         migrations,
+        ...(finalized === undefined ? {} : { approvalProof: finalized.value }),
         state: "ready"
       });
       return ok({
@@ -311,7 +379,12 @@ export function createStoryBibleExplicitInverseSession(
         expiresAt: new Date(expiresAtMs).toISOString(),
         sourceAssetId: input.source.candidate.id,
         affectedAssetIds: expectedAssetIds,
-        approvalProofs,
+        ...(finalized === undefined
+          ? {}
+          : {
+              approvalProofRef: finalized.value.proofRef,
+              providerApproval: finalized.value.providerSummary
+            }),
         changeSet
       });
     },
@@ -367,35 +440,62 @@ export function createStoryBibleExplicitInverseSession(
         return binding;
       }
 
-      const approval = await options.changeSets.decide({
-        runId: receipt.runId,
-        projectId: receipt.projectId,
-        commandId: stableId(
-          "cmd",
-          `${receipt.previewId}:${receipt.changeSetId}:${receipt.revision}:${receipt.checksum}`
-        ),
-        expectedRunRevision: 0,
-        changeSetId: receipt.changeSetId,
-        revision: receipt.revision,
-        checksum: receipt.checksum,
-        decision: "apply_selected"
-      });
-      if (!approval.ok) {
-        receipt.state = "ready";
-        return approval;
-      }
-      if (!isChangeSetApproval(approval.value)) {
-        receipt.state = "ready";
-        return err(
-          explicitInverseError(
-            "STORY_BIBLE_EXPLICIT_INVERSE_APPROVAL_INVALID",
-            "The explicit inverse Change Set did not produce a human approval binding."
-          )
-        );
+      let approval: ChangeSetApproval | ChangeSetApprovalV2;
+      if (options.approvalMode === "legacy_v1_historical") {
+        const decided = await options.changeSets.decide({
+          runId: receipt.runId,
+          projectId: receipt.projectId,
+          commandId: stableId(
+            "cmd",
+            `${receipt.previewId}:${receipt.changeSetId}:${receipt.revision}:${receipt.checksum}`
+          ),
+          expectedRunRevision: 0,
+          changeSetId: receipt.changeSetId,
+          revision: receipt.revision,
+          checksum: receipt.checksum,
+          decision: "apply_selected"
+        });
+        if (!decided.ok) {
+          receipt.state = "ready";
+          return decided;
+        }
+        if (!isChangeSetApproval(decided.value)) {
+          receipt.state = "ready";
+          return err(invalidExplicitInverseApproval());
+        }
+        approval = decided.value;
+      } else {
+        if (
+          options.approvalV2 === undefined ||
+          receipt.approvalProof === undefined ||
+          persisted.value.schemaVersion !== "2.0"
+        ) {
+          receipt.state = "ready";
+          return err(
+            explicitInverseError(
+              "STORY_BIBLE_EXPLICIT_INVERSE_V2_BINDING_INVALID",
+              "The frozen explicit inverse Change Set is missing its V2 proof or schema binding."
+            )
+          );
+        }
+        const decided = await options.approvalV2.approve({
+          changeSet: persisted.value,
+          consistencyGroupId: receipt.consistencyGroupId,
+          proofRef: receipt.approvalProof.proofRef
+        });
+        if (!decided.ok) {
+          receipt.state = "ready";
+          return decided;
+        }
+        if (!isChangeSetApprovalV2(decided.value)) {
+          receipt.state = "ready";
+          return err(invalidExplicitInverseApproval());
+        }
+        approval = decided.value;
       }
       const applied = await options.versionGroups.applyApprovedBatch({
         changeSet: persisted.value,
-        approval: approval.value,
+        approval,
         applyBatchId: stableId(
           "apply",
           `${receipt.previewId}:${receipt.changeSetId}:${receipt.revision}:${receipt.checksum}`
@@ -457,6 +557,35 @@ export function createStoryBibleExplicitInverseSession(
       receipts.clear();
     }
   };
+}
+
+function isChangeSetApprovalV2(value: unknown): value is ChangeSetApprovalV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate["schemaVersion"] === "2.0" &&
+    candidate["decision"] === "apply_selected" &&
+    candidate["approvalSource"] === "human_confirmation" &&
+    isChecksum(candidate["displayBindingChecksum"]) &&
+    isNonEmptyString(candidate["authorizationId"]) &&
+    isNonEmptyString(candidate["reservationTransactionId"]) &&
+    validateApprovalBindingV2(candidate["binding"]).ok
+  );
+}
+
+function invalidExplicitInverseApproval(): UnifiedError {
+  return explicitInverseError(
+    "STORY_BIBLE_EXPLICIT_INVERSE_APPROVAL_INVALID",
+    "The explicit inverse Change Set did not produce a valid Main-owned human approval binding."
+  );
+}
+
+function isChecksum(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 async function deriveCandidateGroup(input: {
@@ -896,7 +1025,9 @@ function sameRelativePath(left: string, right: string): boolean {
   return left.replaceAll("\\", "/") === right.replaceAll("\\", "/");
 }
 
-function isChangeSetApproval(value: ChangeSet | ChangeSetApproval): value is ChangeSetApproval {
+function isChangeSetApproval(
+  value: ChangeSet | ChangeSetApproval | ChangeSetApprovalV2
+): value is ChangeSetApproval {
   return "approvalSource" in value && value.approvalSource === "human_confirmation";
 }
 

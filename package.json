@@ -9,9 +9,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build:types && npm run build:renderer && node scripts/write-build-manifest.mjs",
+    "build": "npm run build:types && npm run build:renderer && npm run build:approval && node scripts/write-build-manifest.mjs",
     "build:types": "tsc -b",
     "build:renderer": "vite build --config apps/desktop/vite.config.ts",
+    "build:approval": "vite build --config apps/desktop/vite.approval.config.ts",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "format": "prettier --check .",
@@ -21,8 +22,12 @@
     "schema:story-bible": "npm run build:types -- --pretty false && node scripts/generate-story-bible-schemas.mjs",
     "test": "vitest run --passWithNoTests --maxWorkers=2",
     "test:contract": "vitest run packages/schemas/test --passWithNoTests",
-    "test:e2e": "npm run build && playwright test",
-    "test:e2e:built": "playwright test",
+    "test:e2e": "npm run build && playwright test --config=playwright.config.ts",
+    "test:e2e:built": "playwright test --config=playwright.config.ts",
+    "test:e2e:packaged": "playwright test --config=playwright.packaged.config.ts",
+    "qualification:matrix": "node scripts/run-approval-surface-qualification-matrix.mjs",
+    "qualification:sign": "node scripts/sign-approval-surface-qualification.mjs",
+    "qualification:verify": "node scripts/verify-approval-surface-qualification.mjs",
     "alpha:check": "npm run build && node scripts/alpha-check.mjs",
     "alpha:verify": "node scripts/alpha-check.mjs",
     "package:check": "npm run build && node scripts/package-check.mjs",
@@ -40,6 +45,7 @@
     "npm": ">=10.8.0"
   },
   "devDependencies": {
+    "@electron/fuses": "^1.8.0",
     "@eslint/js": "^9.17.0",
     "@playwright/test": "^1.49.1",
     "@types/node": "^26.1.0",

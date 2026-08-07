@@ -974,7 +974,10 @@ npm run test:contract
 npm run typecheck
 npm run lint
 npm run build
-npm run test:e2e:built -- apps/desktop/test/agent-write.e2e.ts apps/desktop/test/agent-writing-domain.e2e.ts
+# 这两个审批/写作 journey 只允许在 ADR-0004 资格化、由 Authenticode 覆盖的真实包中运行；
+# 普通 Playwright 配置显式排除它们，禁止用 development Electron/Renderer 注入替代可信表面。
+$env:NOVEL_STUDIO_QUALIFIED_PACKAGE_EXE = "<qualified-package-dir>\Novel Studio.exe"
+npm run test:e2e:packaged -- --workers=1
 git diff --check
 ```
 

@@ -12,6 +12,11 @@ export type ApprovalBindingV2OperationKind =
   | "create_directory"
   | "chapter_replace"
   | "chapter_create"
+  | "chapter_rename"
+  | "chapter_reorder"
+  | "chapter_status"
+  | "chapter_delete"
+  | "chapter_restore"
   | "story_bible_mutation";
 
 export type ApprovalBindingV2Source =
@@ -231,10 +236,8 @@ export function validateApprovalBindingV2(
   }
   const record = value as Record<string, unknown>;
   const operationKind = record["operationKind"];
-  const allowed = new Set<string>([
-    ...COMMON_KEYS,
-    ...(operationKind === "delete_file" ? DELETE_KEYS : [])
-  ]);
+  const isDestructiveDelete = operationKind === "delete_file" || operationKind === "chapter_delete";
+  const allowed = new Set<string>([...COMMON_KEYS, ...(isDestructiveDelete ? DELETE_KEYS : [])]);
   if (Object.keys(record).some((key) => !allowed.has(key))) {
     return invalid(
       "APPROVAL_BINDING_V2_UNKNOWN_FIELD",
@@ -374,7 +377,7 @@ export function validateApprovalBindingV2(
     return invalid("APPROVAL_BINDING_V2_EXPIRED", "Approval Binding has expired.");
   }
   const deleteFields = DELETE_KEYS.map((key) => record[key]);
-  if (operationKind === "delete_file") {
+  if (isDestructiveDelete) {
     if (
       deleteFields.some((field) => typeof field !== "string" || field === "") ||
       !HASH_PATTERN.test(record["recoverySideEffectChecksum"] as string)
@@ -426,6 +429,11 @@ function isOperationKind(value: unknown): value is ApprovalBindingV2OperationKin
     "create_directory",
     "chapter_replace",
     "chapter_create",
+    "chapter_rename",
+    "chapter_reorder",
+    "chapter_status",
+    "chapter_delete",
+    "chapter_restore",
     "story_bible_mutation"
   ].includes(value as ApprovalBindingV2OperationKind);
 }

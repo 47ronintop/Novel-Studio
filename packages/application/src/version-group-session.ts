@@ -51,6 +51,15 @@ export interface VersionGroupTransactionApplyInput {
   readonly reservationTransactionId?: string;
   readonly providerSemanticVersionSetChecksum?: string;
   readonly approvalBindingV2?: ApprovalBindingV2;
+  /**
+   * Main-only one-shot proof emitted while preparing a chapter lifecycle candidate.
+   * This is deliberately distinct from the approval-decision proof carried by
+   * `approvalBindingV2`.
+   */
+  readonly chapterLifecyclePreparationProof?: {
+    readonly proofId: string;
+    readonly proofChecksum: string;
+  };
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;
@@ -240,6 +249,9 @@ export function createVersionGroupSession(
           (input.group === undefined ||
             operation.consistencyGroupId === input.group.consistencyGroupId)
       );
+      const lifecycleDomainOperation = isChangeSetV2(input.changeSet)
+        ? input.changeSet.domainOperation
+        : undefined;
       if (
         (selectedFiles.length === 0 && selectedOperations.length === 0) ||
         selectedFiles.some((file) => !file.validation.valid) ||
@@ -294,6 +306,14 @@ export function createVersionGroupSession(
                 providerSemanticVersionSetChecksum:
                   v2Approval.binding.providerSemanticVersionSetChecksum,
                 approvalBindingV2: v2Approval.binding
+              }
+            : {}),
+          ...(lifecycleDomainOperation !== undefined
+            ? {
+                chapterLifecyclePreparationProof: {
+                  proofId: lifecycleDomainOperation.proofRef,
+                  proofChecksum: lifecycleDomainOperation.proofChecksum
+                }
               }
             : {}),
           ...(input.group === undefined
@@ -441,8 +461,7 @@ export function createVersionGroupSession(
                 ...(result.value.chapterStatusTransitionProof === undefined
                   ? {}
                   : {
-                      chapterStatusTransitionProof:
-                        result.value.chapterStatusTransitionProof
+                      chapterStatusTransitionProof: result.value.chapterStatusTransitionProof
                     })
               })
             : Object.freeze({

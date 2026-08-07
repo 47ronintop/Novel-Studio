@@ -218,7 +218,13 @@ async function createConversation(page: Page): Promise<string> {
 async function sendConversationRequest(page: Page, request: string): Promise<void> {
   const composer = page.getByLabel("会话输入区");
   await composer.getByLabel("Agent 请求").fill(request);
-  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
+  const start = composer.getByRole("button", { name: "启动 Agent 运行" });
+  await start.click();
+  // The first click performs Main-owned preview preparation. Require the pending transition so a
+  // second click cannot be accepted by the renderer before that work has produced its binding.
+  await expect(start).toBeDisabled();
+  await expect(start).toBeEnabled();
+  await start.click();
   await expect(
     page
       .getByLabel("Agent 会话主视图")
@@ -267,9 +273,21 @@ async function waitForLatestStandaloneRunStatus(page: Page, status: string): Pro
           standaloneScope
         );
         if (listed === undefined) return "agent-runs-api-unavailable";
-        return listed.ok
-          ? (listed.value.at(-1)?.status ?? "no-persisted-run")
-          : `${listed.error.code}: ${listed.error.message}`;
+        if (!listed.ok) return `${listed.error.code}: ${listed.error.message}`;
+        const status = listed.value.at(-1)?.status;
+        if (status !== undefined) return status;
+        const visibleErrors = await page
+          .locator('[role="alert"], .ns-agent-error')
+          .evaluateAll((elements) =>
+            elements
+              .filter((element) => {
+                const style = window.getComputedStyle(element);
+                return style.display !== "none" && style.visibility !== "hidden";
+              })
+              .map((element) => element.textContent?.trim() ?? "")
+              .filter((text) => text.length > 0)
+          );
+        return `no-persisted-run; visible-errors=${JSON.stringify(visibleErrors)}`;
       },
       { timeout: 30_000 }
     )

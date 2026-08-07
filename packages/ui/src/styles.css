@@ -11113,3 +11113,85 @@ textarea:focus-visible,
     width: 100%;
   }
 }
+.ns-agent-sharing-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.ns-agent-sharing-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(8 13 24 / 58%);
+  backdrop-filter: blur(3px);
+}
+
+.ns-agent-sharing-dialog-content {
+  position: relative;
+  width: min(620px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--ns-border);
+  border-radius: 14px;
+  background: var(--ns-surface-elevated, var(--ns-surface));
+  box-shadow: 0 24px 80px rgb(0 0 0 / 34%);
+  padding: 22px;
+}
+
+.ns-agent-sharing-dialog-content header p,
+.ns-agent-sharing-boundary,
+.ns-agent-sharing-meaning p {
+  color: var(--ns-muted);
+}
+
+.ns-agent-sharing-meaning {
+  margin: 16px 0;
+  border: 1px solid var(--ns-border);
+  border-radius: 10px;
+  background: var(--ns-surface-subtle, transparent);
+  padding: 10px 12px;
+}
+
+.ns-agent-sharing-meaning p {
+  margin: 4px 0;
+}
+
+.ns-agent-sharing-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ns-agent-sharing-fields label {
+  display: grid;
+  gap: 6px;
+}
+
+.ns-agent-sharing-fields select {
+  min-width: 0;
+  border: 1px solid var(--ns-border);
+  border-radius: 8px;
+  background: var(--ns-surface);
+  color: var(--ns-text);
+  padding: 8px 10px;
+}
+
+.ns-agent-sharing-boundary {
+  margin: 16px 0 8px;
+}
+
+.ns-agent-sharing-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+@media (max-width: 640px) {
+  .ns-agent-sharing-fields {
+    grid-template-columns: 1fr;
+  }
+}

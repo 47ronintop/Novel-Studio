@@ -63,6 +63,13 @@ export interface AgentChapterCreateOperationInput {
   readonly catalogRevision: string;
 }
 
+/** Exact persisted bytes plus the parsed chapter used by a prepared domain mutation. */
+export interface SerializedChapterRead {
+  readonly chapter: ChapterDocument;
+  readonly content: string;
+  readonly checksum: string;
+}
+
 export class ChapterFileRepository
   implements
     ChapterDraftRepositoryPort,
@@ -139,6 +146,47 @@ export class ChapterFileRepository
     }
 
     return ok(parsed.value);
+  }
+
+  /**
+   * Read the exact persisted chapter bytes for a Change Set candidate without exposing a pathname
+   * mutation API. Lifecycle preparation uses this after the coordinator has frozen metadata.
+   */
+  public async readSerializedChapter(
+    chapterId: string
+  ): Promise<Result<SerializedChapterRead, UnifiedError>> {
+    const filePath = join(this.options.projectRoot, "chapters", `${chapterId}.md`);
+    let content: string;
+    try {
+      content = await readFile(filePath, "utf8");
+    } catch (error) {
+      return err(
+        storageError({
+          code: "CHAPTER_FILE_MISSING",
+          message: "Chapter file could not be read.",
+          suggestedAction: "Restore the chapter file or choose a valid project folder.",
+          traceId: this.traceId,
+          redactedDetail: {
+            filePath,
+            reason: error instanceof Error ? error.message : "Unknown read error"
+          }
+        })
+      );
+    }
+    const parsed = parseChapterDocument(content, this.traceId);
+    if (!parsed.ok) return parsed;
+    if (parsed.value.frontmatter.id !== chapterId) {
+      return err(
+        validationError({
+          code: "CHAPTER_FILE_INVALID",
+          message: "Chapter frontmatter id does not match the requested chapter.",
+          suggestedAction: "Fix the chapter frontmatter id and retry opening the project.",
+          traceId: this.traceId,
+          redactedDetail: { filePath, requestedChapterId: chapterId }
+        })
+      );
+    }
+    return ok({ chapter: parsed.value, content, checksum: checksumText(content) });
   }
 
   public async listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>> {
@@ -378,7 +426,7 @@ export class ChapterFileRepository
       },
       body: input.body ?? ""
     };
-    const serializedContent = formatChapterDocument(chapter);
+    const serializedContent = serializeChapterDocument(chapter);
     const syntheticRecord = recordFromChapter(chapter, serializedContent);
     const item = chapterCatalogItem(syntheticRecord, chapterCatalogRevision(records.value));
     return ok({
@@ -514,7 +562,7 @@ export class ChapterFileRepository
         "Prepared chapter id already exists in the catalog."
       );
     }
-    const expectedContent = formatChapterDocument(input.chapter);
+    const expectedContent = serializeChapterDocument(input.chapter);
     if (input.serializedContent !== expectedContent) {
       return this.createValidationFailure(
         "CHAPTER_CREATE_CONTENT_INVALID",
@@ -733,7 +781,7 @@ export class ChapterFileRepository
         },
         body: record.body
       };
-      const candidateContent = formatChapterDocument(candidateDocument);
+      const candidateContent = serializeChapterDocument(candidateDocument);
       const candidate = parseChapterDocument(candidateContent, this.traceId);
       if (
         !candidate.ok ||
@@ -1091,7 +1139,7 @@ export class ChapterFileRepository
       );
     }
 
-    const fileText = formatChapterDocument(chapter);
+    const fileText = serializeChapterDocument(chapter);
     const writeResult = await writeTextAtomically({
       targetPath: join(this.options.projectRoot, "chapters", `${chapter.frontmatter.id}.md`),
       content: fileText,
@@ -1537,7 +1585,7 @@ function parseChapterDocument(
   });
 }
 
-function formatChapterDocument(chapter: ChapterDocument): string {
+export function serializeChapterDocument(chapter: ChapterDocument): string {
   const frontmatter = dumpYaml(chapter.frontmatter, {
     lineWidth: -1,
     noRefs: true,

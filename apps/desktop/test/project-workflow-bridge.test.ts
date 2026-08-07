@@ -25,6 +25,16 @@ describe("project workflow bridge", () => {
     expect(loaded.chapters.map((chapter) => chapter.id)).toEqual(["chapter_1", "chapter_2"]);
   });
 
+  test("refreshes through the Main-owned repository refresh endpoint", async () => {
+    const refreshActiveWorkspace = vi.fn(async () => ok(creativeSnapshot()));
+    const bridge = createProjectWorkflowBridge(createApi({ refreshActiveWorkspace }));
+
+    const refreshed = await bridge.refreshActiveProject();
+
+    expect(refreshActiveWorkspace).toHaveBeenCalledOnce();
+    expect(refreshed).toMatchObject({ projectId: "prj_m12", status: "ready" });
+  });
+
   test("opens a creative project explicitly without an ordinary-folder fallback", async () => {
     const openCreativeProject = vi.fn(async () => ok(creativeActivation()));
     const api = createApi({ openCreativeProject });

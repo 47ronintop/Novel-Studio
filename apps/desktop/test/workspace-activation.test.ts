@@ -34,6 +34,7 @@ describe("workspace activation coordinator", () => {
       "runtime:prepare",
       "application:commit",
       "runtime:commit",
+      "application:refresh",
       "application:finalize"
     ]);
   });
@@ -60,11 +61,7 @@ describe("workspace activation coordinator", () => {
     const result = await coordinator.openCreativeProject("D:/Novel/New");
 
     expect(result).toEqual(err(failure));
-    expect(order).toEqual([
-      "application:prepare",
-      "runtime:prepare",
-      "application:discard"
-    ]);
+    expect(order).toEqual(["application:prepare", "runtime:prepare", "application:discard"]);
   });
 
   test("keeps the committed activation successful when post-commit cleanup fails", async () => {
@@ -103,6 +100,52 @@ describe("workspace activation coordinator", () => {
       "runtime:prepare",
       "application:commit",
       "runtime:commit",
+      "application:refresh",
+      "application:finalize"
+    ]);
+  });
+
+  test("returns the repository-refreshed creative workspace after runtime startup recovery", async () => {
+    const order: string[] = [];
+    const candidate = creativeCandidate();
+    const refreshed = {
+      ...candidate.creativeProject,
+      chapters: [
+        {
+          id: "chapter_1",
+          order: 1,
+          title: "Recovered opening",
+          status: "draft",
+          updatedAt: "2026-08-06T01:00:00.000Z"
+        }
+      ]
+    };
+    const application = fakeApplication({
+      candidate,
+      committed: creativeDto(),
+      order,
+      refreshed
+    });
+    const runtimeManager = fakeRuntimeManager({
+      preparedRuntime: { binding: toDesktopAgentWorkspaceBinding(candidate), runtime: {} },
+      order
+    });
+    const coordinator = createWorkspaceActivationCoordinator({ application, runtimeManager });
+
+    const result = await coordinator.openCreativeProject("D:/Novel/New");
+
+    expect(result).toEqual(
+      ok({
+        ...creativeDto(),
+        creativeProject: { ...creativeDto().creativeProject, chapters: refreshed.chapters }
+      })
+    );
+    expect(order).toEqual([
+      "application:prepare",
+      "runtime:prepare",
+      "application:commit",
+      "runtime:commit",
+      "application:refresh",
       "application:finalize"
     ]);
   });
@@ -204,6 +247,10 @@ function fakeApplication(input: {
   readonly committed: WorkspaceActivationDto;
   readonly order: string[];
   readonly finalizeResult?: ReturnType<typeof err>;
+  readonly refreshed?: Extract<
+    PreparedWorkspaceActivation,
+    { readonly creativeProject: unknown }
+  >["creativeProject"];
 }): DesktopApplication {
   return {
     prepareOpenCreativeProject: vi.fn(async () => {
@@ -213,6 +260,12 @@ function fakeApplication(input: {
     commitWorkspaceActivation: vi.fn(() => {
       input.order.push("application:commit");
       return input.committed;
+    }),
+    refreshActiveProjectWorkspace: vi.fn(async () => {
+      input.order.push("application:refresh");
+      if (input.refreshed !== undefined) return ok(input.refreshed);
+      if ("creativeProject" in input.candidate) return ok(input.candidate.creativeProject);
+      throw new Error("not used");
     }),
     discardWorkspaceActivation: vi.fn(async () => {
       input.order.push("application:discard");

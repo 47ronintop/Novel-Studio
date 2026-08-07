@@ -91,6 +91,12 @@ describe("standalone Agent state root", () => {
     if (!started.ok) throw new Error(`${started.error.code}: ${started.error.message}`);
     expect(started).toMatchObject({ ok: true, value: { runId: "standalone_run_01" } });
     await waitForTerminal(runtime.value, started.value.runId);
+    await expect(
+      runtime.value.agentConversationSession.loadContext({
+        scope: STANDALONE_AGENT_SCOPE,
+        conversationId: "standalone_conversation_01"
+      })
+    ).resolves.toMatchObject({ ok: true, value: [expect.objectContaining({ role: "user" })] });
 
     expect(modelInputs).toHaveLength(1);
     expect(modelInputs[0]?.tools).toEqual([]);
@@ -130,6 +136,88 @@ describe("standalone Agent state root", () => {
       expect(snapshot).toBeDefined();
       if (snapshot !== undefined) expect("projectId" in snapshot).toBe(false);
     }
+  });
+
+  test("requires a Main-owned exact-send preview before confirming a standalone run", async () => {
+    const userDataRoot = await createRoot("send-preview");
+    const modelInputs: AgentModelRoundInput[] = [];
+    const runtime = await createDesktopStandaloneAgentRuntime({
+      userDataRoot,
+      createConversationId: () => "standalone_conversation_preview",
+      createDraftId: () => "standalone_draft_preview",
+      createRunId: () => "standalone_run_preview",
+      modelDriver: textModelDriver(modelInputs, "Confirmed standalone response."),
+      resolveModelStartFacts: textModelFacts
+    });
+    expect(runtime).toMatchObject({ ok: true });
+    if (!runtime.ok) return;
+    const conversation = await runtime.value.agentConversationSession.createConversation({
+      scope: STANDALONE_AGENT_SCOPE,
+      commandId: "create_preview_conversation"
+    });
+    if (!conversation.ok) throw conversation.error;
+    const draft = await runtime.value.agentRunDraftSession.syncStartDraft({
+      scope: STANDALONE_AGENT_SCOPE,
+      conversationId: conversation.value.conversationId,
+      commandId: "sync_preview_draft",
+      userRequest: "Confirm this standalone request.",
+      operationMode: "conversation",
+      contextMode: "standalone_chat",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "text-only-model",
+      contextRefs: []
+    });
+    if (!draft.ok) throw draft.error;
+    const packed = await runtime.value.agentContextSession.previewPackedContext({
+      scope: STANDALONE_AGENT_SCOPE,
+      conversationId: conversation.value.conversationId,
+      commandId: "preview_packed_standalone_context",
+      runDraftId: draft.value.runDraft.runDraftId,
+      expectedDraftRevision: draft.value.runDraft.revision,
+      runDraftChecksum: draft.value.runDraft.checksum
+    });
+    expect(packed).toMatchObject({ ok: true, value: { sources: [], blocks: [] } });
+    if (!packed.ok) throw packed.error;
+    const start = {
+      scope: STANDALONE_AGENT_SCOPE,
+      conversationId: conversation.value.conversationId,
+      commandId: "start_preview_run",
+      expectedRunRevision: 0,
+      runDraftId: draft.value.runDraft.runDraftId,
+      runDraftRevision: draft.value.runDraft.revision,
+      runDraftChecksum: draft.value.runDraft.checksum,
+      packedContextId: packed.value.packedContextId,
+      packedContextPayloadChecksum: packed.value.payloadChecksum
+    } as const;
+    if (
+      runtime.value.prepareAgentSendPreview === undefined ||
+      runtime.value.confirmAgentSendPreview === undefined
+    ) {
+      throw new Error("Expected standalone runtime to expose the required send-preview surface.");
+    }
+
+    const preview = await runtime.value.prepareAgentSendPreview({
+      schemaVersion: "2.0",
+      commandId: "prepare_preview_run",
+      startCommand: start
+    });
+    expect(preview).toMatchObject({
+      ok: true,
+      value: { tools: [], sources: [], target: { providerLabel: "test-provider" } }
+    });
+    if (!preview.ok) throw preview.error;
+    expect(modelInputs).toEqual([]);
+
+    const confirmed = await runtime.value.confirmAgentSendPreview({
+      schemaVersion: "2.0",
+      previewId: preview.value.previewId,
+      canonicalPayloadChecksum: preview.value.canonicalPayloadChecksum
+    });
+    expect(confirmed).toMatchObject({ ok: true, value: { runId: "standalone_run_preview" } });
+    if (!confirmed.ok) throw confirmed.error;
+    await waitForTerminal(runtime.value, confirmed.value.runId);
+    expect(modelInputs).toHaveLength(1);
   });
 
   test("persists completed model usage under the standalone state root without a project id", async () => {

@@ -32,10 +32,11 @@ test("uses the local scripted Agent when the configured profile has no stored ke
     const page = await electronApp.firstWindow();
     await queueDirectorySelection(electronApp, projectRoot);
     await openAgentPanel(page);
+    await chooseWorkspaceModelSharing(page);
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("检查当前章节");
     await composer.getByLabel("启动 Agent 运行").click();
-
+    await confirmFirstSendPreview(page, composer);
     await expect(page.locator(".ns-agent-assistant-text")).toContainText(
       "我会先读取项目结构和当前章节。"
     );
@@ -113,10 +114,12 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await queueDirectorySelection(electronApp, projectRoot);
     await openAgentPanel(page);
+    await chooseWorkspaceModelSharing(page);
     await configureLocalModel(page, baseUrl);
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("读取当前章节");
     await composer.getByLabel("启动 Agent 运行").click();
+    await confirmFirstSendPreview(page, composer);
     await resolveContextRefreshIfVisible(page);
     await expect(page.locator(".ns-agent-assistant-text")).toContainText("等待停止");
     await expect(page.locator(".ns-agent-status")).toHaveText("规划中");
@@ -192,7 +195,14 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     }
 
     const messages = Array.isArray(body.messages) ? body.messages : [];
-    const toolCount = messages.filter(
+    const currentRequestIndex = messages.findLastIndex(
+      (message) =>
+        isRecord(message) &&
+        message["role"] === "user" &&
+        typeof message["content"] === "string" &&
+        !isApplicationContextEnvelope(message["content"])
+    );
+    const toolCount = messages.slice(currentRequestIndex + 1).filter(
       (message) =>
         typeof message === "object" &&
         message !== null &&
@@ -244,13 +254,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
       return;
     }
     if (toolCount === 0) {
-      sendToolCall(
-        response,
-        "entries",
-        "list_project_entries",
-        { path: "notes" },
-        "先读取项目结构。"
-      );
+      sendToolCall(response, "chapters", "list_chapters", {}, "先读取章节目录。");
       return;
     }
     if (toolCount === 1) {
@@ -264,7 +268,20 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
       );
       return;
     }
-    sendToolCall(response, "finish", "finish", { summary: "只读执行完成" });
+    const evidenceRef = latestCompletedToolEvidenceRef(body);
+    if (evidenceRef === undefined) {
+      throw new Error("Expected a persisted tool_completed evidence reference before finish");
+    }
+    sendToolCall(response, "finish", "finish", {
+      outcome: "completed",
+      report: {
+        result: "只读执行完成",
+        appliedChanges: [],
+        verification: [evidenceRef],
+        residualRisks: []
+      },
+      evidenceRefs: [evidenceRef]
+    });
   });
   await listen(server);
   const address = server.address();
@@ -283,11 +300,13 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     const page = await electronApp.firstWindow();
     await queueDirectorySelection(electronApp, projectRoot);
     await openAgentPanel(page);
+    await chooseWorkspaceModelSharing(page);
     await configureLocalModel(page, baseUrl);
     await replaceChapterText(page, "未保存的开头");
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("核对当前章节并给出计划");
     await composer.getByLabel("启动 Agent 运行").click();
+    await confirmFirstSendPreview(page, composer);
     await expect(page.getByText("editor_buffer / dirty", { exact: false })).toBeVisible();
 
     const activitySummary = page.getByLabel("Agent 活动摘要");
@@ -295,7 +314,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await expect(activitySummary).not.toHaveAttribute("open", "");
     await expect(activitySummary.locator(":scope > summary")).toContainText("已读取 1 项");
     await expect(
-      activitySummary.locator("ol").getByText(/已列出 notes 的 1 个条目/)
+      activitySummary.locator("ol").getByText("已列出 1 个章节", { exact: false })
     ).not.toBeVisible();
     await expect(
       activitySummary.locator("ol").getByText(`已读取章节 ${activeChapterId}`, { exact: true })
@@ -323,16 +342,16 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await restoredSummary.locator(":scope > summary").click();
     const persistedSteps = await restoredSummary.locator("ol > li").allTextContents();
     expect(persistedSteps).toHaveLength(2);
-    expect(persistedSteps[0]).toContain("已列出 notes 的 1 个条目");
+    expect(persistedSteps[0]).toContain("已列出 1 个章节");
     expect(persistedSteps[1]).toContain(`已读取章节 ${activeChapterId}`);
 
     await page.getByRole("button", { name: "按此方案执行" }).click();
     await expect
       .poll(() => requests.some((entry) => entry.userRequest.includes("Execute approved plan")))
       .toBe(true);
-    await waitForLatestRunStatus(page, "completed");
+    await waitForLatestRunStatus(page, "completed", "execution");
     await expect(page.getByLabel("会话运行历史")).toContainText("completed");
-    const completedRunId = await latestRunId(page);
+    const completedRunId = await latestRunId(page, "execution");
     const completedTurn = page.locator(`[data-run-id="${completedRunId}"]`);
     await expect(completedTurn).toHaveCount(1);
     const completedAssistant = completedTurn.locator('[data-speaker="assistant"] > p').first();
@@ -344,7 +363,7 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     await completedSummary.locator(":scope > summary").click();
     const completedSteps = await completedSummary.locator("ol > li").allTextContents();
     expect(completedSteps).toHaveLength(2);
-    expect(completedSteps[0]).toContain("已列出 notes 的 1 个条目");
+    expect(completedSteps[0]).toContain("已列出 1 个章节");
     expect(completedSteps[1]).toContain(`已读取章节 ${activeChapterId}`);
     await assertCompactConversationSurface(page);
 
@@ -399,6 +418,30 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByRole("button", { name: "关闭设置" }).click();
 }
 
+async function chooseWorkspaceModelSharing(page: Page): Promise<void> {
+  const result = await page.evaluate(async () => {
+    const api = (
+      window as unknown as {
+        novelStudio?: {
+          workspace?: {
+            updateContextPolicy?: (update: unknown) => Promise<{ readonly ok: boolean }>;
+          };
+        };
+      }
+    ).novelStudio;
+    return api?.workspace?.updateContextPolicy?.({
+      action: "set_sharing_defaults",
+      defaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "allow",
+        toolReadResults: "allow"
+      }
+    });
+  });
+  expect(result).toMatchObject({ ok: true });
+}
+
 async function openAgentPanel(page: Page): Promise<void> {
   const unbound = page.getByLabel("Agent 未绑定工作区");
   const view = page.getByLabel("Agent 会话主视图");
@@ -440,22 +483,51 @@ async function resolveContextRefreshIfVisible(page: Page): Promise<void> {
   if (visible) await refresh.getByRole("button", { name: "从目标排除" }).click();
 }
 
-async function waitForLatestRunStatus(page: Page, status: string): Promise<void> {
+async function confirmFirstSendPreview(
+  page: Page,
+  composer: ReturnType<Page["getByLabel"]>
+): Promise<void> {
+  await composer.getByTitle("查看上下文").click();
+  const inspector = page.getByRole("dialog", { name: "上下文用量" });
+  await inspector.getByRole("tab", { name: "实际发送预览", exact: true }).click();
+  // The generic context panel appears while the request is still being prepared. Only this exact
+  // Main-bound preview proves that the next click confirms an actual frozen payload.
+  await expect(inspector.locator(".ns-agent-send-preview")).toBeVisible();
+  await inspector.press("Escape");
+  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
+}
+
+async function waitForLatestRunStatus(
+  page: Page,
+  status: string,
+  operationMode?: "planning" | "execution"
+): Promise<void> {
   await expect
     .poll(async () => {
       const listed = await page.evaluate(async () =>
         window.novelStudio?.agentRuns.list("prj_minimal_chapter")
       );
-      return listed?.ok ? listed.value.at(-1)?.status : undefined;
+      const runs = listed?.ok
+        ? listed.value.filter((run) => operationMode === undefined || run.operationMode === operationMode)
+        : [];
+      return runs.at(-1)?.status;
     })
     .toBe(status);
 }
 
-async function latestRunId(page: Page): Promise<string> {
-  const runId = await page.evaluate(async () => {
+async function latestRunId(
+  page: Page,
+  operationMode?: "planning" | "execution"
+): Promise<string> {
+  const runId = await page.evaluate(async (expectedOperationMode) => {
     const listed = await window.novelStudio?.agentRuns.list("prj_minimal_chapter");
-    return listed?.ok ? listed.value.at(-1)?.runId : undefined;
-  });
+    const runs = listed?.ok
+      ? listed.value.filter(
+          (run) => expectedOperationMode === undefined || run.operationMode === expectedOperationMode
+        )
+      : [];
+    return runs.at(-1)?.runId;
+  }, operationMode);
   if (runId === undefined) throw new Error("Expected a persisted Agent run");
   return runId;
 }
@@ -524,6 +596,43 @@ function isApplicationContextEnvelope(content: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function latestCompletedToolEvidenceRef(body: Record<string, unknown>): string | undefined {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      !isRecord(message) ||
+      message["role"] !== "tool" ||
+      typeof message["content"] !== "string" ||
+      typeof message["tool_call_id"] !== "string"
+    ) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(message["content"]) as unknown;
+      if (!isRecord(payload)) continue;
+      let evidenceRefs: unknown = payload["evidenceRefs"];
+      if (!Array.isArray(evidenceRefs) && typeof payload["data"] === "string") {
+        const data = JSON.parse(payload["data"]) as unknown;
+        evidenceRefs = isRecord(data) ? data["evidenceRefs"] : undefined;
+      }
+      if (!Array.isArray(evidenceRefs)) continue;
+      const evidenceRef = evidenceRefs.find(
+        (value): value is string =>
+          typeof value === "string" &&
+          /^run-event\/[1-9][0-9]*\/tool_completed\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(
+            value
+          ) &&
+          value.endsWith(`/tool_completed/${message["tool_call_id"]}`)
+      );
+      if (evidenceRef !== undefined) return evidenceRef;
+    } catch {
+      // Only the application's structured tool-result envelope can supply completion evidence.
+    }
+  }
+  return undefined;
 }
 
 function json(response: ServerResponse, payload: Record<string, unknown>): void {

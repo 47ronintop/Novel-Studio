@@ -1,8 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { createUnifiedError } from "@novel-studio/shared";
 import {
   computeAgentToolDescriptorDigest,
   createAgentContextSnapshot,
+  createChangeSetRevisionV2,
   createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
   revokeCapability,
@@ -6862,11 +6864,14 @@ describe("AgentRunSession v2 tool facade", () => {
     startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     answerUserInput(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     decidePlan(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    decideChangeSet(command: Record<string, unknown>): Promise<Record<string, unknown>>;
     invalidateAgentRunCapabilities(
       command: Record<string, unknown>
     ): Promise<Record<string, unknown>>;
     readAgentRun(runId: string): Promise<Record<string, unknown>>;
     resumeAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    retryRunTarget(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    refreshContext(command: Record<string, unknown>): Promise<Record<string, unknown>>;
   };
 
   const readExecutor = {
@@ -7411,9 +7416,6 @@ describe("AgentRunSession v2 tool facade", () => {
         "list_project_entries",
         "read_resource",
         "search_project",
-        "edit_text",
-        "create_resource",
-        "manage_path",
         "finish",
         "request_user_input"
       ]);
@@ -7463,7 +7465,7 @@ describe("AgentRunSession v2 tool facade", () => {
 
     await session.startAgentRun(startCommand());
     await vi.waitFor(() => expect(providerToolNames.length).toBeGreaterThan(0));
-    expect(providerToolNames).toContain("edit_text");
+    expect(providerToolNames).not.toContain("edit_text");
     expect(providerToolNames).not.toContain("search_project");
     expect(providerToolNames).not.toContain("create_resource");
     expect(providerToolNames).not.toContain("manage_path");
@@ -7575,7 +7577,7 @@ describe("AgentRunSession v2 tool facade", () => {
       ok: true,
       value: {
         facadeVersion: "v2",
-        descriptors: expect.arrayContaining([
+        descriptors: expect.not.arrayContaining([
           expect.objectContaining({ name: "edit_text" }),
           expect.objectContaining({ name: "create_resource" }),
           expect.objectContaining({ name: "manage_path" })
@@ -7583,8 +7585,8 @@ describe("AgentRunSession v2 tool facade", () => {
       }
     });
     await vi.waitFor(() => expect(executionToolNames).not.toEqual([]));
-    expect(executionToolNames).toContain("edit_text");
-    expect(executionToolNames).toContain("manage_path");
+    expect(executionToolNames).not.toContain("edit_text");
+    expect(executionToolNames).not.toContain("manage_path");
     expect(executionToolNames).not.toContain("propose_chapter_write");
     expect(executionToolNames).not.toContain("read_chapter");
   });
@@ -7850,7 +7852,7 @@ describe("AgentRunSession v2 tool facade", () => {
     });
   });
 
-  test("maps v2 Story Bible edits onto the existing Change Set proposal path", async () => {
+  test("rejects a schema 1 v2 Story Bible mutation alias at dispatch", async () => {
     const proposals: Record<string, unknown>[] = [];
     const runId = "run_v2_story_edit";
     const changeSet = diagnosticChangeSet(runId);
@@ -7890,21 +7892,19 @@ describe("AgentRunSession v2 tool facade", () => {
     });
 
     await session.startAgentRun(startCommand());
-    await vi.waitFor(() => expect(proposals).toHaveLength(1));
-    expect(proposals[0]).toMatchObject({
-      assetId: "hero",
-      baseHash: "a".repeat(64),
-      range: { unit: "character", start: 0, end: 2 },
-      replacement: "{}"
-    });
     await vi.waitFor(async () => {
-      expect(await session.readAgentRun(runId)).toMatchObject({
-        value: { snapshot: { status: "awaiting_write_approval" } }
+      const read = await session.readAgentRun(runId);
+      const events = (read["value"] as { readonly events?: readonly Record<string, unknown>[] })
+        ?.events;
+      expect(events?.find((event) => event["type"] === "tool_failed")?.["detail"]).toMatchObject({
+        toolCallId: "v2-story-edit",
+        code: "AGENT_TOOL_NOT_ALLOWED"
       });
     });
+    expect(proposals).toEqual([]);
   });
 
-  test("maps v2 file creation onto AgentFileOperationSession and Change Set v1.1", async () => {
+  test("rejects a schema 1 v2 file-creation alias at dispatch", async () => {
     const fileProposals: Record<string, unknown>[] = [];
     const stagedOperations: Record<string, unknown>[] = [];
     const runId = "run_v2_create_file";
@@ -7950,23 +7950,20 @@ describe("AgentRunSession v2 tool facade", () => {
     });
 
     await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
-    await vi.waitFor(() => expect(stagedOperations).toHaveLength(1));
-    expect(fileProposals[0]).toMatchObject({
-      toolCallId: "v2-create-file",
-      relativePath: "notes/new.md",
-      content: "new",
-      dependsOn: ["op-parent"]
+    await vi.waitFor(async () => {
+      const read = await session.readAgentRun(runId);
+      const events = (read["value"] as { readonly events?: readonly Record<string, unknown>[] })
+        ?.events;
+      expect(events?.find((event) => event["type"] === "tool_failed")?.["detail"]).toMatchObject({
+        toolCallId: "v2-create-file",
+        code: "AGENT_TOOL_NOT_ALLOWED"
+      });
     });
-    expect(stagedOperations[0]).toMatchObject({
-      operation: {
-        kind: "create_file",
-        relativePath: "notes/new.md",
-        dependsOn: ["op-parent"]
-      }
-    });
+    expect(fileProposals).toEqual([]);
+    expect(stagedOperations).toEqual([]);
   });
 
-  test("fails closed for v2 chapter creation when the formal chapter session is missing", async () => {
+  test("rejects a schema 1 v2 chapter-creation alias before backend dispatch", async () => {
     const runId = "run_v2_create_chapter_without_formal_session";
     const session = createSession({
       coordinatorOptions: { createRunId: () => runId },
@@ -8005,12 +8002,12 @@ describe("AgentRunSession v2 tool facade", () => {
       const failed = events?.find((event) => event["type"] === "tool_failed");
       expect(failed?.["detail"]).toMatchObject({
         toolCallId: "v2-create-chapter",
-        code: "AGENT_CHAPTER_SESSION_UNAVAILABLE"
+        code: "AGENT_TOOL_NOT_ALLOWED"
       });
     });
   });
 
-  test("maps v2 move operations and keeps them awaiting human review when preapproved", async () => {
+  test("rejects a schema 1 v2 move alias at dispatch", async () => {
     const moveProposals: Record<string, unknown>[] = [];
     const runId = "run_v2_move_file";
     let lifecycleOperation: Record<string, unknown> | undefined;
@@ -8070,19 +8067,17 @@ describe("AgentRunSession v2 tool facade", () => {
       ...startCommand(),
       contextMode: "general_file"
     });
-    await vi.waitFor(() => expect(moveProposals).toHaveLength(1));
-    expect(moveProposals[0]).toMatchObject({
-      sourcePath: "notes/old.md",
-      targetPath: "notes/new.md",
-      sourceChecksum: "b".repeat(64),
-      dependsOn: ["op-directory"]
-    });
-    expect(lifecycleOperation).toMatchObject({ kind: "move_file" });
     await vi.waitFor(async () => {
-      expect(await session.readAgentRun(runId)).toMatchObject({
-        value: { snapshot: { status: "awaiting_write_approval" } }
+      const read = await session.readAgentRun(runId);
+      const events = (read["value"] as { readonly events?: readonly Record<string, unknown>[] })
+        ?.events;
+      expect(events?.find((event) => event["type"] === "tool_failed")?.["detail"]).toMatchObject({
+        toolCallId: "v2-move-file",
+        code: "AGENT_TOOL_NOT_ALLOWED"
       });
     });
+    expect(moveProposals).toEqual([]);
+    expect(lifecycleOperation).toBeUndefined();
   });
 
   test("writes Guidance 3.0 and Prompt Artifact 2.0 only when the Main-owned gate is enabled", async () => {
@@ -8848,11 +8843,7 @@ describe("AgentRunSession v2 tool facade", () => {
     ["canonicalRootIdentityChecksum", "a", "canonical_root_changed"],
     ["sharingGrantRevision", "b", "sharing_revision_changed"],
     ["policyRevision", "policy_02", "policy_revision_changed"],
-    [
-      "providerSemanticVersionSetChecksum",
-      "c",
-      "provider_semantic_version_set_changed"
-    ],
+    ["providerSemanticVersionSetChecksum", "c", "provider_semantic_version_set_changed"],
     ["providerToolProjectionChecksum", "d", "provider_tool_projection_changed"],
     ["effectiveCapabilityStateChecksum", "e", "effective_capability_state_changed"]
   ])(
@@ -8876,7 +8867,8 @@ describe("AgentRunSession v2 tool facade", () => {
         modelDriver: {
           async *streamRound() {
             providerCalls += 1;
-            if (providerCalls > 1) throw new Error("Boundary drift reached a second Provider call.");
+            if (providerCalls > 1)
+              throw new Error("Boundary drift reached a second Provider call.");
             yield toolCall(`read-before-${field}`, "read_resource", {
               ref: "chapter:chapter-01"
             });
@@ -9079,6 +9071,153 @@ describe("AgentRunSession v2 tool facade", () => {
     });
   });
 
+  test("keeps legacy recovery actions fail-closed when the active Guidance gate requires a handoff", async () => {
+    const retryRepository = durableMemoryRepository();
+    const retryOriginal = createSession({
+      coordinatorOptions: { createRunId: () => "run_legacy_retry_handoff" },
+      repository: retryRepository,
+      newRunToolFacadeVersion: "v2",
+      modelDriver: {
+        async *streamRound() {
+          yield* [];
+          throw createUnifiedError({
+            code: "LLM_PROVIDER_DISCONNECTED",
+            category: "ModelProviderError",
+            message: "Provider disconnected.",
+            recoverability: "retryable",
+            suggestedAction: "Retry the model round.",
+            traceId: "agent-run-session-test"
+          });
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    expect(await retryOriginal.startAgentRun(startCommand())).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await retryOriginal.readAgentRun("run_legacy_retry_handoff")).toMatchObject({
+        value: {
+          snapshot: {
+            status: "executing_model",
+            recoveryState: "retryable",
+            activeErrorId: expect.any(String)
+          }
+        }
+      });
+    });
+    const retryRecovered = createSession({
+      repository: retryRepository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      modelDriver: {
+        streamRound: () => unexpectedModelRound("A legacy run must not call the Provider.")
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    const retryRead = (await retryRecovered.readAgentRun("run_legacy_retry_handoff")) as {
+      readonly value: {
+        readonly snapshot: {
+          readonly runRevision: number;
+          readonly activeErrorId: string;
+        };
+        readonly diagnostic: {
+          readonly retryTargets: readonly { readonly kind: string; readonly id: string }[];
+        };
+      };
+    };
+    const retrySnapshot = retryRead.value.snapshot;
+    const retryTarget = retryRead.value.diagnostic.retryTargets[0];
+    expect(retryTarget).toMatchObject({ kind: "model_round" });
+    await expect(
+      retryRecovered.retryRunTarget({
+        projectId: "project-01",
+        runId: "run_legacy_retry_handoff",
+        commandId: "retry-legacy-handoff",
+        expectedRunRevision: retrySnapshot.runRevision,
+        errorId: retrySnapshot.activeErrorId,
+        target: retryTarget
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: "AGENT_GUIDANCE_HANDOFF_REQUIRED" } });
+    await expect(retryRecovered.readAgentRun("run_legacy_retry_handoff")).resolves.toMatchObject({
+      value: {
+        snapshot: {
+          status: "executing_model",
+          runRevision: retrySnapshot.runRevision,
+          activeErrorId: retrySnapshot.activeErrorId,
+          recoveryState: "retryable"
+        }
+      }
+    });
+
+    const contextRepository = durableMemoryRepository();
+    const contextOriginal = createSession({
+      coordinatorOptions: { createRunId: () => "run_legacy_context_handoff" },
+      repository: contextRepository,
+      newRunToolFacadeVersion: "v2",
+      modelDriver: { streamRound: blockedModelRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      contextSourceReader: {
+        async readCurrentSources() {
+          return { ok: true, value: [{ refId: "file:stale.md", content: "after" }] };
+        }
+      }
+    });
+    expect(
+      await contextOriginal.startAgentRun({
+        ...startCommand(),
+        initialContextSources: [
+          {
+            refId: "file:stale.md",
+            sourceKind: "disk_file",
+            relativePath: "stale.md",
+            content: "before",
+            dirty: false
+          }
+        ]
+      })
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect(await contextOriginal.readAgentRun("run_legacy_context_handoff")).toMatchObject({
+        value: { snapshot: { status: "awaiting_context_refresh" } }
+      });
+    });
+    const contextRecovered = createSession({
+      repository: contextRepository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      modelDriver: {
+        streamRound: () => unexpectedModelRound("A legacy run must not call the Provider.")
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+    const contextRead = (await contextRecovered.readAgentRun("run_legacy_context_handoff")) as {
+      readonly value: { readonly snapshot: { readonly runRevision: number } };
+    };
+    await expect(
+      contextRecovered.refreshContext({
+        projectId: "project-01",
+        runId: "run_legacy_context_handoff",
+        commandId: "refresh-legacy-handoff",
+        expectedRunRevision: contextRead.value.snapshot.runRevision,
+        decision: "exclude"
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: "AGENT_GUIDANCE_HANDOFF_REQUIRED" } });
+    await expect(
+      contextRecovered.readAgentRun("run_legacy_context_handoff")
+    ).resolves.toMatchObject({
+      value: {
+        snapshot: {
+          status: "awaiting_context_refresh",
+          runRevision: contextRead.value.snapshot.runRevision
+        },
+        events: expect.arrayContaining([expect.objectContaining({ type: "context_stale" })])
+      }
+    });
+  });
+
   test("rejects a valid Guidance 3.0 artifact bound to another tool catalog revision", async () => {
     const repository = durableMemoryRepository();
     const original = createSession({
@@ -9131,6 +9270,435 @@ describe("AgentRunSession v2 tool facade", () => {
       ok: false,
       error: { code: "AGENT_PROMPT_MATERIALIZATION_INVALID" }
     });
+  });
+
+  test("routes a v2 Change Set apply through the trusted Main approval bridge", async () => {
+    const runId = "run_v2_trusted_apply";
+    let providerSemanticVersionSetChecksum = "";
+    let changeSet = await v2DiagnosticChangeSet(runId);
+    const prepared: Record<string, unknown>[] = [];
+    const proofWrites: Record<string, unknown>[] = [];
+    const decided: Record<string, unknown>[] = [];
+    const legacyDecisions: Record<string, unknown>[] = [];
+    const applied: Record<string, unknown>[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: { ...creativeV2Capabilities(), writingOperations: ["chapter_replace"] },
+      modelDriver: { streamRound: v2ChapterProposalRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      changeSetSession: {
+        bindRunProviderSemanticVersionSet(_runId: string, checksum: string) {
+          providerSemanticVersionSetChecksum = checksum;
+          return { ok: true as const, value: undefined };
+        },
+        async proposeChapterWrite() {
+          changeSet = await v2DiagnosticChangeSet(runId, providerSemanticVersionSetChecksum);
+          return { ok: true, value: changeSet };
+        },
+        async persistApprovalDecisionProof(input: Record<string, unknown>) {
+          proofWrites.push(input);
+          const proof = input["proof"] as { readonly proofId: string };
+          return { ok: true, value: { proofId: proof.proofId, proofChecksum: "c".repeat(64) } };
+        },
+        async decide(command: Record<string, unknown>) {
+          legacyDecisions.push(command);
+          throw new Error("a v2 Change Set must never use legacy decide");
+        },
+        async decideV2(input: Record<string, unknown>) {
+          decided.push(input);
+          return {
+            ok: true,
+            value: v2Approval(changeSet, "apply_selected")
+          };
+        },
+        async rejectV2() {
+          throw new Error("apply must not reject the Change Set");
+        }
+      },
+      changeSetApprovalV2: {
+        async prepare(input: Record<string, unknown>) {
+          prepared.push(input);
+          return {
+            ok: true,
+            value: {
+              changeSet,
+              decision: "apply_selected",
+              displayBindingChecksum: changeSet.displayBindingChecksum,
+              binding: { mainOnly: true },
+              authorizationId: "auth_v2_apply",
+              reservationTransactionId: "reservation_v2_apply",
+              trustedConfirmationQualified: true,
+              resolvedAt: "2026-08-06T00:00:00.000Z"
+            }
+          };
+        }
+      },
+      versionGroupExecutor: {
+        async apply(input: Record<string, unknown>) {
+          applied.push(input);
+          return { ok: true, value: { versionGroupId: "version_group_v2_apply" } };
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    });
+
+    await session.startAgentRun(startCommand());
+    const pending = await awaitPendingChangeSet(session, runId);
+    await expect(
+      session.decideChangeSet(
+        changeSetCommand(
+          runId,
+          pending,
+          changeSet as {
+            readonly changeSetId: string;
+            readonly revision: number;
+            readonly checksum: string;
+          },
+          "apply_selected"
+        )
+      )
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0]).toMatchObject({
+      changeSet: { changeSetId: changeSet.changeSetId, checksum: changeSet.checksum },
+      command: { decision: "apply_selected" },
+      approvalContext: {
+        workspaceBindingId: expect.any(String),
+        operation: "chapter_replace",
+        approvalBindingOperationKind: "chapter_replace",
+        preview: {
+          changeSetId: changeSet.changeSetId,
+          revision: changeSet.revision,
+          checksum: changeSet.checksum,
+          displayBindingChecksum: changeSet.displayBindingChecksum,
+          providerSemanticVersionSetChecksum: changeSet.providerSemanticVersionSetChecksum
+        }
+      }
+    });
+    expect(proofWrites).toHaveLength(1);
+    expect(proofWrites[0]).toMatchObject({
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      proof: {
+        operation: "chapter_replace",
+        decision: "human_confirmation",
+        binding: {
+          changeSetId: changeSet.changeSetId,
+          changeSetRevision: changeSet.revision,
+          changeSetChecksum: changeSet.checksum,
+          capabilityRevision: expect.any(String),
+          policyRevision: expect.any(String)
+        }
+      }
+    });
+    const approvalContext = prepared[0]?.["approvalContext"] as {
+      readonly workspaceBindingId: string;
+      readonly proofRef: { readonly proofId: string };
+    };
+    const persistedProof = proofWrites[0]?.["proof"] as {
+      readonly proofId: string;
+      readonly binding: { readonly workspaceBindingId: string };
+    };
+    expect(approvalContext.workspaceBindingId).toBe(persistedProof.binding.workspaceBindingId);
+    expect(approvalContext.proofRef.proofId).toBe(persistedProof.proofId);
+    expect(decided).toHaveLength(1);
+    expect(decided[0]).toMatchObject({
+      authorizationId: "auth_v2_apply",
+      reservationTransactionId: "reservation_v2_apply",
+      changeSet: { changeSetId: changeSet.changeSetId }
+    });
+    expect(applied).toHaveLength(1);
+    expect(legacyDecisions).toEqual([]);
+
+    // A replayed command receipt may not mint another proof or invoke the confirmation surface.
+    await expect(
+      session.decideChangeSet(changeSetCommand(runId, pending, changeSet, "apply_selected"))
+    ).resolves.toMatchObject({ ok: true });
+    expect(proofWrites).toHaveLength(1);
+    expect(prepared).toHaveLength(1);
+  });
+
+  test("rejects a v2 Change Set without a binding and clears its pending receipt state", async () => {
+    const runId = "run_v2_reject";
+    let providerSemanticVersionSetChecksum = "";
+    let changeSet = await v2DiagnosticChangeSet(runId);
+    const repository = durableMemoryRepository();
+    const rejected: Record<string, unknown>[] = [];
+    const legacyDecisions: Record<string, unknown>[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: { ...creativeV2Capabilities(), writingOperations: ["chapter_replace"] },
+      modelDriver: { streamRound: v2ChapterProposalRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      changeSetSession: {
+        bindRunProviderSemanticVersionSet(_runId: string, checksum: string) {
+          providerSemanticVersionSetChecksum = checksum;
+          return { ok: true as const, value: undefined };
+        },
+        async proposeChapterWrite() {
+          changeSet = await v2DiagnosticChangeSet(runId, providerSemanticVersionSetChecksum);
+          return { ok: true, value: changeSet };
+        },
+        async decide(command: Record<string, unknown>) {
+          legacyDecisions.push(command);
+          throw new Error("a v2 rejection must never use legacy decide");
+        },
+        async rejectV2(input: Record<string, unknown>) {
+          rejected.push(input);
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "2.0",
+              decision: "reject_all",
+              resolvedAt: input["resolvedAt"],
+              displayBindingChecksum: changeSet.displayBindingChecksum
+            }
+          };
+        }
+      }
+    });
+
+    await session.startAgentRun(startCommand());
+    const pending = await awaitPendingChangeSet(session, runId);
+    const command = changeSetCommand(runId, pending, changeSet, "reject_all");
+    await expect(session.decideChangeSet(command)).resolves.toMatchObject({ ok: true });
+
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      displayBindingChecksum: changeSet.displayBindingChecksum
+    });
+    expect(rejected[0]).not.toHaveProperty("binding");
+    expect(rejected[0]).not.toHaveProperty("reservationTransactionId");
+    expect(legacyDecisions).toEqual([]);
+    await expect(session.readAgentRun(runId)).resolves.toMatchObject({
+      value: {
+        snapshot: {
+          status: "executing_model",
+          pendingChangeSetId: null,
+          pendingChangeSetRevision: null,
+          pendingChangeSetChecksum: null
+        }
+      }
+    });
+    await expect(
+      repository.readCommandReceipt(runId, String(command["commandId"]))
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { ok: true }
+    });
+  });
+
+  test("fails closed for v2 apply when the trusted Main bridge is absent or throws", async () => {
+    for (const [runId, bridge] of [
+      ["run_v2_bridge_absent", undefined],
+      [
+        "run_v2_bridge_error",
+        {
+          async prepare() {
+            throw new Error("Main surface failed");
+          }
+        }
+      ]
+    ] as const) {
+      let providerSemanticVersionSetChecksum = "";
+      let changeSet = await v2DiagnosticChangeSet(runId);
+      const legacyDecisions: Record<string, unknown>[] = [];
+      const decided: Record<string, unknown>[] = [];
+      const session = createSession({
+        coordinatorOptions: { createRunId: () => runId },
+        repository: durableMemoryRepository(),
+        newRunToolFacadeVersion: "v2",
+        agentGuidanceV3: true,
+        capabilitySnapshot: { ...creativeV2Capabilities(), writingOperations: ["chapter_replace"] },
+        modelDriver: { streamRound: v2ChapterProposalRound },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: readExecutor,
+        changeSetSession: {
+          bindRunProviderSemanticVersionSet(_runId: string, checksum: string) {
+            providerSemanticVersionSetChecksum = checksum;
+            return { ok: true as const, value: undefined };
+          },
+          async proposeChapterWrite() {
+            changeSet = await v2DiagnosticChangeSet(runId, providerSemanticVersionSetChecksum);
+            return { ok: true, value: changeSet };
+          },
+          async persistApprovalDecisionProof(input: Record<string, unknown>) {
+            const proof = input["proof"] as { readonly proofId: string };
+            return {
+              ok: true,
+              value: { proofId: proof.proofId, proofChecksum: "c".repeat(64) }
+            };
+          },
+          async decide(command: Record<string, unknown>) {
+            legacyDecisions.push(command);
+            throw new Error("a v2 Change Set must never fall back to legacy decide");
+          },
+          async decideV2(input: Record<string, unknown>) {
+            decided.push(input);
+            throw new Error("a missing or failed bridge must not reach decideV2");
+          },
+          async rejectV2() {
+            throw new Error("unused");
+          }
+        },
+        versionGroupExecutor: {
+          async apply() {
+            throw new Error("a failed bridge must not apply the Change Set");
+          },
+          async undoRun() {
+            throw new Error("unused");
+          }
+        },
+        ...(bridge === undefined ? {} : { changeSetApprovalV2: bridge })
+      });
+
+      await session.startAgentRun(startCommand());
+      const pending = await awaitPendingChangeSet(session, runId);
+      const command = changeSetCommand(runId, pending, changeSet, "apply_selected");
+      if (bridge === undefined) {
+        await expect(session.decideChangeSet(command)).resolves.toMatchObject({
+          ok: false,
+          error: { code: "CHANGE_SET_TRUSTED_SURFACE_UNAVAILABLE" }
+        });
+      } else {
+        await expect(session.decideChangeSet(command)).resolves.toMatchObject({
+          ok: false,
+          error: { code: "CHANGE_SET_TRUSTED_SURFACE_FAILED" }
+        });
+      }
+      expect(decided).toEqual([]);
+      expect(legacyDecisions).toEqual([]);
+      await expect(session.readAgentRun(runId)).resolves.toMatchObject({
+        value: {
+          snapshot: {
+            status: "awaiting_write_approval",
+            pendingChangeSetId: changeSet.changeSetId,
+            pendingChangeSetRevision: changeSet.revision,
+            pendingChangeSetChecksum: changeSet.checksum
+          }
+        }
+      });
+    }
+  });
+
+  test("keeps explicit legacy Change Set approvals on the historical decide path", async () => {
+    const runId = "run_legacy_historical_apply";
+    const changeSet = diagnosticChangeSet(runId);
+    const legacyDecisions: Record<string, unknown>[] = [];
+    const applied: Record<string, unknown>[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v1",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: { streamRound: legacyChapterProposalRound },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      changeSetSession: {
+        async proposeChapterWrite() {
+          return { ok: true, value: changeSet };
+        },
+        async decide(command: Record<string, unknown>) {
+          legacyDecisions.push(command);
+          return {
+            ok: true,
+            value: {
+              schemaVersion: "1.1",
+              decision: "apply_selected",
+              approvalSource: "human_confirmation",
+              resolvedAt: "2026-08-06T00:00:00.000Z",
+              binding: {
+                changeSetId: changeSet.changeSetId,
+                revision: changeSet.revision,
+                checksum: changeSet.checksum,
+                approvalToken: changeSet.approvalToken
+              }
+            }
+          };
+        },
+        async decideV2() {
+          throw new Error("legacy Change Sets must not enter the v2 gate");
+        },
+        async rejectV2() {
+          throw new Error("unused");
+        }
+      },
+      versionGroupExecutor: {
+        async apply(input: Record<string, unknown>) {
+          applied.push(input);
+          return { ok: true, value: { versionGroupId: "version_group_legacy_apply" } };
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    });
+
+    await session.startAgentRun(startCommand());
+    const pending = await awaitPendingChangeSet(session, runId);
+    await expect(
+      session.decideChangeSet(
+        changeSetCommand(
+          runId,
+          pending,
+          changeSet as {
+            readonly changeSetId: string;
+            readonly revision: number;
+            readonly checksum: string;
+          },
+          "apply_selected"
+        )
+      )
+    ).resolves.toMatchObject({ ok: true });
+    expect(legacyDecisions).toHaveLength(1);
+    expect(applied).toHaveLength(1);
+  });
+
+  test("starts a non-Guidance v2 facade with no legacy mutation aliases", async () => {
+    const runId = "run_v2_schema_1_read_only";
+    let toolNames: readonly string[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound(input: { readonly tools: readonly { readonly name: string }[] }) {
+          toolNames = input.tools.map((tool) => tool.name);
+          yield { type: "round_completed" as const, finishReason: "stop" as const };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor
+    });
+
+    await expect(session.startAgentRun(startCommand())).resolves.toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(toolNames).not.toEqual([]));
+    expect(toolNames).not.toEqual(
+      expect.arrayContaining([
+        "edit_text",
+        "create_resource",
+        "manage_path",
+        "create_story_bible",
+        "patch_story_bible",
+        "set_story_bible_status",
+        "restore_story_bible"
+      ])
+    );
   });
 });
 
@@ -9642,6 +10210,108 @@ function networkReadResult() {
     contentSummary: "ok",
     truncated: false,
     sourceLabel: "test"
+  };
+}
+
+async function v2DiagnosticChangeSet(
+  runId: string,
+  providerSemanticVersionSetChecksum = "a".repeat(64)
+) {
+  const baseContent = "before";
+  return createChangeSetRevisionV2(
+    {
+      changeSetId: `changes_v2_${runId}`,
+      runId,
+      projectId: "project-01",
+      checkpointId: `checkpoint_v2_${runId}`,
+      contextSnapshotId: `context_v2_${runId}`,
+      writePolicy: "write_before_confirmation",
+      createdAt: "2026-08-06T00:00:00.000Z",
+      providerSemanticVersionSetChecksum,
+      proposal: {
+        relativePath: "chapters/chapter-01.md",
+        assetType: "chapter",
+        baseContent,
+        baseChecksum: createHash("sha256").update(baseContent).digest("hex"),
+        range: { unit: "character", start: 0, end: baseContent.length },
+        replacement: "after"
+      }
+    },
+    { createHunkId: () => `hunk_v2_${runId}` }
+  );
+}
+
+async function* v2ChapterProposalRound() {
+  yield toolCall("v2-change-set-proposal", "edit_text", {
+    ref: "chapter:chapter-01",
+    baseHash: createHash("sha256").update("before").digest("hex"),
+    range: { unit: "character", start: 0, end: "before".length },
+    replacement: "after"
+  });
+  yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+}
+
+async function* legacyChapterProposalRound() {
+  yield toolCall("legacy-change-set-proposal", "propose_chapter_write", {
+    chapterId: "chapter-01",
+    baseHash: createHash("sha256").update("before").digest("hex"),
+    range: { unit: "character", start: 0, end: "before".length },
+    replacement: "after"
+  });
+  yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+}
+
+async function awaitPendingChangeSet(
+  session: { readonly readAgentRun: (runId: string) => Promise<Record<string, unknown>> },
+  runId: string
+): Promise<number> {
+  await vi.waitFor(async () => {
+    expect(await session.readAgentRun(runId)).toMatchObject({
+      value: { snapshot: { status: "awaiting_write_approval" } }
+    });
+  });
+  const read = await session.readAgentRun(runId);
+  const value = read["value"] as { readonly snapshot: { readonly runRevision: number } };
+  return value.snapshot.runRevision;
+}
+
+function changeSetCommand(
+  runId: string,
+  expectedRunRevision: number,
+  changeSet: {
+    readonly changeSetId: string;
+    readonly revision: number;
+    readonly checksum: string;
+  },
+  decision: "apply_selected" | "reject_all"
+): Record<string, unknown> {
+  return {
+    projectId: "project-01",
+    runId,
+    commandId: `${runId}:${decision}`,
+    expectedRunRevision,
+    changeSetId: changeSet.changeSetId,
+    revision: changeSet.revision,
+    checksum: changeSet.checksum,
+    decision
+  };
+}
+
+function v2Approval(
+  changeSet: {
+    readonly displayBindingChecksum: string;
+  },
+  decision: "apply_selected" | "reject_all"
+): Record<string, unknown> {
+  return {
+    schemaVersion: "2.0",
+    decision,
+    approvalSource: "human_confirmation",
+    resolvedAt: "2026-08-06T00:00:00.000Z",
+    displayBindingChecksum: changeSet.displayBindingChecksum,
+    authorizationId: "auth_v2",
+    reservationTransactionId: "reservation_v2",
+    binding: { mainOnly: true }
   };
 }
 

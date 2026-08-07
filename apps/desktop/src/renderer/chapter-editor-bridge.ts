@@ -16,6 +16,11 @@ import type {
   ChapterEditorProps,
   ChapterEditorVersionEntry
 } from "@novel-studio/ui";
+import {
+  createWritingEditorStateReporter,
+  type WritingEditorRendererSession,
+  type WritingEditorStateReportStatus
+} from "./writing-editor-state-reporter.js";
 export interface ChapterEditorBridge {
   load(): Promise<ChapterEditorProps>;
   adopt(props: ChapterEditorProps): ChapterEditorProps;
@@ -27,6 +32,11 @@ export interface ChapterEditorBridge {
   previewVersion(versionId: string): Promise<ChapterVersionContent>;
   restoreVersion(versionId: string): Promise<ChapterEditorProps>;
   previewSuggestionDiff(nextBody: string): Promise<ChapterEditorDiffPreview>;
+  openWritingEditor(session: WritingEditorRendererSession): Promise<WritingEditorStateReportStatus>;
+  reportWritingEditorState(
+    session: WritingEditorRendererSession
+  ): Promise<WritingEditorStateReportStatus>;
+  disconnectWritingEditor(): Promise<WritingEditorStateReportStatus>;
 }
 
 export interface ChapterStatusBridgeResult {
@@ -36,6 +46,7 @@ export interface ChapterStatusBridgeResult {
 
 export function createChapterEditorBridge(api: NovelStudioApi): ChapterEditorBridge {
   let currentProps: ChapterEditorProps | undefined;
+  const writingEditorReporter = createWritingEditorStateReporter(api);
 
   return {
     async load() {
@@ -89,7 +100,36 @@ export function createChapterEditorBridge(api: NovelStudioApi): ChapterEditorBri
     },
     previewSuggestionDiff(nextBody: string) {
       return unwrap(api.chapter.previewSuggestionDiff(nextBody));
+    },
+    openWritingEditor(session) {
+      const snapshot = currentWritingEditorSnapshot(currentProps, session);
+      return snapshot === undefined
+        ? Promise.resolve({ status: "unknown", code: "EDITOR_STATE_NOT_OPEN" })
+        : writingEditorReporter.open(snapshot);
+    },
+    reportWritingEditorState(session) {
+      const snapshot = currentWritingEditorSnapshot(currentProps, session);
+      return snapshot === undefined
+        ? Promise.resolve({ status: "unknown", code: "EDITOR_STATE_NOT_OPEN" })
+        : writingEditorReporter.report(snapshot);
+    },
+    disconnectWritingEditor() {
+      return writingEditorReporter.disconnect();
     }
+  };
+}
+
+function currentWritingEditorSnapshot(
+  props: ChapterEditorProps | undefined,
+  session: WritingEditorRendererSession
+) {
+  if (props === undefined) return undefined;
+  return {
+    ...session,
+    resourceKind: "chapter" as const,
+    resourceId: props.chapter.frontmatter.id,
+    dirty: props.dirty,
+    bufferContent: props.chapter.body
   };
 }
 

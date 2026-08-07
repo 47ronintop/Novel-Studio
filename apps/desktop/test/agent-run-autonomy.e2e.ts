@@ -5,7 +5,6 @@ import {
   type ElectronApplication,
   type Page
 } from "@playwright/test";
-import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -20,132 +19,35 @@ const secondChapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D1";
 const firstBody = "Original chapter body.\n";
 const secondBody = "Second original body.\n";
 
-test("auto-applies two versioned Change Sets and reviews a conflicting run undo", async () => {
+test("keeps source-built execution read-only until a signed package is qualified", async () => {
   test.setTimeout(120_000);
   const scenario = await launchScenario();
-  const firstRelativePath = `chapters/${firstChapterId}.md`;
-  const secondRelativePath = `chapters/${secondChapterId}.md`;
-  const firstPath = join(scenario.projectRoot, firstRelativePath);
-  const secondPath = join(scenario.projectRoot, secondRelativePath);
+  const firstPath = join(scenario.projectRoot, "chapters", `${firstChapterId}.md`);
+  const secondPath = join(scenario.projectRoot, "chapters", `${secondChapterId}.md`);
   const firstBaseline = await readFile(firstPath, "utf8");
   const secondBaseline = await readFile(secondPath, "utf8");
 
   try {
     await startAutonomousExecution(scenario.page);
-
+    const capabilitySummary = scenario.page.getByLabel("运行能力摘要");
+    await expect(capabilitySummary).toContainText("只读执行");
+    await expect(capabilitySummary).toContainText("章节正文替换不可用");
+    await expect(scenario.page.getByRole("button", { name: "撤销本次运行" })).toHaveCount(0);
+    scenario.releaseProviderResponse();
     await expect
-      .poll(
-        async () => {
-          const read = await readLatestAgentRun(scenario.page);
-          if (
-            read.ok === true &&
-            isRecord(read.value) &&
-            isRecord(read.value["snapshot"]) &&
-            read.value["snapshot"]["status"] === "failed"
-          ) {
-            throw new Error(`Agent run failed: ${JSON.stringify(read.value["events"])}`);
-          }
-          if (
-            read.ok === true &&
-            isRecord(read.value) &&
-            isRecord(read.value["snapshot"]) &&
-            read.value["snapshot"]["status"] === "awaiting_context_refresh"
-          ) {
-            await resolveContextRefreshIfVisible(scenario.page);
-          }
-          return read;
-        },
-        { timeout: 30_000 }
-      )
-      .toMatchObject({
-        ok: true,
-        value: {
-          snapshot: { status: "completed", writePolicy: "user_preapproved_run" },
-          changeSet: { status: "applied", writePolicy: "user_preapproved_run" }
-        }
-      });
-
-    await expect
-      .poll(async () => readFile(firstPath, "utf8"), { timeout: 30_000 })
-      .toContain("Autonomous first chapter body.");
-    await expect
-      .poll(async () => readFile(secondPath, "utf8"), { timeout: 30_000 })
-      .toContain("Autonomous second original body.");
+      .poll(async () => readLatestAgentRun(scenario.page), { timeout: 30_000 })
+      .toMatchObject({ ok: true, value: { snapshot: { status: "completed" } } });
     const completedRun = await readLatestAgentRun(scenario.page);
-    expect(
-      agentRunEventTypes(completedRun).filter((type) => type === "change_set_auto_approved")
-    ).toHaveLength(2);
-    expect(
-      agentRunEventTypes(completedRun).filter((type) => type === "write_applied")
-    ).toHaveLength(2);
-    const applyJournals = (await readTransactionJournals(scenario.projectRoot)).filter(
-      (journal) => journal.kind === "apply"
-    );
-    expect(applyJournals).toHaveLength(2);
-    expect(applyJournals).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          writePolicy: "user_preapproved_run",
-          approvalSource: "user_preapproved_run",
-          transactionStatus: "applied"
-        }),
-        expect.objectContaining({
-          writePolicy: "user_preapproved_run",
-          approvalSource: "user_preapproved_run",
-          transactionStatus: "applied"
-        })
-      ])
-    );
-    expect(await readHistoryRecords(scenario.projectRoot, "before-agent-write")).toHaveLength(2);
-
-    const userEdited = (await readFile(firstPath, "utf8")).replace(
-      "Autonomous first chapter body.",
-      "User edit after Agent write."
-    );
-    await writeFile(firstPath, userEdited, "utf8");
-    const returnToConversation = scenario.page.getByRole("button", { name: "返回对话" });
-    if (await returnToConversation.isVisible()) await returnToConversation.click();
-    const undo = scenario.page
-      .getByLabel("Agentic Writing Loop")
-      .getByRole("button", { name: "撤销本次运行" });
-    await expect(undo).toBeEnabled();
-    await undo.click();
-
-    await expect.poll(async () => readFile(secondPath, "utf8")).toBe(secondBaseline);
-    await expect.poll(async () => readFile(firstPath, "utf8")).toBe(userEdited);
-    const review = scenario.page.getByLabel("运行撤销冲突审阅");
-    await expect(review).toBeVisible();
-    const conflictFile = review
-      .locator(".ns-rollback-review-file")
-      .filter({ hasText: firstRelativePath });
-    await expect(conflictFile.getByText("当前内容", { exact: true })).toBeVisible();
-    await expect(conflictFile.getByText("AI 最后写入", { exact: true })).toBeVisible();
-    await expect(conflictFile.getByText("运行前基线", { exact: true })).toBeVisible();
-    await conflictFile.getByRole("radio", { name: "保留当前" }).check();
-    await review.getByRole("button", { name: "应用所选恢复" }).click();
-
-    expect(await readFile(firstPath, "utf8")).toBe(userEdited);
+    expect(agentRunEventTypes(completedRun)).not.toContain("change_set_ready");
+    expect(agentRunEventTypes(completedRun)).not.toContain("write_applied");
+    expect(await readFile(firstPath, "utf8")).toBe(firstBaseline);
     expect(await readFile(secondPath, "utf8")).toBe(secondBaseline);
     expect(
-      await readHistoryRecords(scenario.projectRoot, "before-agent-session-undo")
-    ).toHaveLength(1);
-
-    const rollbackReviewPath = join(
-      scenario.projectRoot,
-      "history",
-      "rollback-reviews",
-      `${applyJournals[0]?.runId}.json`
-    );
-    await expect
-      .poll(() => readJsonRecord(rollbackReviewPath), { timeout: 15_000 })
-      .toMatchObject({
-        status: "completed",
-        files: expect.arrayContaining([
-          expect.objectContaining({ relativePath: firstRelativePath, status: "kept" }),
-          expect.objectContaining({ relativePath: secondRelativePath, status: "completed" })
-        ])
-      });
-    expect(firstBaseline).not.toBe(userEdited);
+      (await readTransactionJournals(scenario.projectRoot)).filter(
+        (journal) => journal.kind === "apply"
+      )
+    ).toHaveLength(0);
+    expect(await readHistoryRecords(scenario.projectRoot, "before-agent-write")).toHaveLength(0);
   } finally {
     await scenario.close();
   }
@@ -154,12 +56,16 @@ test("auto-applies two versioned Change Sets and reviews a conflicting run undo"
 async function launchScenario(): Promise<{
   readonly page: Page;
   readonly projectRoot: string;
+  releaseProviderResponse(): void;
   close(): Promise<void>;
 }> {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-autonomy-e2e-"));
   const projectRoot = join(tempRoot, "Project");
   await prepareProject(projectRoot);
-  let round = 0;
+  let releaseProviderResponse: (() => void) | undefined;
+  const providerResponseGate = new Promise<void>((resolve) => {
+    releaseProviderResponse = resolve;
+  });
   const server = createServer(async (request, response) => {
     const body = await readJsonBody(request);
     if (request.method === "GET" && request.url === "/v1/models") {
@@ -182,38 +88,31 @@ async function launchScenario(): Promise<{
       json(response, { choices: [{ message: { role: "assistant", content: "ok" } }] });
       return;
     }
-    round += 1;
-    if (round === 1) {
-      sendToolCall(response, {
-        id: "autonomy-first",
-        name: "edit_text",
+    await providerResponseGate;
+    const evidenceRef = "run-event/7/tool_completed/call_autonomy-read";
+    sendToolCalls(response, [
+      {
+        id: "autonomy-read",
+        name: "read_resource",
+        arguments: { ref: `chapter:${firstChapterId}` }
+      },
+      {
+        id: "autonomy-finish",
+        name: "finish",
         arguments: {
-          ref: `chapter:${firstChapterId}`,
-          baseHash: sha256(firstBody),
-          range: { unit: "character", start: 0, end: 8 },
-          replacement: "Autonomous first"
+          schemaVersion: "2.0",
+          outcome: "completed",
+          report: {
+            result: "Read-only review completed without project mutations.",
+            appliedChanges: [],
+            verification: [evidenceRef],
+            residualRisks: [],
+            nextStep: "Use a qualified signed package before requesting a mutation."
+          },
+          evidenceRefs: [evidenceRef]
         }
-      });
-      return;
-    }
-    if (round === 2) {
-      sendToolCall(response, {
-        id: "autonomy-second",
-        name: "edit_text",
-        arguments: {
-          ref: `chapter:${secondChapterId}`,
-          baseHash: sha256(secondBody),
-          range: { unit: "character", start: 0, end: 6 },
-          replacement: "Autonomous second"
-        }
-      });
-      return;
-    }
-    sendToolCall(response, {
-      id: "autonomy-finish",
-      name: "finish",
-      arguments: { summary: "Two autonomous writes completed." }
-    });
+      }
+    ]);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -229,10 +128,15 @@ async function launchScenario(): Promise<{
   await queueDirectorySelection(electronApp, projectRoot);
   await activateCreativeProject(page);
   await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
+  await chooseWorkspaceModelSharing(page);
   return {
     page,
     projectRoot,
+    releaseProviderResponse() {
+      releaseProviderResponse?.();
+    },
     async close() {
+      releaseProviderResponse?.();
       await electronApp.close();
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error === undefined ? resolve() : reject(error)))
@@ -281,6 +185,10 @@ async function startAutonomousExecution(page: Page): Promise<void> {
   await expect(composer.getByRole("checkbox")).toHaveCount(0);
   await composer.getByLabel("Agent 请求").fill("连续修改两章并完成运行");
   await composer.getByLabel("启动 Agent 运行").click();
+  await composer.getByTitle("查看上下文").click();
+  await page.getByRole("tab", { name: "实际发送预览" }).click();
+  await expect(page.locator(".ns-agent-send-preview")).toBeVisible();
+  await composer.getByLabel("启动 Agent 运行").click();
   await resolveContextRefreshIfVisible(page);
 }
 
@@ -298,7 +206,9 @@ async function selectAutomaticMode(
   }
   await composer.getByLabel("添加引用与执行审批").click();
   const menu = page.getByRole("dialog", { name: "添加引用与执行审批" });
-  await menu.getByRole("radio", { name: "替我审批" }).check();
+  await expect(menu.getByRole("radio", { name: "请求批准" })).toBeChecked();
+  await expect(menu.getByRole("radio", { name: "请求批准" })).toBeEnabled();
+  await expect(menu.getByRole("radio", { name: "替我审批" })).toBeDisabled();
   await expect(menu.getByRole("checkbox")).toHaveCount(0);
   await menu.press("Escape");
 }
@@ -328,6 +238,30 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
       .filter({ hasText: "Connected to openai-compatible/local-agent" })
   ).toContainText("Connected to openai-compatible/local-agent");
   await page.getByRole("button", { name: "关闭设置" }).click();
+}
+
+async function chooseWorkspaceModelSharing(page: Page): Promise<void> {
+  const result = await page.evaluate(async () => {
+    const api = (
+      window as unknown as {
+        novelStudio?: {
+          workspace?: {
+            updateContextPolicy?: (update: unknown) => Promise<{ readonly ok: boolean }>;
+          };
+        };
+      }
+    ).novelStudio;
+    return api?.workspace?.updateContextPolicy?.({
+      action: "set_sharing_defaults",
+      defaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "allow",
+        toolReadResults: "allow"
+      }
+    });
+  });
+  expect(result).toMatchObject({ ok: true });
 }
 
 async function prepareProject(projectRoot: string): Promise<void> {
@@ -409,9 +343,9 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   return isRecord(parsed) ? parsed : {};
 }
 
-function sendToolCall(
+function sendToolCalls(
   response: ServerResponse,
-  call: { readonly id: string; readonly name: string; readonly arguments: unknown }
+  calls: readonly { readonly id: string; readonly name: string; readonly arguments: unknown }[]
 ): void {
   response.writeHead(200, {
     "content-type": "text/event-stream",
@@ -423,14 +357,12 @@ function sendToolCall(
       choices: [
         {
           delta: {
-            tool_calls: [
-              {
-                index: 0,
-                id: `call_${call.id}`,
-                type: "function",
-                function: { name: call.name, arguments: JSON.stringify(call.arguments) }
-              }
-            ]
+            tool_calls: calls.map((call, index) => ({
+              index,
+              id: `call_${call.id}`,
+              type: "function",
+              function: { name: call.name, arguments: JSON.stringify(call.arguments) }
+            }))
           }
         }
       ]
@@ -445,10 +377,6 @@ function sendToolCall(
 function json(response: ServerResponse, payload: Record<string, unknown>): void {
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify(payload));
-}
-
-function sha256(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

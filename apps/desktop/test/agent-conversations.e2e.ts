@@ -60,9 +60,45 @@ test("isolates multi-run conversation context and restores project-scoped conver
       );
       return;
     }
-    sendToolCall(response, `finish-${String(modelRequests.length)}`, "finish", {
-      summary: `Completed ${userRequest}`
-    });
+    const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
+    const toolCount = messages.filter(
+      (message) => isRecord(message) && message["role"] === "tool"
+    ).length;
+    if (toolCount === 0) {
+      sendToolCall(response, "chapters", "list_chapters", {}, "Inspecting the chapter list.");
+      return;
+    }
+    if (toolCount === 1) {
+      sendToolCall(
+        response,
+        "chapter",
+        "read_resource",
+        { ref: "chapter:ch_01JZ7P9QK2R6D4W8K3A1B5C9D0" },
+        "Reading the requested chapter."
+      );
+      return;
+    }
+    const evidenceRef = latestCompletedToolEvidenceRef(body);
+    if (evidenceRef === undefined) {
+      throw new Error("Expected a persisted tool_completed evidence reference before finish");
+    }
+    sendToolCall(
+      response,
+      `finish-${String(modelRequests.length)}`,
+      "finish",
+      {
+        schemaVersion: "2.0",
+        outcome: "completed",
+        report: {
+          result: `Completed ${userRequest}`,
+          appliedChanges: [],
+          verification: [evidenceRef],
+          residualRisks: []
+        },
+        evidenceRefs: [evidenceRef]
+      },
+      `Completed ${userRequest}`
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -81,6 +117,7 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await openQueuedCreativeProject(page);
     await openAgentSurface(page);
     await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
+    await chooseWorkspaceModelSharing(page);
     const conversationA = await selectedConversation(page);
     const composer = page.getByLabel("会话输入区");
     await expect(composer.getByLabel(/^模型与推理：/)).toBeVisible();
@@ -166,7 +203,9 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await expect(permissionMenu.locator('details[aria-label="本次权限摘要"]')).toContainText(
       "服务端事实"
     );
-    await permissionMenu.getByRole("radio", { name: "替我审批" }).check();
+    await expect(permissionMenu.getByRole("radio", { name: "请求批准" })).toBeChecked();
+    await expect(permissionMenu.getByRole("radio", { name: "请求批准" })).toBeEnabled();
+    await expect(permissionMenu.getByRole("radio", { name: "替我审批" })).toBeDisabled();
     await expect(permissionMenu.getByRole("checkbox")).toHaveCount(0);
     await permissionMenu.press("Escape");
 
@@ -184,9 +223,9 @@ test("isolates multi-run conversation context and restores project-scoped conver
 
     await sendConversationRequest(page, "Continue the alpha thread.");
     await waitForRunCount(page, 2);
-    await expect.poll(() => modelRequests.length).toBe(2);
-    expect(messageText(modelRequests[1])).toContain("Untrusted conversation context");
-    expect(messageText(modelRequests[1])).toContain("Remember the alpha lantern clue.");
+    await expect.poll(() => modelRequests.length).toBe(6);
+    expect(messageText(modelRequests[3])).toContain('"kind":"untrusted_conversation_data"');
+    expect(messageText(modelRequests[3])).toContain("Remember the alpha lantern clue.");
 
     const conversationB = await createConversation(page);
     expect(conversationB).not.toBe(conversationA);
@@ -204,9 +243,9 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await expect(runProjection).not.toContainText(
       /tokens?|成本|cost|Context Trace|Workflow History|Observability|文风规则|运行历史/i
     );
-    await expect.poll(() => modelRequests.length).toBe(3);
-    expect(messageText(modelRequests[2])).not.toContain("alpha lantern clue");
-    expect(messageText(modelRequests[2])).not.toContain("Untrusted conversation context");
+    await expect.poll(() => modelRequests.length).toBe(7);
+    expect(messageText(modelRequests[6])).not.toContain("alpha lantern clue");
+    expect(messageText(modelRequests[6])).not.toContain("Untrusted conversation context");
 
     await selectConversation(page, conversationA);
     await expect(
@@ -461,13 +500,29 @@ async function selectPlanningWritingMode(page: Page): Promise<void> {
 async function sendConversationRequest(page: Page, request: string): Promise<void> {
   const composer = page.getByLabel("会话输入区");
   await composer.getByLabel("Agent 请求").fill(request);
-  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
+  const start = composer.getByRole("button", { name: "启动 Agent 运行" });
+  await start.click();
+  await waitForExactSendPreview(page, composer);
+  await start.click();
   await expect(
     page
       .getByLabel("Agent 会话主视图")
       .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
       .filter({ hasText: request })
   ).toBeVisible();
+}
+
+async function waitForExactSendPreview(page: Page, composer: Locator): Promise<void> {
+  // Starting is intentionally two-phase: Main prepares the exact payload first, then a later
+  // click confirms it. Do not race the confirmation against the renderer's pending state.
+  await composer.locator(".ns-agent-context-trigger").click();
+  const inspector = page.getByLabel("上下文用量");
+  await inspector.getByRole("tab", { name: "实际发送预览", exact: true }).click();
+  await expect(inspector.getByRole("tabpanel", { name: "实际发送预览" })).toHaveClass(
+    /ns-agent-send-preview/
+  );
+  await inspector.press("Escape");
+  await expect(inspector).toHaveCount(0);
 }
 
 async function waitForRunCount(page: Page, count: number): Promise<void> {
@@ -495,18 +550,34 @@ async function latestRunId(page: Page): Promise<string> {
 }
 
 async function waitForLatestRunStatus(page: Page, status: string): Promise<void> {
+  const runId = await latestRunId(page);
   await expect
     .poll(
       async () => {
-        const listed = await page.evaluate(
-          async (boundProjectId) => window.novelStudio?.agentRuns.list(boundProjectId),
-          projectId
+        const read = await page.evaluate(
+          async (id) => window.novelStudio?.agentRuns.read(id),
+          runId
         );
-        return listed?.ok ? listed.value.at(-1)?.status : undefined;
+        const current = read?.ok ? read.value.snapshot.status : undefined;
+        return current !== undefined &&
+          ["completed", "cancelled", "failed", "limit_reached"].includes(current)
+          ? current
+          : "pending";
       },
       { timeout: 30_000 }
     )
-    .toBe(status);
+    .not.toBe("pending");
+  const diagnostic = await page.evaluate(
+    async (id) => window.novelStudio?.agentRuns.read(id),
+    runId
+  );
+  const observed = diagnostic?.ok ? diagnostic.value.snapshot.status : "unavailable";
+  if (observed !== status) {
+    throw new Error(
+      `Expected Agent run ${runId} to be ${status}, received ${observed}. ` +
+        `Persisted diagnostic: ${JSON.stringify(diagnostic)}`
+    );
+  }
 }
 
 async function waitForTerminalRuns(page: Page): Promise<void> {
@@ -670,6 +741,30 @@ async function configureLocalModel(page: Page, baseUrl: string): Promise<void> {
   await page.getByRole("button", { name: "关闭设置" }).click();
 }
 
+async function chooseWorkspaceModelSharing(page: Page): Promise<void> {
+  const result = await page.evaluate(async () => {
+    const api = (
+      window as unknown as {
+        novelStudio?: {
+          workspace?: {
+            updateContextPolicy?: (update: unknown) => Promise<{ readonly ok: boolean }>;
+          };
+        };
+      }
+    ).novelStudio;
+    return api?.workspace?.updateContextPolicy?.({
+      action: "set_sharing_defaults",
+      defaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "allow",
+        toolReadResults: "allow"
+      }
+    });
+  });
+  expect(result).toMatchObject({ ok: true });
+}
+
 function messageText(body: Record<string, unknown> | undefined): string {
   const messages = Array.isArray(body?.["messages"]) ? body["messages"] : [];
   return messages
@@ -712,11 +807,49 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   return isRecord(parsed) ? parsed : {};
 }
 
+function latestCompletedToolEvidenceRef(body: Record<string, unknown>): string | undefined {
+  const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      !isRecord(message) ||
+      message["role"] !== "tool" ||
+      typeof message["content"] !== "string" ||
+      typeof message["tool_call_id"] !== "string"
+    ) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(message["content"]) as unknown;
+      if (!isRecord(payload)) continue;
+      let evidenceRefs: unknown = payload["evidenceRefs"];
+      if (!Array.isArray(evidenceRefs) && typeof payload["data"] === "string") {
+        const data = JSON.parse(payload["data"]) as unknown;
+        evidenceRefs = isRecord(data) ? data["evidenceRefs"] : undefined;
+      }
+      if (!Array.isArray(evidenceRefs)) continue;
+      const evidenceRef = evidenceRefs.find(
+        (value): value is string =>
+          typeof value === "string" &&
+          /^run-event\/[1-9][0-9]*\/tool_completed\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(
+            value
+          ) &&
+          value.endsWith(`/tool_completed/${message["tool_call_id"]}`)
+      );
+      if (evidenceRef !== undefined) return evidenceRef;
+    } catch {
+      // Only the application's paired tool-result envelope can supply finish evidence.
+    }
+  }
+  return undefined;
+}
+
 function sendToolCall(
   response: ServerResponse,
   id: string,
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  content?: string
 ): void {
   response.writeHead(200, {
     "content-type": "text/event-stream",
@@ -724,7 +857,7 @@ function sendToolCall(
     connection: "keep-alive"
   });
   response.write(
-    `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call_${id}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] })}\n\n`
+    `data: ${JSON.stringify({ choices: [{ delta: { ...(content === undefined ? {} : { content }), tool_calls: [{ index: 0, id: `call_${id}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] })}\n\n`
   );
   response.write(
     `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`

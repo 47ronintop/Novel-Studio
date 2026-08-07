@@ -21,11 +21,26 @@ describe("M13 real E2E and CI gate", () => {
       readonly scripts: Record<string, string>;
     };
     const playwrightConfig = await readFile("playwright.config.ts", "utf8");
+    const packagedPlaywrightConfig = await readFile("playwright.packaged.config.ts", "utf8");
 
-    expect(packageJson.scripts["test:e2e"]).toBe("npm run build && playwright test");
-    expect(packageJson.scripts["test:e2e:built"]).toBe("playwright test");
+    expect(packageJson.scripts["test:e2e"]).toBe(
+      "npm run build && playwright test --config=playwright.config.ts"
+    );
+    expect(packageJson.scripts["test:e2e:built"]).toBe(
+      "playwright test --config=playwright.config.ts"
+    );
+    expect(packageJson.scripts["test:e2e:packaged"]).toBe(
+      "playwright test --config=playwright.packaged.config.ts"
+    );
     expect(packageJson.scripts["test:e2e"]).not.toContain("--list");
     expect(playwrightConfig).toContain('testMatch: "**/*.e2e.ts"');
+    expect(playwrightConfig).toContain('"**/agent-write.e2e.ts"');
+    expect(playwrightConfig).toContain('"**/agent-writing-domain.e2e.ts"');
+    expect(packagedPlaywrightConfig).toContain('testDir: "./apps/desktop/test"');
+    expect(packagedPlaywrightConfig).toContain(
+      'testMatch: ["agent-write.e2e.ts", "agent-writing-domain.e2e.ts"]'
+    );
+    expect(packagedPlaywrightConfig).toContain("workers: 1");
   });
 
   test("runs each expensive GitHub Actions quality gate once", async () => {

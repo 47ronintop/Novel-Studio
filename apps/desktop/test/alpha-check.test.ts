@@ -8,11 +8,14 @@ describe("M9 alpha checklist", () => {
     };
 
     expect(packageJson.scripts.build).toBe(
-      "npm run build:types && npm run build:renderer && node scripts/write-build-manifest.mjs"
+      "npm run build:types && npm run build:renderer && npm run build:approval && node scripts/write-build-manifest.mjs"
     );
     expect(packageJson.scripts["build:types"]).toBe("tsc -b");
     expect(packageJson.scripts["build:renderer"]).toBe(
       "vite build --config apps/desktop/vite.config.ts"
+    );
+    expect(packageJson.scripts["build:approval"]).toBe(
+      "vite build --config apps/desktop/vite.approval.config.ts"
     );
     expect(packageJson.scripts["alpha:check"]).toBe(
       "npm run build && node scripts/alpha-check.mjs"

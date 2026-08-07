@@ -23,6 +23,13 @@ module.exports = {
     ...engineeringFileAccessArtifacts
   ],
   asarUnpack: [...engineeringFileAccessArtifacts],
+  electronFuses: {
+    runAsNode: false,
+    enableNodeOptionsEnvironmentVariable: false,
+    enableNodeCliInspectArguments: false,
+    enableEmbeddedAsarIntegrityValidation: true,
+    onlyLoadAppFromAsar: true
+  },
   extraResources: [],
   extraMetadata: {
     main: "apps/desktop/dist/main/index.js"

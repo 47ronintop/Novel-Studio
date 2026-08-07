@@ -15,7 +15,7 @@ import type {
   CommandPaletteFeedback,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import { ProjectCreateDialog } from "@novel-studio/ui";
+import { AgentModelSharingDialog, ProjectCreateDialog } from "@novel-studio/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
@@ -59,9 +59,14 @@ import { createWorkspaceNavigation, type WorkspaceNavigation } from "./workspace
 import { useStudioActions } from "./studio-actions.js";
 import { useStoryAnalysisWorkspace } from "./story-analysis-workspace.js";
 import {
+  saveWorkspaceModelSharingDefaults,
+  shouldRequestWorkspaceModelSharingDefaults
+} from "./model-sharing-defaults.js";
+import {
   createCreativeProjectFileShellBindings,
   useWorkspaceFileEditorRuntime
 } from "./workspace-file-editor-runtime.js";
+import { useWritingEditorIntegration } from "./use-writing-editor-integration.js";
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
@@ -113,6 +118,7 @@ export function App() {
     aiWritingWorkflowBridge?.getProps()
   );
   const [agentRun, setAgentRun] = useState(() => agentRunBridge?.getProps());
+
   const workspaceContext = shellState.workspaceContext;
   const activeProjectId =
     workspaceContext.kind === "none" ? undefined : workspaceContext.workspaceId;
@@ -200,6 +206,7 @@ export function App() {
   const [navigatorSearchQuery, setNavigatorSearchQuery] = useState("");
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [projectCreateDialogOpen, setProjectCreateDialogOpen] = useState(false);
+  const [modelSharingDialogOpen, setModelSharingDialogOpen] = useState(false);
   const [appearancePreferences, setAppearancePreferences] = useState<UserAppearancePreferences>({
     theme: "dark",
     accentColor: "teal"
@@ -235,6 +242,21 @@ export function App() {
       setProjectCreateDialogOpen(false);
     }
   }, [projectCreateDialogOpen, projectWorkflow?.status, projectWorkflow?.feedback]);
+
+  useEffect(() => {
+    setModelSharingDialogOpen(false);
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (
+      shouldRequestWorkspaceModelSharingDefaults({
+        workspaceKind: shellState.workspaceContext.kind,
+        ...(agentRun?.errorMessage === undefined ? {} : { errorMessage: agentRun.errorMessage })
+      })
+    ) {
+      setModelSharingDialogOpen(true);
+    }
+  }, [agentRun?.errorMessage, shellState.workspaceContext.kind]);
 
   useEffect(() => {
     const next = ensureCreativeWorkspaceContext(shellState, projectWorkflow?.projectId);
@@ -474,35 +496,20 @@ export function App() {
     onAgentRunChange: setAgentRun
   });
 
-  const publishStoryBibleEditor = useCallback(
-    (editor: NonNullable<typeof storyBibleEditor>) => {
-      setStoryBibleEditor(editor);
-      if (storyBibleBridge !== undefined) setStoryBible(storyBibleBridge.getProps());
-    },
-    [setStoryBible, setStoryBibleEditor, storyBibleBridge]
-  );
-  const handleStoryBibleExternalUpdateReload = useCallback(() => {
-    if (storyBibleBridge === undefined) return;
-    void storyBibleBridge.reloadExternalUpdate().then(publishStoryBibleEditor);
-  }, [publishStoryBibleEditor, storyBibleBridge]);
-  const handleStoryBibleExternalUpdateContinue = useCallback(() => {
-    if (storyBibleBridge === undefined) return;
-    publishStoryBibleEditor(storyBibleBridge.continueExternalUpdate());
-  }, [publishStoryBibleEditor, storyBibleBridge]);
-
-  useEffect(() => {
-    if (agentRunBridge === undefined || storyBibleBridge === undefined) return;
-    let active = true;
-    const unsubscribe = agentRunBridge.subscribeProjectFilesChanged((event) => {
-      void storyBibleBridge.handleExternalUpdate(event).then((editor) => {
-        if (active) publishStoryBibleEditor(editor);
-      });
+  const { handleStoryBibleExternalUpdateReload, handleStoryBibleExternalUpdateContinue } =
+    useWritingEditorIntegration({
+      activeCreativeWorkspaceId,
+      agentRunBridge,
+      chapterBridge,
+      chapterEditor,
+      projectWorkflowBridge,
+      setChapterEditor,
+      setProjectWorkflow,
+      setStoryBible,
+      setStoryBibleEditor,
+      storyBibleBridge,
+      storyBibleEditor
     });
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [agentRunBridge, publishStoryBibleEditor, storyBibleBridge]);
   const {
     handleCreativeNavigatorModeSelect,
     handleCreativeFileExpandedPathIdsChange,
@@ -1019,6 +1026,11 @@ export function App() {
         onChooseParentDirectory={handleChooseCreateParentDirectory}
         onCancel={() => setProjectCreateDialogOpen(false)}
         onCreate={handleCreateProject}
+      />
+      <AgentModelSharingDialog
+        open={modelSharingDialogOpen}
+        onClose={() => setModelSharingDialogOpen(false)}
+        onSave={(defaults) => saveWorkspaceModelSharingDefaults(api, defaults)}
       />
     </>
   );

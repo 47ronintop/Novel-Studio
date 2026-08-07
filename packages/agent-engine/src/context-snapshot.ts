@@ -131,6 +131,8 @@ export interface AgentCurrentContextSource {
   readonly refId: string;
   readonly status?: "available" | "missing";
   readonly content?: string;
+  /** App-owned editor revision when the current source is a managed editor buffer. */
+  readonly sourceRevision?: number;
   /** Reader-owned identity used when body checksums are not the staleness contract. */
   readonly comparisonChecksum?: string;
   /** Current Main-resolved identity for sources whose provenance includes the canonical root. */
@@ -1367,6 +1369,9 @@ function currentSourceMatches(
   current: AgentCurrentContextSource | undefined
 ): boolean {
   if (current === undefined || current.status === "missing") return false;
+  if (current.sourceRevision !== undefined && current.sourceRevision !== source.sourceRevision) {
+    return false;
+  }
   const currentChecksum =
     current.comparisonChecksum ??
     (current.content === undefined ? undefined : checksumText(current.content));

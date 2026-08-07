@@ -175,6 +175,27 @@ describe("Agent prompt materializer", () => {
     ]);
   });
 
+  it("does not replay initial context materialization as a dynamic provider turn", () => {
+    const events: readonly AgentRunEvent[] = [
+      {
+        schemaVersion: "1.3",
+        runId: "run_1",
+        projectId: "project_1",
+        scope: profile.scope,
+        sequence: 1,
+        runRevision: 1,
+        type: "context_refreshed",
+        createdAt: "2026-08-06T00:00:00.000Z",
+        detail: {
+          initialContextMaterialized: true,
+          sourceRefs: ["project:conventions"]
+        }
+      }
+    ];
+
+    expect(materializeAgentRunHistory(events)).toEqual([]);
+  });
+
   it("places prior summary before outline and keeps the current request last in the initial turn", () => {
     const output = materializeAgentPrompt({
       profile,

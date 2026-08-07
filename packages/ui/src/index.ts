@@ -99,6 +99,11 @@ export type {
 } from "./story-bible-timeline.js";
 export { AgentRunPanel } from "./agent-run-panel.js";
 export {
+  AgentModelSharingDialog,
+  DEFAULT_WORKSPACE_MODEL_SHARING_SELECTION
+} from "./agent-model-sharing-dialog.js";
+export type { AgentModelSharingDialogProps } from "./agent-model-sharing-dialog.js";
+export {
   AgentCapabilitySummary,
   approvalReasonLabel,
   approvalRequirementLabel,

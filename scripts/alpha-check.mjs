@@ -22,12 +22,17 @@ async function checkRequiredFiles() {
     "apps/desktop/dist/main/index.js",
     "apps/desktop/dist/preload/index.js",
     "apps/desktop/dist/renderer/index.html",
+    "apps/desktop/dist/approval/index.html",
+    "apps/desktop/dist/approval/approval.js",
+    "apps/desktop/dist/approval/approval.css",
+    "apps/desktop/dist/preload/approval-preload.cjs",
     "packages/application/dist/src/index.js",
     "packages/repository/dist/src/index.js",
     "packages/ui/dist/src/index.js",
     "docs/performance/m9-alpha-baseline.md",
     "apps/desktop/electron-builder.config.cjs",
     "apps/desktop/vite.config.ts",
+    "apps/desktop/vite.approval.config.ts",
     "scripts/create-performance-fixture.mjs"
   ];
 
@@ -42,7 +47,7 @@ async function checkPackageScripts() {
   const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   if (
     packageJson.scripts?.build !==
-    "npm run build:types && npm run build:renderer && node scripts/write-build-manifest.mjs"
+    "npm run build:types && npm run build:renderer && npm run build:approval && node scripts/write-build-manifest.mjs"
   ) {
     failures.push("Root package.json must expose one consistent Electron build pipeline.");
   }
@@ -53,6 +58,12 @@ async function checkPackageScripts() {
     packageJson.scripts?.["build:renderer"] !== "vite build --config apps/desktop/vite.config.ts"
   ) {
     failures.push("Root package.json must expose build:renderer script.");
+  }
+  if (
+    packageJson.scripts?.["build:approval"] !==
+    "vite build --config apps/desktop/vite.approval.config.ts"
+  ) {
+    failures.push("Root package.json must expose build:approval for the isolated confirmation UI.");
   }
   if (packageJson.scripts?.["alpha:check"] !== "npm run build && node scripts/alpha-check.mjs") {
     failures.push("Root package.json must expose alpha:check script.");

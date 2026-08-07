@@ -199,6 +199,8 @@ export interface ProjectWorkspaceSession {
   createProjectInParent(
     input: CreateCreativeProjectInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  /** Re-read the active project's repository-backed chapter and recovery projections. */
+  refreshFromRepository(): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
   createChapter(input: CreateChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   renameChapter(input: RenameChapterInput): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
@@ -317,6 +319,20 @@ export function createProjectWorkspaceSession(
         return cleanupCreatedProjectAfterFailure(created.value.projectRoot, activated);
       }
       return activated;
+    },
+    async refreshFromRepository() {
+      if (state === undefined || chapterRepository === undefined) {
+        return workspaceUnavailable();
+      }
+
+      const chapters = await chapterRepository.listChapters();
+      if (!chapters.ok) return chapters;
+      const nextActiveChapterId = chapters.value.some(
+        (chapter) => chapter.id === state?.activeChapterId
+      )
+        ? state.activeChapterId
+        : chapters.value[0]?.id;
+      return refreshWorkspaceChapters(nextActiveChapterId, { preserveDirtyActiveEditor: true });
     },
     async listChapters() {
       if (chapterRepository === undefined) {
@@ -825,7 +841,8 @@ export function createProjectWorkspaceSession(
   }
 
   async function refreshWorkspaceChapters(
-    activeChapterId: string | undefined
+    activeChapterId: string | undefined,
+    options: { readonly preserveDirtyActiveEditor?: boolean } = {}
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>> {
     if (state === undefined || chapterRepository === undefined) {
       return workspaceUnavailable();
@@ -840,8 +857,10 @@ export function createProjectWorkspaceSession(
       return recovery;
     }
 
+    const workspaceWithoutActiveChapter = { ...state };
+    delete workspaceWithoutActiveChapter.activeChapterId;
     const nextState: ProjectWorkspaceSnapshot = {
-      ...state,
+      ...workspaceWithoutActiveChapter,
       chapters: chapters.value,
       recovery: recovery.value,
       health: buildProjectHealth({
@@ -853,8 +872,18 @@ export function createProjectWorkspaceSession(
       ...(activeChapterId === undefined ? {} : { activeChapterId })
     };
     state = nextState;
-    activeChapterEditorSession =
-      activeChapterId === undefined ? undefined : createActiveChapterEditorSession(activeChapterId);
+    const currentEditorState = activeChapterEditorSession?.getState();
+    const preserveDirtyActiveEditor =
+      options.preserveDirtyActiveEditor === true &&
+      activeChapterId !== undefined &&
+      currentEditorState?.dirty === true &&
+      currentEditorState.chapter.frontmatter.id === activeChapterId;
+    if (!preserveDirtyActiveEditor) {
+      activeChapterEditorSession =
+        activeChapterId === undefined
+          ? undefined
+          : createActiveChapterEditorSession(activeChapterId);
+    }
 
     return ok(state);
   }

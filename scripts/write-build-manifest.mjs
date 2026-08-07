@@ -14,7 +14,11 @@ const sourceDirty =
 const artifactPaths = {
   main: "apps/desktop/dist/main/index.js",
   preload: "apps/desktop/dist/preload/index.cjs",
-  renderer: "apps/desktop/dist/renderer/index.html"
+  renderer: "apps/desktop/dist/renderer/index.html",
+  approvalHtml: "apps/desktop/dist/approval/index.html",
+  approvalJs: "apps/desktop/dist/approval/approval.js",
+  approvalCss: "apps/desktop/dist/approval/approval.css",
+  approvalPreload: "apps/desktop/dist/preload/approval-preload.cjs"
 };
 const artifacts = {};
 

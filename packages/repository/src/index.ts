@@ -31,20 +31,23 @@ export type {
   AgentWriteTransactionOptions
 } from "./agent-write-transaction.js";
 export { CacheRepository } from "./cache-repository.js";
-export { ChapterFileRepository } from "./chapter-repository.js";
+export { ChapterFileRepository, serializeChapterDocument } from "./chapter-repository.js";
 export type {
   AgentChapterCreateOperationInput,
-  PreparedAgentChapterCreateInput
+  PreparedAgentChapterCreateInput,
+  SerializedChapterRead
 } from "./chapter-repository.js";
 export { ChapterWriteCoordinator, chapterLifecycleChecksum } from "./chapter-write-coordinator.js";
 export type {
   ChapterDeleteInput,
+  ChapterOutlineSnapshot,
   ChapterRestoreInput,
   ChapterReorderInput,
   ChapterStatusInput,
   ChapterWriteCoordinatorOptions,
   ChapterWriteCoordinatorRepository,
   ChapterWriteInverse,
+  PreparedChapterWrite,
   ChapterWriteReceipt
 } from "./chapter-write-coordinator.js";
 export { ConfigAssetRepository } from "./config-asset-repository.js";
@@ -394,3 +397,12 @@ export type {
 } from "./trusted-creative-file-operations.js";
 export { ApprovalDecisionProofFileRepository } from "./approval-decision-proof-repository.js";
 export type { ApprovalDecisionProofFileRepositoryOptions } from "./approval-decision-proof-repository.js";
+export {
+  StoryBibleReferenceDependencyFileRepository,
+  StoryBibleReferenceDependencyRepository
+} from "./story-bible-reference-dependency-repository.js";
+export type {
+  StoryBibleReferenceDependencyBindingRecordV1,
+  StoryBibleReferenceDependencyFileRepositoryOptions,
+  StoryBibleReferenceDependencyRecordV1
+} from "./story-bible-reference-dependency-repository.js";

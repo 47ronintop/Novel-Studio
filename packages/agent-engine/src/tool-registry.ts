@@ -339,21 +339,6 @@ function listLegacyV2AgentTools(input: ListAgentToolsInput): readonly AgentToolD
     ];
   }
 
-  const lifecycleTools =
-    cap?.fileLifecycleEnabled === true
-      ? [
-          coreTool("create_resource", "file_tool", "propose"),
-          coreTool("manage_path", "file_tool", "propose")
-        ]
-      : [];
-  // Creative runtimes always compose their trusted text-mutation backend. Engineering runtimes
-  // must explicitly qualify the hardened lifecycle backend before exposing edits.
-  const editTools =
-    cap === undefined ||
-    cap.workspaceKind === "creativeProject" ||
-    cap.fileLifecycleEnabled === true
-      ? [coreTool("edit_text", "file_tool", "propose")]
-      : [];
   const networkTools =
     cap?.networkReadEnabled === true
       ? [
@@ -366,24 +351,15 @@ function listLegacyV2AgentTools(input: ListAgentToolsInput): readonly AgentToolD
     input.externalToolDescriptors !== undefined && externalValidation.ok && cap?.mcpToolsEnabled
       ? input.externalToolDescriptors.filter((descriptor) => descriptor.source?.kind === "mcp")
       : [];
-  const storyBibleWriteTools =
-    input.contextMode === "writing" && cap?.storyBibleStructuredToolsEnabled === true
-      ? [
-          coreTool("create_story_bible", "file_tool", "propose"),
-          coreTool("patch_story_bible", "file_tool", "propose"),
-          coreTool("set_story_bible_status", "file_tool", "propose"),
-          coreTool("restore_story_bible", "file_tool", "propose")
-        ]
-      : [];
+  // Schema 1 has no authenticated per-operation approval binding. A v2 facade must never
+  // resurrect its broad legacy mutation aliases here: the 2.0 catalog is the only mutation
+  // surface, and it binds every proposal to an actually qualified write operation.
 
   return [
     coreTool("list_project_entries", "file_tool", "read"),
     coreTool("read_resource", "file_tool", "read"),
     ...searchTools,
-    ...editTools,
     ...storyBibleReadTools,
-    ...storyBibleWriteTools,
-    ...lifecycleTools,
     ...networkTools,
     ...remoteExternalTools,
     coreTool("finish", "protocol_action", "control"),

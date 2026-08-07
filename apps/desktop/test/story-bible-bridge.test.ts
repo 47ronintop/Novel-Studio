@@ -125,6 +125,64 @@ const analysisResult: ForeshadowAnalysisResultDto = {
 };
 
 describe("Story Bible bridge", () => {
+  test("reports the selected Story Bible draft without confusing it with a chapter", async () => {
+    const calls: string[] = [];
+    const reports: Array<{
+      readonly resourceKind: "story_bible";
+      readonly resourceId: string;
+      readonly rendererRevision: number;
+      readonly acknowledgedRevision: number;
+      readonly dirty: boolean;
+      readonly bufferChecksum: string;
+    }> = [];
+    const api = createApi(calls);
+    api.writingEditor = {
+      reportState: async (report) => {
+        if (report.resourceKind !== "story_bible")
+          throw new Error("Expected a Story Bible report.");
+        reports.push(report);
+        return {
+          ok: true,
+          acknowledgement: {
+            workspaceId: report.workspaceId,
+            resourceKind: report.resourceKind,
+            resourceId: report.resourceId,
+            editorInstanceId: report.editorInstanceId,
+            rendererRevision: report.rendererRevision
+          }
+        };
+      }
+    };
+    const bridge = createStoryBibleBridge(api);
+
+    await bridge.load("project-01");
+    bridge.selectEntry("chr_hero");
+    await expect(
+      bridge.openWritingEditor({ workspaceId: "project-01", editorInstanceId: "editor-01" })
+    ).resolves.toEqual({ status: "connected", rendererRevision: 1 });
+    bridge.updateDraft("character", { summary: "Unsaved story bible draft" });
+    await expect(
+      bridge.reportWritingEditorState({ workspaceId: "project-01", editorInstanceId: "editor-01" })
+    ).resolves.toEqual({ status: "connected", rendererRevision: 2 });
+
+    expect(reports).toHaveLength(4);
+    expect(reports[0]).toMatchObject({
+      resourceKind: "story_bible",
+      resourceId: "chr_hero",
+      dirty: false,
+      rendererRevision: 1,
+      acknowledgedRevision: 0
+    });
+    expect(reports[2]).toMatchObject({
+      resourceKind: "story_bible",
+      resourceId: "chr_hero",
+      dirty: true,
+      rendererRevision: 2,
+      acknowledgedRevision: 1
+    });
+    expect(reports.every((report) => /^[a-f0-9]{64}$/u.test(report.bufferChecksum))).toBe(true);
+  });
+
   test("loads Story Bible snapshot and maps it to UI summary props", async () => {
     const calls: string[] = [];
     const bridge = createStoryBibleBridge(createApi(calls));
@@ -1165,7 +1223,7 @@ describe("Story Bible bridge", () => {
     );
   });
 
-  test("blocks paid-off foreshadows without an actual payoff chapter before calling preload", async () => {
+  test("saves paid-off foreshadows without an actual payoff chapter as a warning-only condition", async () => {
     const calls: string[] = [];
     const bridge = createStoryBibleBridge(createApi(calls));
     await bridge.load("workspace-01");
@@ -1176,9 +1234,8 @@ describe("Story Bible bridge", () => {
 
     const saved = await bridge.saveDraft({ chapterIds: ["ch_01", "ch_05"] });
 
-    expect(saved).toMatchObject({ status: "error", dirty: true });
-    expect(saved.feedback?.message).toContain("必须选择实际回收章节");
-    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(false);
+    expect(saved).toMatchObject({ status: "saved", dirty: false });
+    expect(calls.some((call) => call.startsWith("storyBible.saveAsset:"))).toBe(true);
   });
 
   test("blocks duplicate foreshadow evidence across non-deleted assets before calling preload", async () => {

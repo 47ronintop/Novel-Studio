@@ -3,11 +3,13 @@ import { realpath } from "node:fs/promises";
 import type {
   AgentContextSession,
   AgentConversationSession,
+  AgentSendPreviewDtoV2,
   AgentPermissionSession,
   AgentPlanExecutionSession,
   AgentRunDraftSession,
   AgentRunSession,
-  AgentUsageSession
+  AgentUsageSession,
+  ConfirmAgentSendPreviewCommandV2
 } from "@novel-studio/application";
 import type { AgentRunEvent, AgentRunSnapshot } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -29,11 +31,22 @@ interface DesktopAgentRuntimeSessions {
   readonly agentPermissionSession: AgentPermissionSession;
   readonly agentPlanExecutionSession: AgentPlanExecutionSession;
   readonly agentUsageSession?: AgentUsageSession;
+  /** Present only when this runtime owns the mandatory frozen first-send confirmation flow. */
+  readonly prepareAgentSendPreview?: (command: {
+    readonly schemaVersion: "2.0";
+    readonly commandId: string;
+    readonly startCommand: import("@novel-studio/agent-engine").StartAgentRunCommand;
+  }) => Promise<Result<AgentSendPreviewDtoV2, UnifiedError>>;
+  readonly confirmAgentSendPreview?: (
+    command: ConfirmAgentSendPreviewCommandV2
+  ) => Promise<Result<AgentRunSnapshot, UnifiedError>>;
   readonly prepare: () => Promise<Result<void, UnifiedError>>;
   readonly dispose?: () => void;
   readonly releasePromptCacheResources?: () => void;
   /** Fail-close settings-backed capability/executor access without waiting for a rebuild. */
   readonly revokeSettingsCapabilities?: () => void;
+  /** Synchronously removes approval-backed mutation capabilities before a deferred rebuild. */
+  readonly revokeApprovalCapabilities?: () => void;
 }
 
 export interface DesktopAgentRuntime extends DesktopAgentRuntimeSessions {
@@ -119,6 +132,8 @@ export interface DesktopAgentRuntimeManager {
   refreshCurrentWorkspace(): Promise<Result<void, UnifiedError>>;
   /** Fail-close settings-backed capability/executor access in the current runtime. */
   revokeCurrentSettingsCapabilities(): void;
+  /** Fail-close approval-backed mutation capabilities in the current runtime. */
+  revokeCurrentApprovalCapabilities(): void;
   hasActiveRun(): Promise<Result<boolean, UnifiedError>>;
   subscribeAgentRunEvents(listener: (event: AgentRunEvent) => void): () => void;
   dispose(): void;
@@ -131,6 +146,8 @@ export interface CreateDesktopAgentRuntimeManagerOptions {
   /** Main supplies this app-owned factory; renderer input never participates in standalone paths. */
   readonly createStandaloneRuntime?:
     (() => DesktopStandaloneAgentRuntime | Promise<DesktopStandaloneAgentRuntime>) | undefined;
+  /** Main-owned lifecycle hook for scope-bound capabilities such as trusted approval surfaces. */
+  readonly onActiveRuntimeChanged?: (active: ActiveDesktopAgentRuntime | undefined) => void;
 }
 
 export function createDesktopAgentRuntimeManager(
@@ -422,6 +439,10 @@ export function createDesktopAgentRuntimeManager(
     runtime?.revokeSettingsCapabilities?.();
   }
 
+  function revokeCurrentApprovalCapabilities(): void {
+    runtime?.revokeApprovalCapabilities?.();
+  }
+
   const manager: DesktopAgentRuntimeManager = {
     async prepareStandalone() {
       if (standalonePreparation !== undefined) return standalonePreparation;
@@ -453,6 +474,7 @@ export function createDesktopAgentRuntimeManager(
         // down workspace-only state after its active-run guard has passed.
         disposeWorkspaceRuntime();
         selectedScope = "standalone";
+        options.onActiveRuntimeChanged?.({ scope: "standalone", runtime: prepared.value });
         return ok(undefined);
       } finally {
         endScopeTransition(transition.value);
@@ -574,6 +596,11 @@ export function createDesktopAgentRuntimeManager(
       selectedScope = "workspace";
       previousUnsubscribe?.();
       previousRuntime?.dispose?.();
+      options.onActiveRuntimeChanged?.({
+        scope: "workspace",
+        binding: prepared.binding,
+        runtime: prepared.runtime
+      });
       preparedStates.delete(prepared);
       pendingPreparations.delete(prepared);
       endScopeTransition(state.transition);
@@ -631,6 +658,7 @@ export function createDesktopAgentRuntimeManager(
       return result;
     },
     revokeCurrentSettingsCapabilities,
+    revokeCurrentApprovalCapabilities,
     hasActiveRun,
     subscribeAgentRunEvents(listener) {
       listeners.add(listener);
@@ -645,6 +673,7 @@ export function createDesktopAgentRuntimeManager(
       standaloneRuntime?.dispose?.();
       standaloneRuntime = undefined;
       selectedScope = undefined;
+      options.onActiveRuntimeChanged?.(undefined);
       for (const prepared of [...pendingPreparations]) {
         this.discardPreparedWorkspace(prepared);
       }

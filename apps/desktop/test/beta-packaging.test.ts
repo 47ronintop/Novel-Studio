@@ -28,6 +28,16 @@ describe("M10 beta packaging", () => {
     expect(config).not.toContain("NOVEL_STUDIO_GIT_RUNTIME_DIR");
   });
 
+  test("applies ASAR integrity fuses after packaging", () => {
+    const config = readFileSync(
+      join(process.cwd(), "apps", "desktop", "electron-builder.config.cjs"),
+      "utf8"
+    );
+    expect(config).toContain("electronFuses");
+    expect(config).toContain("enableEmbeddedAsarIntegrityValidation: true");
+    expect(config).toContain("onlyLoadAppFromAsar: true");
+  });
+
   test("declares renderer bundling and installer-grade packaging scripts", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       readonly scripts: Record<string, string>;
@@ -38,8 +48,11 @@ describe("M10 beta packaging", () => {
     expect(packageJson.scripts["build:renderer"]).toBe(
       "vite build --config apps/desktop/vite.config.ts"
     );
+    expect(packageJson.scripts["build:approval"]).toBe(
+      "vite build --config apps/desktop/vite.approval.config.ts"
+    );
     expect(packageJson.scripts.build).toBe(
-      "npm run build:types && npm run build:renderer && node scripts/write-build-manifest.mjs"
+      "npm run build:types && npm run build:renderer && npm run build:approval && node scripts/write-build-manifest.mjs"
     );
     expect(packageJson.scripts["package:check"]).toBe(
       "npm run build && node scripts/package-check.mjs"
@@ -54,5 +67,6 @@ describe("M10 beta packaging", () => {
     );
     expect(packageJson.devDependencies.vite).toBeDefined();
     expect(packageJson.devDependencies["electron-builder"]).toBeDefined();
+    expect(packageJson.devDependencies["@electron/fuses"]).toBeDefined();
   });
 });

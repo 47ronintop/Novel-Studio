@@ -1,3 +1,4 @@
+import { toProjectWorkspaceSnapshotDto } from "@novel-studio/application";
 import type {
   CreateCreativeProjectInput,
   CreativeProjectFileSession,
@@ -98,7 +99,22 @@ export function createWorkspaceActivationCoordinator(
 
     const committed = options.application.commitWorkspaceActivation(candidate.value.activationId);
     options.runtimeManager.commitPreparedWorkspace(preparedRuntime.value);
-    if (!("creativeProject" in candidate.value)) {
+    let activation = committed;
+    if ("creativeProject" in candidate.value) {
+      const refreshed = await options.application.refreshActiveProjectWorkspace();
+      if (refreshed.ok && "creativeProject" in committed) {
+        activation = {
+          ...committed,
+          creativeProject: toProjectWorkspaceSnapshotDto(refreshed.value)
+        };
+      } else if (!refreshed.ok) {
+        try {
+          options.reportCleanupFailure?.(refreshed.error);
+        } catch {
+          // The activation is already committed; reporting must not split Renderer and main state.
+        }
+      }
+    } else {
       options.creativeProjectFileSession?.deactivate();
     }
     const finalized = await options.application.finalizeWorkspaceActivation(
@@ -111,7 +127,7 @@ export function createWorkspaceActivationCoordinator(
         // The activation is already committed; reporting must not split Renderer and main state.
       }
     }
-    return ok(committed);
+    return ok(activation);
   }
 }
 

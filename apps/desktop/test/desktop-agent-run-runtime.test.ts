@@ -6,15 +6,25 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   checksumChangeSetSelection,
   checksumChangeSetText,
+  createProviderSemanticVersionSetV1,
   createApprovalBindingV2,
   createAgentRunCoordinator,
   createChangeSetRevision,
+  createChangeSetRevisionV2,
   createChangeSetRevisionBatchV2,
   createOperationsChangeSetRevisionBatch,
   createOperationsChangeSetRevisionV2,
+  createEffectiveCapabilityState,
   decideChangeSetApproval,
   decideChangeSetApprovalV2,
+  DEFAULT_APPROVAL_RULE_SET_CHECKSUM,
+  DEFAULT_APPROVAL_RULE_SET_VERSION,
+  effectiveWorkspaceFileOperations,
+  effectiveWritingOperations,
   inspectChangeSetConsistencyGroups,
+  isCapabilityEffective,
+  listAgentTools,
+  providerSemanticVersionSetChecksum as checksumProviderSemanticVersionSet,
   type AgentToolCapabilitySnapshot,
   type ChangeSet,
   type ChangeSetApproval
@@ -37,7 +47,10 @@ import {
   type StoryBibleV11Asset
 } from "@novel-studio/repository";
 import { err, ok, type UnifiedError } from "@novel-studio/shared";
-import { createChapterAgentToolSession } from "@novel-studio/application";
+import {
+  createChapterAgentToolSession,
+  type ChapterLifecyclePreparationPort
+} from "@novel-studio/application";
 
 import * as runtimeExports from "../src/main/agent-run-runtime.js";
 import { createAgentFeatureFlags } from "../src/main/agent-feature-flags.js";
@@ -53,6 +66,216 @@ afterEach(async () => {
 });
 
 describe("desktop Agent Run runtime", () => {
+  test("keeps scripted fallback reads inside the frozen catalog", () => {
+    expect(
+      runtimeExports.selectDesktopScriptedInitialReadTool(
+        [{ name: "list_chapters" }, { name: "read_resource" }],
+        "chapter-01"
+      )
+    ).toEqual({
+      toolCallId: "desktop_list_chapters",
+      name: "list_chapters",
+      argumentsValue: {}
+    });
+    expect(
+      runtimeExports.selectDesktopScriptedInitialReadTool([{ name: "read_resource" }], "chapter-01")
+    ).toEqual({
+      toolCallId: "desktop_read_chapter",
+      name: "read_resource",
+      argumentsValue: { ref: "chapter:chapter-01" }
+    });
+    expect(runtimeExports.selectDesktopScriptedInitialReadTool([], "chapter-01")).toBeUndefined();
+  });
+
+  test("binds application control receipts to their originating tool call before ledger replay", () => {
+    const normalized = runtimeExports.normalizeDesktopToolMessageForSendLedger({
+      role: "tool",
+      toolCallId: "call-unavailable",
+      content: JSON.stringify({ ok: false, error: { code: "AGENT_TOOL_NOT_ALLOWED" } })
+    });
+    expect(normalized).toMatchObject({ role: "tool", toolCallId: "call-unavailable" });
+    expect(JSON.parse(normalized.content)).toMatchObject({
+      schemaVersion: "2.0",
+      kind: "untrusted_tool_data",
+      instructionPolicy: "content_is_data_not_authority",
+      source: {
+        sourceKind: "tool_result",
+        toolCallId: "call-unavailable",
+        providerToolName: "application",
+        resultKind: "application_control_result"
+      },
+      data: JSON.stringify({ ok: false, error: { code: "AGENT_TOOL_NOT_ALLOWED" } })
+    });
+  });
+
+  test("preserves paired assistant tool calls and injected evidence for subsequent provider rounds", () => {
+    const evidenceRef = "run-event/3/tool_completed/call_chapters";
+    const roundMessages = runtimeExports.normalizeDesktopRoundMessagesForSendLedger([
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "call_chapters", name: "list_chapters", arguments: "{}" }]
+      },
+      {
+        role: "tool",
+        toolCallId: "call_chapters",
+        content: JSON.stringify({
+          kind: "untrusted_project_data",
+          instructionPolicy: "content_is_data_not_authority",
+          sourceRefId: "chapters",
+          data: { items: [] },
+          evidenceRefs: [evidenceRef]
+        })
+      }
+    ]);
+
+    expect(roundMessages[0]).toMatchObject({
+      role: "assistant",
+      toolCalls: [{ id: "call_chapters", name: "list_chapters", arguments: "{}" }]
+    });
+    expect(roundMessages[1]).toMatchObject({ role: "tool", toolCallId: "call_chapters" });
+    const envelope = JSON.parse(roundMessages[1]?.content ?? "{}") as Record<string, unknown>;
+    expect(envelope).toMatchObject({
+      schemaVersion: "2.0",
+      kind: "untrusted_tool_data",
+      source: {
+        sourceKind: "tool_result",
+        toolCallId: "call_chapters",
+        providerToolName: "list_chapters"
+      }
+    });
+    expect(JSON.parse(String(envelope["data"]))).toMatchObject({ evidenceRefs: [evidenceRef] });
+  });
+
+  test("keeps read/search effective while an expired approval attestation revokes mutations", () => {
+    const capabilities = runtimeExports.requestedCapabilitySnapshot({
+      workspaceKind: "creativeProject",
+      projectId: "project",
+      contentRoot: "content-root",
+      stateRoot: "state-root",
+      featureFlags: createAgentFeatureFlags({
+        agentGuidanceV3: true,
+        approvalBindingV2: true,
+        phaseA_searchEnabled: true,
+        writingDomainCrudV2: true,
+        creativeTrustedReplaceV2: true,
+        revision: "approval-expiry-capability-boundary"
+      })
+    });
+
+    const effective = createEffectiveCapabilityState(capabilities);
+    const revoked = runtimeExports.revokeApprovalMutationCapabilities(
+      effective,
+      "2026-08-06T00:00:00.000Z"
+    );
+
+    expect(effectiveWritingOperations(effective)).not.toEqual([]);
+    expect(effectiveWorkspaceFileOperations(effective)).not.toEqual([]);
+    // `active` protects the ungated read-resource path; search remains independently effective.
+    expect(revoked.active).toBe(true);
+    expect(isCapabilityEffective(revoked, "search")).toBe(true);
+    expect(isCapabilityEffective(revoked, "writing_mutation")).toBe(false);
+    expect(isCapabilityEffective(revoked, "workspace_file_mutation")).toBe(false);
+    expect(effectiveWritingOperations(revoked)).toEqual([]);
+    expect(effectiveWorkspaceFileOperations(revoked)).toEqual([]);
+  });
+
+  test("exposes chapter lifecycle tools only when Main has the preparation backend", () => {
+    const featureFlags = createAgentFeatureFlags({
+      agentGuidanceV3: true,
+      approvalBindingV2: true,
+      writingDomainCrudV2: true,
+      revision: "desktop-chapter-lifecycle-request"
+    });
+    const requested = runtimeExports.requestedCapabilitySnapshot({
+      workspaceKind: "creativeProject",
+      projectId: "project",
+      contentRoot: "content-root",
+      stateRoot: "state-root",
+      featureFlags
+    });
+    const lifecycleOperations = [
+      "chapter_rename",
+      "chapter_reorder",
+      "chapter_status",
+      "chapter_restore"
+    ] as const;
+
+    expect(requested.writingOperations).toEqual([
+      "chapter_replace",
+      "chapter_create",
+      ...lifecycleOperations,
+      "story_bible_create",
+      "story_bible_patch",
+      "story_bible_status",
+      "story_bible_restore"
+    ]);
+
+    const effective = runtimeExports.buildRuntimeCapabilitySnapshot({
+      requested,
+      featureFlags,
+      lifecycleOperations: createTestingReplaceLifecyclePort("unused-operation-root"),
+      hasVersionGroupExecutor: true,
+      hasTrustedApprovalV2: true
+    });
+    expect(effective.writingOperations).not.toEqual(expect.arrayContaining(lifecycleOperations));
+    const toolNames = listAgentTools({
+      facadeVersion: "v2",
+      catalogSchemaVersion: "2.0",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: effective
+    }).map((tool) => tool.name);
+    expect(toolNames).not.toEqual(
+      expect.arrayContaining([
+        "rename_chapter",
+        "reorder_chapter",
+        "set_chapter_status",
+        "restore_chapter"
+      ])
+    );
+
+    const enabled = runtimeExports.buildRuntimeCapabilitySnapshot({
+      requested,
+      featureFlags,
+      lifecycleOperations: createTestingReplaceLifecyclePort("unused-operation-root"),
+      chapterLifecyclePreparation: {
+        lifecyclePreparationProofBridge: true,
+        validateAndConsumeLifecyclePreparation: vi.fn()
+      } as unknown as ChapterLifecyclePreparationPort,
+      hasVersionGroupExecutor: true,
+      hasTrustedApprovalV2: true
+    });
+    expect(enabled.writingOperations).toEqual(expect.arrayContaining(lifecycleOperations));
+    expect(
+      listAgentTools({
+        facadeVersion: "v2",
+        catalogSchemaVersion: "2.0",
+        operationMode: "execution",
+        contextMode: "writing",
+        writePolicy: "write_before_confirmation",
+        capabilitySnapshot: enabled
+      }).map((tool) => tool.name)
+    ).toEqual(
+      expect.arrayContaining([
+        "rename_chapter",
+        "reorder_chapter",
+        "set_chapter_status",
+        "restore_chapter"
+      ])
+    );
+
+    const disabled = runtimeExports.requestedCapabilitySnapshot({
+      workspaceKind: "creativeProject",
+      projectId: "project",
+      contentRoot: "content-root",
+      stateRoot: "state-root",
+      featureFlags: createAgentFeatureFlags({ revision: "desktop-chapter-lifecycle-disabled" })
+    });
+    expect(disabled.writingOperations).not.toEqual(expect.arrayContaining(lifecycleOperations));
+  });
+
   test("intersects operation release evidence, feature gate, backend, and transaction executor", () => {
     const requested: AgentToolCapabilitySnapshot = {
       workspaceKind: "creativeProject",
@@ -140,6 +363,220 @@ describe("desktop Agent Run runtime", () => {
       })
     ).toMatchObject({ writingOperations: [], workspaceFileOperations: [] });
   });
+
+  test("persists Main-resolved Story Bible and chapter dependency revisions before approval", async () => {
+    const projectRoot = await mkdtemp(
+      join(tmpdir(), "novel-studio-story-bible-dependency-prepare-")
+    );
+    roots.push(projectRoot);
+    const sourceId = `chr_${"a".repeat(32)}`;
+    const targetId = `chr_${"b".repeat(32)}`;
+    const chapterId = "ch_story_bible_dependency";
+    const chapters = new ChapterFileRepository({ projectRoot });
+    expect(
+      await chapters.createChapter({ chapterId, title: "Dependency chapter", body: "Reference." })
+    ).toMatchObject({ ok: true });
+    const sourceIds = [targetId, sourceId];
+    const storyBible = new StoryBibleFileRepository({
+      projectRoot,
+      createAssetId: () => sourceIds.shift() ?? "chr_unexpected"
+    });
+    const relation = {
+      relationId: `rel_${"1".repeat(32)}`,
+      sourceId,
+      targetId,
+      relationType: "character.trust",
+      direction: "directed" as const,
+      status: "active" as const,
+      validFromChapterId: chapterId,
+      validToChapterId: null,
+      inversePolicy: "none" as const,
+      inverseRelationId: null,
+      evidence: [],
+      note: ""
+    };
+    expect(
+      await storyBible.createStoryAsset({
+        type: "character",
+        value: { title: "Dependency target" }
+      })
+    ).toMatchObject({ ok: true, value: { id: targetId } });
+    expect(
+      await storyBible.createStoryAsset({
+        type: "character",
+        value: { title: "Dependency source", summary: "Before." }
+      })
+    ).toMatchObject({ ok: true, value: { id: sourceId } });
+    const initialSource = await storyBible.readCompatibleStoryAsset(sourceId);
+    if (!initialSource.ok) throw new Error(initialSource.error.message);
+    const sourceCandidate = storyBibleStatusCandidate(
+      initialSource.value.asset,
+      initialSource.value.asset.status
+    );
+    sourceCandidate.relations = [relation];
+    expect(
+      await storyBible.saveStoryAssetCandidate({
+        candidate: sourceCandidate,
+        baseRevision: initialSource.value.revision,
+        baseChecksum: initialSource.value.checksum,
+        knownChapterIds: [chapterId]
+      })
+    ).toMatchObject({ ok: true });
+    const source = await storyBible.readCompatibleStoryAsset(sourceId);
+    if (!source.ok) throw new Error(source.error.message);
+    const lockOwnerId = "desktop-story-bible-dependency-prepare-lock";
+    const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+    expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+    const providerSemanticVersionSetChecksum = checksumProviderSemanticVersionSet(
+      createProviderSemanticVersionSetV1({
+        writingTaskIntentSchemaVersion: "1.0",
+        writingGenerationGuidanceVersion: "not_applicable",
+        approvalRuleSetVersion: DEFAULT_APPROVAL_RULE_SET_VERSION,
+        approvalRuleSetChecksum: DEFAULT_APPROVAL_RULE_SET_CHECKSUM
+      })
+    );
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: chapterId,
+      projectLockOwnerId: lockOwnerId,
+      lifecycleOperations: createTestingReplaceLifecyclePort(projectRoot),
+      providerSemanticVersionSetChecksum,
+      changeSetApprovalV2: {
+        async prepare() {
+          throw new Error("Not reached while staging.");
+        }
+      },
+      createRunId: () => "run-story-bible-dependency-prepare",
+      featureFlags: createAgentFeatureFlags({
+        agentGuidanceV3: true,
+        approvalBindingV2: true,
+        writingDomainCrudV2: true,
+        revision: "desktop-story-bible-dependency-prepare"
+      }),
+      resolveModelStartFacts: async () => ({
+        profileId: "desktop-story-bible-dependency-profile",
+        provider: "demo",
+        modelName: "desktop-story-bible-dependency-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden" as const, reason: "test model" }
+      }),
+      readEditorState: async () => ({
+        status: "known" as const,
+        dirty: false,
+        content: "",
+        rendererRevision: 1
+      }),
+      modelDriver: {
+        async *streamRound() {
+          yield runtimeToolCall("patch-story-bible-dependencies", "patch_story_bible", {
+            assetId: sourceId,
+            baseRevision: source.value.revision,
+            baseChecksum: source.value.checksum,
+            operations: [{ op: "replace", path: "/summary", value: "After." }]
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-story-bible-dependency-prepare"
+    });
+    if (!conversation.ok) throw new Error(conversation.error.message);
+    const draft = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-story-bible-dependency-prepare",
+      userRequest: "Update the dependency source.",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "desktop-story-bible-dependency-profile",
+      contextRefs: []
+    });
+    if (!draft.ok) throw new Error(draft.error.message);
+    const previewed = await previewDraftStart(
+      runtime,
+      draft.value,
+      "start-story-bible-dependency-prepare"
+    );
+    expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
+      ok: true
+    });
+    await vi.waitFor(
+      async () => {
+        const state = await runtime.agentRunSession.readAgentRun(
+          "run-story-bible-dependency-prepare"
+        );
+        if (!state.ok) throw new Error(state.error.message);
+        if (state.value.snapshot.status !== "awaiting_write_approval") {
+          throw new Error(
+            JSON.stringify(
+              state.value.events
+                .filter((event) => event.type === "tool_failed")
+                .map((event) => event.detail)
+            )
+          );
+        }
+      },
+      { timeout: 10_000 }
+    );
+    const dependencyDirectory = join(
+      projectRoot,
+      "history",
+      "agent-runs",
+      "run-story-bible-dependency-prepare",
+      "story-bible-reference-dependencies"
+    );
+    const sidecars = await readdir(dependencyDirectory);
+    expect(sidecars).toHaveLength(1);
+    const sidecarName = sidecars[0];
+    if (sidecarName === undefined) throw new Error("Expected one dependency sidecar.");
+    const sidecar = JSON.parse(await readFile(join(dependencyDirectory, sidecarName), "utf8")) as {
+      dependencies: readonly {
+        resourceKind: string;
+        resourceId: string;
+        revision: number;
+        checksum: string;
+      }[];
+    };
+    const chapter = await chapters.readChapterForAgent(chapterId);
+    const target = await storyBible.readCompatibleStoryAsset(targetId);
+    if (!chapter.ok || !target.ok) throw new Error("Dependency fixture changed unexpectedly.");
+    expect(sidecar.dependencies).toEqual(
+      expect.arrayContaining([
+        {
+          resourceKind: "story_bible",
+          resourceId: sourceId,
+          revision: source.value.revision,
+          checksum: source.value.checksum
+        },
+        {
+          resourceKind: "story_bible",
+          resourceId: targetId,
+          revision: target.value.revision,
+          checksum: target.value.checksum
+        },
+        {
+          resourceKind: "chapter",
+          resourceId: chapterId,
+          revision: chapter.value.revision,
+          checksum: chapter.value.persistedChecksum
+        }
+      ])
+    );
+  }, 15_000);
 
   test.each([
     {
@@ -744,6 +1181,11 @@ describe("desktop Agent Run runtime", () => {
       activeChapterId: "chapter-unused",
       projectLockOwnerId: lockOwnerId,
       providerSemanticVersionSetChecksum: "a".repeat(64),
+      changeSetApprovalV2: {
+        async prepare() {
+          throw new Error("Chapter creation must stage before the V2 approval surface is invoked.");
+        }
+      },
       createRunId: () => runId,
       featureFlags: createAgentFeatureFlags({
         agentGuidanceV3: true,
@@ -1005,6 +1447,176 @@ describe("desktop Agent Run runtime", () => {
       }
     });
   });
+
+  test.each([
+    ["dirty dependency", "TARGET_DIRTY"],
+    ["unknown dependency", "EDITOR_STATE_UNKNOWN"],
+    ["stale dependency", "STORY_BIBLE_REFERENCE_DEPENDENCY_STALE"],
+    ["proof mismatch", "STORY_BIBLE_REFERENCE_DEPENDENCY_PROOF_STALE"],
+    ["replayed proof", "STORY_BIBLE_REFERENCE_DEPENDENCY_REPLAY"]
+  ] as const)(
+    "rejects a Story Bible %s before the transaction writes",
+    async (_label, guardCode) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-story-bible-dependency-"));
+      roots.push(projectRoot);
+      const storyBible = new StoryBibleFileRepository({
+        projectRoot,
+        now: () => "2026-08-06T00:00:00.000Z"
+      });
+      const created = await storyBible.createStoryAsset({
+        type: "character",
+        value: { title: "Dependency-guard target", summary: "Before." }
+      });
+      if (!created.ok) throw new Error(created.error.message);
+      const assetId = created.value.id;
+      const before = await storyBible.readCompatibleStoryAsset(assetId);
+      if (!before.ok) throw new Error(before.error.message);
+      const prepared = await storyBible.prepareStoryAssetCandidate({
+        candidate: {
+          schemaVersion: "1.1",
+          id: before.value.asset.id,
+          type: before.value.asset.type,
+          title: before.value.asset.title,
+          status: before.value.asset.status,
+          summary: "After.",
+          aliases: [...before.value.asset.aliases],
+          relations: [...before.value.asset.relations],
+          details: before.value.asset.details,
+          extensions: before.value.asset.extensions,
+          createdAt: before.value.asset.createdAt
+        },
+        baseRevision: before.value.revision,
+        baseChecksum: before.value.checksum
+      });
+      if (!prepared.ok) throw new Error(prepared.error.message);
+      const changeSet = await createChangeSetRevisionV2({
+        changeSetId: `changes-story-bible-dependency-${guardCode.toLowerCase()}`,
+        runId: `run-story-bible-dependency-${guardCode.toLowerCase()}`,
+        projectId: "project-01",
+        checkpointId: "checkpoint-story-bible-dependency",
+        contextSnapshotId: "context-story-bible-dependency",
+        writePolicy: "write_before_confirmation",
+        providerSemanticVersionSetChecksum: "a".repeat(64),
+        createdAt: "2099-01-01T00:00:00.000Z",
+        proposal: {
+          relativePath: prepared.value.relativePath,
+          assetType: "text",
+          assetId,
+          baseContent: prepared.value.baseContent,
+          baseChecksum: prepared.value.baseChecksum,
+          range: { unit: "character", start: 0, end: prepared.value.baseContent.length },
+          replacement: prepared.value.content,
+          consistencyGroupId: "story-bible-dependency"
+        }
+      });
+      const operationId = prepared.value.relativePath;
+      const binding = createApprovalBindingV2({
+        workspaceBindingId: "workspace_project_01",
+        rootBindingId: "root_project_01",
+        runId: changeSet.runId,
+        changeSetId: changeSet.changeSetId,
+        changeSetRevision: changeSet.revision,
+        changeSetChecksum: changeSet.checksum,
+        providerSemanticVersionSetChecksum: changeSet.providerSemanticVersionSetChecksum,
+        operationKind: "story_bible_mutation",
+        selectionChecksum: inspectChangeSetConsistencyGroups(changeSet).selectionChecksum ?? "",
+        selectedOperationIds: [operationId],
+        operationOrderChecksum: checksumChangeSetText(operationId),
+        sourceRef: `story_bible:${assetId}`,
+        targetRef: `story_bible:${assetId}`,
+        baseChecksum: prepared.value.baseChecksum,
+        candidateChecksum: sha256(prepared.value.content),
+        baseManifestChecksum: checksumChangeSetText(
+          `${prepared.value.relativePath}:${prepared.value.baseChecksum}`
+        ),
+        candidateManifestChecksum: checksumChangeSetText(
+          `${prepared.value.relativePath}:${sha256(prepared.value.content)}`
+        ),
+        encoding: "utf-8",
+        bom: "absent",
+        eol: "lf",
+        approvalRuleSetVersion: "rules-2.0",
+        approvalRuleSetChecksum: "b".repeat(64),
+        proofId: `proof-story-bible-dependency-${guardCode.toLowerCase()}`,
+        proofChecksum: "c".repeat(64),
+        executionWritePolicy: "write_before_confirmation",
+        policyRevision: "policy_story_bible_dependency",
+        capabilityRevision: "capability_story_bible_dependency",
+        approvalSource: "human_confirmation",
+        issuedAt: "2099-01-01T00:00:00.000Z",
+        expiresAt: "2099-01-01T01:00:00.000Z"
+      });
+      const approval = decideChangeSetApprovalV2({
+        changeSet,
+        decision: "apply_selected",
+        displayBindingChecksum: changeSet.displayBindingChecksum,
+        binding,
+        authorizationId: `auth-story-bible-dependency-${guardCode.toLowerCase()}`,
+        reservationTransactionId: `tx-story-bible-dependency-${guardCode.toLowerCase()}`,
+        resolvedAt: "2099-01-01T00:00:01.000Z",
+        now: Date.parse("2099-01-01T00:00:01.000Z")
+      });
+      if (!approval.ok) throw new Error(approval.error.message);
+      const authorizationLedger = new ApprovalAuthorizationLedger({
+        projectRoot,
+        now: () => "2099-01-01T00:00:02.000Z"
+      });
+      const lockOwnerId = `desktop-story-bible-dependency-${guardCode.toLowerCase()}`;
+      const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+      expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+      const verifyAndClaim = vi.fn(async () => err(testLifecycleError(guardCode)));
+      const services = runtimeExports.createDesktopVersionGroupServices({
+        contentRoot: projectRoot,
+        stateRoot: projectRoot,
+        projectId: "project-01",
+        projectLockOwnerId: lockOwnerId,
+        trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+          workspaceKind: "creativeProject",
+          projectRoot
+        }),
+        authorizationLedger,
+        requireV2Authorization: true,
+        projectReads: new AgentProjectReadRepository({ projectRoot }),
+        storyBible,
+        storyBibleReferenceDependencyApplyGuard: { verifyAndClaim }
+      });
+      expect(await services.recoverOnStartup()).toMatchObject({ ok: true });
+      expect(
+        await authorizationLedger.issue({
+          binding,
+          authorizationId: approval.value.authorizationId
+        })
+      ).toMatchObject({ ok: true });
+      expect(
+        await authorizationLedger.reserve({
+          authorizationId: approval.value.authorizationId,
+          transactionId: approval.value.reservationTransactionId
+        })
+      ).toMatchObject({ ok: true });
+
+      await expect(
+        services.executor.apply({ changeSet, approval: approval.value })
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: guardCode }
+      });
+      expect(verifyAndClaim).toHaveBeenCalledWith(
+        expect.objectContaining({
+          proofRef: { proofId: binding.proofId, proofChecksum: binding.proofChecksum },
+          runId: changeSet.runId,
+          changeSetId: changeSet.changeSetId,
+          revision: changeSet.revision,
+          checksum: changeSet.checksum
+        })
+      );
+      expect(await readFile(join(projectRoot, prepared.value.relativePath), "utf8")).toBe(
+        prepared.value.baseContent
+      );
+      await expect(
+        new RecoveryRepository({ projectRoot }).listAgentTransactionJournals()
+      ).resolves.toEqual(ok([]));
+    }
+  );
 
   test("rejects multiple formal chapter creates before duplicate orders can be written", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-chapter-create-batch-"));
@@ -1644,6 +2256,12 @@ describe("desktop Agent Run runtime", () => {
       },
       { timeout: 10_000 }
     );
+    await expect(
+      runtime.agentConversationSession.loadContext({
+        projectId: "project-01",
+        conversationId
+      })
+    ).resolves.toMatchObject({ ok: true, value: [expect.objectContaining({ role: "user" })] });
     expect(
       JSON.parse(
         await readFile(
@@ -2208,6 +2826,15 @@ describe("desktop Agent Run runtime", () => {
     if (!prepared.ok) return;
 
     const previewed = await previewDraftStart(runtime, prepared.value, "start-saved-editor-run");
+    if (
+      await legacyMutationIsNotExposed({
+        session: runtime.agentRunSession,
+        runId: "run-saved-editor-preflight",
+        toolCallIds: ["proposal-saved-editor"],
+        command: previewed.command
+      })
+    )
+      return;
     const started = await runtime.agentRunSession.startAgentRun(previewed.command);
     expect(started).toMatchObject({ ok: true });
     await vi.waitFor(async () => {
@@ -2446,6 +3073,143 @@ describe("desktop Agent Run runtime", () => {
     expect(firstRoundMessages.at(-1)?.content).toBe("Use the open character setting.");
   });
 
+  test("keeps dirty chapter and Story Bible drafts distinct for a non-mutating analysis", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-dirty-context-"));
+    roots.push(projectRoot);
+    const chapterId = "ch_dirty_context";
+    const chapterBody = "Persisted chapter body.";
+    const storyBible = new StoryBibleFileRepository({ projectRoot });
+    await mkdir(join(projectRoot, "chapters"), { recursive: true });
+    await writeFile(
+      join(projectRoot, "chapters", `${chapterId}.md`),
+      `---\nschemaVersion: "1.0"\nid: ${chapterId}\ntype: chapter\ntitle: Draft context\norder: 1\nstatus: draft\ncreatedAt: "2026-08-01T00:00:00.000Z"\nupdatedAt: "2026-08-01T00:00:00.000Z"\n---\n\n${chapterBody}`,
+      "utf8"
+    );
+    expect(
+      await storyBible.saveStoryAsset({
+        schemaVersion: "1.0",
+        id: "chr_dirty_context",
+        type: "character",
+        title: "Persisted hero",
+        status: "active",
+        summary: "PERSISTED_STORY_BIBLE_MARKER",
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z"
+      })
+    ).toMatchObject({ ok: true });
+    let editorDirty = true;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      activeChapterId: chapterId,
+      readEditorState: async (relativePath) => {
+        if (relativePath === `chapters/${chapterId}.md`) {
+          return {
+            status: "known" as const,
+            dirty: editorDirty,
+            content: "DIRTY_CHAPTER_MARKER",
+            rendererRevision: 17
+          };
+        }
+        if (relativePath === "characters/chr_dirty_context.json") {
+          return {
+            status: "known" as const,
+            dirty: editorDirty,
+            content: '{"summary":"DIRTY_STORY_BIBLE_MARKER"}',
+            rendererRevision: 23
+          };
+        }
+        return undefined;
+      },
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-dirty-context",
+        provider: "demo",
+        modelName: "dirty-context-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden", reason: "test model" }
+      }),
+      modelDriver: { async *streamRound() {} }
+    });
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-dirty-context-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-dirty-context",
+      userRequest: "Analyze the current drafts against their saved versions.",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-dirty-context",
+      contextRefs: [
+        { kind: "chapter", refId: `chapter:${chapterId}`, chapterId, label: "Draft context" },
+        {
+          kind: "story_bible",
+          refId: "story_bible:chr_dirty_context",
+          assetId: "chr_dirty_context",
+          label: "Persisted hero"
+        }
+      ],
+      activeResourceRef: null
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+
+    const previewed = await previewDraftStart(runtime, prepared.value, "preview-dirty-context");
+    expect(previewed.preview.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          refId: `chapter:${chapterId}`,
+          sourceKind: "disk_file",
+          relativePath: `chapters/${chapterId}.md`
+        }),
+        expect.objectContaining({
+          refId: `editor_buffer:chapter:${chapterId}`,
+          sourceKind: "editor_buffer",
+          relativePath: `chapters/${chapterId}.md`,
+          sourceRevision: 17
+        }),
+        expect.objectContaining({
+          refId: "story_bible:chr_dirty_context",
+          sourceKind: "disk_file",
+          relativePath: "characters/chr_dirty_context.json"
+        }),
+        expect.objectContaining({
+          refId: "editor_buffer:story_bible:chr_dirty_context",
+          sourceKind: "editor_buffer",
+          relativePath: "characters/chr_dirty_context.json",
+          sourceRevision: 23
+        })
+      ])
+    );
+    expect(previewed.preview.blocks.map((block) => block.content)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(chapterBody),
+        "DIRTY_CHAPTER_MARKER",
+        expect.stringContaining("PERSISTED_STORY_BIBLE_MARKER"),
+        '{"summary":"DIRTY_STORY_BIBLE_MARKER"}'
+      ])
+    );
+    editorDirty = false;
+    await expect(runtime.agentRunSession.startAgentRun(previewed.command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_STALE" }
+    });
+  });
+
   test("fails closed when an active creative file changes after its checksum is captured", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-active-file-stale-"));
     roots.push(projectRoot);
@@ -2651,7 +3415,14 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand());
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-read-propose",
+        toolCallIds: ["proposal-from-read"]
+      })
+    )
+      return;
 
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run-desktop-read-propose")).toMatchObject({
@@ -2718,7 +3489,14 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand());
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-foreshadow-edit",
+        toolCallIds: ["edit-foreshadow"]
+      })
+    )
+      return;
 
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run-desktop-foreshadow-edit")).toMatchObject({
@@ -2801,7 +3579,15 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand("writing"));
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-foreshadow-create",
+        toolCallIds: ["create-invalid-foreshadow", "create-valid-foreshadow"],
+        command: executionCommand("writing")
+      })
+    )
+      return;
 
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run-desktop-foreshadow-create")).toMatchObject({
@@ -2908,7 +3694,7 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand("writing"));
+    await session.startAgentRun(executionCommand());
 
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run-desktop-story-bible-read")).toMatchObject({
@@ -3048,7 +3834,15 @@ describe("desktop Agent Run runtime", () => {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
 
-    await session.startAgentRun(executionCommand("writing"));
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-story-bible-patch",
+        toolCallIds: ["patch-character"],
+        command: executionCommand("writing")
+      })
+    )
+      return;
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
     await vi.waitFor(async () => {
@@ -3164,7 +3958,14 @@ describe("desktop Agent Run runtime", () => {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
 
-    await session.startAgentRun(executionCommand());
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-story-bible-legacy",
+        toolCallIds: ["patch-legacy-location"]
+      })
+    )
+      return;
     let changeSet: Record<string, unknown> | undefined;
     let awaitingRevision = 0;
     await vi.waitFor(async () => {
@@ -3985,7 +4786,15 @@ describe("desktop Agent Run runtime", () => {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
 
-    await session.startAgentRun(executionCommand("writing"));
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-story-bible-create",
+        toolCallIds: ["create-lore"],
+        command: executionCommand("writing")
+      })
+    )
+      return;
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
     let operation: Record<string, unknown> | undefined;
@@ -4117,7 +4926,14 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand());
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-memory-story-bible-edit",
+        toolCallIds: ["edit-memory-as-story-bible"]
+      })
+    )
+      return;
 
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run-desktop-memory-story-bible-edit")).toMatchObject({
@@ -4216,7 +5032,14 @@ describe("desktop Agent Run runtime", () => {
         }
       });
 
-      await session.startAgentRun(executionCommand());
+      if (
+        await legacyMutationIsNotExposed({
+          session,
+          runId: "run-desktop-unknown-story-bible-edit",
+          toolCallIds: ["edit-unknown-story-bible"]
+        })
+      )
+        return;
 
       await vi.waitFor(async () => {
         expect(await session.readAgentRun("run-desktop-unknown-story-bible-edit")).toMatchObject({
@@ -4444,7 +5267,14 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand());
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-write",
+        toolCallIds: ["proposal-01"]
+      })
+    )
+      return;
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
     await vi.waitFor(async () => {
@@ -4552,7 +5382,14 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand());
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-conflict",
+        toolCallIds: ["proposal-conflict"]
+      })
+    )
+      return;
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
     await vi.waitFor(async () => {
@@ -4661,7 +5498,14 @@ describe("desktop Agent Run runtime", () => {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
 
-    await session.startAgentRun(executionCommand());
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-dirty-undo",
+        toolCallIds: ["proposal-dirty-undo"]
+      })
+    )
+      return;
     let changeSet: Record<string, unknown> | undefined;
     let revision = 0;
     await vi.waitFor(async () => {
@@ -4801,7 +5645,15 @@ describe("desktop Agent Run runtime", () => {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
 
-    await session.startAgentRun(executionCommand("general_file"));
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-text-validation",
+        toolCallIds: ["proposal-text-1"],
+        command: executionCommand("general_file")
+      })
+    )
+      return;
 
     let changeSet: Record<string, unknown> | undefined;
     let awaitingRevision = 0;
@@ -4994,7 +5846,15 @@ describe("desktop Agent Run runtime", () => {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
 
-    await session.startAgentRun(executionCommand("general_file"));
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-v2-lifecycle",
+        toolCallIds: ["create-v2-chapter", "create-v2-story-bible", "create-v2-file"],
+        command: executionCommand("general_file")
+      })
+    )
+      return;
     type PendingChangeSet = {
       readonly runRevision: number;
       readonly changeSet: Record<string, unknown>;
@@ -5154,7 +6014,15 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand("general_file"));
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId: "run-desktop-settings-schema",
+        toolCallIds: ["proposal-settings"],
+        command: executionCommand("general_file")
+      })
+    )
+      return;
 
     await vi.waitFor(async () => {
       expect(await session.readAgentRun("run-desktop-settings-schema")).toMatchObject({
@@ -5284,7 +6152,15 @@ describe("desktop Agent Run runtime", () => {
       }
     });
 
-    await session.startAgentRun(executionCommand("writing"));
+    if (
+      await legacyMutationIsNotExposed({
+        session,
+        runId,
+        toolCallIds: [`managed-${input.label.replace(" ", "-")}`],
+        command: executionCommand("writing")
+      })
+    )
+      return;
 
     await vi.waitFor(
       async () => {
@@ -5805,6 +6681,204 @@ describe("desktop Agent Run runtime", () => {
     );
   });
 
+  test("inherits the Plan sharing state before its execution run reads project content", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-plan-sharing-"));
+    roots.push(projectRoot);
+    const planId = "plan_desktop_sharing_handoff";
+    const readContent = "Plan execution protected project content.\n";
+    await mkdir(join(projectRoot, "notes"), { recursive: true });
+    await writeFile(join(projectRoot, "notes", "plan.md"), readContent, "utf8");
+    let readerCalls = 0;
+    let modelRounds = 0;
+
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      createRunId: () => "run_desktop_plan_execution_inherited",
+      featureFlags: createAgentFeatureFlags({
+        agentGuidanceV3: true,
+        revision: "desktop-plan-sharing-handoff"
+      }),
+      sharingDefaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "allow",
+        toolReadResults: "allow"
+      },
+      sharingDefaultsRevision: "b".repeat(64),
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-desktop-plan-sharing",
+        provider: "demo",
+        modelName: "desktop-plan-sharing-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden" as const, reason: "test model" }
+      }),
+      readCreativeProjectFile: async (relativePath: string) => {
+        readerCalls += 1;
+        return ok({
+          schemaVersion: "1.0" as const,
+          projectId: "project-01",
+          workspaceId: "project-01",
+          path: relativePath,
+          content: readContent,
+          checksum: sha256(readContent),
+          byteLength: Buffer.byteLength(readContent, "utf8"),
+          nodeRevision: "plan-sharing-reader-node-1"
+        });
+      },
+      modelDriver: {
+        async *streamRound(input) {
+          modelRounds += 1;
+          if (modelRounds === 1) {
+            yield runtimeToolCall("plan-sharing-finish-plan", "finish_plan", {
+              planId,
+              goal: "Read the project content after Plan approval.",
+              successCriteria: ["The execution run reads the protected project content."],
+              nonGoals: ["Do not modify project files."],
+              facts: [],
+              assumptions: [],
+              openQuestions: [],
+              targetRefs: [{ refId: "file:notes/plan.md", intent: "read during execution" }],
+              steps: [
+                {
+                  stepId: "read-protected-content",
+                  title: "Read protected content",
+                  verification: "The execution run completes the read."
+                }
+              ],
+              risks: [],
+              verification: ["Inspect the completed execution run."],
+              sourceRefs: ["file:notes/plan.md"]
+            });
+            yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+            return;
+          }
+          if (modelRounds === 2) {
+            yield runtimeToolCall("plan-sharing-read", "read_resource", {
+              ref: "file:notes/plan.md"
+            });
+          } else {
+            expect(
+              input.messages.find(
+                (message) =>
+                  message.role === "tool" && message.toolCallId === "plan-sharing-read"
+              )?.content
+            ).toContain("evidenceRefs");
+            const evidenceRef = `run-event/${String(
+              input.snapshot.lastSequence
+            )}/tool_completed/plan-sharing-read`;
+            yield runtimeToolCall("plan-sharing-finish", "finish", {
+              outcome: "completed",
+              report: {
+                result: "Plan execution sharing inheritance completed.",
+                appliedChanges: [],
+                verification: [evidenceRef],
+                residualRisks: []
+              },
+              evidenceRefs: [evidenceRef]
+            });
+          }
+          yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+        }
+      }
+    });
+
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-desktop-plan-sharing-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-desktop-plan-sharing",
+      userRequest: "Prepare a plan to read the protected project file.",
+      operationMode: "planning",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      executionWritePolicyDraft: "user_preapproved_run",
+      modelProfileId: "profile-desktop-plan-sharing",
+      contextRefs: []
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const packedPreview = await previewDraftStart(
+      runtime,
+      prepared.value,
+      "preview-desktop-plan-sharing-context"
+    );
+    const preview = await runtime.prepareAgentSendPreview({
+      schemaVersion: "2.0",
+      commandId: "prepare-desktop-plan-sharing-send",
+      startCommand: {
+        ...packedPreview.command,
+        commandId: "start-desktop-plan-sharing"
+      }
+    });
+    expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true });
+    if (!preview.ok) return;
+    const confirmed = await runtime.confirmAgentSendPreview({
+      schemaVersion: "2.0",
+      previewId: preview.value.previewId,
+      canonicalPayloadChecksum: preview.value.canonicalPayloadChecksum
+    });
+    expect(confirmed).toMatchObject({ ok: true });
+    if (!confirmed.ok) return;
+
+    await vi.waitFor(async () => {
+      expect(await runtime.agentRunSession.readAgentRun(confirmed.value.runId)).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "plan_ready" } }
+      });
+    });
+    const planning = await runtime.agentRunSession.readAgentRun(confirmed.value.runId);
+    expect(planning).toMatchObject({ ok: true });
+    if (!planning.ok) return;
+    const execution = await runtime.agentRunSession.decidePlan({
+      projectId: "project-01",
+      runId: confirmed.value.runId,
+      commandId: "approve-desktop-plan-sharing",
+      expectedRunRevision: planning.value.snapshot.runRevision,
+      planId,
+      planRevision: 1,
+      decision: "approve"
+    });
+    expect(execution, JSON.stringify(execution)).toMatchObject({
+      ok: true,
+      value: { runId: "run_desktop_plan_execution_inherited" }
+    });
+    if (!execution.ok) return;
+    const inheritedState = JSON.parse(
+      await readFile(
+        join(projectRoot, "agent-model-sharing", `${sha256(execution.value.runId)}.json`),
+        "utf8"
+      )
+    ) as { readonly defaults: { readonly defaultsRevision: string }; readonly grant: unknown };
+    expect(inheritedState).toMatchObject({
+      defaults: { defaultsRevision: "b".repeat(64) },
+      grant: { defaultsRevision: "b".repeat(64) }
+    });
+    await vi.waitFor(async () => {
+      const read = await runtime.agentRunSession.readAgentRun(execution.value.runId);
+      if (read.ok && read.value.snapshot.status === "failed") {
+        throw new Error("Plan execution sharing inheritance unexpectedly failed");
+      }
+      expect(read).toMatchObject({ ok: true, value: { snapshot: { status: "completed" } } });
+    });
+    expect(readerCalls).toBe(1);
+  });
+
   test("forwards Main's search-query auto-approval policy into the run session", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-agent-web-search-"));
     roots.push(projectRoot);
@@ -6040,6 +7114,41 @@ function executionCommand(
       requiredContextTokens: 8000
     }
   };
+}
+
+/**
+ * Catalog 1.0 is retained for reading old runs only.  A newly started desktop
+ * run must never regain its retired mutation tools merely because an older
+ * runtime test constructs the flag-off host.
+ */
+async function legacyMutationIsNotExposed(input: {
+  readonly session: {
+    startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+    readAgentRun(runId: string): Promise<Record<string, unknown>>;
+  };
+  readonly runId: string;
+  readonly toolCallIds: readonly string[];
+  readonly command?: Record<string, unknown>;
+}): Promise<boolean> {
+  expect(await input.session.startAgentRun(input.command ?? executionCommand())).toMatchObject({
+    ok: true
+  });
+  await vi.waitFor(async () => {
+    expect(await input.session.readAgentRun(input.runId)).toMatchObject({
+      ok: true,
+      value: {
+        events: expect.arrayContaining(
+          input.toolCallIds.map((toolCallId) =>
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({ toolCallId, code: "AGENT_TOOL_NOT_ALLOWED" })
+            })
+          )
+        )
+      }
+    });
+  });
+  return true;
 }
 
 function strictPlanningCommand(conversationId: string, commandId: string) {

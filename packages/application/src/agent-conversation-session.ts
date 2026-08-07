@@ -1287,7 +1287,10 @@ function assistantTextFromEvents(rawEvents: readonly JsonObject[]): string | und
       pendingDelta = "";
     }
     if (type === "run_completed") {
-      const summary = readString(detail, "summary")?.trim();
+      const finishReport = readObject(detail, "finishReport");
+      const report = readObject(finishReport ?? {}, "report");
+      const summary =
+        readString(detail, "summary")?.trim() ?? readString(report ?? {}, "result")?.trim();
       if (summary !== undefined && summary.length > 0) assistantText = summary;
     }
   }

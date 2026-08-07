@@ -263,6 +263,7 @@ export interface DesktopApplication {
   closeWorkspace(): Promise<Result<DesktopShellState, UnifiedError>>;
   getShellState(): DesktopShellState;
   getActiveProjectWorkspace(): Result<ProjectWorkspaceSnapshot, UnifiedError>;
+  refreshActiveProjectWorkspace(): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   listCommands(): readonly ApplicationCommand[];
   executeCommand(commandId: string): Result<DesktopShellState, UnifiedError>;
   prepareOpenCreativeProject(
@@ -698,6 +699,12 @@ export function createDesktopApplication(
     getActiveProjectWorkspace() {
       const snapshot = activeProjectWorkspaceSession?.getSnapshot();
       return snapshot === undefined ? projectWorkspaceUnavailable() : ok(snapshot);
+    },
+    async refreshActiveProjectWorkspace() {
+      if (activeProjectWorkspaceSession === undefined) {
+        return projectWorkspaceUnavailable();
+      }
+      return activeProjectWorkspaceSession.refreshFromRepository();
     },
     listCommands: () => [
       ...DEFAULT_APPLICATION_COMMANDS,

@@ -8,7 +8,8 @@ import {
 
 import {
   DEFAULT_AGENT_FEATURE_FLAGS,
-  createAgentFeatureFlags
+  createAgentFeatureFlags,
+  createProductionAgentFeatureFlags
 } from "../../../apps/desktop/src/main/agent-feature-flags.js";
 import { createEngineeringFileAccessQualificationService } from "../../../apps/desktop/src/main/engineering-file-access-qualification.js";
 
@@ -96,6 +97,37 @@ describe("AgentFeatureFlags", () => {
       creativeFileMoveV2: true,
       creativeFileDeleteV2: true
     });
+  });
+
+  test("production approval flags require verifier-owned attestation provenance, not a port or clone", () => {
+    const forged = {
+      schemaVersion: "1.0" as const,
+      status: "qualified" as const,
+      bundleDigest: "a".repeat(64),
+      qualificationRevision: "approval-ui-r1",
+      sourceRevision: "1".repeat(40),
+      approvalArtifactManifestChecksum: "2".repeat(64),
+      qualificationMatrixRevision: "adr-0004-qualification-r1",
+      qualificationMatrixChecksum: "3".repeat(64),
+      automatedReportChecksum: "4".repeat(64),
+      ownerApprovalId: "owner-approval-1",
+      ownerKeyId: "owner-key-1",
+      issuedAt: "2098-12-01T00:00:00.000Z",
+      expiresAt: "2099-02-01T00:00:00.000Z",
+      attestationChecksum: "5".repeat(64)
+    };
+    const flags = createProductionAgentFeatureFlags(
+      {
+        agentGuidanceV3: true,
+        approvalBindingV2: true,
+        writingDomainCrudV2: true,
+        revision: "test-revision"
+      },
+      forged
+    );
+
+    expect(flags).toMatchObject({ approvalBindingV2: false, writingDomainCrudV2: false });
+    expect(flags.revision).toBe("test-revision:approval-surface:unavailable");
   });
 
   test("createAgentFeatureFlags result is frozen", () => {

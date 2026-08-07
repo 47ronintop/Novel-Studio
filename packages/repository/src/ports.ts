@@ -358,6 +358,11 @@ export interface AgentWriteTransactionInput {
   readonly reservationTransactionId?: string;
   readonly providerSemanticVersionSetChecksum?: string;
   readonly approvalBindingV2?: ApprovalBindingV2;
+  /** Main-only lifecycle preparation proof, separate from Approval Binding 2.0 evidence. */
+  readonly chapterLifecyclePreparationProof?: {
+    readonly proofId: string;
+    readonly proofChecksum: string;
+  };
   readonly applyBatchId?: string;
   readonly consistencyGroupId?: string;
   readonly selectionChecksum?: string;

@@ -8,13 +8,19 @@ interface BuildManifest {
   readonly sourceRevision: string;
   readonly sourceDirty: boolean;
   readonly artifacts: Record<
-    "main" | "preload" | "renderer",
+    | "main"
+    | "preload"
+    | "renderer"
+    | "approvalHtml"
+    | "approvalJs"
+    | "approvalCss"
+    | "approvalPreload",
     { readonly path: string; readonly sha256: string; readonly sourceRevision: string }
   >;
 }
 
 describe("Electron stream build consistency", () => {
-  test("records one source revision and matching hashes for main, preload, and renderer", async () => {
+  test("records one source revision and matching hashes for main, workbench, and isolated approval artifacts", async () => {
     const packageJson = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as {
       readonly scripts: Record<string, string>;
     };

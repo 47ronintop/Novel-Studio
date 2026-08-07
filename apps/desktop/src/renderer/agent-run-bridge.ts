@@ -75,6 +75,7 @@ import type {
 import { contextProfileIdFor } from "@novel-studio/ui";
 import type { UnifiedError } from "@novel-studio/shared";
 
+import { AGENT_MODEL_SHARING_DEFAULTS_REQUIRED_MESSAGE } from "./model-sharing-defaults.js";
 import type { StoryBibleSnapshotBinding } from "./story-bible-bridge.js";
 
 type AgentPlanExecutionOptions = NonNullable<Parameters<AgentPlanReviewProps["onDecision"]>[1]>;
@@ -300,7 +301,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         event.type === "assistant_text_delta"
           ? `${state.assistantText}${stringDetail(event.detail, "delta") ?? ""}`
           : event.type === "run_completed" && state.assistantText.length === 0
-            ? (stringDetail(event.detail, "summary") ?? state.assistantText)
+            ? (completedResultDetail(event.detail) ?? state.assistantText)
             : state.assistantText,
       pendingUserInput:
         event.type === "user_input_requested"
@@ -3309,6 +3310,48 @@ function legacyPlanArtifactProjection(plan: PersistedPlanArtifact): PlanArtifact
 }
 
 function formatAgentStartError(error: UnifiedError): string {
+  if (error.code === "AGENT_MODEL_SHARING_DEFAULTS_REQUIRED") {
+    return AGENT_MODEL_SHARING_DEFAULTS_REQUIRED_MESSAGE;
+  }
+  if (error.code === "TARGET_DIRTY") {
+    return "目标内容有未保存修改，Agent 未发送任何内容。请先保存或放弃修改后重试。";
+  }
+  if (error.code === "EDITOR_STATE_UNKNOWN") {
+    return "无法确认目标编辑器是否有未保存修改，Agent 未发送任何内容。请重新打开目标后重试。";
+  }
+  if (error.code === "AGENT_CONTEXT_MODE_UNAVAILABLE") {
+    return "当前工作区不支持所选 Agent 上下文模式，Agent 未发送任何内容。请切换到兼容的项目或上下文模式后重试。";
+  }
+  if (error.code === "AGENT_CONTEXT_SCOPE_INVALID") {
+    return "当前项目或工作区已切换，原 Agent 请求未发送。请在当前项目中重新发起请求。";
+  }
+  if (error.code === "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED") {
+    return "无法验证当前创作文件是否仍为活动目标，Agent 未发送任何内容。请重新打开该文件后重试。";
+  }
+  if (error.code === "AGENT_CONTEXT_PREVIEW_REQUIRED") {
+    return "需要先生成当前上下文预览，Agent 未发送任何内容。请刷新上下文预览后重试。";
+  }
+  if (error.code === "AGENT_CONTEXT_PREVIEW_STALE" || error.code === "AGENT_CONTEXT_STALE") {
+    return "上下文预览已过期或内容发生变化，Agent 未发送任何内容。请刷新上下文预览后重试。";
+  }
+  if (
+    error.code === "AGENT_MODEL_SHARING_BINDING_INVALID" ||
+    error.code === "AGENT_MODEL_SHARING_APPROVAL_STALE"
+  ) {
+    return "模型共享范围的确认已失效，Agent 未发送任何内容。请重新检查共享范围并生成新的发送预览。";
+  }
+  if (error.code === "AGENT_SEND_PREVIEW_INVALID" || error.code === "AGENT_SEND_PREVIEW_STALE") {
+    return "发送预览已失效，Agent 未发送任何内容。请重新生成预览后再确认发送。";
+  }
+  if (error.code === "AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID") {
+    return "上下文预算校验结果已失效，Agent 未发送任何内容。请刷新上下文预览后重试。";
+  }
+  if (
+    error.code === "AGENT_PROJECT_CONTEXT_ROOT_UNAVAILABLE" ||
+    error.code === "AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID"
+  ) {
+    return "当前项目上下文无法安全读取，Agent 未发送任何内容。请重新打开项目并刷新上下文后重试。";
+  }
   if (error.code === "MODEL_PROFILE_NOT_FOUND") {
     return "所选模型配置已不存在。请在设置中重新选择模型或设置默认模型后重试。";
   }
@@ -3328,7 +3371,11 @@ function formatAgentStartError(error: UnifiedError): string {
     const supported = allowed.length === 0 ? "" : `可用值：${allowed.join("、")}。`;
     return `${modelName}不支持${requested}。${supported}请在“模型与推理”中重新选择后重试。`;
   }
-  if (error.code !== "AGENT_MODEL_CAPABILITY_UNSUPPORTED") return error.message;
+  if (error.code !== "AGENT_MODEL_CAPABILITY_UNSUPPORTED") {
+    if (/\p{Script=Han}/u.test(error.message)) return error.message;
+    const errorCode = /^[A-Z0-9_]{1,96}$/u.test(error.code) ? error.code : "UNKNOWN_START_ERROR";
+    return `Agent 启动前校验未通过，未发送任何内容。请检查当前项目、模型与上下文设置后重试（错误码：${errorCode}）。`;
+  }
 
   const detail = error.redactedDetail;
   const missing = Array.isArray(detail?.["missingCapabilities"])
@@ -3692,7 +3739,7 @@ function assistantTextFromEvents(events: readonly AgentRunEvent[]): string {
     .join("");
   if (streamed.length > 0) return streamed;
   const completed = [...events].reverse().find((event) => event.type === "run_completed");
-  return stringDetail(completed?.detail, "summary") ?? "";
+  return completedResultDetail(completed?.detail) ?? "";
 }
 
 function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status"] | undefined {
@@ -4027,6 +4074,19 @@ function isOption(value: unknown): value is { readonly id: string; readonly labe
 function stringDetail(detail: AgentRunEvent["detail"], key: string): string | undefined {
   const value = detail?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function completedResultDetail(detail: AgentRunEvent["detail"]): string | undefined {
+  const summary = stringDetail(detail, "summary");
+  if (summary !== undefined) return summary;
+  const finishReport = detail?.["finishReport"];
+  if (typeof finishReport !== "object" || finishReport === null || Array.isArray(finishReport)) {
+    return undefined;
+  }
+  const report = finishReport["report"];
+  if (typeof report !== "object" || report === null || Array.isArray(report)) return undefined;
+  const result = report["result"];
+  return typeof result === "string" && result.length > 0 ? result : undefined;
 }
 
 function createCommandId(prefix: string): string {

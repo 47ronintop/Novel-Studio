@@ -1,4 +1,5 @@
 import { mkdir, realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import {
@@ -6,6 +7,7 @@ import {
   createAgentFileOperationSession,
   createAgentUsageSession,
   createChapterEditorSession,
+  createMainApprovalIssuer,
   createConfigStudioSession,
   createDesktopApplication,
   createEngineeringWorkspaceSession,
@@ -18,6 +20,7 @@ import {
   createStoryAnalysisApplicationSession,
   createStoryAnalysisChangeSetPreparationPort,
   createStoryBibleExplicitInverseSession,
+  createStoryBibleApprovalProofSession,
   createStoryBibleSession,
   createUserPreferencesSession,
   resolveDefaultForeshadowAnalysisRuntimeProfile,
@@ -25,6 +28,7 @@ import {
   resolveDefaultStoryAnalysisRuntimeProfile
 } from "@novel-studio/application";
 import {
+  createApprovalRuleSetProjection,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord,
   type AgentUsageRecord
@@ -52,6 +56,7 @@ import {
   AgentProjectReadRepository,
   AgentRunFileRepository,
   AgentUsageFileRepository,
+  ApprovalAuthorizationLedger,
   ConfigAssetRepository,
   EngineeringWorkspaceFileRepository,
   HistoryRepository,
@@ -67,7 +72,7 @@ import {
   WorkspaceStateFileRepository
 } from "@novel-studio/repository";
 import { createTrustedCreativeFileOperationsPort } from "@novel-studio/repository";
-import { err, ok, type JsonObject } from "@novel-studio/shared";
+import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shared";
 
 import {
   createDesktopChangeSetSession,
@@ -497,12 +502,19 @@ export function createProjectDesktopApplication(
         projectRoot,
         traceId: "trace_desktop_story_bible_explicit_inverse_project_reads"
       });
+      const approvalBindingIssuer = createMainApprovalIssuer();
+      const authorizationLedger = new ApprovalAuthorizationLedger({
+        projectRoot,
+        traceId: "trace_desktop_story_bible_explicit_inverse_authorization_ledger"
+      });
       const changeSets = createDesktopChangeSetSession({
         projectId: snapshot.project.projectId,
         projectReads,
         chapterRepository: chapter,
         storyBible,
-        repository: runRepository
+        repository: runRepository,
+        providerSemanticVersionSetChecksum: checksumText("story-bible-explicit-inverse-v2@1"),
+        approvalBindingIssuer
       });
       const proofRepositoryBound = changeSets.bindApprovalDecisionProofRepository(
         new ApprovalDecisionProofFileRepository({
@@ -511,6 +523,12 @@ export function createProjectDesktopApplication(
         })
       );
       if (!proofRepositoryBound.ok) throw new Error(proofRepositoryBound.error.message);
+      const approvalProofFinalizer = createStoryBibleApprovalProofSession({ changeSets });
+      const approvalRules = createApprovalRuleSetProjection(["story_bible_patch"]);
+      const workspaceBindingId = checksumText(
+        `creativeProject\n${snapshot.project.projectId}\n${projectRoot}`
+      );
+      const rootBindingId = checksumText(projectRoot);
       const versionGroups = createDesktopVersionGroupServices({
         contentRoot: projectRoot,
         stateRoot: projectRoot,
@@ -522,10 +540,13 @@ export function createProjectDesktopApplication(
         }),
         projectReads,
         chapterRepository: chapter,
-        storyBible
+        storyBible,
+        authorizationLedger,
+        requireV2Authorization: true
       }).versionGroupSession;
       return createStoryBibleExplicitInverseSession({
         projectId: snapshot.project.projectId,
+        approvalMode: "v2_production",
         repository: {
           readCompatibleStoryAsset: (assetId) => storyBible.readCompatibleStoryAsset(assetId),
           prepareStoryAssetCandidateReadOnly: (input) =>
@@ -538,6 +559,29 @@ export function createProjectDesktopApplication(
         chapterCatalog: { listChapters: () => chapter.listChapters() },
         changeSets,
         versionGroups,
+        approvalProofFinalizer: {
+          finalize: (input) =>
+            approvalProofFinalizer.finalize({
+              ...input,
+              groupKind: "explicit_inverse",
+              approvalRuleSetVersion: approvalRules.version,
+              approvalRuleSetChecksum: approvalRules.checksum,
+              workspaceBindingId,
+              rootBindingId,
+              policyRevision: "manual_story_bible_explicit_inverse@1",
+              capabilityRevision: "manual_story_bible_explicit_inverse@1",
+              pathClass: "ordinary",
+              targetFreshness: "clean_stable"
+            })
+        },
+        approvalV2: {
+          async ensureAvailable() {
+            return err(explicitInverseApprovalSurfaceUnavailable());
+          },
+          async approve() {
+            return err(explicitInverseApprovalSurfaceUnavailable());
+          }
+        },
         ...(options.now === undefined ? {} : { now: options.now })
       });
     },
@@ -1036,6 +1080,22 @@ export async function createBootstrappedDefaultDesktopApplicationWithSnapshot(
 
 export function createProjectLockOwnerId(): string {
   return `desktop_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function checksumText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function explicitInverseApprovalSurfaceUnavailable() {
+  return createUnifiedError({
+    code: "TRUSTED_APPROVAL_SURFACE_UNAVAILABLE",
+    category: "AgentError",
+    message:
+      "The ADR-0004 qualified confirmation surface is unavailable; mutation remains read-only.",
+    recoverability: "user-action",
+    suggestedAction: "Open a new confirmation from the current Main-owned preview.",
+    traceId: "desktop-story-bible-explicit-inverse-approval"
+  });
 }
 
 async function ensureDefaultProject(

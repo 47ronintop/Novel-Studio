@@ -3,10 +3,13 @@ import { describe, expect, test, vi } from "vitest";
 import {
   checksumChangeSetSelection,
   checksumChangeSetText,
+  createApprovalBindingV2,
+  createChangeSetRevisionV2,
   deriveChangeSetGroupApprovalToken,
   type ChangeSet,
   type ChangeSetApproval,
   type ChangeSetApprovalV2,
+  type ChangeSetV2,
   type VersionGroup
 } from "@novel-studio/agent-engine";
 import { err, ok } from "@novel-studio/shared";
@@ -48,6 +51,76 @@ describe("VersionGroupSession", () => {
       "recovery-clean:notes/one.md",
       "resume:notes/one.md"
     ]);
+  });
+
+  test("forwards a lifecycle preparation proof separately from the approval decision proof", async () => {
+    let appliedInput: Parameters<VersionGroupSessionTransactionPort["apply"]>[0] | undefined;
+    const session = createSession([], {
+      async apply(input) {
+        appliedInput = input;
+        return ok(appliedGroup());
+      }
+    });
+    const lifecycleChangeSet = await chapterLifecycleChangeSet();
+    const lifecycleDomainOperation = lifecycleChangeSet.domainOperation;
+    if (lifecycleDomainOperation === undefined) {
+      throw new Error("Expected a lifecycle domain operation.");
+    }
+    const approvalBinding = createApprovalBindingV2({
+      workspaceBindingId: "workspace_01",
+      rootBindingId: "root_01",
+      runId: lifecycleChangeSet.runId,
+      changeSetId: lifecycleChangeSet.changeSetId,
+      changeSetRevision: lifecycleChangeSet.revision,
+      changeSetChecksum: lifecycleChangeSet.checksum,
+      providerSemanticVersionSetChecksum: lifecycleChangeSet.providerSemanticVersionSetChecksum,
+      operationKind: "chapter_rename",
+      selectionChecksum: lifecycleDomainOperation.selectionChecksum,
+      selectedOperationIds: ["chapters/chapter_01.md"],
+      operationOrderChecksum: "d".repeat(64),
+      sourceRef: "chapter:chapter_01",
+      targetRef: "chapter:chapter_01",
+      baseChecksum: checksumChangeSetText("before"),
+      candidateChecksum: "b".repeat(64),
+      baseManifestChecksum: "a".repeat(64),
+      candidateManifestChecksum: "b".repeat(64),
+      encoding: "utf-8",
+      bom: "absent",
+      eol: "lf",
+      approvalRuleSetVersion: "rules_2",
+      approvalRuleSetChecksum: "c".repeat(64),
+      proofId: "approval_decision_proof",
+      proofChecksum: "e".repeat(64),
+      executionWritePolicy: "write_before_confirmation",
+      policyRevision: "policy_01",
+      capabilityRevision: "capability_01",
+      approvalSource: "human_confirmation",
+      issuedAt: "2026-08-06T00:00:00.000Z",
+      expiresAt: "2099-08-06T00:00:00.000Z"
+    });
+
+    const result = await session.applyApproved({
+      changeSet: lifecycleChangeSet,
+      approval: {
+        schemaVersion: "2.0",
+        decision: "apply_selected",
+        approvalSource: "human_confirmation",
+        resolvedAt: "2026-08-06T00:01:00.000Z",
+        displayBindingChecksum: lifecycleChangeSet.displayBindingChecksum,
+        authorizationId: "authorization_01",
+        reservationTransactionId: "reservation_01",
+        binding: approvalBinding
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(appliedInput).toMatchObject({
+      approvalBindingV2: { proofId: "approval_decision_proof" },
+      chapterLifecyclePreparationProof: {
+        proofId: lifecycleDomainOperation.proofRef,
+        proofChecksum: lifecycleDomainOperation.proofChecksum
+      }
+    });
   });
 
   test("accepts an operations-only Change Set and forwards selected lifecycle operations", async () => {
@@ -1038,6 +1111,39 @@ function changeSet(): ChangeSet {
       }
     ]
   };
+}
+
+async function chapterLifecycleChangeSet(): Promise<ChangeSetV2> {
+  const relativePath = "chapters/chapter_01.md";
+  const selectionChecksum = checksumChangeSetText(relativePath);
+  return createChangeSetRevisionV2({
+    changeSetId: "changes_lifecycle_01",
+    runId: "run_lifecycle_01",
+    projectId: "project_01",
+    checkpointId: "checkpoint_01",
+    contextSnapshotId: "context_01",
+    providerSemanticVersionSetChecksum: "d".repeat(64),
+    createdAt: "2026-08-06T00:00:00.000Z",
+    proposal: {
+      relativePath,
+      assetType: "chapter",
+      assetId: "chapter_01",
+      contentMode: "serialized_chapter",
+      baseChecksum: checksumChangeSetText("before"),
+      baseContent: "before",
+      range: { unit: "character", start: 0, end: 6 },
+      replacement: "after"
+    },
+    domainOperation: {
+      kind: "chapter_rename",
+      sourceRef: "chapter:chapter_01",
+      targetRef: "chapter:chapter_01",
+      proofRef: "a".repeat(64),
+      proofChecksum: "b".repeat(64),
+      selectedRelativePaths: [relativePath],
+      selectionChecksum
+    }
+  });
 }
 
 function approval(): ChangeSetApproval {

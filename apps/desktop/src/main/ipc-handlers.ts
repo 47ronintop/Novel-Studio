@@ -32,7 +32,9 @@ import type {
   RefreshContextDraftCommand,
   SyncStartDraftCommand,
   UpdateAgentRunDraftCommand,
-  UpdateContextDraftCommand
+  UpdateContextDraftCommand,
+  WritingEditorStateReport,
+  WritingEditorStateReportResult
 } from "@novel-studio/application";
 import type {
   AgentSendPreviewDtoV2,
@@ -127,6 +129,10 @@ import {
   validateStoryBibleWriteCandidate
 } from "@novel-studio/schemas";
 import { createDesktopProjectConventionsFile } from "./project-conventions-file.js";
+import {
+  MAX_WRITING_EDITOR_BUFFER_BYTES,
+  type WritingEditorStateRegistry
+} from "./writing-editor-state-registry.js";
 
 export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
@@ -149,6 +155,10 @@ export interface ApplicationIpcHandlerOptions {
   readonly publishAgentRunEvent?: (event: AgentRunEvent) => void;
   readonly publishStoryAnalysisCompletionEvent?: (event: StoryAnalysisCompletionEvent) => void;
   readonly agentWriteSaveCoordinator?: AgentWriteSaveCoordinator;
+  /** Main-owned managed writing editor liveness registry. */
+  readonly writingEditorStateRegistry?: WritingEditorStateRegistry;
+  /** The only workspace permitted to report managed writing editor state. */
+  readonly getActiveWritingEditorWorkspaceId?: () => string | undefined;
   readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
   readonly agentMcpSettingsSession?: McpSettingsSession;
   readonly agentTaskCatalogPort?: {
@@ -512,6 +522,10 @@ export function createApplicationIpcHandlers(
       chooseDirectory("creative-create-parent", options.chooseCreateProjectDirectory),
     "application:project:get-active-workspace": () =>
       Promise.resolve(projectSnapshotResultToDto(application.getActiveProjectWorkspace())),
+    "application:project:refresh-active-workspace": () =>
+      application
+        .refreshActiveProjectWorkspace()
+        .then((result) => projectSnapshotResultToDto(result)),
     "application:project:open-creative-project": async (selectionId: unknown) => {
       const selection = resolveDirectorySelection(selectionId, "creative-open");
       if (!selection.ok) return selection;
@@ -1245,6 +1259,47 @@ export function createApplicationIpcHandlers(
       }
 
       return Promise.resolve(application.previewActiveChapterSuggestionDiff(nextBody));
+    },
+    "application:writing-editor:report-state": (input: unknown) => {
+      const report = toWritingEditorStateReport(input);
+      if (report === undefined) {
+        return Promise.resolve(
+          writingEditorStateError(
+            "EDITOR_STATE_INPUT_INVALID",
+            "Invalid writing editor state report."
+          )
+        );
+      }
+      const registry = options.writingEditorStateRegistry;
+      const activeWorkspaceId = options.getActiveWritingEditorWorkspaceId?.();
+      if (registry === undefined || activeWorkspaceId === undefined) {
+        return Promise.resolve(
+          writingEditorStateError(
+            "EDITOR_STATE_UNAVAILABLE",
+            "Writing editor state tracking is unavailable for this workspace."
+          )
+        );
+      }
+      if (report.workspaceId !== activeWorkspaceId) {
+        return Promise.resolve(
+          writingEditorStateError(
+            "EDITOR_STATE_WORKSPACE_MISMATCH",
+            "Writing editor state does not belong to the active workspace."
+          )
+        );
+      }
+      const updated = registry.report(report);
+      if (!updated.ok) return Promise.resolve({ ok: false, error: updated.error });
+      return Promise.resolve({
+        ok: true,
+        acknowledgement: {
+          workspaceId: updated.state.workspaceId,
+          resourceKind: updated.state.resourceKind,
+          resourceId: updated.state.resourceId,
+          editorInstanceId: updated.state.editorInstanceId,
+          rendererRevision: updated.state.rendererRevision
+        }
+      } satisfies WritingEditorStateReportResult);
     },
     "application:settings:list-model-profiles": () => application.listModelProfiles(),
     "application:settings:discover-models": (profileId: unknown) => {
@@ -2674,6 +2729,63 @@ function isSafeId(value: unknown): value is string {
 
 function isSha256Checksum(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function toWritingEditorStateReport(value: unknown): WritingEditorStateReport | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "workspaceId",
+      "resourceKind",
+      "resourceId",
+      "editorInstanceId",
+      "connection",
+      "rendererRevision",
+      "acknowledgedRevision",
+      "dirty",
+      "bufferChecksum",
+      "bufferContent"
+    ]) ||
+    !isCanonicalWritingEditorIdentityPart(value["workspaceId"]) ||
+    !isCanonicalWritingEditorIdentityPart(value["resourceId"]) ||
+    !isCanonicalWritingEditorIdentityPart(value["editorInstanceId"]) ||
+    (value["resourceKind"] !== "chapter" && value["resourceKind"] !== "story_bible") ||
+    (value["connection"] !== "connected" &&
+      value["connection"] !== "disconnected" &&
+      value["connection"] !== "unknown") ||
+    !isNonNegativeInteger(value["rendererRevision"]) ||
+    !isNonNegativeInteger(value["acknowledgedRevision"]) ||
+    value["acknowledgedRevision"] > value["rendererRevision"] ||
+    typeof value["dirty"] !== "boolean" ||
+    !isSha256Checksum(value["bufferChecksum"]) ||
+    typeof value["bufferContent"] !== "string" ||
+    Buffer.byteLength(value["bufferContent"], "utf8") > MAX_WRITING_EDITOR_BUFFER_BYTES
+  ) {
+    return undefined;
+  }
+  return {
+    workspaceId: value["workspaceId"],
+    resourceKind: value["resourceKind"],
+    resourceId: value["resourceId"],
+    editorInstanceId: value["editorInstanceId"],
+    connection: value["connection"],
+    rendererRevision: value["rendererRevision"],
+    acknowledgedRevision: value["acknowledgedRevision"],
+    dirty: value["dirty"],
+    bufferChecksum: value["bufferChecksum"],
+    bufferContent: value["bufferContent"]
+  };
+}
+
+function isCanonicalWritingEditorIdentityPart(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 512 && value.trim().length > 0;
+}
+
+function writingEditorStateError(
+  code: Extract<WritingEditorStateReportResult, { readonly ok: false }>["error"]["code"],
+  message: string
+): WritingEditorStateReportResult {
+  return { ok: false, error: { code, message } };
 }
 
 function isOpaqueRetryTargetId(value: unknown): value is string {

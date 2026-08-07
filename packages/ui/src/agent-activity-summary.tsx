@@ -4,11 +4,7 @@ import type { AgentRunEvent } from "@novel-studio/application";
 
 import { AgentRunTimeline } from "./agent-run-timeline.js";
 
-export function AgentActivitySummary({
-  events
-}: {
-  readonly events: readonly AgentRunEvent[];
-}) {
+export function AgentActivitySummary({ events }: { readonly events: readonly AgentRunEvent[] }) {
   const orderedEvents = [...events].sort(compareEvents);
   const completedEvents = orderedEvents.filter((event) => event.type === "tool_completed");
   const currentEvent = currentToolEvent(orderedEvents);
@@ -89,7 +85,11 @@ function changeSetPaths(event: AgentRunEvent): readonly string[] {
 }
 
 function isReadTool(toolName: string | undefined): boolean {
-  return toolName === "list_project_entries" || toolName?.startsWith("read_") === true;
+  return (
+    toolName === "list_project_entries" ||
+    toolName === "list_chapters" ||
+    toolName?.startsWith("read_") === true
+  );
 }
 
 function isProposalTool(toolName: string | undefined): boolean {

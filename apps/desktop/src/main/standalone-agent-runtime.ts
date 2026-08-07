@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
@@ -8,8 +9,11 @@ import {
   createAgentPricingRegistry,
   createAgentRunDraftSession,
   createAgentRunSession,
+  createAgentSendPreviewSession,
   createAgentUsageSession,
   buildAgentSystemPrompt,
+  canonicalAgentFirstRoundSemanticPayloadChecksumV2,
+  materializeCanonicalAgentRound,
   materializeAgentPrompt,
   readResolvedContextBudgetUsageLimits,
   resolveBudgetInputs as resolveCanonicalBudgetInputs,
@@ -18,23 +22,31 @@ import {
   type AgentContextBudgetInputsPort,
   type AgentConversationLifecyclePort,
   type AgentConversationPersistencePort,
+  type AgentFirstRoundSemanticPayloadV2,
   type AgentPermissionSession,
   type AgentRunDraftSession,
   type AgentRunModelDriver,
   type AgentRunStartFacts,
   type AgentRunStartModelFacts,
-  type AgentRunStartPreflightPort
+  type AgentRunStartPreflightPort,
+  type AgentSendPreviewDtoV2,
+  type AgentSendPreviewPreparedMaterialV2,
+  type AgentSendPreviewValidationFactsV2,
+  type ConfirmAgentSendPreviewCommandV2
 } from "@novel-studio/application";
 import {
   STANDALONE_AGENT_CONTEXT_SCOPE,
   agentContextScopeKey,
   computeAgentRunToolCatalogRevision,
+  createProviderSemanticVersionSetV1,
   createEffectiveCapabilityState,
   freezeAgentToolCapabilitySnapshot,
   normalizeAgentRunSnapshot,
+  serializeCanonicalRoundManifestV2,
   validateAgentRunToolCatalogSnapshot,
   type AgentContextScope,
   type AgentRunSnapshot,
+  type StartAgentRunCommand,
   type AgentUsageRecord
 } from "@novel-studio/agent-engine";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
@@ -259,7 +271,7 @@ function composeDesktopStandaloneAgentRuntime(
           ? ok(listed.value.map((snapshot) => snapshot as unknown as JsonObject))
           : err(listed.error);
       },
-      readRunEvents: (runId) => runRepository.readEvents(runId),
+      readRunEvents: (runId) => readStandaloneConversationRunEvents(runRepository, runId),
       async hasPendingReview() {
         return err(standaloneRuntimeError("AGENT_STANDALONE_SCOPE_REQUIRED"));
       },
@@ -418,6 +430,78 @@ function composeDesktopStandaloneAgentRuntime(
       now
     }
   });
+  const previewBindings = new Map<string, StandaloneSendPreviewBinding>();
+  const latestPreviewBindingByDraft = new Map<string, StandaloneSendPreviewBinding>();
+  const startCommandsByReservedRun = new Map<string, StartAgentRunCommand>();
+  const materializePreview = async (binding: StandaloneSendPreviewBinding) =>
+    materializeStandaloneSendPreview({
+      binding,
+      draftSession,
+      conversationSession,
+      startPreflight
+    });
+  const agentSendPreviewSession = createAgentSendPreviewSession<AgentRunSnapshot>({
+    materializer: {
+      async materializeFirstRound(command) {
+        const binding = previewBindings.get(command.commandId);
+        if (binding === undefined) return err(standaloneRuntimeError("AGENT_SEND_PREVIEW_INVALID"));
+        const materialized = await materializePreview(binding);
+        if (materialized.ok) {
+          latestPreviewBindingByDraft.set(command.runDraftId, binding);
+          startCommandsByReservedRun.set(binding.reservedRunId, binding.startCommand);
+        }
+        return materialized;
+      },
+      async resolveCurrentValidationFacts(input) {
+        const binding = latestPreviewBindingByDraft.get(input.runDraftId);
+        if (binding === undefined) return err(standaloneRuntimeError("AGENT_SEND_PREVIEW_STALE"));
+        const materialized = await materializePreview(binding);
+        return materialized.ok ? ok(materialized.value.validationFacts) : materialized;
+      }
+    },
+    async sendFrozenFirstRound(input) {
+      const startCommand = startCommandsByReservedRun.get(
+        input.validationFacts.target.connectionId
+      );
+      if (startCommand === undefined)
+        return err(standaloneRuntimeError("AGENT_SEND_PREVIEW_STALE"));
+      // The standalone surface has no project context or tools. Its run session independently
+      // re-resolves the same immutable draft before the provider receives the first round.
+      return session.startAgentRun(startCommand);
+    },
+    now,
+    traceId: "desktop-standalone-agent-send-preview"
+  });
+  const prepareAgentSendPreview = async (command: {
+    readonly schemaVersion: "2.0";
+    readonly commandId: string;
+    readonly startCommand: StartAgentRunCommand;
+  }): Promise<Result<AgentSendPreviewDtoV2, UnifiedError>> => {
+    if (!isValidStandalonePreviewStart(command)) {
+      return err(standaloneRuntimeError("AGENT_SEND_PREVIEW_INVALID"));
+    }
+    const binding: StandaloneSendPreviewBinding = {
+      commandId: command.commandId,
+      startCommand: command.startCommand,
+      reservedRunId: `agent_run_preview_${randomBytes(12).toString("hex")}`
+    };
+    previewBindings.set(command.commandId, binding);
+    const prepared = await agentSendPreviewSession.preparePreview({
+      schemaVersion: "2.0",
+      commandId: command.commandId,
+      runDraftId: command.startCommand.runDraftId,
+      expectedRunDraftRevision: command.startCommand.runDraftRevision,
+      runDraftChecksum: command.startCommand.runDraftChecksum
+    });
+    if (!prepared.ok) previewBindings.delete(command.commandId);
+    return prepared;
+  };
+  const confirmAgentSendPreview = async (
+    command: ConfirmAgentSendPreviewCommandV2
+  ): Promise<Result<AgentRunSnapshot, UnifiedError>> => {
+    const confirmed = await agentSendPreviewSession.confirmAndSend(command);
+    return confirmed.ok ? ok(confirmed.value.value) : confirmed;
+  };
 
   let disposed = false;
   let prepareResult: Promise<Result<void, UnifiedError>> | undefined;
@@ -443,6 +527,8 @@ function composeDesktopStandaloneAgentRuntime(
     agentPermissionSession: createUnavailableStandalonePermissionSession(),
     agentPlanExecutionSession: planExecutionSession,
     agentUsageSession: usageSession,
+    prepareAgentSendPreview,
+    confirmAgentSendPreview,
     prepare,
     listRunSnapshots: () => listStandaloneRunSnapshots(runRepository, scope),
     ...(options.releasePromptCacheScope === undefined
@@ -450,6 +536,190 @@ function composeDesktopStandaloneAgentRuntime(
       : { releasePromptCacheResources: options.releasePromptCacheScope }),
     dispose
   };
+}
+
+interface StandaloneSendPreviewBinding {
+  readonly commandId: string;
+  readonly startCommand: StartAgentRunCommand;
+  /** Main-owned nonce; also binds the preview to the only start command it may confirm. */
+  readonly reservedRunId: string;
+}
+
+function isValidStandalonePreviewStart(value: {
+  readonly schemaVersion: "2.0";
+  readonly commandId: string;
+  readonly startCommand: StartAgentRunCommand;
+}): boolean {
+  const command = value.startCommand;
+  return (
+    value.schemaVersion === "2.0" &&
+    isMachineToken(value.commandId) &&
+    isMachineToken(command.commandId) &&
+    isMachineToken(command.conversationId) &&
+    isMachineToken(command.runDraftId) &&
+    Number.isSafeInteger(command.runDraftRevision) &&
+    command.runDraftRevision >= 0 &&
+    isSha256(command.runDraftChecksum) &&
+    sameStandaloneScope(command.scope) &&
+    command.projectId === undefined
+  );
+}
+
+async function materializeStandaloneSendPreview(input: {
+  readonly binding: StandaloneSendPreviewBinding;
+  readonly draftSession: AgentRunDraftSession;
+  readonly conversationSession: ReturnType<typeof createAgentConversationSession>;
+  readonly startPreflight: AgentRunStartPreflightPort;
+}): Promise<Result<AgentSendPreviewPreparedMaterialV2, UnifiedError>> {
+  const start = input.binding.startCommand;
+  const draft = await input.draftSession.resolveStartDraft({
+    scope: STANDALONE_AGENT_SCOPE,
+    conversationId: start.conversationId,
+    runDraftId: start.runDraftId,
+    runDraftRevision: start.runDraftRevision,
+    runDraftChecksum: start.runDraftChecksum
+  });
+  if (!draft.ok) return draft;
+  const facts = await input.startPreflight.resolveStart(start);
+  if (!facts.ok) return facts;
+  const profile = resolveAgentContextProfile(
+    STANDALONE_AGENT_SCOPE,
+    "conversation",
+    "standalone_chat"
+  );
+  const conversation = await input.conversationSession.loadContext({
+    scope: STANDALONE_AGENT_SCOPE,
+    conversationId: start.conversationId
+  });
+  if (!conversation.ok) return conversation;
+  const providerSemanticVersionSet = createProviderSemanticVersionSetV1({
+    writingTaskIntentSchemaVersion: "not_applicable",
+    writingGenerationGuidanceVersion: "not_applicable",
+    approvalRuleSetVersion: "not_applicable",
+    approvalRuleSetChecksum: "not_applicable"
+  });
+  const systemPrompt = buildAgentSystemPrompt(profile);
+  const canonical = materializeCanonicalAgentRound({
+    roundId: `round_${input.binding.reservedRunId}_0`,
+    runId: input.binding.reservedRunId,
+    roundNumber: 0,
+    profile,
+    systemPrompt,
+    toolCatalogRevision: STANDALONE_EMPTY_TOOL_CATALOG.catalogRevision,
+    userRequest: facts.value.userRequest,
+    conversationSummaryMessages: conversation.value,
+    projectedToolDescriptors: [],
+    sharing: { defaultsRevision: "not_applicable", runGrantRevision: "not_applicable" },
+    providerSemanticVersionSet
+  });
+  const semanticPayload = standaloneSemanticPayload(canonical);
+  const payloadChecksum = canonicalAgentFirstRoundSemanticPayloadChecksumV2(semanticPayload);
+  const manifest = canonical.canonicalRoundManifest;
+  const target = {
+    providerId: standaloneMachineIdentity(facts.value.model.provider, "provider"),
+    modelId: standaloneMachineIdentity(facts.value.model.modelName, "model"),
+    connectionId: input.binding.reservedRunId,
+    accountIdentityChecksum: standaloneChecksum("account-identity-unavailable"),
+    adapterPolicyRevision: "standalone-llm-adapter-v2",
+    adapterPolicyChecksum: standaloneChecksum("standalone-llm-adapter-v2")
+  };
+  const validationFacts: AgentSendPreviewValidationFactsV2 = {
+    schemaVersion: "2.0",
+    scopeBindingChecksum: standaloneChecksum(agentContextScopeKey(STANDALONE_AGENT_SCOPE)),
+    runDraftId: start.runDraftId,
+    runDraftRevision: start.runDraftRevision,
+    runDraftChecksum: start.runDraftChecksum,
+    requestRevision: String(start.runDraftRevision),
+    requestChecksum: standaloneChecksum(facts.value.userRequest),
+    target,
+    sourceBindings: [],
+    sharingDefaultsRevision: "not_applicable",
+    sharingGrantRevision: "not_applicable",
+    sharingGrantChecksum: "not_applicable",
+    taskIntentChecksum: "not_applicable",
+    capabilityRevision: "standalone-empty-v2",
+    capabilityChecksum: standaloneChecksum(STANDALONE_EMPTY_TOOL_CATALOG.catalogRevision),
+    toolProjectionRevision: manifest.tools.catalogRevision,
+    toolProjectionChecksum: manifest.tools.projectionChecksum,
+    providerSemanticVersionSetChecksum: manifest.providerSemanticVersionSetChecksum,
+    canonicalRoundManifestChecksum: manifest.manifestChecksum,
+    canonicalPayloadChecksum: payloadChecksum
+  };
+  return ok({
+    semanticPayload,
+    canonicalRoundManifestJson: serializeCanonicalRoundManifestV2(manifest),
+    validationFacts,
+    display: {
+      schemaVersion: "2.0",
+      target: {
+        providerLabel: facts.value.model.provider,
+        modelLabel: facts.value.model.modelName,
+        connectionLabel: facts.value.model.profileId,
+        adapterPolicyLabel: "standalone-llm-adapter-v2"
+      },
+      guidance: {
+        version: "2.0",
+        profileId: profile.profileId,
+        runtimeFacts: { scope: "standalone", tools: "none" }
+      },
+      sources: [],
+      retainedLocalProvenanceKinds: ["provider_account_identity"],
+      providerNativeSemanticChecksum: null
+    }
+  });
+}
+
+function standaloneSemanticPayload(
+  canonical: ReturnType<typeof materializeCanonicalAgentRound>
+): AgentFirstRoundSemanticPayloadV2 {
+  return {
+    schemaVersion: "2.0",
+    systemPrompt: canonical.prompt.systemPrompt,
+    messages: canonical.canonicalRoundManifest.messages.map((message) => {
+      if (message.role === "assistant") {
+        return {
+          schemaVersion: "2.0" as const,
+          role: "assistant" as const,
+          content: message.content,
+          toolCalls: message.toolCalls.map((call) => ({
+            schemaVersion: "2.0" as const,
+            toolCallId: call.id,
+            name: call.name,
+            argumentsText: call.arguments
+          }))
+        };
+      }
+      if (message.role === "tool") {
+        if (message.toolCallId === null) throw new Error("AGENT_SEND_PREVIEW_INVALID");
+        return {
+          schemaVersion: "2.0" as const,
+          role: "tool" as const,
+          content: message.content,
+          toolCallId: message.toolCallId
+        };
+      }
+      return { schemaVersion: "2.0" as const, role: "user" as const, content: message.content };
+    }),
+    tools: [],
+    parameters: {}
+  };
+}
+
+function standaloneChecksum(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function standaloneMachineIdentity(value: string, fallback: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9._:@/-]/gu, "_").slice(0, 256);
+  return isMachineToken(normalized) ? normalized : fallback;
+}
+
+function isMachineToken(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u.test(value);
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 function createStandaloneConversationPersistence(
@@ -609,7 +879,13 @@ function createStandaloneBudgetInputs(
           requiredContextTokens: model.requiredContextTokens
         },
         contents: [],
-        resolved: resolved.value
+        resolved: resolved.value,
+        // Standalone has no project sources, but packed-context preview still requires a complete
+        // Main-owned packing tuple before the renderer may bind it to a run start.
+        profile,
+        modelProfileId: input.draft.modelProfileId,
+        activeSources: [],
+        excludedSources: []
       };
       return ok(budget);
     }
@@ -760,6 +1036,23 @@ function isNestedPath(parent: string, child: string): boolean {
     !relativePath.startsWith("../") &&
     !isAbsolute(relativePath)
   );
+}
+
+async function readStandaloneConversationRunEvents(
+  repository: AgentRunFileRepository,
+  runId: string
+): Promise<Result<JsonObject[], UnifiedError>> {
+  const snapshot = await repository.readSnapshotV20(runId);
+  if (snapshot.ok && snapshot.value !== undefined) {
+    const events = await repository.readEventsV20(runId);
+    return events.ok ? ok(events.value as unknown as JsonObject[]) : err(events.error);
+  }
+  if (!snapshot.ok && snapshot.error.code === "AGENT_RUN_SNAPSHOT_V20_LEGACY_RECORD") {
+    return repository.readEvents(runId);
+  }
+  return snapshot.ok
+    ? err(standaloneRuntimeError("AGENT_RUN_NOT_FOUND"))
+    : err(snapshot.error);
 }
 
 function standaloneRuntimeError(code: string): UnifiedError {

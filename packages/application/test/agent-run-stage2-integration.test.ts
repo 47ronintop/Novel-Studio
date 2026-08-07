@@ -75,7 +75,7 @@ describe("AgentRunSession Stage 2 integration", () => {
     ).toContain("change_set_ready");
   });
 
-  test("auto-approves an acknowledged execution run through the same Version Group path", async () => {
+  test("rejects legacy run preapproval before the model or Version Group can start", async () => {
     const createSession = requireCreateSession();
     let round = 0;
     let applyCount = 0;
@@ -244,7 +244,14 @@ describe("AgentRunSession Stage 2 integration", () => {
       writePolicy: "user_preapproved_run",
       writePolicyAcknowledged: true
     });
-    expect(started).toMatchObject({ ok: true, value: { writePolicy: "user_preapproved_run" } });
+    expect(started).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_POLICY_TRUST_REQUIRED" }
+    });
+    expect(round).toBe(0);
+    expect(applyCount).toBe(0);
+    expect(receiptCommandIds).toEqual([]);
+    if (!started.ok) return;
     await waitForStatus(session, "run_stage3_auto", "completed");
 
     const read = await session.readAgentRun("run_stage3_auto");
@@ -283,7 +290,7 @@ describe("AgentRunSession Stage 2 integration", () => {
     );
   });
 
-  test("does not emit auto approval when approval validation fails", async () => {
+  test("rejects legacy run preapproval without attempting an automatic decision", async () => {
     const createSession = requireCreateSession();
     let decisionCount = 0;
     const session = createSession({
@@ -308,13 +315,18 @@ describe("AgentRunSession Stage 2 integration", () => {
       versionGroupExecutor: unusedVersionGroupExecutor()
     });
 
-    await session.startAgentRun({
+    const started = await session.startAgentRun({
       ...startCommand(),
       commandId: "start-invalid-auto",
       writePolicy: "user_preapproved_run",
       writePolicyAcknowledged: true
     });
-    await vi.waitFor(() => expect(decisionCount).toBe(1));
+    expect(started).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_WRITE_POLICY_TRUST_REQUIRED" }
+    });
+    expect(decisionCount).toBe(0);
+    if (!started.ok) return;
 
     const read = await session.readAgentRun("run_stage3_invalid_auto");
     expect(read).toMatchObject({
@@ -841,15 +853,18 @@ describe("AgentRunSession Stage 2 integration", () => {
         ]
       };
       const session = createSession({
-        newRunToolFacadeVersion: "v2",
+        // This is a legacy Stage 2 context-refresh regression.  Schema-1 catalogs are the only
+        // compatible surface for its synthetic Change Set; v2 mutations require a qualified
+        // Change Set/approval proof and are covered by the v2 session tests.
+        newRunToolFacadeVersion: "v1",
         coordinatorOptions: { createRunId: () => runId },
         repository: memoryRepository(),
         modelDriver: {
           async *streamRound() {
             rounds += 1;
             if (rounds === 1) {
-              yield toolCall("propose_outline_refresh", "edit_text", {
-                ref: "story_bible:chr_one",
+              yield toolCall("propose_outline_refresh", "propose_chapter_write", {
+                chapterId: "chapter-outline-refresh",
                 baseHash: sha256("before\n"),
                 range: { unit: "character", start: 0, end: 7 },
                 replacement: candidateContent
@@ -892,13 +907,10 @@ describe("AgentRunSession Stage 2 integration", () => {
           }
         },
         changeSetSession: {
-          async proposeStoryBibleWrite() {
+          ...unusedChangeSetMethods(),
+          async proposeChapterWrite() {
             return { ok: true, value: changeSet };
-          },
-          async proposeFileWrite() {
-            throw new Error("unused");
-          },
-          ...unusedChangeSetMethods()
+          }
         },
         versionGroupExecutor: {
           async apply() {

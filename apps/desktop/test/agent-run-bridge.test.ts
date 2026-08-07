@@ -856,13 +856,25 @@ describe("Agent Run renderer bridge", () => {
     await bridge.send("自动修订当前章节");
 
     listener?.({
-      ...event(2, "run_completed", {}),
+      ...event(2, "run_completed", {
+        finishReport: {
+          outcome: "completed",
+          report: {
+            result: "Completed strict execution.",
+            appliedChanges: [],
+            verification: ["run-event/1/tool_completed/call_read"],
+            residualRisks: []
+          },
+          evidenceRefs: ["run-event/1/tool_completed/call_read"]
+        }
+      }),
       runRevision: 2
     });
 
     expect(bridge.getComposerProps()?.writePolicy).toBe("write_before_confirmation");
     expect(bridge.getComposerProps()?.writePolicyAcknowledged).toBe(false);
     expect(bridge.getProps()?.events.at(-1)?.type).toBe("run_completed");
+    expect(bridge.getProps()?.assistantText).toBe("Completed strict execution.");
   });
 
   test("restores an active legacy preapproved run fail-closed", async () => {
@@ -3756,6 +3768,201 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       { entryId: "ledger-01", sentAtLabel: "20:00", previewId: "preview-01" }
     ]);
     expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeUndefined();
+  });
+
+  test("does not treat a second click during preview preparation as confirmation", async () => {
+    const preview = {
+      schemaVersion: "2.0" as const,
+      previewId: "preview-pending-01",
+      createdAt: "2026-08-04T19:59:00.000Z",
+      expiresAt: "2026-08-04T20:04:00.000Z",
+      canonicalPayloadChecksum: "q".repeat(64),
+      target: {
+        providerLabel: "Local",
+        modelLabel: "local-model",
+        connectionLabel: "Local connection",
+        adapterPolicyLabel: "Adapter policy 1"
+      },
+      guidance: { version: "3.0", profileId: "writing", runtimeFacts: {}, content: "guidance" },
+      tools: [],
+      sources: [],
+      retainedLocalProvenanceKinds: [],
+      providerNativeSemanticChecksum: null
+    };
+    type PreviewResult = Awaited<ReturnType<NovelStudioApi["agentRuns"]["prepareSendPreview"]>>;
+    let releasePreview: ((value: PreviewResult) => void) | undefined;
+    const pendingPreview = new Promise<PreviewResult>((resolve) => {
+      releasePreview = resolve;
+    });
+    let confirmationCount = 0;
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        prepareStart: async (command: unknown) => ok(preparedDraftView(command)),
+        previewPackedContext: async () => ok(packedContextPreview()),
+        prepareSendPreview: async () => pendingPreview,
+        confirmSendPreview: async () => {
+          confirmationCount += 1;
+          return ok(snapshot);
+        },
+        readSendLedger: async () => ok([]),
+        read: async () => ok({ snapshot, events: [] }),
+        list: async () => ok([])
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: { ...editor, dirty: false },
+      settings
+    });
+
+    const firstClick = bridge.send("检查当前章节");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bridge.getComposerProps()?.disabled).toBe(true);
+    await bridge.send("检查当前章节");
+    expect(confirmationCount).toBe(0);
+
+    releasePreview?.(ok(preview));
+    await firstClick;
+    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toEqual(preview);
+    await bridge.send("检查当前章节");
+    expect(confirmationCount).toBe(1);
+  });
+
+  test("explains that an incomplete model sharing choice blocks the send preview", async () => {
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        prepareStart: async (command: unknown) => ok(preparedDraftView(command)),
+        previewPackedContext: async () => ok(packedContextPreview()),
+        prepareSendPreview: async () =>
+          err(
+            createUnifiedError({
+              code: "AGENT_MODEL_SHARING_DEFAULTS_REQUIRED",
+              category: "ValidationError",
+              message: "The Agent request could not be validated before it started.",
+              recoverability: "user-action",
+              suggestedAction: "Complete model sharing defaults.",
+              traceId: "agent-run-bridge-test"
+            })
+          ),
+        read: async () => ok({ snapshot, events: [] }),
+        list: async () => ok([])
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      settings
+    });
+
+    const result = await bridge.send("检查当前章节");
+
+    expect(result.errorMessage).toBe(
+      "当前项目尚未完成模型共享范围选择，Agent 未发送任何内容。请先完成该项目的共享范围设置后重试。"
+    );
+  });
+
+  test("maps pre-start validation failures to actionable Chinese guidance", async () => {
+    const cases = [
+      ["TARGET_DIRTY", "目标内容有未保存修改，Agent 未发送任何内容。请先保存或放弃修改后重试。"],
+      [
+        "EDITOR_STATE_UNKNOWN",
+        "无法确认目标编辑器是否有未保存修改，Agent 未发送任何内容。请重新打开目标后重试。"
+      ],
+      [
+        "AGENT_CONTEXT_MODE_UNAVAILABLE",
+        "当前工作区不支持所选 Agent 上下文模式，Agent 未发送任何内容。请切换到兼容的项目或上下文模式后重试。"
+      ],
+      [
+        "AGENT_CONTEXT_SCOPE_INVALID",
+        "当前项目或工作区已切换，原 Agent 请求未发送。请在当前项目中重新发起请求。"
+      ],
+      [
+        "AGENT_CREATIVE_GENERAL_ACTIVE_RESOURCE_UNVERIFIED",
+        "无法验证当前创作文件是否仍为活动目标，Agent 未发送任何内容。请重新打开该文件后重试。"
+      ],
+      [
+        "AGENT_CONTEXT_PREVIEW_REQUIRED",
+        "需要先生成当前上下文预览，Agent 未发送任何内容。请刷新上下文预览后重试。"
+      ],
+      [
+        "AGENT_CONTEXT_PREVIEW_STALE",
+        "上下文预览已过期或内容发生变化，Agent 未发送任何内容。请刷新上下文预览后重试。"
+      ],
+      [
+        "AGENT_CONTEXT_STALE",
+        "上下文预览已过期或内容发生变化，Agent 未发送任何内容。请刷新上下文预览后重试。"
+      ],
+      [
+        "AGENT_MODEL_SHARING_BINDING_INVALID",
+        "模型共享范围的确认已失效，Agent 未发送任何内容。请重新检查共享范围并生成新的发送预览。"
+      ],
+      [
+        "AGENT_MODEL_SHARING_APPROVAL_STALE",
+        "模型共享范围的确认已失效，Agent 未发送任何内容。请重新检查共享范围并生成新的发送预览。"
+      ],
+      [
+        "AGENT_SEND_PREVIEW_INVALID",
+        "发送预览已失效，Agent 未发送任何内容。请重新生成预览后再确认发送。"
+      ],
+      [
+        "AGENT_SEND_PREVIEW_STALE",
+        "发送预览已失效，Agent 未发送任何内容。请重新生成预览后再确认发送。"
+      ],
+      [
+        "AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID",
+        "上下文预算校验结果已失效，Agent 未发送任何内容。请刷新上下文预览后重试。"
+      ],
+      [
+        "AGENT_PROJECT_CONTEXT_ROOT_UNAVAILABLE",
+        "当前项目上下文无法安全读取，Agent 未发送任何内容。请重新打开项目并刷新上下文后重试。"
+      ],
+      [
+        "AGENT_CONTEXT_SOURCE_MATERIALIZATION_INVALID",
+        "当前项目上下文无法安全读取，Agent 未发送任何内容。请重新打开项目并刷新上下文后重试。"
+      ],
+      [
+        "UNRECOGNIZED_PREFLIGHT_FAILURE",
+        "Agent 启动前校验未通过，未发送任何内容。请检查当前项目、模型与上下文设置后重试（错误码：UNRECOGNIZED_PREFLIGHT_FAILURE）。"
+      ]
+    ] as const;
+
+    for (const [code, expected] of cases) {
+      const api = {
+        agentRuns: {
+          onEvent: () => () => undefined,
+          prepareStart: async (command: unknown) => ok(preparedDraftView(command)),
+          previewPackedContext: async () => ok(packedContextPreview()),
+          prepareSendPreview: async () =>
+            err(
+              createUnifiedError({
+                code,
+                category: "ValidationError",
+                message: "The Agent request could not be validated before it started.",
+                recoverability: "user-action",
+                suggestedAction: "Retry.",
+                traceId: "agent-run-bridge-test"
+              })
+            ),
+          read: async () => ok({ snapshot, events: [] }),
+          list: async () => ok([])
+        }
+      } as unknown as NovelStudioApi;
+      const bridge = createAgentRunBridge(api);
+      bridge.syncContext({
+        projectId: "project-01",
+        conversationId: "conversation-01",
+        settings
+      });
+
+      expect((await bridge.send("检查当前章节")).errorMessage).toBe(expected);
+    }
   });
 
   test("invalidates a prepared send preview when the request changes", async () => {

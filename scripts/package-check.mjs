@@ -37,6 +37,27 @@ async function checkPackageScripts() {
     failures.push("Missing package:dir script.");
   }
   if (
+    packageJson.scripts?.["qualification:matrix"] !==
+    "node scripts/run-approval-surface-qualification-matrix.mjs"
+  ) {
+    failures.push("Missing fixed approval-surface qualification matrix runner.");
+  }
+  if (
+    packageJson.scripts?.["qualification:sign"] !==
+    "node scripts/sign-approval-surface-qualification.mjs"
+  ) {
+    failures.push("Missing external Security Owner qualification signer.");
+  }
+  if (
+    packageJson.scripts?.["qualification:verify"] !==
+    "node scripts/verify-approval-surface-qualification.mjs"
+  ) {
+    failures.push("Missing external Security Owner qualification verifier.");
+  }
+  if (packageJson.devDependencies?.["@electron/fuses"] === undefined) {
+    failures.push("Missing direct @electron/fuses dependency for packaged integrity validation.");
+  }
+  if (
     packageJson.scripts?.["package:check"] !== "npm run build && node scripts/package-check.mjs"
   ) {
     failures.push("Missing package:check script.");
@@ -105,6 +126,10 @@ async function checkBuildArtifacts() {
     "apps/desktop/dist/main/index.js",
     "apps/desktop/dist/preload/index.cjs",
     "apps/desktop/dist/renderer/index.html",
+    "apps/desktop/dist/approval/index.html",
+    "apps/desktop/dist/approval/approval.js",
+    "apps/desktop/dist/approval/approval.css",
+    "apps/desktop/dist/preload/approval-preload.cjs",
     "packages/application/dist/src/index.js",
     "packages/repository/dist/src/index.js",
     "packages/ui/dist/src/index.js",
@@ -139,7 +164,15 @@ async function checkBuildManifest() {
     return;
   }
 
-  for (const name of ["main", "preload", "renderer"]) {
+  for (const name of [
+    "main",
+    "preload",
+    "renderer",
+    "approvalHtml",
+    "approvalJs",
+    "approvalCss",
+    "approvalPreload"
+  ]) {
     const artifact = manifest.artifacts?.[name];
     if (
       artifact === undefined ||
@@ -193,6 +226,13 @@ async function checkElectronBuilderConfig() {
   }
   if (config.extraResources !== undefined && config.extraResources.length !== 0) {
     failures.push("Electron package must not ship canceled local executable runtimes.");
+  }
+  if (
+    config.asar !== true ||
+    config.electronFuses?.enableEmbeddedAsarIntegrityValidation !== true ||
+    config.electronFuses?.onlyLoadAppFromAsar !== true
+  ) {
+    failures.push("Package must apply the ADR-0004 ASAR integrity fuses after packing.");
   }
   const allowedPackageFiles = new Set([
     "apps/desktop/dist/**",

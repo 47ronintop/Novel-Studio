@@ -544,6 +544,85 @@ describe("M12 project workflow session", () => {
     expect(deletedChapter.value.body).toBe("第一段正文\n");
   });
 
+  test("refreshes external chapter deletions and chooses a deterministic remaining active chapter", async () => {
+    const projectRoot = await createTempRoot();
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
+      now: () => "2026-08-06T00:00:00.000Z",
+      createProjectRepository: (root) => new ProjectFileRepository({ projectRoot: root }),
+      createChapterRepository: (root) => new ChapterFileRepository({ projectRoot: root }),
+      createHistoryRepository: (root) => new HistoryRepository({ projectRoot: root }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+    await session.createProject({
+      projectRoot,
+      projectId: "prj_external_refresh",
+      title: "External refresh",
+      language: "zh-CN"
+    });
+    await session.createChapter({ chapterId: "ch_opening", title: "Opening", body: "opening\n" });
+    await session.createChapter({ chapterId: "ch_second", title: "Second", body: "second\n" });
+    await session.selectChapter("ch_opening");
+
+    const externalRepository = new ChapterFileRepository({ projectRoot });
+    await externalRepository.deleteChapter({ chapterId: "ch_opening" });
+    const afterOpeningDeleted = await session.refreshFromRepository();
+
+    expect(isOk(afterOpeningDeleted)).toBe(true);
+    if (isErr(afterOpeningDeleted)) throw new Error(afterOpeningDeleted.error.message);
+    expect(afterOpeningDeleted.value.chapters.map((chapter) => chapter.id)).toEqual(["ch_second"]);
+    expect(afterOpeningDeleted.value.activeChapterId).toBe("ch_second");
+
+    await externalRepository.deleteChapter({ chapterId: "ch_second" });
+    const afterAllDeleted = await session.refreshFromRepository();
+
+    expect(isOk(afterAllDeleted)).toBe(true);
+    if (isErr(afterAllDeleted)) throw new Error(afterAllDeleted.error.message);
+    expect(afterAllDeleted.value.activeChapterId).toBeUndefined();
+    expect(session.getActiveChapterEditorSession()).toBeUndefined();
+  });
+
+  test("refresh keeps a dirty active editor buffer while taking external chapter metadata", async () => {
+    const projectRoot = await createTempRoot();
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
+      now: () => "2026-08-06T00:00:00.000Z",
+      createProjectRepository: (root) => new ProjectFileRepository({ projectRoot: root }),
+      createChapterRepository: (root) => new ChapterFileRepository({ projectRoot: root }),
+      createHistoryRepository: (root) => new HistoryRepository({ projectRoot: root }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+    await session.createProject({
+      projectRoot,
+      projectId: "prj_dirty_refresh",
+      title: "Dirty refresh",
+      language: "zh-CN"
+    });
+    await session.createChapter({
+      chapterId: "ch_opening",
+      title: "Opening",
+      body: "saved body\n"
+    });
+    await session.selectChapter("ch_opening");
+    const editor = session.getActiveChapterEditorSession();
+    await editor?.load();
+    await editor?.edit("unsaved body\n");
+
+    await new ChapterFileRepository({ projectRoot }).renameChapter({
+      chapterId: "ch_opening",
+      title: "Renamed externally"
+    });
+    const refreshed = await session.refreshFromRepository();
+
+    expect(isOk(refreshed)).toBe(true);
+    if (isErr(refreshed)) throw new Error(refreshed.error.message);
+    expect(refreshed.value.chapters).toMatchObject([
+      { id: "ch_opening", title: "Renamed externally" }
+    ]);
+    expect(session.getActiveChapterEditorSession()).toBe(editor);
+    expect(editor?.getState()).toMatchObject({ dirty: true, chapter: { body: "unsaved body\n" } });
+  });
+
   test("exposes dirty chapter recovery records in the workspace snapshot", async () => {
     const projectRoot = await createTempRoot();
     const recoveryRecords: RecoveryRecord[] = [

@@ -125,11 +125,21 @@ describe("AgentToolCapabilitySnapshot", () => {
     const cap: AgentToolCapabilitySnapshot = {
       ...createDefaultCapabilitySnapshot(),
       storyBibleStructuredToolsEnabled: true,
+      writingOperations: [
+        "story_bible_create",
+        "story_bible_patch",
+        "story_bible_status",
+        "story_bible_restore"
+      ],
       featureFlagRevision: "story-bible-v1.1-test"
     };
-    const names = (operationMode: "planning" | "execution", contextMode: "writing" | "general_file") =>
+    const names = (
+      operationMode: "planning" | "execution",
+      contextMode: "writing" | "general_file"
+    ) =>
       listAgentTools({
         facadeVersion: "v2",
+        catalogSchemaVersion: "2.0",
         operationMode,
         contextMode,
         writePolicy: "write_before_confirmation",

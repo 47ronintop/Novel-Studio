@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  collectStoryBibleDeclaredReferences,
   collectStoryBibleDeclaredChapterReferences,
   isStoryBibleV11AssetType,
   type StoryBibleReferenceTargetType,
@@ -30,6 +31,7 @@ import {
   type StoryBiblePatchEntryRef,
   type StoryBiblePatchOperation
 } from "./story-bible-patch.js";
+import type { StoryBibleReferenceDependencyV1 } from "./story-bible-reference-dependency-guard.js";
 
 export type StoryBibleAgentWriteToolName =
   "create_story_bible" | "patch_story_bible" | "set_story_bible_status" | "restore_story_bible";
@@ -96,10 +98,19 @@ export interface StoryBiblePreparedAgentProposal {
   readonly rebased: boolean;
   /** App-owned, deterministic inputs for the final Main-only approval decision proof. */
   readonly approvalProof: StoryBibleProposalApprovalProof;
+  /** Main-only resource identities used to resolve durable editor/reference dependency snapshots. */
+  readonly referenceDependencyRefs: readonly StoryBibleReferenceDependencyRef[];
+  /** Filled only by a qualified Main adapter; never copied into Provider tool output. */
+  readonly referenceDependencies?: readonly StoryBibleReferenceDependencyV1[];
   readonly consistencyGroupId?: string;
   readonly referenceImpact?: JsonObject;
   readonly storyBibleStatusProof?: StoryBibleStatusTransitionProof;
   readonly warnings: readonly ForeshadowContractWarning[];
+}
+
+export interface StoryBibleReferenceDependencyRef {
+  readonly resourceKind: "story_bible" | "chapter";
+  readonly resourceId: string;
 }
 
 export interface StoryBibleRestoreAuthorization {
@@ -261,6 +272,9 @@ export function createStoryBibleAgentToolSession(
         action: "create",
         afterAsset: prepared.value.asset,
         content: prepared.value.content
+      }),
+      referenceDependencyRefs: collectReferenceDependencyRefs({
+        afterAsset: prepared.value.asset
       }),
       warnings: storyBibleContractWarnings(prepared.value.asset),
       ...(consistencyGroupId === undefined ? {} : { consistencyGroupId })
@@ -612,6 +626,11 @@ export function createStoryBibleAgentToolSession(
       fieldDiffs,
       rebased: patched.value.rebased,
       approvalProof,
+      referenceDependencyRefs: collectReferenceDependencyRefs({
+        beforeAsset: read.value.asset,
+        afterAsset: prepared.value.asset,
+        ...(input.referenceImpact === undefined ? {} : { referenceImpact: input.referenceImpact })
+      }),
       warnings: storyBibleContractWarnings(prepared.value.asset),
       ...(input.consistencyGroupId === undefined
         ? {}
@@ -645,6 +664,58 @@ export function createStoryBibleAgentToolSession(
     const chapters = await options.chapterCatalog.listChapters();
     return chapters.ok ? ok(chapters.value.map((chapter) => chapter.id)) : chapters;
   }
+}
+
+function collectReferenceDependencyRefs(input: {
+  readonly beforeAsset?: JsonObject;
+  readonly afterAsset: JsonObject;
+  readonly referenceImpact?: JsonObject;
+}): readonly StoryBibleReferenceDependencyRef[] {
+  const refs = new Map<string, StoryBibleReferenceDependencyRef>();
+  const add = (resourceKind: StoryBibleReferenceDependencyRef["resourceKind"], value: unknown) => {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,256}$/u.test(value)) return;
+    refs.set(`${resourceKind}\u0000${value}`, { resourceKind, resourceId: value });
+  };
+  if (typeof input.beforeAsset?.["id"] === "string") {
+    add("story_bible", input.beforeAsset["id"]);
+  }
+  for (const asset of [input.beforeAsset, input.afterAsset]) {
+    if (asset === undefined) continue;
+    for (const reference of collectStoryBibleDeclaredReferences(asset)) {
+      add("story_bible", reference.targetId);
+    }
+    for (const reference of collectStoryBibleDeclaredChapterReferences(asset)) {
+      add("chapter", reference.chapterId);
+    }
+  }
+  const incoming = input.referenceImpact?.["incoming"];
+  if (Array.isArray(incoming)) {
+    for (const reference of incoming) {
+      if (isRecord(reference)) add("story_bible", reference["sourceAssetId"]);
+    }
+  }
+  const outgoing = input.referenceImpact?.["outgoing"];
+  if (Array.isArray(outgoing)) {
+    for (const reference of outgoing) {
+      if (!isRecord(reference)) continue;
+      const expected = reference["expectedTargetTypes"];
+      const isChapter =
+        reference["targetReferenceType"] === "chapter" ||
+        (Array.isArray(expected) && expected.includes("chapter"));
+      add(isChapter ? "chapter" : "story_bible", reference["targetAssetId"]);
+    }
+  }
+  const deletionImpact = input.referenceImpact?.["deletionImpact"];
+  if (isRecord(deletionImpact) && Array.isArray(deletionImpact["affectedAssetIds"])) {
+    for (const assetId of deletionImpact["affectedAssetIds"]) add("story_bible", assetId);
+  }
+  return Object.freeze(
+    [...refs.values()].sort(
+      (left, right) =>
+        left.resourceKind.localeCompare(right.resourceKind, "en") ||
+        left.resourceId.localeCompare(right.resourceId, "en")
+    )
+  );
 }
 
 const STORY_BIBLE_PROPOSAL_THRESHOLDS = Object.freeze({

@@ -560,12 +560,9 @@ describe("AgentConversationBridge", () => {
       conversation("conv_01", "run_new", "planning_model", "2026-07-14T01:00:00.000Z")
     ]);
 
+    // Main can publish an entire round before the async conversation lookup for run_started
+    // resolves. The bridge must preserve the later completion/activity events in that burst.
     fixture.emit(runEvent("run_new", "run_started", 1));
-    await flushAsyncRouting();
-    fixture.emit(
-      runEvent("run_new", "assistant_text_completed", 2, { text: "Completed response" })
-    );
-    await flushAsyncRouting();
     fixture.emit(
       runEvent("run_new", "tool_started", 3, {
         toolCallId: "read-01",
@@ -573,7 +570,6 @@ describe("AgentConversationBridge", () => {
         summary: "正在读取第一章"
       })
     );
-    await flushAsyncRouting();
     fixture.emit(
       runEvent("run_new", "tool_completed", 4, {
         toolCallId: "read-01",
@@ -581,9 +577,31 @@ describe("AgentConversationBridge", () => {
         summary: "已读取第一章"
       })
     );
-    await flushAsyncRouting();
-    fixture.emit(runEvent("run_new", "run_completed", 5));
-    await flushAsyncRouting();
+    fixture.emit(
+      runEvent("run_new", "run_completed", 5, {
+        finishReport: {
+          schemaVersion: "2.0",
+          outcome: "completed",
+          report: {
+            result: "Completed response",
+            appliedChanges: [],
+            verification: ["run-event/4/tool_completed/read-01"],
+            residualRisks: []
+          },
+          evidenceRefs: ["run-event/4/tool_completed/read-01"]
+        }
+      })
+    );
+    await vi.waitFor(() => {
+      expect(bridge.getProps()?.selectedConversation?.runs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: "run_new",
+            assistantText: "Completed response"
+          })
+        ])
+      );
+    });
 
     const state = bridge.getProps();
     if (state === undefined) throw new Error("Expected loaded conversation state");

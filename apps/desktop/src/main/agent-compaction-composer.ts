@@ -18,6 +18,7 @@ import {
   type AgentContextSnapshotV20,
   type AgentContextSource,
   type AgentRunSnapshot,
+  type AgentRunEvent,
   type AgentRunToolCatalogSnapshot,
   type AgentUsageRecord,
   type CompactContextCommand,
@@ -199,10 +200,21 @@ async function readRunContext(
   repository: AgentRunFileRepository,
   runId: string
 ): Promise<Result<RunContext, UnifiedError>> {
-  const run = await repository.readSnapshot(runId);
-  if (!run.ok) return err(run.error);
-  if (run.value === undefined) return err(composerError("AGENT_CONTEXT_COMPACTION_RUN_NOT_FOUND"));
-  const contextSnapshotId = run.value["contextSnapshotId"];
+  const legacyRead = await repository.readSnapshot(runId);
+  let run: JsonObject | undefined;
+  if (legacyRead.ok) {
+    run = legacyRead.value;
+  } else if (legacyRead.error.code === "AGENT_RUN_SNAPSHOT_VERSION_UNSUPPORTED") {
+    // V2 records deliberately bypass the compatibility reader. Compaction is a V2-aware caller,
+    // so it must obtain the strict envelope rather than weakening the repository boundary.
+    const strictRead = await repository.readSnapshotV20(runId);
+    if (!strictRead.ok) return err(strictRead.error);
+    run = strictRead.value as unknown as JsonObject | undefined;
+  } else {
+    return err(legacyRead.error);
+  }
+  if (run === undefined) return err(composerError("AGENT_CONTEXT_COMPACTION_RUN_NOT_FOUND"));
+  const contextSnapshotId = run["contextSnapshotId"];
   if (typeof contextSnapshotId !== "string") {
     return err(composerError("AGENT_CONTEXT_COMPACTION_NO_SNAPSHOT"));
   }
@@ -212,14 +224,12 @@ async function readRunContext(
     return err(composerError("AGENT_CONTEXT_COMPACTION_NO_SNAPSHOT"));
   }
   try {
-    const runIsV2 = run.value["schemaVersion"] === "2.0";
+    const runIsV2 = run["schemaVersion"] === "2.0";
     const snapshotIsV2 = stored.value["schemaVersion"] === "2.0";
     if (runIsV2 !== snapshotIsV2) {
       throw new Error("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH");
     }
-    const normalizedRun = runIsV2
-      ? parseAgentRunSnapshotV20(run.value)
-      : normalizeAgentRunSnapshot(run.value);
+    const normalizedRun = runIsV2 ? parseAgentRunSnapshotV20(run) : normalizeAgentRunSnapshot(run);
     const snapshot = snapshotIsV2
       ? parseAgentContextSnapshotV2(stored.value)
       : normalizeAgentContextSnapshot(stored.value, {
@@ -233,7 +243,7 @@ async function readRunContext(
       throw new Error("AGENT_CONTEXT_COMPACTION_SNAPSHOT_MISMATCH");
     }
     return ok({
-      run: run.value,
+      run,
       normalizedRun,
       snapshot,
       protocol: snapshotIsV2 ? "v2" : "legacy"
@@ -399,17 +409,25 @@ async function loadFrozenBudgetMaterial(
   } else if (prompt.value.schemaVersion === "2.0" || catalog.value.schemaVersion === "2.0") {
     return err(composerError("AGENT_CONTEXT_COMPACTION_PROTOCOL_MISMATCH"));
   }
-  const storedEvents = await repository.readEvents(context.normalizedRun.runId);
-  if (!storedEvents.ok) return err(storedEvents.error);
-  let events;
-  try {
-    const legacyWorkspaceKind =
-      context.normalizedRun.scope.kind === "workspace"
-        ? context.normalizedRun.scope.workspaceKind
-        : undefined;
-    events = storedEvents.value.map((event) => normalizeAgentRunEvent(event, legacyWorkspaceKind));
-  } catch {
-    return err(composerError("AGENT_CONTEXT_COMPACTION_EVENTS_INVALID"));
+  let events: readonly AgentRunEvent[];
+  if (context.protocol === "v2") {
+    const storedEvents = await repository.readEventsV20(context.normalizedRun.runId);
+    if (!storedEvents.ok) return err(storedEvents.error);
+    events = storedEvents.value;
+  } else {
+    const storedEvents = await repository.readEvents(context.normalizedRun.runId);
+    if (!storedEvents.ok) return err(storedEvents.error);
+    try {
+      const legacyWorkspaceKind =
+        context.normalizedRun.scope.kind === "workspace"
+          ? context.normalizedRun.scope.workspaceKind
+          : undefined;
+      events = storedEvents.value.map((event) =>
+        normalizeAgentRunEvent(event, legacyWorkspaceKind)
+      );
+    } catch {
+      return err(composerError("AGENT_CONTEXT_COMPACTION_EVENTS_INVALID"));
+    }
   }
   const historyThroughSequence = prompt.value.contextSources
     .filter((source) => source.sourceKind === "compaction_summary")
@@ -720,7 +738,7 @@ async function buildArtifacts(
   const afterTokens = budget.value.usedTokens;
 
   const usageRecord = buildUsageRecord({
-    run,
+    run: context.normalizedRun,
     request,
     budget: budget.value,
     beforeTokens,
@@ -1067,7 +1085,7 @@ async function readPromptMaterialization(
 
 /** A redacted final usage record for the compaction round: only token/budget facts, never content. */
 function buildUsageRecord(input: {
-  readonly run: JsonObject;
+  readonly run: AgentRunSnapshot;
   readonly request: CompactionArtifactRequest;
   readonly budget: ContextBudgetSnapshotV11;
   readonly beforeTokens: number;
@@ -1076,15 +1094,8 @@ function buildUsageRecord(input: {
   readonly usageTime: AgentUsageTimeFacts;
 }): Result<AgentUsageRecord, UnifiedError> {
   const { run, request, budget } = input;
-  let scope: AgentUsageRecord["scope"];
-  try {
-    scope = normalizeAgentRunSnapshot(run).scope;
-  } catch {
-    return err(composerError("AGENT_CONTEXT_COMPACTION_SNAPSHOT_INVALID"));
-  }
-  const capability = isRecord(run["providerCapabilitySnapshot"])
-    ? run["providerCapabilitySnapshot"]
-    : {};
+  const scope = run.scope;
+  const capability = run.providerCapabilitySnapshot;
   const compactionId = request.manifest.compactionId;
   const runId = String(run["runId"]);
   const finalSequence = readNonNegative(run["lastSequence"]);
@@ -1092,8 +1103,8 @@ function buildUsageRecord(input: {
   const outputTokens = readNonNegative(request.outputTokens);
   const usageStatus = request.strategy === "model_assisted" ? "estimated" : "missing";
   const pricing = input.pricingRegistry?.price({
-    provider: String(capability["provider"] ?? ""),
-    model: String(capability["modelName"] ?? ""),
+    provider: capability.provider,
+    model: capability.modelName,
     usage: {
       inputTokens,
       outputTokens,
@@ -1114,8 +1125,8 @@ function buildUsageRecord(input: {
     conversationId: String(run["conversationId"] ?? ""),
     roundId: compactionId,
     finalSequence,
-    provider: String(capability["provider"] ?? ""),
-    model: String(capability["modelName"] ?? ""),
+    provider: capability.provider,
+    model: capability.modelName,
     inputTokens,
     outputTokens,
     cacheOutcome: "unknown",

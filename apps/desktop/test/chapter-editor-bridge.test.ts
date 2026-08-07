@@ -35,6 +35,52 @@ const snapshot = {
 } satisfies ChapterEditorSnapshot;
 
 describe("chapter editor bridge", () => {
+  test("reports the loaded chapter buffer through the managed editor handshake", async () => {
+    const reports: Array<{
+      readonly resourceId: string;
+      readonly rendererRevision: number;
+      readonly acknowledgedRevision: number;
+      readonly dirty: boolean;
+      readonly bufferChecksum: string;
+    }> = [];
+    const api = {
+      chapter: {
+        load: async () => ok(snapshot)
+      },
+      writingEditor: {
+        reportState: async (report: (typeof reports)[number]) => {
+          reports.push(report);
+          return {
+            ok: true as const,
+            acknowledgement: {
+              workspaceId: "project-01",
+              resourceKind: "chapter" as const,
+              resourceId: report.resourceId,
+              editorInstanceId: "editor-01",
+              rendererRevision: report.rendererRevision
+            }
+          };
+        }
+      }
+    } as NovelStudioApi;
+    const bridge = createChapterEditorBridge(api);
+
+    await bridge.load();
+    await expect(
+      bridge.openWritingEditor({ workspaceId: "project-01", editorInstanceId: "editor-01" })
+    ).resolves.toEqual({ status: "connected", rendererRevision: 1 });
+
+    expect(reports).toHaveLength(2);
+    expect(reports[0]).toMatchObject({
+      resourceId: snapshot.state.chapter.frontmatter.id,
+      dirty: false,
+      rendererRevision: 1,
+      acknowledgedRevision: 0
+    });
+    expect(reports[1]).toMatchObject({ rendererRevision: 1, acknowledgedRevision: 1 });
+    expect(reports[0]?.bufferChecksum).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
   test("loads, edits, saves, and previews versions through the preload Application API", async () => {
     const calls: string[] = [];
     const api: NovelStudioApi = {

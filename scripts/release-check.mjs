@@ -1,7 +1,10 @@
 import { Buffer } from "node:buffer";
+import { execFile, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+
+import { runStrictPackagedQualificationChecks } from "./release-gate-sequencing.mjs";
 
 const require = createRequire(import.meta.url);
 const Ajv = require("ajv");
@@ -9,6 +12,7 @@ const root = process.cwd();
 const options = parseArguments(process.argv.slice(2));
 const strictReleaseGate = options.strict;
 const failures = [];
+let qualifiedPackageDirectory;
 
 await checkPackageScripts();
 await checkElectronBuilderConfig();
@@ -18,7 +22,14 @@ await checkPublicInstallGate();
 await checkV1ShipReadiness();
 const stage5OverallStatus = await checkStage5Evidence();
 if (strictReleaseGate) {
-  await verifyPackagedLayout(options.packageDirectory);
+  await runStrictPackagedQualificationChecks({
+    verifyLayout: async () => {
+      qualifiedPackageDirectory = await verifyPackagedLayout(options.packageDirectory);
+      return qualifiedPackageDirectory;
+    },
+    verifyOwnerQualification: verifySecurityOwnerQualification,
+    runPackagedE2e: runQualifiedPackagedE2e
+  });
 }
 
 if (failures.length > 0) {
@@ -55,6 +66,75 @@ async function checkPackageScripts() {
   expectScript(scripts, "release:notes", "node scripts/release-notes.mjs");
   expectScript(scripts, "release:check", "node scripts/release-check.mjs");
   expectScript(scripts, "release:gate", "node scripts/release-check.mjs --strict --package-dir");
+  expectScript(
+    scripts,
+    "test:e2e:packaged",
+    "playwright test --config=playwright.packaged.config.ts"
+  );
+}
+
+async function runQualifiedPackagedE2e(packageDirectory) {
+  const executablePath = join(packageDirectory, "Novel Studio.exe");
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const completed = await new Promise((resolvePromise) => {
+    const child = spawn(npmCommand, ["run", "test:e2e:packaged"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        NOVEL_STUDIO_QUALIFIED_PACKAGE_EXE: executablePath
+      },
+      stdio: "inherit",
+      windowsHide: true
+    });
+    child.once("error", () => resolvePromise(false));
+    child.once("exit", (code) => resolvePromise(code === 0));
+  });
+  if (!completed) {
+    failures.push("Qualified packaged Agent E2E failed.");
+  }
+  return completed;
+}
+
+async function verifySecurityOwnerQualification(packageDirectory) {
+  const reportPath = process.env["NOVEL_STUDIO_APPROVAL_QUALIFICATION_REPORT"];
+  const publicKeyFile = process.env["NOVEL_STUDIO_SECURITY_OWNER_ED25519_PUBLIC_KEY_PATH"];
+  const publicKeyEnv = process.env["NOVEL_STUDIO_SECURITY_OWNER_ED25519_PUBLIC_KEY_ENV"];
+  if ((publicKeyFile === undefined) === (publicKeyEnv === undefined)) {
+    failures.push(
+      "Strict release gate requires exactly one external Security Owner Ed25519 public key input."
+    );
+    return false;
+  }
+  const argumentsList = [
+    "scripts/verify-approval-surface-qualification.mjs",
+    "--app-asar",
+    join(packageDirectory, "resources", "app.asar")
+  ];
+  if (reportPath !== undefined && reportPath.length > 0) {
+    argumentsList.push("--report", reportPath);
+  }
+  if (publicKeyFile !== undefined && publicKeyFile.length > 0) {
+    argumentsList.push("--public-key-file", publicKeyFile);
+  } else if (publicKeyEnv !== undefined && publicKeyEnv.length > 0) {
+    argumentsList.push("--public-key-env", publicKeyEnv);
+  } else {
+    failures.push("Strict release gate Security Owner public key input is empty.");
+    return false;
+  }
+  const completed = await new Promise((resolvePromise) => {
+    const child = spawn(process.execPath, argumentsList, {
+      cwd: root,
+      env: process.env,
+      stdio: "inherit",
+      windowsHide: true
+    });
+    child.once("error", () => resolvePromise(false));
+    child.once("exit", (code) => resolvePromise(code === 0));
+  });
+  if (!completed) {
+    failures.push("Strict release gate Security Owner qualification verification failed.");
+  }
+  return completed;
 }
 
 function parseArguments(argumentsList) {
@@ -87,8 +167,13 @@ function parseArguments(argumentsList) {
 }
 
 async function verifyPackagedLayout(packageDirectory) {
+  const layoutFailures = [];
+  const failLayout = (message) => {
+    layoutFailures.push(message);
+    failures.push(message);
+  };
   if (!isNonEmptyString(packageDirectory)) {
-    failures.push("Strict release gate requires a non-empty packaged directory path.");
+    failLayout("Strict release gate requires a non-empty packaged directory path.");
     return undefined;
   }
 
@@ -99,13 +184,11 @@ async function verifyPackagedLayout(packageDirectory) {
     packageStat = await lstat(requestedDirectory);
     canonicalDirectory = await realpath(requestedDirectory);
   } catch {
-    failures.push(
-      "Strict release gate package directory does not exist or cannot be canonicalized."
-    );
+    failLayout("Strict release gate package directory does not exist or cannot be canonicalized.");
     return undefined;
   }
   if (!packageStat.isDirectory() || packageStat.isSymbolicLink()) {
-    failures.push("Strict release gate package directory must be a regular canonical directory.");
+    failLayout("Strict release gate package directory must be a regular canonical directory.");
     return undefined;
   }
 
@@ -116,18 +199,51 @@ async function verifyPackagedLayout(packageDirectory) {
     !(await isContainedRegularFile(canonicalDirectory, electronExecutable)) ||
     !(await isPortableExecutable(electronExecutable))
   ) {
-    failures.push("Strict release gate package is missing a valid Electron executable.");
+    failLayout("Strict release gate package is missing a valid Electron executable.");
+  } else if (!(await hasValidWindowsAuthenticodeSignature(electronExecutable))) {
+    failLayout("Strict release gate requires a valid Windows Authenticode signature.");
   }
   if (!(await isContainedRegularDirectory(canonicalDirectory, resourcesDirectory))) {
-    failures.push("Strict release gate package is missing a canonical resources directory.");
+    failLayout("Strict release gate package is missing a canonical resources directory.");
   }
   if (!(await isContainedRegularFile(canonicalDirectory, appAsar))) {
-    failures.push("Strict release gate package is missing resources/app.asar.");
+    failLayout("Strict release gate package is missing resources/app.asar.");
   } else if (!(await hasExpectedAsarPackageMetadata(appAsar))) {
-    failures.push("Strict release gate app.asar is missing expected package metadata.");
+    failLayout("Strict release gate app.asar is missing expected package metadata.");
   }
 
-  return failures.length === 0 ? canonicalDirectory : undefined;
+  return layoutFailures.length === 0 ? canonicalDirectory : undefined;
+}
+
+async function hasValidWindowsAuthenticodeSignature(executablePath) {
+  const systemRoot = process.env.SystemRoot;
+  if (systemRoot === undefined) return false;
+  const windowsPowerShellRoot = join(systemRoot, "System32", "WindowsPowerShell", "v1.0");
+  return new Promise((resolvePromise) => {
+    execFile(
+      join(windowsPowerShellRoot, "powershell.exe"),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Import-Module $env:NOVEL_STUDIO_SIGNATURE_MODULE -ErrorAction Stop; $signature = Get-AuthenticodeSignature -LiteralPath $env:NOVEL_STUDIO_SIGNATURE_TARGET; if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { exit 1 }"
+      ],
+      {
+        env: {
+          ...process.env,
+          NOVEL_STUDIO_SIGNATURE_TARGET: executablePath,
+          NOVEL_STUDIO_SIGNATURE_MODULE: join(
+            windowsPowerShellRoot,
+            "Modules",
+            "Microsoft.PowerShell.Security",
+            "Microsoft.PowerShell.Security.psd1"
+          )
+        },
+        windowsHide: true
+      },
+      (error) => resolvePromise(error === null)
+    );
+  });
 }
 
 async function hasExpectedAsarPackageMetadata(asarPath) {
@@ -272,7 +388,11 @@ async function checkPublicInstallGate() {
     return;
   }
 
-  expectScript(scripts, "test:e2e", "npm run build && playwright test");
+  expectScript(
+    scripts,
+    "test:e2e",
+    "npm run build && playwright test --config=playwright.config.ts"
+  );
   expectScript(scripts, "package:artifact-check", "node scripts/artifact-secret-scan.mjs");
 
   const publicGatePath = "docs/packaging/m97-public-install-release-gate.md";

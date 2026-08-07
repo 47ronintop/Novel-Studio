@@ -297,6 +297,7 @@ export interface NovelStudioApi {
   };
   project: {
     getActiveWorkspace(): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
+    refreshActiveWorkspace(): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     chooseOpenCreativeDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
     chooseCreateParentDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
     openCreativeProject(selectionId: string): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
@@ -504,6 +505,10 @@ export interface NovelStudioApi {
       nextBody: string
     ): Promise<Result<ChapterSuggestionDiffPreview, UnifiedError>>;
   };
+  /** Optional while older preload surfaces are still upgraded; absence is fail-closed. */
+  writingEditor?: {
+    reportState(report: WritingEditorStateReport): Promise<WritingEditorStateReportResult>;
+  };
   settings: {
     listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
     discoverModelOptions(profileId: string): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
@@ -634,6 +639,48 @@ export interface NovelStudioApi {
     testConnection(serverId: string): Promise<Result<{ readonly latencyMs: number }, UnifiedError>>;
     revokeServer(serverId: string): Promise<Result<McpSettingsData, UnifiedError>>;
   };
+}
+
+/** Renderer-to-Main liveness handshake for managed writing editors. */
+export interface WritingEditorStateReport {
+  readonly workspaceId: string;
+  readonly resourceKind: "chapter" | "story_bible";
+  readonly resourceId: string;
+  readonly editorInstanceId: string;
+  readonly connection: "connected" | "disconnected" | "unknown";
+  readonly rendererRevision: number;
+  readonly acknowledgedRevision: number;
+  readonly dirty: boolean;
+  readonly bufferChecksum: string;
+  /** Current editor text; Main verifies this against bufferChecksum before retaining it. */
+  readonly bufferContent: string;
+}
+
+export type WritingEditorStateReportResult =
+  | {
+      readonly ok: true;
+      readonly acknowledgement: WritingEditorStateAcknowledgement;
+    }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code:
+          | "EDITOR_STATE_UNAVAILABLE"
+          | "EDITOR_STATE_INPUT_INVALID"
+          | "EDITOR_STATE_WORKSPACE_MISMATCH"
+          | "EDITOR_STATE_UPDATE_INVALID"
+          | "EDITOR_STATE_STALE_UPDATE";
+        readonly message: string;
+      };
+    };
+
+export interface WritingEditorStateAcknowledgement {
+  readonly workspaceId: string;
+  readonly resourceKind: WritingEditorStateReport["resourceKind"];
+  readonly resourceId: string;
+  readonly editorInstanceId: string;
+  /** Renderer revision durably accepted by Main; include it in the next report acknowledgement. */
+  readonly rendererRevision: number;
 }
 
 export interface AiWritingSuggestionStreamOptions {

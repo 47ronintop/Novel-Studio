@@ -606,6 +606,7 @@ export type {
   ChangeSetOperationKind,
   ChangeSetOperationSelection,
   ChangeSetV2,
+  ChangeSetV2DomainOperation,
   ChangeSetLegacy,
   CreateChangeSetRevisionV2Input,
   CreateOperationsChangeSetRevisionV2Input

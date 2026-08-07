@@ -894,7 +894,10 @@ export function materializeAgentRunHistory(
       assertControlEventMapping("user_input_resolved", "user", null);
       messages.push({ role: "user", content: event.detail["answer"] });
     }
-    if (event.type === "context_refreshed" || event.type === "context_excluded") {
+    if (
+      (event.type === "context_refreshed" || event.type === "context_excluded") &&
+      event.detail?.["initialContextMaterialized"] !== true
+    ) {
       assertControlEventMapping(event.type, "user", "untrusted_recovery_data");
       const sourceRefs = Array.isArray(event.detail?.["sourceRefs"])
         ? event.detail["sourceRefs"].filter((value): value is string => typeof value === "string")

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   createApprovalBindingV2,
+  createChangeSetRevisionBatchV2,
   changeSetV2DisplayBindingChecksum,
   createChangeSetRevisionV2,
   checksumChangeSetText,
@@ -175,7 +176,8 @@ describe("Approval Binding 2.0", () => {
       displayBindingChecksum: changeSet.displayBindingChecksum,
       binding: binding({
         changeSetChecksum: changeSet.checksum,
-        selectedOperationIds: ["notes/one.md"]
+        selectedOperationIds: ["notes/one.md"],
+        operationOrderChecksum: checksumChangeSetText("notes/one.md")
       }),
       resolvedAt: "2099-01-01T00:00:01.000Z",
       now: Date.parse("2099-01-01T00:00:30.000Z")
@@ -193,7 +195,8 @@ describe("Approval Binding 2.0", () => {
         changeSetChecksum: changeSet.checksum,
         executionWritePolicy: "user_preapproved_run",
         approvalSource: "user_preapproved_run",
-        selectedOperationIds: ["notes/one.md"]
+        selectedOperationIds: ["notes/one.md"],
+        operationOrderChecksum: checksumChangeSetText("notes/one.md")
       }),
       trustedConfirmationQualified: true,
       authorizationId: "auth_01",
@@ -204,6 +207,184 @@ describe("Approval Binding 2.0", () => {
     expect(forgedPreapproval).toMatchObject({
       ok: false,
       error: { code: "CHANGE_SET_TRUSTED_SURFACE_UNAVAILABLE" }
+    });
+  });
+
+  test("binds a lifecycle approval to its frozen domain identity, proof, and selection", async () => {
+    const path = "chapters/ch_01.md";
+    const selectionChecksum = checksumChangeSetText(path);
+    const changeSet = await createChangeSetRevisionBatchV2({
+      changeSetId: "changes_lifecycle_01",
+      runId: "run_01",
+      projectId: "project_01",
+      checkpointId: "checkpoint_01",
+      contextSnapshotId: "context_01",
+      providerSemanticVersionSetChecksum: providerChecksum,
+      domainOperation: {
+        kind: "chapter_rename",
+        sourceRef: "chapter:ch_01",
+        targetRef: "chapter:ch_01",
+        proofRef: "lifecycle_proof_01",
+        proofChecksum: "d".repeat(64),
+        selectedRelativePaths: [path],
+        selectionChecksum
+      },
+      proposals: [
+        {
+          relativePath: path,
+          assetType: "chapter",
+          contentMode: "serialized_chapter",
+          assetId: "ch_01",
+          baseContent: "# Old",
+          baseChecksum: checksumChangeSetText("# Old"),
+          range: { unit: "character", start: 0, end: 5 },
+          replacement: "# New",
+          consistencyGroupId: `chapter-lifecycle-${"a".repeat(48)}`
+        }
+      ],
+      createdAt: "2099-01-01T00:00:00.000Z"
+    });
+    const valid = decideChangeSetApprovalV2({
+      changeSet,
+      decision: "apply_selected",
+      displayBindingChecksum: changeSet.displayBindingChecksum,
+      binding: binding({
+        changeSetId: changeSet.changeSetId,
+        changeSetChecksum: changeSet.checksum,
+        operationKind: "chapter_rename",
+        selectionChecksum,
+        selectedOperationIds: [path],
+        operationOrderChecksum: checksumChangeSetText(path),
+        sourceRef: "chapter:ch_01",
+        targetRef: "chapter:ch_01",
+        proofId: "lifecycle_proof_01",
+        proofChecksum: "d".repeat(64)
+      }),
+      authorizationId: "auth_01",
+      reservationTransactionId: "tx_01",
+      resolvedAt: "2099-01-01T00:00:01.000Z",
+      now: Date.parse("2099-01-01T00:00:30.000Z")
+    });
+    expect(valid).toMatchObject({ ok: true });
+
+    const forgedKind = decideChangeSetApprovalV2({
+      changeSet,
+      decision: "apply_selected",
+      displayBindingChecksum: changeSet.displayBindingChecksum,
+      binding: binding({
+        changeSetId: changeSet.changeSetId,
+        changeSetChecksum: changeSet.checksum,
+        operationKind: "chapter_replace",
+        selectionChecksum,
+        selectedOperationIds: [path],
+        operationOrderChecksum: checksumChangeSetText(path),
+        sourceRef: "chapter:ch_01",
+        targetRef: "chapter:ch_01",
+        proofId: "lifecycle_proof_01",
+        proofChecksum: "d".repeat(64)
+      }),
+      authorizationId: "auth_01",
+      reservationTransactionId: "tx_01",
+      resolvedAt: "2099-01-01T00:00:01.000Z",
+      now: Date.parse("2099-01-01T00:00:30.000Z")
+    });
+    expect(forgedKind).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_V2_DOMAIN_BINDING_MISMATCH" }
+    });
+
+    const independentApprovalDecisionProof = decideChangeSetApprovalV2({
+      changeSet,
+      decision: "apply_selected",
+      displayBindingChecksum: changeSet.displayBindingChecksum,
+      binding: binding({
+        changeSetId: changeSet.changeSetId,
+        changeSetChecksum: changeSet.checksum,
+        operationKind: "chapter_rename",
+        selectionChecksum,
+        selectedOperationIds: [path],
+        operationOrderChecksum: checksumChangeSetText(path),
+        sourceRef: "chapter:ch_01",
+        targetRef: "chapter:ch_01",
+        proofId: "approval_decision_proof_01",
+        proofChecksum: "e".repeat(64)
+      }),
+      authorizationId: "auth_01",
+      reservationTransactionId: "tx_01",
+      resolvedAt: "2099-01-01T00:00:01.000Z",
+      now: Date.parse("2099-01-01T00:00:30.000Z")
+    });
+    expect(independentApprovalDecisionProof).toMatchObject({ ok: true });
+
+    const forgedSource = decideChangeSetApprovalV2({
+      changeSet,
+      decision: "apply_selected",
+      displayBindingChecksum: changeSet.displayBindingChecksum,
+      binding: binding({
+        changeSetId: changeSet.changeSetId,
+        changeSetChecksum: changeSet.checksum,
+        operationKind: "chapter_rename",
+        selectionChecksum,
+        selectedOperationIds: [path],
+        operationOrderChecksum: checksumChangeSetText(path),
+        sourceRef: "chapter:ch_other",
+        targetRef: "chapter:ch_01",
+        proofId: "approval_decision_proof_01",
+        proofChecksum: "e".repeat(64)
+      }),
+      authorizationId: "auth_01",
+      reservationTransactionId: "tx_01",
+      resolvedAt: "2099-01-01T00:00:01.000Z",
+      now: Date.parse("2099-01-01T00:00:30.000Z")
+    });
+    expect(forgedSource).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_V2_DOMAIN_BINDING_MISMATCH" }
+    });
+  });
+
+  test("fails closed when serialized chapter candidates have no frozen lifecycle identity", async () => {
+    const changeSet = await createChangeSetRevisionBatchV2({
+      changeSetId: "changes_serialized_01",
+      runId: "run_01",
+      projectId: "project_01",
+      checkpointId: "checkpoint_01",
+      contextSnapshotId: "context_01",
+      providerSemanticVersionSetChecksum: providerChecksum,
+      proposals: [
+        {
+          relativePath: "chapters/ch_01.md",
+          assetType: "chapter",
+          contentMode: "serialized_chapter",
+          assetId: "ch_01",
+          baseContent: "# Old",
+          baseChecksum: checksumChangeSetText("# Old"),
+          range: { unit: "character", start: 0, end: 5 },
+          replacement: "# New",
+          consistencyGroupId: `chapter-lifecycle-${"b".repeat(48)}`
+        }
+      ],
+      createdAt: "2099-01-01T00:00:00.000Z"
+    });
+    expect(
+      decideChangeSetApprovalV2({
+        changeSet,
+        decision: "apply_selected",
+        displayBindingChecksum: changeSet.displayBindingChecksum,
+        binding: binding({
+          changeSetId: changeSet.changeSetId,
+          changeSetChecksum: changeSet.checksum,
+          selectedOperationIds: ["chapters/ch_01.md"],
+          operationOrderChecksum: checksumChangeSetText("chapters/ch_01.md")
+        }),
+        authorizationId: "auth_01",
+        reservationTransactionId: "tx_01",
+        resolvedAt: "2099-01-01T00:00:01.000Z",
+        now: Date.parse("2099-01-01T00:00:30.000Z")
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_V2_DOMAIN_IDENTITY_REQUIRED" }
     });
   });
 });

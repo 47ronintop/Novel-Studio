@@ -108,18 +108,24 @@ export function decideChangeSetApprovalV2(
       .filter((operation) => operation.selected !== false)
       .map((operation) => operation.operationId)
   ];
+  const expectedOperationOrderChecksum = checksumChangeSetText(selectedOperationIds.join("\n"));
   if (
     input.decision === "apply_selected" &&
     (selectedOperationIds.length === 0 ||
       input.changeSet.files.some((file) => file.selected && !file.validation.valid) ||
       selectedOperationIds.length !== binding.selectedOperationIds.length ||
-      selectedOperationIds.some((id, index) => id !== binding.selectedOperationIds[index]))
+      selectedOperationIds.some((id, index) => id !== binding.selectedOperationIds[index]) ||
+      binding.operationOrderChecksum !== expectedOperationOrderChecksum)
   ) {
     return failure(
       "CHANGE_SET_V2_SELECTION_INVALID",
       "The selected Change Set operations do not match the signed binding.",
       "Review the exact selection and request a new approval."
     );
+  }
+  if (input.decision === "apply_selected") {
+    const domainBinding = validateV2DomainOperationBinding(input.changeSet, binding);
+    if (!domainBinding.ok) return domainBinding;
   }
   if (
     input.decision === "apply_selected" &&
@@ -146,6 +152,55 @@ export function decideChangeSetApprovalV2(
       binding
     })
   );
+}
+
+/**
+ * A serialized chapter candidate is an application-domain mutation, not an ordinary file
+ * replacement.  Its operation identity is created by Main together with the frozen Change Set;
+ * a provider/renderer-owned Approval Binding therefore cannot relabel it as `replace_file` or
+ * `chapter_replace`. The domain proof reference is a separate Main-only preparation capability;
+ * Approval Binding proof fields identify the independent human approval decision and must not be
+ * conflated with it.
+ */
+function validateV2DomainOperationBinding(
+  changeSet: ChangeSetV2,
+  binding: ApprovalBindingV2
+): Result<void, UnifiedError> {
+  const lifecycleSerializedChapterSelected = changeSet.files.some(
+    (file) =>
+      file.selected &&
+      file.contentMode === "serialized_chapter" &&
+      /^chapter-lifecycle-[a-f0-9]{48}$/u.test(file.consistencyGroupId ?? "")
+  );
+  const domain = changeSet.domainOperation;
+  if (domain === undefined) {
+    if (!lifecycleSerializedChapterSelected) return ok(undefined);
+    return failure(
+      "CHANGE_SET_V2_DOMAIN_IDENTITY_REQUIRED",
+      "Serialized chapter mutations require a frozen Main-owned lifecycle operation identity.",
+      "Regenerate the lifecycle proposal from the Main-owned preparation result."
+    );
+  }
+  const selectedFilePaths = changeSet.files
+    .filter((file) => file.selected)
+    .map((file) => file.relativePath);
+  const expectedSelectionChecksum = checksumChangeSetText(domain.selectedRelativePaths.join("\n"));
+  if (
+    selectedFilePaths.length !== domain.selectedRelativePaths.length ||
+    selectedFilePaths.some((path, index) => path !== domain.selectedRelativePaths[index]) ||
+    domain.selectionChecksum !== expectedSelectionChecksum ||
+    binding.selectionChecksum !== domain.selectionChecksum ||
+    binding.operationKind !== domain.kind ||
+    binding.sourceRef !== domain.sourceRef ||
+    binding.targetRef !== domain.targetRef
+  ) {
+    return failure(
+      "CHANGE_SET_V2_DOMAIN_BINDING_MISMATCH",
+      "The approval binding does not match the frozen chapter lifecycle operation.",
+      "Refresh the Main-owned lifecycle preview and approve the current operation."
+    );
+  }
+  return ok(undefined);
 }
 
 export interface DecideChangeSetApprovalInput {

@@ -23,13 +23,15 @@ describe("DesktopAgentRuntimeManager", () => {
     const standaloneRoot = await createRoot("standalone-routing-state");
     const workspaceRuntimes: ReturnType<typeof fakeRuntime>[] = [];
     const standalone = fakeStandaloneRuntime(standaloneRoot);
+    const activatedScopes: string[] = [];
     const manager = createDesktopAgentRuntimeManager({
       createRuntime(binding) {
         const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot);
         workspaceRuntimes.push(runtime);
         return runtime as unknown as DesktopAgentRuntime;
       },
-      createStandaloneRuntime: () => standalone as unknown as DesktopStandaloneAgentRuntime
+      createStandaloneRuntime: () => standalone as unknown as DesktopStandaloneAgentRuntime,
+      onActiveRuntimeChanged: (active) => activatedScopes.push(active?.scope ?? "none")
     });
     const seen: string[] = [];
     manager.subscribeAgentRunEvents((event) => seen.push(event.runId));
@@ -58,6 +60,7 @@ describe("DesktopAgentRuntimeManager", () => {
     standalone.emit({ runId: "standalone_restored" });
 
     expect(seen).toEqual(["standalone_active", "workspace_active", "standalone_restored"]);
+    expect(activatedScopes).toEqual(["standalone", "workspace", "standalone"]);
     expect(standalone).toMatchObject({ disposeCalls: 0, prepareCalls: 1, subscribeCalls: 1 });
     expect(workspaceRuntimes[0]).toMatchObject({ disposeCalls: 1, unsubscribeCalls: 1 });
   });
@@ -653,6 +656,61 @@ describe("DesktopAgentRuntimeManager", () => {
     expect(runtimes[1]).toMatchObject({ disposeCalls: 1 });
     expect(runtimes[2]).toMatchObject({ disposeCalls: 0 });
   });
+
+  test.each([
+    ["active", "running", false],
+    ["pending approval", "awaiting_write_approval", false],
+    ["applying/deferred", "applying_changes", true]
+  ] as const)(
+    "revokes approval capabilities synchronously before %s expiry refresh can stop or defer the runtime",
+    async (_label, status, deferStop) => {
+      const root = await createRoot(`approval-expiry-${status}`);
+      const runtimes: ReturnType<typeof fakeRuntime>[] = [];
+      const manager = createDesktopAgentRuntimeManager({
+        createRuntime(binding) {
+          const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot, {
+            deferStop,
+            snapshots: [
+              {
+                runId: `run_${status}`,
+                projectId: binding.workspaceId,
+                runRevision: 1,
+                status
+              }
+            ]
+          });
+          runtimes.push(runtime);
+          return runtime as unknown as DesktopAgentRuntime;
+        }
+      });
+      await manager.bindWorkspace(engineeringBinding(`ws_${status}`, root));
+
+      manager.revokeCurrentApprovalCapabilities();
+      expect(runtimes[0]).toMatchObject({ approvalRevokeCalls: 1, stopCalls: 0 });
+
+      const refreshed = await manager.refreshCurrentWorkspace();
+      if (deferStop) {
+        expect(refreshed).toMatchObject({
+          ok: false,
+          error: { code: "AGENT_RUNTIME_SETTINGS_REFRESH_DEFERRED" }
+        });
+        expect(runtimes).toHaveLength(1);
+        expect(runtimes[0]).toMatchObject({
+          approvalRevokeCalls: 1,
+          stopCalls: 1,
+          disposeCalls: 0
+        });
+      } else {
+        expect(refreshed).toMatchObject({ ok: true });
+        expect(runtimes).toHaveLength(2);
+        expect(runtimes[0]).toMatchObject({
+          approvalRevokeCalls: 1,
+          stopCalls: 1,
+          disposeCalls: 1
+        });
+      }
+    }
+  );
 });
 
 async function createRoot(name: string): Promise<string> {
@@ -694,6 +752,7 @@ function fakeRuntime(
     unsubscribeCalls: 0,
     stopCalls: 0,
     revokeCalls: 0,
+    approvalRevokeCalls: 0,
     async prepare() {
       runtime.prepareCalls += 1;
       return options.prepare?.() ?? options.prepareResult ?? ok(undefined);
@@ -732,6 +791,9 @@ function fakeRuntime(
     },
     revokeSettingsCapabilities() {
       runtime.revokeCalls += 1;
+    },
+    revokeApprovalCapabilities() {
+      runtime.approvalRevokeCalls += 1;
     },
     addSnapshot(snapshot: Record<string, unknown>) {
       snapshots.push(snapshot);

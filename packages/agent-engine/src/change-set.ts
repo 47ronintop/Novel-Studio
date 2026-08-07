@@ -24,6 +24,24 @@ export type ChangeSetRangeUnit = "character" | "line" | "paragraph";
 export type ChangeSetStatus =
   "awaiting_approval" | "approved" | "rejected" | "stale" | "applied" | "abandoned";
 
+/**
+ * Main-owned identity for a chapter lifecycle Change Set.  Unlike renderer-visible
+ * file paths, this describes the domain operation that produced the frozen candidate.
+ * It deliberately contains only stable references/checksums, never an authorization
+ * capability or raw domain proof.
+ */
+export interface ChangeSetV2DomainOperation {
+  readonly kind:
+    "chapter_rename" | "chapter_reorder" | "chapter_status" | "chapter_delete" | "chapter_restore";
+  readonly sourceRef: string;
+  readonly targetRef: string;
+  readonly proofRef: string;
+  readonly proofChecksum: string;
+  /** Ordered selected file paths belonging to this indivisible domain operation. */
+  readonly selectedRelativePaths: readonly string[];
+  readonly selectionChecksum: string;
+}
+
 // ── Change Set v1.1: Operation types ─────────────────────────────────────────
 
 /** The kind of file lifecycle operation in a v1.1 Change Set. */
@@ -182,6 +200,7 @@ export type ChangeSetV2 = Omit<
   readonly displayBindingChecksum: string;
   readonly providerSemanticVersionSetChecksum: string;
   readonly approvalToken?: never;
+  readonly domainOperation?: ChangeSetV2DomainOperation;
 };
 
 export type ChangeSetLegacy = Omit<ChangeSet, "schemaVersion" | "approvalToken"> & {
@@ -191,6 +210,7 @@ export type ChangeSetLegacy = Omit<ChangeSet, "schemaVersion" | "approvalToken">
 
 export interface CreateChangeSetRevisionV2Input extends CreateChangeSetRevisionInput {
   readonly providerSemanticVersionSetChecksum: string;
+  readonly domainOperation?: ChangeSetV2DomainOperation;
 }
 
 export interface CreateOperationsChangeSetRevisionV2Input {
@@ -243,6 +263,7 @@ export interface CreateChangeSetRevisionBatchInput {
 
 export interface CreateChangeSetRevisionBatchV2Input extends CreateChangeSetRevisionBatchInput {
   readonly providerSemanticVersionSetChecksum: string;
+  readonly domainOperation?: ChangeSetV2DomainOperation;
 }
 
 export interface AppendChangeSetProposalInput {
@@ -370,7 +391,7 @@ export async function createChangeSetRevisionBatchV2(
 ): Promise<ChangeSetV2> {
   assertProviderSemanticVersionSetChecksum(input.providerSemanticVersionSetChecksum);
   const legacy = await createChangeSetRevisionBatch(input, options);
-  return asChangeSetV2(legacy, input.providerSemanticVersionSetChecksum);
+  return asChangeSetV2(legacy, input.providerSemanticVersionSetChecksum, input.domainOperation);
 }
 
 /** Strictly validate and freeze a Change Set 2.0 read from Main storage. */
@@ -404,7 +425,8 @@ export function isChangeSetV2(value: unknown): value is ChangeSetV2 {
     "files",
     "createdAt",
     "operationsSchemaVersion",
-    "operations"
+    "operations",
+    "domainOperation"
   ]);
   if (
     Object.keys(record).some((key) => !allowedKeys.has(key)) ||
@@ -417,7 +439,11 @@ export function isChangeSetV2(value: unknown): value is ChangeSetV2 {
   ) {
     return false;
   }
-  if (!isStrictChangeSetV2Payload(record)) return false;
+  if (
+    !isStrictChangeSetV2Payload(record) ||
+    !isChangeSetV2DomainOperationShape(record["domainOperation"])
+  )
+    return false;
   if (
     typeof record["checksum"] !== "string" ||
     !/^[a-f0-9]{64}$/u.test(record["checksum"] as string)
@@ -482,6 +508,41 @@ function isStrictChangeSetV2Payload(record: Record<string, unknown>): boolean {
   } catch {
     return false;
   }
+}
+
+function isChangeSetV2DomainOperationShape(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const operation = value as Record<string, unknown>;
+  const allowed = new Set([
+    "kind",
+    "sourceRef",
+    "targetRef",
+    "proofRef",
+    "proofChecksum",
+    "selectedRelativePaths",
+    "selectionChecksum"
+  ]);
+  return (
+    Object.keys(operation).every((key) => allowed.has(key)) &&
+    [
+      "chapter_rename",
+      "chapter_reorder",
+      "chapter_status",
+      "chapter_delete",
+      "chapter_restore"
+    ].includes(operation["kind"] as string) &&
+    ["sourceRef", "targetRef", "proofRef", "proofChecksum", "selectionChecksum"].every(
+      (key) => typeof operation[key] === "string" && (operation[key] as string).length > 0
+    ) &&
+    /^[a-f0-9]{64}$/u.test(operation["proofChecksum"] as string) &&
+    /^[a-f0-9]{64}$/u.test(operation["selectionChecksum"] as string) &&
+    Array.isArray(operation["selectedRelativePaths"]) &&
+    (operation["selectedRelativePaths"] as unknown[]).length > 0 &&
+    (operation["selectedRelativePaths"] as unknown[]).every(
+      (path) => typeof path === "string" && validateAgentRelativePath(path).ok
+    )
+  );
 }
 
 function isChangeSetV2FileShape(value: unknown): boolean {
@@ -753,7 +814,11 @@ export async function appendChangeSetProposalsV2(
 ): Promise<ChangeSetV2> {
   const legacyCurrent = asLegacyChangeSetForInternal(current);
   const revised = await appendChangeSetProposals(legacyCurrent, input, options);
-  return asChangeSetV2(revised, current.providerSemanticVersionSetChecksum);
+  return asChangeSetV2(
+    revised,
+    current.providerSemanticVersionSetChecksum,
+    current.domainOperation
+  );
 }
 
 export async function selectChangeSetRevision(
@@ -763,7 +828,11 @@ export async function selectChangeSetRevision(
 ): Promise<ChangeSet> {
   const preserveSchema = (next: ChangeSet): ChangeSet =>
     current.schemaVersion === "2.0"
-      ? asChangeSetV2(next, current.providerSemanticVersionSetChecksum ?? "")
+      ? asChangeSetV2(
+          next,
+          current.providerSemanticVersionSetChecksum ?? "",
+          (current as ChangeSetV2).domainOperation
+        )
       : next;
   const selections = new Map(input.files.map((selection) => [selection.relativePath, selection]));
   for (const selection of input.files) {
@@ -1319,7 +1388,8 @@ function stableSerialize(value: unknown): string {
 
 function asChangeSetV2(
   changeSet: ChangeSet,
-  providerSemanticVersionSetChecksum: string
+  providerSemanticVersionSetChecksum: string,
+  domainOperation?: ChangeSetV2DomainOperation
 ): ChangeSetV2 {
   const withoutLegacyToken = Object.fromEntries(
     Object.entries(changeSet).filter(([key]) => key !== "approvalToken")
@@ -1328,6 +1398,9 @@ function asChangeSetV2(
     ...withoutLegacyToken,
     schemaVersion: "2.0" as const,
     providerSemanticVersionSetChecksum,
+    ...(domainOperation === undefined
+      ? {}
+      : { domainOperation: cloneChangeSetV2DomainOperation(domainOperation) }),
     checksum: ""
   };
   const checksum = checksumChangeSetText(stableSerialize(base));
@@ -1342,13 +1415,31 @@ function asChangeSetV2(
 }
 
 function asLegacyChangeSetForInternal(changeSet: ChangeSetV2): ChangeSetLegacy {
+  const legacyFields = { ...changeSet };
+  delete legacyFields.domainOperation;
   return {
-    ...changeSet,
+    ...legacyFields,
     schemaVersion: changeSet.operations === undefined ? "1.0" : "1.1",
     approvalToken: checksumChangeSetText(
       `${changeSet.changeSetId}:${changeSet.revision}:${changeSet.checksum}`
     )
   } as ChangeSetLegacy;
+}
+
+function cloneChangeSetV2DomainOperation(
+  operation: ChangeSetV2DomainOperation
+): ChangeSetV2DomainOperation {
+  if (!isChangeSetV2DomainOperationShape(operation)) {
+    throw changeSetError(
+      "CHANGE_SET_V2_DOMAIN_OPERATION_INVALID",
+      "The frozen chapter lifecycle operation identity is invalid.",
+      "Regenerate the Main-owned chapter lifecycle preparation."
+    );
+  }
+  return {
+    ...operation,
+    selectedRelativePaths: [...operation.selectedRelativePaths]
+  };
 }
 
 function assertProviderSemanticVersionSetChecksum(value: string): void {

@@ -232,7 +232,7 @@ describe("AgentRunPanel", () => {
       completedRead(2, "read-01", "已读取第 1 章"),
       completedRead(4, "read-02", "已读取第 2 章"),
       completedRead(6, "read-03", "已读取第 3 章"),
-      completedRead(8, "read-04", "已读取第 4 章"),
+      completedRead(8, "read-04", "已读取第 4 章", "list_chapters"),
       completedProposal(10, "write-01", "notes/outline.md"),
       completedProposal(12, "write-02", "chapters/chapter-02.md")
     ].flat();
@@ -558,7 +558,12 @@ describe("AgentRunPanel", () => {
   });
 });
 
-function completedRead(sequence: number, toolCallId: string, summary: string) {
+function completedRead(
+  sequence: number,
+  toolCallId: string,
+  summary: string,
+  toolName = "read_chapter"
+) {
   return [
     {
       schemaVersion: "1.0" as const,
@@ -568,7 +573,7 @@ function completedRead(sequence: number, toolCallId: string, summary: string) {
       runRevision: sequence,
       type: "tool_started" as const,
       createdAt: "2026-07-13T00:00:00.000Z",
-      detail: { toolCallId, toolName: "read_chapter", summary: `正在${summary.slice(1)}` }
+      detail: { toolCallId, toolName, summary: `正在${summary.slice(1)}` }
     },
     {
       schemaVersion: "1.0" as const,
@@ -578,7 +583,7 @@ function completedRead(sequence: number, toolCallId: string, summary: string) {
       runRevision: sequence + 1,
       type: "tool_completed" as const,
       createdAt: "2026-07-13T00:00:01.000Z",
-      detail: { toolCallId, toolName: "read_chapter", summary }
+      detail: { toolCallId, toolName, summary }
     }
   ];
 }

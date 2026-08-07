@@ -256,7 +256,7 @@ describe("Agent run tool catalog snapshots", () => {
     ).toMatchObject({ ok: false });
   });
 
-  test("keeps Catalog 1.0 v2 descriptors frozen as legacy data", () => {
+  test("keeps Catalog 1.0 v2 descriptors read-only as legacy data", () => {
     const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
       input: Record<string, unknown>
     ) => readonly Record<string, unknown>[];
@@ -294,7 +294,10 @@ describe("Agent run tool catalog snapshots", () => {
     );
 
     expect(legacy).toMatchObject({ schemaVersion: "1.0", facadeVersion: "v2" });
-    expect(legacyNames).toContain("manage_path");
+    // Catalog 1.0 has no authenticated per-operation approval binding.  It remains
+    // parseable for historical runs, but the current schema-1 v2 profile must not
+    // issue broad legacy mutation aliases for newly created runs.
+    expect(legacyNames).not.toContain("manage_path");
     expect(
       (legacy["descriptors"] as readonly Record<string, unknown>[]).every(
         (descriptor) => descriptor["writeOperation"] === undefined

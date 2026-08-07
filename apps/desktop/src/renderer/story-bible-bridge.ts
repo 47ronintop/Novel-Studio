@@ -49,6 +49,11 @@ import {
   type ForeshadowConfirmationOperation,
   type ForeshadowConfirmationPlan
 } from "./foreshadow-confirmation-plan.js";
+import {
+  createWritingEditorStateReporter,
+  type WritingEditorRendererSession,
+  type WritingEditorStateReportStatus
+} from "./writing-editor-state-reporter.js";
 
 export interface StoryBibleBridge {
   getProps(): StoryBibleSummaryProps;
@@ -101,6 +106,11 @@ export interface StoryBibleBridge {
   confirmStatusAction(): Promise<StoryBibleStatusActionPreparation>;
   beginSave(): StoryBibleEditorProps;
   saveDraft(options?: StoryBibleSaveOptions): Promise<StoryBibleEditorProps>;
+  openWritingEditor(session: WritingEditorRendererSession): Promise<WritingEditorStateReportStatus>;
+  reportWritingEditorState(
+    session: WritingEditorRendererSession
+  ): Promise<WritingEditorStateReportStatus>;
+  disconnectWritingEditor(): Promise<WritingEditorStateReportStatus>;
 }
 
 export interface StoryBibleExternalUpdateInput {
@@ -222,6 +232,7 @@ export function createStoryBibleBridge(
     statusAction: { status: "idle" }
   };
   let editorProps = createEditorProps(snapshot, editorState, consistency);
+  const writingEditorReporter = createWritingEditorStateReporter(api);
 
   const publishEditor = (): StoryBibleEditorProps => {
     editorProps = createEditorProps(snapshot, editorState, consistency);
@@ -1300,6 +1311,21 @@ export function createStoryBibleBridge(
       deleteFeedback();
       return publishEditor();
     },
+    openWritingEditor(session) {
+      const reporterSnapshot = currentStoryBibleWritingEditorSnapshot(snapshotBinding, editorState);
+      return reporterSnapshot === undefined
+        ? Promise.resolve({ status: "unknown", code: "EDITOR_STATE_NOT_OPEN" })
+        : writingEditorReporter.open({ ...session, ...reporterSnapshot });
+    },
+    reportWritingEditorState(session) {
+      const reporterSnapshot = currentStoryBibleWritingEditorSnapshot(snapshotBinding, editorState);
+      return reporterSnapshot === undefined
+        ? Promise.resolve({ status: "unknown", code: "EDITOR_STATE_NOT_OPEN" })
+        : writingEditorReporter.report({ ...session, ...reporterSnapshot });
+    },
+    disconnectWritingEditor() {
+      return writingEditorReporter.disconnect();
+    },
     async saveDraft(saveOptions) {
       const generation = loadGeneration;
       const workspaceId = snapshotBinding?.workspaceId;
@@ -2117,6 +2143,28 @@ export function createStoryBibleBridge(
     deleteFeedback();
     publishEditor();
   }
+}
+
+function currentStoryBibleWritingEditorSnapshot(
+  binding: StoryBibleSnapshotBinding | undefined,
+  state: StoryBibleEditorState
+):
+  | {
+      readonly resourceKind: "story_bible";
+      readonly resourceId: string;
+      readonly dirty: boolean;
+      readonly bufferContent: string;
+    }
+  | undefined {
+  if (binding === undefined || state.viewMode !== "detail" || state.draft.id === undefined) {
+    return undefined;
+  }
+  return {
+    resourceKind: "story_bible",
+    resourceId: state.draft.id,
+    dirty: state.dirty,
+    bufferContent: JSON.stringify(state.draft)
+  };
 }
 
 function selectedTimelineEventIndex(

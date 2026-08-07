@@ -98,6 +98,8 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot,
   WorkspaceContextPolicyUpdate,
+  WritingEditorStateReport,
+  WritingEditorStateReportResult,
   WorkflowRunRecord,
   WorkflowRunSummary,
   AgentRunDraftResult,
@@ -152,6 +154,10 @@ const api: NovelStudioApi = {
     getActiveWorkspace: () =>
       invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
         "application:project:get-active-workspace"
+      ),
+    refreshActiveWorkspace: () =>
+      invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
+        "application:project:refresh-active-workspace"
       ),
     chooseOpenCreativeDirectory: () =>
       invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
@@ -520,6 +526,10 @@ const api: NovelStudioApi = {
         nextBody
       )
   },
+  writingEditor: {
+    reportState: (report: WritingEditorStateReport) =>
+      invokeTyped<WritingEditorStateReportResult>("application:writing-editor:report-state", report)
+  },
   settings: {
     listModelProfiles: () =>
       invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
@@ -846,7 +856,7 @@ function isAgentRunEvent(value: unknown): value is AgentRunEvent {
   const schemaVersion = event["schemaVersion"];
   const scope = event["scope"];
   const hasScope =
-    schemaVersion === "1.3" &&
+    (schemaVersion === "1.3" || schemaVersion === "2.0") &&
     typeof scope === "object" &&
     scope !== null &&
     !Array.isArray(scope) &&
@@ -860,7 +870,8 @@ function isAgentRunEvent(value: unknown): value is AgentRunEvent {
     (schemaVersion === "1.0" ||
       schemaVersion === "1.1" ||
       schemaVersion === "1.2" ||
-      schemaVersion === "1.3") &&
+      schemaVersion === "1.3" ||
+      schemaVersion === "2.0") &&
     typeof event["runId"] === "string" &&
     (hasScope || typeof event["projectId"] === "string") &&
     typeof event["sequence"] === "number" &&

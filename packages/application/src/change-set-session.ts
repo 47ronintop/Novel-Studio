@@ -25,6 +25,7 @@ import {
   type ChangeSetApprovalV2,
   type ChangeSetLegacy,
   type ChangeSetV2,
+  type ChangeSetV2DomainOperation,
   type ChangeSetApproval,
   type ChangeSetAssetType,
   type ChangeSetExternalValidation,
@@ -173,9 +174,14 @@ export interface ProposePreparedFileBatchInput {
   readonly contextSnapshotId: string;
   readonly writePolicy?: AgentWritePolicy;
   readonly consistencyGroupId: string;
+  /** Main-owned lifecycle identity excluding the file selection derived below. */
+  readonly domainOperation?: Omit<
+    ChangeSetV2DomainOperation,
+    "selectedRelativePaths" | "selectionChecksum"
+  >;
   readonly files: readonly {
     readonly relativePath: string;
-    readonly assetType: "chapter";
+    readonly assetType: "chapter" | "text";
     readonly assetId: string;
     readonly baseContent: string;
     readonly candidateContent: string;
@@ -186,6 +192,11 @@ export interface ProposePreparedFileBatchInput {
 }
 
 export interface ChangeSetSession {
+  /** Bind a frozen Catalog 2.0 semantic version set to exactly one run. Main-owned only. */
+  bindRunProviderSemanticVersionSet(
+    runId: string,
+    providerSemanticVersionSetChecksum: string
+  ): Result<void, UnifiedError>;
   proposeChapterWrite(input: ProposeChapterWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
   proposeFileWrite(input: ProposeFileWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
   proposeStoryBibleWrite(
@@ -226,6 +237,21 @@ export interface ChangeSetSession {
   decideV2(
     input: DecideChangeSetApprovalV2Input
   ): Promise<Result<ChangeSetApprovalV2, UnifiedError>>;
+  /** A non-mutating v2 rejection deliberately has no approval binding or reservation. */
+  rejectV2(input: {
+    readonly changeSetId: string;
+    readonly revision: number;
+    readonly checksum: string;
+    readonly displayBindingChecksum: string;
+    readonly resolvedAt: string;
+  }): Promise<Result<ChangeSetV2Rejection, UnifiedError>>;
+}
+
+export interface ChangeSetV2Rejection {
+  readonly schemaVersion: "2.0";
+  readonly decision: "reject_all";
+  readonly resolvedAt: string;
+  readonly displayBindingChecksum: string;
 }
 
 export interface CreateChangeSetSessionOptions {
@@ -244,9 +270,26 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
   const activeChangeSetByCheckpoint = new Map<string, string>();
   const decisionReceipts = new Map<string, Result<ChangeSet | ChangeSetApproval, UnifiedError>>();
   let approvalDecisionProofRepository = options.port.approvalDecisionProofRepository;
+  const providerSemanticVersionSetByRun = new Map<string, string>();
   const createChangeSetId =
     options.createChangeSetId ?? (() => `change_set_${randomUUID().replaceAll("-", "")}`);
   const now = options.now ?? (() => new Date().toISOString());
+
+  function providerSemanticVersionSetForRun(
+    runId: string
+  ): Result<string | undefined, UnifiedError> {
+    const value =
+      providerSemanticVersionSetByRun.get(runId) ?? options.providerSemanticVersionSetChecksum;
+    if (value === undefined) return ok(undefined);
+    if (!/^[a-f0-9]{64}$/u.test(value)) {
+      return failure(
+        "CHANGE_SET_PROVIDER_VERSION_SET_INVALID",
+        "The frozen Provider semantic version set is invalid.",
+        "Recreate the Agent run from its current Main-owned catalog."
+      );
+    }
+    return ok(value);
+  }
 
   async function propose(
     binding: InternalChangeSetProposalBinding,
@@ -254,6 +297,8 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
   ): Promise<Result<ChangeSet, UnifiedError>> {
     const targetError = validateTarget(target, binding.baseHash);
     if (targetError !== undefined) return err(targetError);
+    const providerSemanticVersionSet = providerSemanticVersionSetForRun(binding.runId);
+    if (!providerSemanticVersionSet.ok) return providerSemanticVersionSet;
     const checkpointKey = checkpointBindingKey(binding);
     const activeId = activeChangeSetByCheckpoint.get(checkpointKey);
 
@@ -293,6 +338,18 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           "Refresh context and create a new checkpoint proposal."
         );
       }
+      if (
+        existing !== undefined &&
+        providerSemanticVersionSet.value !== undefined &&
+        (existing.schemaVersion !== "2.0" ||
+          existing.providerSemanticVersionSetChecksum !== providerSemanticVersionSet.value)
+      ) {
+        return failure(
+          "CHANGE_SET_PROVIDER_VERSION_SET_MISMATCH",
+          "The active Change Set was created under a different frozen Provider semantic version set.",
+          "Refresh the run and regenerate the proposal from the current catalog."
+        );
+      }
       const proposal = {
         relativePath: target.relativePath,
         assetType: target.assetType,
@@ -318,7 +375,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       };
       const revision =
         existing === undefined
-          ? options.providerSemanticVersionSetChecksum === undefined
+          ? providerSemanticVersionSet.value === undefined
             ? await createChangeSetRevision(
                 {
                   changeSetId: createChangeSetId(),
@@ -342,7 +399,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
                   writePolicy,
                   proposal,
                   createdAt: now(),
-                  providerSemanticVersionSetChecksum: options.providerSemanticVersionSetChecksum
+                  providerSemanticVersionSetChecksum: providerSemanticVersionSet.value
                 },
                 revisionOptions
               )
@@ -431,6 +488,8 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     input: ProposeOperationBatchInput,
     authorizationInput: object
   ): Promise<Result<ChangeSet, UnifiedError>> {
+    const providerSemanticVersionSet = providerSemanticVersionSetForRun(input.runId);
+    if (!providerSemanticVersionSet.ok) return providerSemanticVersionSet;
     if (input.operations.length === 0) {
       return failure(
         "CHANGE_SET_OPERATION_INVALID",
@@ -483,6 +542,18 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           "CHANGE_SET_CONTEXT_MISMATCH",
           "The active Change Set is bound to a different checkpoint or context snapshot.",
           "Refresh context and create a new checkpoint proposal."
+        );
+      }
+      if (
+        existing !== undefined &&
+        providerSemanticVersionSet.value !== undefined &&
+        (existing.schemaVersion !== "2.0" ||
+          existing.providerSemanticVersionSetChecksum !== providerSemanticVersionSet.value)
+      ) {
+        return failure(
+          "CHANGE_SET_PROVIDER_VERSION_SET_MISMATCH",
+          "The active Change Set was created under a different frozen Provider semantic version set.",
+          "Refresh the run and regenerate the proposal from the current catalog."
         );
       }
 
@@ -562,7 +633,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       }
       const revision =
         existing === undefined
-          ? options.providerSemanticVersionSetChecksum === undefined
+          ? providerSemanticVersionSet.value === undefined
             ? createOperationsChangeSetRevisionBatch({
                 changeSetId: createChangeSetId(),
                 runId: input.runId,
@@ -582,7 +653,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
                 writePolicy,
                 operations,
                 createdAt: now(),
-                providerSemanticVersionSetChecksum: options.providerSemanticVersionSetChecksum
+                providerSemanticVersionSetChecksum: providerSemanticVersionSet.value
               })
           : existing.schemaVersion === "2.0"
             ? appendChangeSetOperationsV2(existing as ChangeSetV2, { operations, createdAt: now() })
@@ -603,7 +674,9 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
   async function proposePreparedFileBatch(
     input: ProposePreparedFileBatchInput
   ): Promise<Result<ChangeSet, UnifiedError>> {
-    if (options.providerSemanticVersionSetChecksum === undefined) {
+    const providerSemanticVersionSet = providerSemanticVersionSetForRun(input.runId);
+    if (!providerSemanticVersionSet.ok) return providerSemanticVersionSet;
+    if (providerSemanticVersionSet.value === undefined) {
       return failure(
         "CHANGE_SET_V2_REQUIRED",
         "Prepared chapter migrations require Change Set 2.0.",
@@ -630,9 +703,16 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
     for (const file of input.files) {
       const path = validateAgentRelativePath(file.relativePath);
       if (!path.ok) return path;
+      const isChapterFile =
+        file.assetType === "chapter" && path.value.relativePath === `chapters/${file.assetId}.md`;
+      const isOutlineFile =
+        file.assetType === "text" &&
+        file.assetId === "outline_main" &&
+        path.value.relativePath === "outline/outline.json" &&
+        file.chapterStatusTransitionProof === undefined;
       if (
         !/^[A-Za-z0-9_-]{1,128}$/u.test(file.assetId) ||
-        path.value.relativePath !== `chapters/${file.assetId}.md` ||
+        (!isChapterFile && !isOutlineFile) ||
         paths.has(path.value.relativePath) ||
         assetIds.has(file.assetId) ||
         file.baseContent.length === 0 ||
@@ -641,14 +721,24 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       ) {
         return failure(
           "CHANGE_SET_PREPARED_BATCH_INVALID",
-          "The prepared chapter migration batch is malformed or stale.",
-          "Regenerate the complete migration plan and retry."
+          "The prepared writing-domain batch is malformed or stale.",
+          "Regenerate the complete domain proposal and retry."
         );
       }
       paths.add(path.value.relativePath);
       assetIds.add(file.assetId);
     }
 
+    const lifecycleDomainOperation =
+      input.domainOperation === undefined
+        ? undefined
+        : {
+            ...input.domainOperation,
+            selectedRelativePaths: input.files.map((file) => file.relativePath),
+            selectionChecksum: checksumChangeSetText(
+              input.files.map((file) => file.relativePath).join("\n")
+            )
+          };
     const checkpointKey = checkpointBindingKey(input);
     const activeId = activeChangeSetByCheckpoint.get(checkpointKey);
     try {
@@ -671,8 +761,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       if (
         existing !== undefined &&
         (existing.schemaVersion !== "2.0" ||
-          existing.providerSemanticVersionSetChecksum !==
-            options.providerSemanticVersionSetChecksum ||
+          existing.providerSemanticVersionSetChecksum !== providerSemanticVersionSet.value ||
           existing.runId !== input.runId ||
           existing.projectId !== input.projectId ||
           existing.checkpointId !== input.checkpointId ||
@@ -685,12 +774,27 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
           "Create a new checkpoint and regenerate the migration plan."
         );
       }
+      if (
+        existing !== undefined &&
+        ((existing as ChangeSetV2).domainOperation !== undefined ||
+          lifecycleDomainOperation !== undefined) &&
+        !sameLifecycleDomainOperation(existing as ChangeSetV2, lifecycleDomainOperation)
+      ) {
+        return failure(
+          "CHANGE_SET_PREPARED_BATCH_CONTEXT_CONFLICT",
+          "A frozen lifecycle Change Set cannot be combined with another prepared mutation.",
+          "Approve, reject, or create a new checkpoint before preparing another lifecycle change."
+        );
+      }
 
       const existingGroup =
         existing?.files.filter((file) => file.consistencyGroupId === input.consistencyGroupId) ??
         [];
       if (existingGroup.length > 0) {
         if (
+          (((existing as ChangeSetV2).domainOperation !== undefined ||
+            lifecycleDomainOperation !== undefined) &&
+            !sameLifecycleDomainOperation(existing as ChangeSetV2, lifecycleDomainOperation)) ||
           existingGroup.length !== input.files.length ||
           input.files.some((file) => {
             const current = existingGroup.find(
@@ -700,7 +804,8 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
               current === undefined ||
               current.assetType !== file.assetType ||
               current.assetId !== file.assetId ||
-              current.contentMode !== "serialized_chapter" ||
+              current.contentMode !==
+                (file.assetType === "chapter" ? "serialized_chapter" : undefined) ||
               current.baseChecksum !== file.baseChecksum ||
               current.candidateChecksum !== file.candidateChecksum ||
               current.baseContent !== file.baseContent ||
@@ -722,7 +827,7 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       const proposals = input.files.map((file) => ({
         relativePath: file.relativePath,
         assetType: file.assetType,
-        contentMode: "serialized_chapter" as const,
+        ...(file.assetType === "chapter" ? { contentMode: "serialized_chapter" as const } : {}),
         assetId: file.assetId,
         baseContent: file.baseContent,
         baseChecksum: file.baseChecksum,
@@ -749,7 +854,10 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
                 writePolicy: "write_before_confirmation",
                 proposals,
                 createdAt: now(),
-                providerSemanticVersionSetChecksum: options.providerSemanticVersionSetChecksum
+                providerSemanticVersionSetChecksum: providerSemanticVersionSet.value,
+                ...(lifecycleDomainOperation === undefined
+                  ? {}
+                  : { domainOperation: lifecycleDomainOperation })
               },
               revisionOptions
             )
@@ -769,6 +877,28 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
   }
 
   return {
+    bindRunProviderSemanticVersionSet(runId, providerSemanticVersionSetChecksum) {
+      if (
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(runId) ||
+        !/^[a-f0-9]{64}$/u.test(providerSemanticVersionSetChecksum)
+      ) {
+        return failure(
+          "CHANGE_SET_PROVIDER_VERSION_SET_INVALID",
+          "The Run or frozen Provider semantic version set is invalid.",
+          "Recreate the Agent run from its current Main-owned catalog."
+        );
+      }
+      const existing = providerSemanticVersionSetByRun.get(runId);
+      if (existing !== undefined && existing !== providerSemanticVersionSetChecksum) {
+        return failure(
+          "CHANGE_SET_PROVIDER_VERSION_SET_REBIND_FORBIDDEN",
+          "A Run cannot be rebound to a different frozen Provider semantic version set.",
+          "Start a new Agent run after the catalog or capability boundary changes."
+        );
+      }
+      providerSemanticVersionSetByRun.set(runId, providerSemanticVersionSetChecksum);
+      return ok(undefined);
+    },
     bindApprovalDecisionProofRepository(repository) {
       if (
         repository === null ||
@@ -1024,6 +1154,30 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
       return decided;
     },
 
+    async rejectV2(input) {
+      const current = await findRevision(input.changeSetId, input.revision);
+      if (!current.ok) return current as Result<ChangeSetV2Rejection, UnifiedError>;
+      if (
+        current.value.schemaVersion !== "2.0" ||
+        current.value.checksum !== input.checksum ||
+        current.value.displayBindingChecksum !== input.displayBindingChecksum
+      ) {
+        return failure(
+          "CHANGE_SET_V2_BINDING_MISMATCH",
+          "The rejection does not match the current Change Set 2.0 preview.",
+          "Refresh the preview before rejecting it."
+        );
+      }
+      return ok(
+        Object.freeze({
+          schemaVersion: "2.0" as const,
+          decision: "reject_all" as const,
+          resolvedAt: input.resolvedAt,
+          displayBindingChecksum: input.displayBindingChecksum
+        })
+      );
+    },
+
     async decide(command) {
       const receiptKey = `${command.projectId}:${command.commandId}`;
       const prior = decisionReceipts.get(receiptKey);
@@ -1202,6 +1356,32 @@ function sameStringSet(
   return (
     sortedLeft.length === sortedRight.length &&
     sortedLeft.every((value, index) => value === sortedRight[index])
+  );
+}
+
+function sameLifecycleDomainOperation(
+  changeSet: ChangeSetV2 | undefined,
+  candidate:
+    | (Omit<ChangeSetV2DomainOperation, "selectedRelativePaths" | "selectionChecksum"> & {
+        readonly selectedRelativePaths: readonly string[];
+        readonly selectionChecksum: string;
+      })
+    | undefined
+): boolean {
+  const existing = changeSet?.domainOperation;
+  return (
+    existing !== undefined &&
+    candidate !== undefined &&
+    existing.kind === candidate.kind &&
+    existing.sourceRef === candidate.sourceRef &&
+    existing.targetRef === candidate.targetRef &&
+    existing.proofRef === candidate.proofRef &&
+    existing.proofChecksum === candidate.proofChecksum &&
+    existing.selectionChecksum === candidate.selectionChecksum &&
+    existing.selectedRelativePaths.length === candidate.selectedRelativePaths.length &&
+    existing.selectedRelativePaths.every(
+      (path, index) => path === candidate.selectedRelativePaths[index]
+    )
   );
 }
 

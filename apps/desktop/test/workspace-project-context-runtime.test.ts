@@ -283,6 +283,7 @@ describe("desktop workspace project context runtime", () => {
     const changed = `${"😀".repeat(4_000)}X${"😀".repeat(499)}`;
     await writeFile(join(roots.contentRoot, "AGENTS.md"), original, "utf8");
     let round = 0;
+    const providerInputs: AgentModelRoundInput[] = [];
     const session = createDesktopAgentRunSession({
       workspaceKind: "engineeringWorkspace",
       projectId: "workspace-conventions-stale",
@@ -291,7 +292,8 @@ describe("desktop workspace project context runtime", () => {
       projectConventionsEnabled: true,
       createRunId: () => "run-conventions-stale",
       modelDriver: {
-        async *streamRound() {
+        async *streamRound(input) {
+          providerInputs.push(input);
           round += 1;
           if (round === 1) {
             await writeFile(join(roots.contentRoot, "AGENTS.md"), changed, "utf8");
@@ -334,6 +336,9 @@ describe("desktop workspace project context runtime", () => {
     });
     if (!refreshed.ok) throw refreshed.error;
     await waitForStatus(session, "run-conventions-stale", "completed");
+
+    expect(providerInputs).toHaveLength(2);
+    expect(JSON.stringify(providerInputs[1]?.messages)).toContain("context_refreshed");
 
     const repository = new AgentRunFileRepository({ projectRoot: roots.stateRoot });
     const completed = await session.readAgentRun("run-conventions-stale");

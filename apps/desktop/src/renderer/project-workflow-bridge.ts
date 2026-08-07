@@ -11,6 +11,7 @@ export interface ProjectWorkflowBridgeOptions {
 export interface ProjectWorkflowBridge {
   getProps(): ProjectWorkflowProps;
   loadActiveProject(projectId: string): Promise<ProjectWorkflowProps>;
+  refreshActiveProject(): Promise<ProjectWorkflowProps>;
   setProjectTitleInput(title: string): ProjectWorkflowProps;
   setProjectFolderNameInput(folderName: string): ProjectWorkflowProps;
   chooseCreateParentDirectory(): Promise<ProjectWorkflowProps>;
@@ -80,6 +81,20 @@ export function createProjectWorkflowBridge(
         adoptSnapshot(loaded.value);
         status = "ready";
         feedback = undefined;
+        return toProps();
+      } catch (error) {
+        return fail(toErrorMessage(error), previousStatus);
+      }
+    },
+    async refreshActiveProject() {
+      const previousStatus = snapshot === undefined ? "idle" : "ready";
+      status = "opening";
+      feedback = undefined;
+      try {
+        const refreshed = await api.project.refreshActiveWorkspace();
+        if (!refreshed.ok) return fail(refreshed.error.message, previousStatus);
+        adoptSnapshot(refreshed.value);
+        status = "ready";
         return toProps();
       } catch (error) {
         return fail(toErrorMessage(error), previousStatus);

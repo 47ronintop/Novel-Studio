@@ -19,7 +19,7 @@ const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapte
 const projectId = "prj_minimal_chapter";
 const chapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 
-test("restores a provider disconnect with the same error ID, copies it, and retries an explicit model target", async () => {
+test("restores a provider disconnect with the same error ID and requires a strict handoff before retry", async () => {
   test.setTimeout(60_000);
   const fixture = await seedDiagnosticFixture("provider_disconnect");
   let electronApp: ElectronApplication | undefined;
@@ -55,20 +55,15 @@ test("restores a provider disconnect with the same error ID, copies it, and retr
     });
 
     await restored.getByRole("button", { name: "重试模型轮次" }).click();
-    await waitForRunStatus(page, fixture.runId, "completed");
-    await expect(page.getByLabel("Agent 错误")).toHaveCount(0);
+    await assertHandoffRequired(page);
     const retried = await readRun(page, fixture.runId);
-    expect(retried.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "run_resumed",
-          detail: expect.objectContaining({
-            errorId: fixture.errorId,
-            targetKind: "model_round"
-          })
-        })
-      ])
-    );
+    expect(retried.snapshot).toMatchObject({
+      status: "executing_model",
+      activeErrorId: fixture.errorId,
+      recoveryState: "retryable"
+    });
+    expect(retried.events.map((event) => event.type)).not.toContain("run_resumed");
+    await expect(page.getByLabel("Agent 错误")).toHaveCount(1);
     await assertNoPermanentDiagnostics(page);
   } finally {
     await electronApp?.close();
@@ -76,7 +71,7 @@ test("restores a provider disconnect with the same error ID, copies it, and retr
   }
 });
 
-test("retries the persisted failed tool call through its explicit target", async () => {
+test("rejects a persisted failed tool-call retry until its legacy run has a strict handoff", async () => {
   test.setTimeout(60_000);
   const fixture = await seedDiagnosticFixture("tool_error");
   let electronApp: ElectronApplication | undefined;
@@ -89,22 +84,15 @@ test("retries the persisted failed tool call through its explicit target", async
     await expect(card.getByRole("button", { name: "重试工具调用" })).toBeVisible();
 
     await card.getByRole("button", { name: "重试工具调用" }).click();
-    await waitForRunStatus(page, fixture.runId, "completed");
+    await assertHandoffRequired(page);
     const retried = await readRun(page, fixture.runId);
-    expect(retried.snapshot).toMatchObject({ activeErrorId: null, recoveryState: "none" });
-    expect(retried.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "tool_retry_requested",
-          detail: expect.objectContaining({
-            errorId: fixture.errorId,
-            targetKind: "tool_call",
-            targetId: "tool_retry_e2e"
-          })
-        })
-      ])
-    );
-    await expect(page.getByLabel("Agent 错误")).toHaveCount(0);
+    expect(retried.snapshot).toMatchObject({
+      status: "executing_model",
+      activeErrorId: fixture.errorId,
+      recoveryState: "retryable"
+    });
+    expect(retried.events.map((event) => event.type)).not.toContain("tool_retry_requested");
+    await expect(page.getByLabel("Agent 错误")).toHaveCount(1);
     await assertNoPermanentDiagnostics(page);
   } finally {
     await electronApp?.close();
@@ -112,7 +100,7 @@ test("retries the persisted failed tool call through its explicit target", async
   }
 });
 
-test("renders context stale diagnostics inline and clears them through context refresh", async () => {
+test("keeps context stale diagnostics actionable but requires a strict handoff before refresh", async () => {
   test.setTimeout(60_000);
   const fixture = await seedDiagnosticFixture("context_stale");
   let electronApp: ElectronApplication | undefined;
@@ -129,16 +117,15 @@ test("renders context stale diagnostics inline and clears them through context r
     });
 
     await page.getByLabel("上下文刷新").getByRole("button", { name: "从目标排除" }).click();
-    await waitForRunStatus(page, fixture.runId, "completed");
+    await assertHandoffRequired(page);
     const refreshed = await readRun(page, fixture.runId);
     expect(refreshed.snapshot, JSON.stringify(refreshed)).toMatchObject({
-      activeErrorId: null,
-      recoveryState: "none"
+      status: "awaiting_context_refresh",
+      activeErrorId: fixture.errorId,
+      recoveryState: "awaiting_context_refresh"
     });
-    expect(refreshed.events).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "context_excluded" })])
-    );
-    await expect(page.getByLabel("Agent 错误")).toHaveCount(0);
+    expect(refreshed.events.map((event) => event.type)).not.toContain("context_excluded");
+    await expect(page.getByLabel("Agent 错误")).toHaveCount(1);
     await assertNoPermanentDiagnostics(page);
   } finally {
     await electronApp?.close();
@@ -579,44 +566,10 @@ async function readRun(
   return result.value as never;
 }
 
-async function waitForRunStatus(page: Page, runId: string, status: string): Promise<void> {
-  try {
-    await expect
-      .poll(
-        async () => {
-          const read = await readRun(page, runId);
-          const actual = read.snapshot["status"];
-          if (
-            actual !== status &&
-            (actual === "completed" ||
-              actual === "cancelled" ||
-              actual === "failed" ||
-              actual === "limit_reached")
-          ) {
-            throw new Error(
-              JSON.stringify({
-                snapshot: read.snapshot,
-                events: read.events.slice(-6),
-                diagnostic: read.diagnostic
-              })
-            );
-          }
-          return actual;
-        },
-        { timeout: 30_000 }
-      )
-      .toBe(status);
-  } catch (error) {
-    const read = await readRun(page, runId);
-    throw new Error(
-      JSON.stringify({
-        cause: error instanceof Error ? error.message : String(error),
-        snapshot: read.snapshot,
-        events: read.events.slice(-12),
-        diagnostic: read.diagnostic
-      })
-    );
-  }
+async function assertHandoffRequired(page: Page): Promise<void> {
+  await expect(
+    page.getByLabel("AI 对话面板").getByText("AGENT_GUIDANCE_HANDOFF_REQUIRED")
+  ).toBeVisible();
 }
 
 async function assertNoPermanentDiagnostics(page: Page): Promise<void> {

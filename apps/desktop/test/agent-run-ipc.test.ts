@@ -850,7 +850,19 @@ describe("Agent Run IPC", () => {
       createdAt: "2026-07-13T00:00:00.000Z"
     };
     eventListener?.(validEvent);
-    expect(received).toEqual([validEvent]);
+    const validV20Event = {
+      schemaVersion: "2.0",
+      runId: "run-ipc-v20",
+      scope: { kind: "workspace", workspaceKind: "creativeProject", workspaceId: "project-01" },
+      sequence: 1,
+      runRevision: 1,
+      type: "assistant_text_delta",
+      createdAt: "2026-08-06T00:00:00.000Z",
+      eventRef: "agent-run/run-ipc-v20/events/1",
+      detail: { delta: "Visible through preload." }
+    };
+    eventListener?.(validV20Event);
+    expect(received).toEqual([validEvent, validV20Event]);
     if (typeof unsubscribe === "function") unsubscribe();
 
     await agentRuns["start"]?.({});

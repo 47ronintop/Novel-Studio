@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
+
 export const EDITOR_STATE_UNKNOWN = "EDITOR_STATE_UNKNOWN" as const;
 export const TARGET_DIRTY = "TARGET_DIRTY" as const;
+/** Upper bound for a renderer-provided draft retained by Main for non-mutation context. */
+export const MAX_WRITING_EDITOR_BUFFER_BYTES = 256 * 1024;
 
 export type WritingEditorResourceKind = "chapter" | "story_bible";
 export type WritingEditorConnectionState = "connected" | "disconnected" | "unknown";
@@ -20,6 +24,8 @@ export interface WritingEditorStateReport extends WritingEditorInstanceIdentity 
   readonly acknowledgedRevision: number;
   readonly dirty: boolean;
   readonly bufferChecksum: string;
+  /** Renderer snapshot retained by Main only after its checksum and byte limit are verified. */
+  readonly bufferContent: string;
 }
 
 export type WritingEditorState = Readonly<WritingEditorStateReport>;
@@ -78,10 +84,25 @@ export type WritingEditorMutationDecision =
       readonly states: readonly WritingEditorState[];
     };
 
+/**
+ * Main's current decision for a single managed resource. `known` is returned only when a live
+ * renderer handshake proves either the resource's current buffer, or that it was never opened /
+ * was cleanly closed. Renderer-provided text is never used to establish that latter fact.
+ */
+export type WritingEditorMutationState =
+  | {
+      readonly status: "known";
+      readonly dirty: boolean;
+      readonly content: string;
+      readonly rendererRevision?: number;
+    }
+  | { readonly status: "unknown"; readonly dirty: false; readonly content: "" };
+
 export interface WritingEditorStateRegistry {
   report(report: WritingEditorStateReport): WritingEditorStateUpdateResult;
   readInstance(identity: WritingEditorInstanceIdentity): WritingEditorState | undefined;
   observe(target: WritingEditorResourceIdentity): WritingEditorResourceObservation;
+  readForMutation(target: WritingEditorResourceIdentity): WritingEditorMutationState;
   decideMutation(targets: readonly WritingEditorResourceIdentity[]): WritingEditorMutationDecision;
   clearWorkspace(workspaceId: string): void;
 }
@@ -144,10 +165,10 @@ export function createWritingEditorStateRegistry(): WritingEditorStateRegistry {
     targets: readonly WritingEditorResourceIdentity[]
   ): WritingEditorMutationDecision {
     const uniqueTargets = deduplicateTargets(targets);
-    const observations = uniqueTargets.map(observe);
-    const unknownTargets = observations
-      .filter((observation) => observation.status !== "connected")
-      .map((observation) => observation.target);
+    const decisions = uniqueTargets.map(resourceDecision);
+    const unknownTargets = decisions
+      .filter((decision) => decision.status === "unknown")
+      .map((decision) => decision.target);
     if (unknownTargets.length > 0) {
       return Object.freeze({
         ok: false,
@@ -156,10 +177,9 @@ export function createWritingEditorStateRegistry(): WritingEditorStateRegistry {
       });
     }
 
-    const states = observations.map((observation) => {
-      if (observation.status !== "connected") throw new Error("unreachable editor observation");
-      return observation.state;
-    });
+    const states = decisions.flatMap((decision) =>
+      decision.status === "known" ? decision.states : []
+    );
     const dirtyStates = states.filter((state) => state.dirty);
     if (dirtyStates.length > 0) {
       return Object.freeze({
@@ -172,6 +192,75 @@ export function createWritingEditorStateRegistry(): WritingEditorStateRegistry {
     return Object.freeze({ ok: true, code: "READY", states: Object.freeze(states) });
   }
 
+  function readForMutation(target: WritingEditorResourceIdentity): WritingEditorMutationState {
+    const decision = resourceDecision(target);
+    if (decision.status === "unknown") {
+      return Object.freeze({ status: "unknown", dirty: false, content: "" });
+    }
+    const dirtyState = decision.states.find((state) => state.dirty);
+    if (dirtyState !== undefined) {
+      return Object.freeze({
+        status: "known",
+        dirty: true,
+        content: dirtyState.bufferContent,
+        rendererRevision: dirtyState.rendererRevision
+      });
+    }
+    const connectedState = decision.states.find((state) => state.connection === "connected");
+    return Object.freeze(
+      connectedState === undefined
+        ? { status: "known", dirty: false, content: "" }
+        : {
+            status: "known",
+            dirty: false,
+            content: connectedState.bufferContent,
+            rendererRevision: connectedState.rendererRevision
+          }
+    );
+  }
+
+  function resourceDecision(target: WritingEditorResourceIdentity): ResourceMutationDecision {
+    const observation = observe(target);
+    if (observation.status === "connected") {
+      return knownResourceDecision(target, [observation.state]);
+    }
+    if (observation.status === "unknown") {
+      if (observation.reason !== "missing" || !hasStableWorkspaceConnection(target.workspaceId)) {
+        return unknownResourceDecision(target);
+      }
+      // A healthy managed editor is connected for this workspace, while this resource has never
+      // been reported. It therefore has no renderer buffer and is clean by construction.
+      return knownResourceDecision(target, []);
+    }
+    if (!hasStableWorkspaceConnection(target.workspaceId)) return unknownResourceDecision(target);
+    if (observation.states.some((state) => state.acknowledgedRevision !== state.rendererRevision)) {
+      return unknownResourceDecision(target);
+    }
+    if (observation.states.some((state) => !state.dirty && state.bufferContent.length > 0)) {
+      // A close from an older or malformed renderer still carries text. It is not the explicit
+      // empty-buffer close contract, so Main must not infer that disk is authoritative.
+      return unknownResourceDecision(target);
+    }
+    // `disconnected` is an explicit close only when its clean snapshot carries no retained
+    // draft. A dirty close remains dirty; it is never upgraded to clean by this branch.
+    return knownResourceDecision(target, observation.states);
+  }
+
+  function hasStableWorkspaceConnection(workspaceId: string): boolean {
+    for (const instances of resources.values()) {
+      for (const state of instances.values()) {
+        if (
+          state.workspaceId === workspaceId &&
+          state.connection === "connected" &&
+          state.acknowledgedRevision === state.rendererRevision
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function clearWorkspace(workspaceId: string): void {
     for (const [key, instances] of resources) {
       if ([...instances.values()].some((state) => state.workspaceId === workspaceId)) {
@@ -180,7 +269,37 @@ export function createWritingEditorStateRegistry(): WritingEditorStateRegistry {
     }
   }
 
-  return Object.freeze({ report, readInstance, observe, decideMutation, clearWorkspace });
+  return Object.freeze({
+    report,
+    readInstance,
+    observe,
+    readForMutation,
+    decideMutation,
+    clearWorkspace
+  });
+}
+
+type ResourceMutationDecision =
+  | {
+      readonly status: "known";
+      readonly target: WritingEditorResourceIdentity;
+      readonly states: readonly WritingEditorState[];
+    }
+  | { readonly status: "unknown"; readonly target: WritingEditorResourceIdentity };
+
+function knownResourceDecision(
+  target: WritingEditorResourceIdentity,
+  states: readonly WritingEditorState[]
+): ResourceMutationDecision {
+  return Object.freeze({
+    status: "known",
+    target: freezeTarget(target),
+    states: Object.freeze(states)
+  });
+}
+
+function unknownResourceDecision(target: WritingEditorResourceIdentity): ResourceMutationDecision {
+  return Object.freeze({ status: "unknown", target: freezeTarget(target) });
 }
 
 function validateReport(report: WritingEditorStateReport): string | undefined {
@@ -207,6 +326,13 @@ function validateReport(report: WritingEditorStateReport): string | undefined {
   if (typeof report.dirty !== "boolean") return "dirty must be a boolean.";
   if (typeof report.bufferChecksum !== "string" || !/^[a-f0-9]{64}$/u.test(report.bufferChecksum)) {
     return "bufferChecksum must be a lowercase SHA-256 checksum.";
+  }
+  if (typeof report.bufferContent !== "string") return "bufferContent must be a string.";
+  if (Buffer.byteLength(report.bufferContent, "utf8") > MAX_WRITING_EDITOR_BUFFER_BYTES) {
+    return `bufferContent must not exceed ${MAX_WRITING_EDITOR_BUFFER_BYTES} UTF-8 bytes.`;
+  }
+  if (checksum(report.bufferContent) !== report.bufferChecksum) {
+    return "bufferChecksum must match bufferContent.";
   }
   return undefined;
 }
@@ -273,6 +399,10 @@ function isIdentityPart(value: string): boolean {
 
 function isRevision(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0;
+}
+
+function checksum(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function updateError(

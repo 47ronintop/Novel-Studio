@@ -31,24 +31,7 @@ describe("StoryBibleExplicitInverseSession", () => {
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
     expect(preview.value.affectedAssetIds).toEqual(["chr_source", "chr_target"]);
-    expect(preview.value.approvalProofs).toHaveLength(2);
-    expect(Object.isFrozen(preview.value.approvalProofs)).toBe(true);
-    for (const proof of preview.value.approvalProofs) {
-      expect(proof).toMatchObject({
-        schemaVersion: "1.0",
-        policyId: "bounded-story-bible-proposal@1.0",
-        operation: "story_bible_patch",
-        effectRuleId: "no_reference_impact_story_bible_patch_v1",
-        evidence: {
-          createOnly: "not_applicable",
-          referenceImpact: "present",
-          limits: "within",
-          stateBoundary: "ordinary"
-        },
-        reviewRequirement: "always_human",
-        referenceImpactChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
-      });
-    }
+    expect(preview.value).not.toHaveProperty("approvalProofs");
     expect(preview.value.changeSet.files).toHaveLength(2);
     expect(new Set(preview.value.changeSet.files.map((file) => file.consistencyGroupId)).size).toBe(
       1
@@ -92,6 +75,56 @@ describe("StoryBibleExplicitInverseSession", () => {
       error: { code: "STORY_BIBLE_EXPLICIT_INVERSE_PREVIEW_INVALID" }
     });
     expect(fixture.batchCalls).toBe(1);
+  });
+
+  test("finalizes the complete inverse group and exposes only its safe proof projection", async () => {
+    const fixture = createFixture({ withApprovalProofFinalizer: true });
+    const preview = await fixture.session.prepareStoryBibleExplicitInverseChange({
+      source: {
+        candidate: candidateWithNewExplicitRelation(fixture.source.asset),
+        baseRevision: fixture.source.revision,
+        baseChecksum: fixture.source.checksum
+      }
+    });
+
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(fixture.finalizerCalls).toHaveLength(1);
+    expect(fixture.finalizerCalls[0]).toMatchObject({
+      changeSetId: preview.value.changeSet.changeSetId,
+      revision: preview.value.changeSet.revision,
+      checksum: preview.value.changeSet.checksum,
+      proposals: expect.arrayContaining([
+        expect.objectContaining({
+          operation: "story_bible_patch",
+          reviewRequirement: "always_human"
+        })
+      ])
+    });
+    expect(preview.value).toMatchObject({
+      approvalProofRef: { proofId: "proof_explicit_inverse" },
+      providerApproval: { approvalRequirement: "human_confirmation" }
+    });
+    expect(preview.value).not.toHaveProperty("approvalProofs");
+  });
+
+  test("new V2 entry fails closed before staging when the ADR-0004 approval surface is unavailable", async () => {
+    const fixture = createFixture({ v2ApprovalSurfaceUnavailable: true });
+
+    await expect(
+      fixture.session.prepareStoryBibleExplicitInverseChange({
+        source: {
+          candidate: candidateWithNewExplicitRelation(fixture.source.asset),
+          baseRevision: fixture.source.revision,
+          baseChecksum: fixture.source.checksum
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRUSTED_APPROVAL_SURFACE_UNAVAILABLE" }
+    });
+    expect(fixture.batchCalls).toBe(0);
+    expect(fixture.finalizerCalls).toHaveLength(0);
   });
 
   test("claims a preview receipt before asynchronous apply work so concurrent confirms cannot reuse it", async () => {
@@ -410,6 +443,8 @@ function createFixture(
     readonly includeSecondTarget?: boolean;
     readonly legacyAssetIds?: readonly string[];
     readonly previewTtlMs?: number;
+    readonly withApprovalProofFinalizer?: boolean;
+    readonly v2ApprovalSurfaceUnavailable?: boolean;
   } = {}
 ) {
   const sourceRelation = options.existingPair ? explicitSourceRelation() : undefined;
@@ -491,9 +526,11 @@ function createFixture(
   let batchCalls = 0;
   let nowMs = Date.parse("2026-08-01T00:00:00.000Z");
   const approvals: string[] = [];
+  const finalizerCalls: unknown[] = [];
   const recreateSession = () =>
     createStoryBibleExplicitInverseSession({
       projectId: "project_story",
+      approvalMode: options.v2ApprovalSurfaceUnavailable ? "v2_production" : "legacy_v1_historical",
       repository: {
         async readCompatibleStoryAsset(assetId) {
           const read = reads.get(assetId);
@@ -565,6 +602,49 @@ function createFixture(
           });
         }
       },
+      ...(options.withApprovalProofFinalizer || options.v2ApprovalSurfaceUnavailable
+        ? {
+            approvalProofFinalizer: {
+              async finalize(input: unknown) {
+                finalizerCalls.push(input);
+                return ok({
+                  proofRef: {
+                    proofId: "proof_explicit_inverse",
+                    proofChecksum: "a".repeat(64)
+                  },
+                  providerSummary: {
+                    schemaVersion: "1.0" as const,
+                    operation: "story_bible_patch" as const,
+                    approvalRequirement: "human_confirmation" as const,
+                    reasonCodes: [],
+                    proofChecksum: "a".repeat(64)
+                  }
+                });
+              }
+            }
+          }
+        : {}),
+      ...(options.v2ApprovalSurfaceUnavailable
+        ? {
+            approvalV2: {
+              async ensureAvailable() {
+                return err(
+                  createUnifiedError({
+                    code: "TRUSTED_APPROVAL_SURFACE_UNAVAILABLE",
+                    category: "AgentError",
+                    message: "The qualified approval surface is unavailable.",
+                    recoverability: "user-action",
+                    suggestedAction: "Open a new Main-owned approval preview.",
+                    traceId: "test-explicit-inverse"
+                  })
+                );
+              },
+              async approve() {
+                throw new Error("V2 approval must not run after an unavailable surface check.");
+              }
+            }
+          }
+        : {}),
       createId(kind) {
         sequence += 1;
         if (kind === "relation") return "rel_1234567890abcdef1234567890abcdef";
@@ -585,6 +665,7 @@ function createFixture(
     target,
     session,
     approvals,
+    finalizerCalls,
     recreateSession,
     advanceTime(milliseconds: number) {
       nowMs += milliseconds;

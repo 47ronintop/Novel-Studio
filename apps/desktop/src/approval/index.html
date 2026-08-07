@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <title>Confirm change set</title>
+    <link rel="stylesheet" href="./approval.css" />
+  </head>
+  <body>
+    <main aria-labelledby="title">
+      <h1 id="title">Review change set</h1>
+      <p id="summary" class="muted" aria-live="polite" aria-atomic="true">
+        Loading Main-owned approval details…
+      </p>
+      <section aria-labelledby="details-heading">
+        <h2 id="details-heading">Canonical details</h2>
+        <div id="details" class="card" role="region" tabindex="0"></div>
+      </section>
+      <p id="status" class="muted" role="status" aria-live="polite" aria-atomic="true"></p>
+      <div id="actions" class="actions" role="group" aria-label="Approval actions">
+        <button id="cancel" type="button" autofocus>Cancel</button>
+        <button id="approve" type="button" disabled>Approve change set</button>
+      </div>
+    </main>
+    <script type="module" src="./approval.js"></script>
+  </body>
+</html>

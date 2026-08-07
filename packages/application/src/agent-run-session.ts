@@ -18,6 +18,7 @@ import {
   formatToolCompletionEvidenceRef,
   formatWriteAppliedEvidenceRef,
   isCapabilityEffective,
+  isChangeSetV2,
   isProviderVisibleWritingOperation,
   usageRecordIdempotencyKey,
   validateAgentUsageRecord,
@@ -43,13 +44,24 @@ import {
   validatePlanArtifactV20,
   validateExternalToolDescriptors,
   validateAgentToolArguments,
+  checksumChangeSetSelection,
+  createMainOnlyApprovalDecisionProofV1,
   type ChangeSet,
   type ChangeSetApproval,
+  type ChangeSetApprovalV2,
+  type ChangeSetV2,
+  type ChangeSetV2DomainOperation,
   type ChangeSetOperation,
   type ChangeSetRange,
+  type ApprovalDecisionProofEvidenceV1,
+  type ApprovalDecisionProofRefV1,
+  type ApprovalBindingV2OperationKind,
+  type MainOnlyApprovalDecisionProofV1,
+  type ProviderVisibleConditionalApprovalRuleId,
   type ContextCompactionRevision,
   type ContextBudgetSnapshotV11,
   type DecideChangeSetCommand,
+  type DecideChangeSetApprovalV2Input,
   type AgentContextMode,
   type AgentContextScope,
   type AgentOperationMode,
@@ -70,6 +82,7 @@ import {
   type AgentToolDescriptor,
   type AgentToolFacadeVersion,
   type AgentRunToolCatalogSnapshot,
+  type AgentRunToolCatalogSnapshotV2,
   type AgentToolCapabilitySnapshot,
   type EffectiveCapabilityState,
   type AgentWritePolicy,
@@ -200,7 +213,7 @@ import {
   type AgentPlanExecutionRepositoryPort,
   type AgentPlanExecutionSession
 } from "./agent-plan-execution-session.js";
-import type { ChangeSetSession } from "./change-set-session.js";
+import type { ChangeSetSession, ChangeSetV2Rejection } from "./change-set-session.js";
 import {
   authorizeAgentRunApproval,
   authorizeAgentRunProposal,
@@ -228,7 +241,15 @@ import type {
   StoryBibleAgentWriteToolName,
   StoryBiblePreparedAgentProposal
 } from "./story-bible-agent-tool-session.js";
-import type { ChapterAgentToolSession } from "./chapter-agent-tool-session.js";
+import type {
+  FinalizeStoryBibleApprovalProofInput,
+  StoryBibleApprovalProofFinalization
+} from "./story-bible-approval-proof-session.js";
+import type {
+  ChapterAgentToolSession,
+  ChapterLifecycleToolName,
+  PreparedChapterLifecycleChange
+} from "./chapter-agent-tool-session.js";
 
 export type AgentModelMessageRole = "system" | "user" | "assistant" | "tool";
 
@@ -469,6 +490,15 @@ export interface AgentStoryBibleToolExecutor {
   }): Promise<Result<StoryBiblePreparedAgentProposal, UnifiedError>>;
 }
 
+/** Main-only proof finalizer for frozen structured Story Bible Change Sets. */
+export interface AgentStoryBibleApprovalProofFinalizer {
+  /** Production finalizers set this when a durable apply-side dependency guard is composed. */
+  readonly referenceDependenciesRequired?: boolean;
+  finalize(
+    input: FinalizeStoryBibleApprovalProofInput
+  ): Promise<Result<StoryBibleApprovalProofFinalization, UnifiedError>>;
+}
+
 /** The model facts the preflight resolves server-side from the run draft's `modelProfileId`. */
 export interface AgentRunStartModelFacts {
   readonly profileId: string;
@@ -558,6 +588,12 @@ export interface AgentRunContextSharingState {
 export interface AgentRunContextSharingPort {
   readForRun(input: {
     readonly runId: string;
+    readonly scope: AgentContextScope;
+  }): Promise<Result<AgentRunContextSharingState, UnifiedError>>;
+  /** Bind a Plan's execution Run to the same, never broader, Main-owned sharing state. */
+  inheritForPlanExecution?(input: {
+    readonly sourceRunId: string;
+    readonly targetRunId: string;
     readonly scope: AgentContextScope;
   }): Promise<Result<AgentRunContextSharingState, UnifiedError>>;
   updateGrant(input: {
@@ -741,7 +777,7 @@ export type AgentRunPackedContextHistory =
 export interface AgentVersionGroupExecutor {
   apply(input: {
     readonly changeSet: ChangeSet;
-    readonly approval: ChangeSetApproval;
+    readonly approval: ChangeSetApproval | ChangeSetApprovalV2;
   }): Promise<Result<JsonObject, UnifiedError>>;
   undoRun(input: {
     readonly runId: string;
@@ -835,6 +871,47 @@ export interface AgentRunSession {
   subscribe(listener: (event: AgentRunEvent) => void): () => void;
 }
 
+export interface AgentRunChangeSetApprovalV2Port {
+  prepare(input: {
+    readonly changeSet: ChangeSetV2;
+    readonly command: DecideChangeSetCommand;
+    /**
+     * Main-only proof and the frozen authority facts used to create it.  This is deliberately
+     * constructed in AgentRunSession, after the current runtime Change Set has been revalidated;
+     * neither the renderer command nor a lifecycle preparation proof can supply it.
+     */
+    readonly approvalContext: AgentRunChangeSetApprovalV2ApprovalContext;
+  }): Promise<Result<DecideChangeSetApprovalV2Input, UnifiedError>>;
+}
+
+/** Opaque Main-only handoff to the qualified ADR-0004 confirmation surface. */
+export interface AgentRunChangeSetApprovalV2ApprovalContext {
+  readonly proofRef: ApprovalDecisionProofRefV1;
+  /** Must equal the persisted proof binding; used by Main to construct ApprovalBinding V2. */
+  readonly workspaceBindingId: string;
+  /** Provider-visible classification from the persisted proof, never inferred by the Renderer. */
+  readonly operation: ProviderVisibleWriteOperation;
+  /** Canonical apply operation, preserving e.g. chapter_delete versus chapter_status proof rules. */
+  readonly approvalBindingOperationKind: ApprovalBindingV2OperationKind;
+  readonly approvalRuleSet: {
+    readonly version: string;
+    readonly checksum: string;
+    readonly catalogRevision: string;
+  };
+  readonly capabilityBoundary: AgentRunCapabilityBoundary;
+  /** Exact immutable preview binding; repeated so the surface need not trust renderer state. */
+  readonly preview: {
+    readonly changeSetId: string;
+    readonly revision: number;
+    readonly checksum: string;
+    readonly displayBindingChecksum: string;
+    readonly providerSemanticVersionSetChecksum: string;
+    readonly selectionChecksum: string;
+    readonly baseManifestChecksum: string;
+    readonly candidateManifestChecksum: string;
+  };
+}
+
 export interface CreateAgentRunSessionOptions {
   /** Main-owned scope bound to this runtime; enables exact workspace-kind validation. */
   readonly scope?: AgentContextScope;
@@ -876,6 +953,12 @@ export interface CreateAgentRunSessionOptions {
   readonly contextCompactor?: AgentRunContextCompactor;
   readonly contextSourceReader?: AgentContextSourceReader;
   readonly changeSetSession?: ChangeSetSession;
+  /**
+   * ADR-0004 Main-only bridge for a Change Set 2.0 approval. It receives only Main-owned current
+   * state and must return a fresh binding plus ledger reservation; renderer commands cannot carry
+   * either. Omit it until the qualified confirmation surface is available.
+   */
+  readonly changeSetApprovalV2?: AgentRunChangeSetApprovalV2Port;
   readonly versionGroupExecutor?: AgentVersionGroupExecutor;
   readonly conversationLifecycle?: AgentConversationLifecyclePort;
   /** Phase D: network read executor. When absent, network tools return UNAVAILABLE. */
@@ -898,6 +981,10 @@ export interface CreateAgentRunSessionOptions {
   readonly chapterAgentToolSession?: ChapterAgentToolSession;
   /** Structured Story Bible proposals, prepared through the shared candidate validator. */
   readonly storyBibleToolExecutor?: AgentStoryBibleToolExecutor;
+  /** Main-only persistence of the approval proof bound to a structured Story Bible Change Set. */
+  readonly storyBibleApprovalProofFinalizer?: AgentStoryBibleApprovalProofFinalizer;
+  /** Stable Main-owned workspace binding for Story Bible approval proofs. */
+  readonly storyBibleApprovalWorkspaceBindingId?: string;
   /**
    * Phase E: external tool executor (plugin: / mcp: namespaced tools).
    * When absent, any external tool call returns AGENT_TOOL_RUNTIME_UNAVAILABLE.
@@ -984,6 +1071,14 @@ interface RunRuntime {
   executionWritePolicyDraft: AgentWritePolicy;
   planArtifact?: PlanArtifact | PlanArtifactV20;
   changeSet?: ChangeSet;
+  /** Proof tied to the exact pending Story Bible Change Set revision, never provider-visible in full. */
+  pendingStoryBibleApproval?: {
+    readonly changeSetId: string;
+    readonly revision: number;
+    readonly checksum: string;
+    readonly proofRef: StoryBibleApprovalProofFinalization["proofRef"];
+    readonly providerSummary: StoryBibleApprovalProofFinalization["providerSummary"];
+  };
   pendingToolApproval?: PendingToolApproval;
   pendingContextShareApproval?: PendingContextShareApprovalRuntime;
   /** Task bindings that have crossed the durable launch boundary in this process. */
@@ -1082,6 +1177,49 @@ const fileLifecycleToolNames = new Set<string>([
   "create_resource",
   "manage_path"
 ]);
+
+const chapterLifecycleToolNames = new Set<ChapterLifecycleToolName>([
+  "rename_chapter",
+  "reorder_chapter",
+  "set_chapter_status",
+  "restore_chapter"
+]);
+
+function isChapterLifecycleToolName(name: string): name is ChapterLifecycleToolName {
+  return chapterLifecycleToolNames.has(name as ChapterLifecycleToolName);
+}
+
+function changeSetDomainOperationForLifecycle(
+  prepared: PreparedChapterLifecycleChange
+): Omit<ChangeSetV2DomainOperation, "selectedRelativePaths" | "selectionChecksum"> | undefined {
+  const proof = prepared.preparationProof;
+  if (
+    proof === undefined ||
+    !/^[a-f0-9]{64}$/u.test(proof.proofId) ||
+    !/^[a-f0-9]{64}$/u.test(proof.proofChecksum)
+  ) {
+    return undefined;
+  }
+  const operationKinds: Record<
+    PreparedChapterLifecycleChange["operation"],
+    ChangeSetV2DomainOperation["kind"]
+  > = {
+    rename: "chapter_rename",
+    reorder: "chapter_reorder",
+    status: "chapter_status",
+    delete: "chapter_delete",
+    restore: "chapter_restore"
+  };
+  const kind = operationKinds[prepared.operation];
+  const targetRef = `chapter:${prepared.targetChapterId}`;
+  return {
+    kind,
+    sourceRef: targetRef,
+    targetRef,
+    proofRef: proof.proofId,
+    proofChecksum: proof.proofChecksum
+  };
+}
 
 const storyBibleWriteToolNames = new Set<StoryBibleAgentWriteToolName>([
   "create_story_bible",
@@ -1326,7 +1464,11 @@ function capabilityNameForTool(descriptor: AgentToolDescriptor): string | undefi
         toolId === "get_story_bible_references"))
   )
     return "story_bible_structured_tools";
-  if (fileLifecycleToolNames.has(toolId)) return "file_lifecycle";
+  if (
+    fileLifecycleToolNames.has(toolId) ||
+    chapterLifecycleToolNames.has(toolId as ChapterLifecycleToolName)
+  )
+    return "file_lifecycle";
   if (toolId === "run_project_task") return "controlled_execution";
   if (toolId === "git_status" || toolId === "git_diff") return "git_read";
   if (networkToolNames.has(toolId)) return "network";
@@ -1674,11 +1816,23 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     readonly providerSemanticVersionSetChecksum: string;
     readonly descriptors: readonly AgentToolDescriptor[];
     readonly mapping: FrozenProviderNameMapping;
+    readonly sharingState?: AgentRunContextSharingState;
   }): {
     readonly frozen: AgentRunCapabilityBoundary;
     readonly observed?: AgentRunCapabilityBoundary;
   } {
     const observed = observedCapabilityBoundary(input.scope);
+    if (
+      input.sharingState !== undefined &&
+      (input.sharingState.grant.defaultsRevision !==
+        input.sharingState.defaults.defaultsRevision ||
+        (observed !== undefined &&
+          (observed.sharingDefaultsRevision !==
+            input.sharingState.defaults.defaultsRevision ||
+            observed.sharingGrantRevision !== input.sharingState.grant.grantRevision)))
+    ) {
+      throw new Error("AGENT_CAPABILITY_BOUNDARY_INVALID");
+    }
     const scopeKey = agentContextScopeKey(input.scope);
     const frozen = freezeCapabilityBoundary(
       {
@@ -1691,11 +1845,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           input.effectiveState
         ),
         sharingDefaultsRevision:
+          input.sharingState?.defaults.defaultsRevision ??
           observed?.sharingDefaultsRevision ??
           (input.scope.kind === "standalone"
             ? "not_applicable"
             : capabilityBoundaryChecksum(["sharing_defaults_unavailable", scopeKey])),
         sharingGrantRevision:
+          input.sharingState?.grant.grantRevision ??
           observed?.sharingGrantRevision ??
           (input.scope.kind === "standalone"
             ? "not_applicable"
@@ -1739,6 +1895,35 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       descriptors: catalog.descriptors,
       mapping: providerMappingFor(snapshot)
     });
+  }
+
+  function bindFrozenChangeSetSemanticVersion(
+    runId: string,
+    providerSemanticVersionSetChecksum: string
+  ): Result<void, UnifiedError> {
+    const changeSets = options.changeSetSession;
+    if (changeSets === undefined) return ok(undefined);
+    if (typeof changeSets.bindRunProviderSemanticVersionSet !== "function") {
+      return err(
+        applicationError(
+          "CHANGE_SET_PROVIDER_VERSION_SET_BINDING_UNAVAILABLE",
+          "The Main Change Set session cannot bind this run to its frozen Provider semantic version set."
+        )
+      );
+    }
+    try {
+      return changeSets.bindRunProviderSemanticVersionSet(
+        runId,
+        providerSemanticVersionSetChecksum
+      );
+    } catch {
+      return err(
+        applicationError(
+          "CHANGE_SET_PROVIDER_VERSION_SET_BINDING_UNAVAILABLE",
+          "The Main Change Set session failed to bind the frozen Provider semantic version set."
+        )
+      );
+    }
   }
 
   function materializeRunGuidanceV3(input: {
@@ -1846,12 +2031,45 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         if (!isJsonObject(payload)) return message;
         return {
           ...message,
-          content: JSON.stringify({ ...payload, evidenceRefs: [evidenceRef] })
+          content: JSON.stringify(toolPayloadWithFinishEvidence(payload, evidenceRef))
         };
       } catch {
         return message;
       }
     });
+  }
+
+  function toolPayloadWithFinishEvidence(payload: JsonObject, evidenceRef: string): JsonObject {
+    const data = payload["data"];
+    if (data === undefined) return { ...payload, evidenceRefs: [evidenceRef] };
+    const legacyEvidence = payload["schemaVersion"] === "2.0" ? {} : { evidenceRefs: [evidenceRef] };
+    if (typeof data === "string") {
+      try {
+        const parsed = JSON.parse(data) as unknown;
+        return {
+          ...payload,
+          ...legacyEvidence,
+          data: JSON.stringify(
+            isJsonObject(parsed)
+              ? { ...parsed, evidenceRefs: [evidenceRef] }
+              : { value: parsed, evidenceRefs: [evidenceRef] }
+          )
+        };
+      } catch {
+        return {
+          ...payload,
+          ...legacyEvidence,
+          data: JSON.stringify({ value: data, evidenceRefs: [evidenceRef] })
+        };
+      }
+    }
+    return {
+      ...payload,
+      ...legacyEvidence,
+      data: isJsonObject(data)
+        ? { ...data, evidenceRefs: [evidenceRef] }
+        : { value: data, evidenceRefs: [evidenceRef] }
+    };
   }
 
   function catalogCapabilityChanged(
@@ -2180,7 +2398,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
 
   async function applyVersionGroupWithAuthorization(
     executor: AgentVersionGroupExecutor,
-    input: { readonly changeSet: ChangeSet; readonly approval: ChangeSetApproval }
+    input: {
+      readonly changeSet: ChangeSet;
+      readonly approval: ChangeSetApproval | ChangeSetApprovalV2;
+    }
   ): Promise<Result<JsonObject, UnifiedError>> {
     const authorized = input.approval.approvalSource === "user_preapproved_run";
     if (authorized) authorizeAgentRunApproval(input.approval);
@@ -3205,6 +3426,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         "The current Agent capability boundary does not match the persisted V20 run."
       );
     }
+    if (restoredCapabilityBoundary !== undefined) {
+      const bound = bindFrozenChangeSetSemanticVersion(
+        snapshot.runId,
+        restoredCapabilityBoundary.frozen.providerSemanticVersionSetChecksum
+      );
+      if (!bound.ok) return bound;
+    }
     const runtime: RunRuntime = {
       messages,
       promptBaseMessageCount,
@@ -4203,6 +4431,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       const stagedProposal = dispatchResult.outcomes.some((outcome) => outcome === "staged");
       if (stagedProposal && runtime.changeSet !== undefined) {
         const changeSet = runtime.changeSet;
+        const pendingStoryBibleApproval = matchesPendingStoryBibleApproval(runtime, changeSet)
+          ? runtime.pendingStoryBibleApproval
+          : undefined;
+        const pendingStoryBibleApprovalDetail =
+          pendingStoryBibleApproval === undefined
+            ? {}
+            : {
+                approvalProofRef: asJsonObject(pendingStoryBibleApproval.proofRef),
+                providerApproval: asJsonObject(pendingStoryBibleApproval.providerSummary)
+              };
         const ready = await recordEvent(runId, {
           runId,
           status: "awaiting_write_approval",
@@ -4216,13 +4454,17 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             changeSetId: changeSet.changeSetId,
             revision: changeSet.revision,
             checksum: changeSet.checksum,
-            changeSet: asJsonObject(changeSet)
+            changeSet: asJsonObject(changeSet),
+            ...pendingStoryBibleApprovalDetail
           }
         });
         if (
           ready.ok &&
           snapshot.writePolicy === "user_preapproved_run" &&
-          !hasDestructiveLifecycleOperations(changeSet)
+          !hasDestructiveLifecycleOperations(changeSet) &&
+          (pendingStoryBibleApproval === undefined ||
+            pendingStoryBibleApproval.providerSummary.approvalRequirement ===
+              "auto_review_eligible")
         ) {
           const autoApprovalCommand: DecideChangeSetCommand = {
             runId,
@@ -5587,6 +5829,249 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? "terminal"
           : "continue";
       }
+      let storyBibleApproval: StoryBibleApprovalProofFinalization | undefined;
+      if (toolCatalogs.get(runId)?.schemaVersion === "2.0") {
+        const catalog = toolCatalogs.get(runId);
+        const boundary = runtime.capabilityBoundary;
+        if (
+          options.storyBibleApprovalProofFinalizer === undefined ||
+          catalog?.schemaVersion !== "2.0" ||
+          boundary === undefined ||
+          options.storyBibleApprovalWorkspaceBindingId === undefined
+        ) {
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            "STORY_BIBLE_APPROVAL_PROOF_BINDING_UNAVAILABLE",
+            "The frozen approval catalog or capability boundary is unavailable for this Story Bible Change Set."
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        if (
+          options.storyBibleApprovalProofFinalizer.referenceDependenciesRequired === true &&
+          prepared.value.referenceDependencies === undefined
+        ) {
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            "STORY_BIBLE_REFERENCE_DEPENDENCY_BINDING_REQUIRED",
+            "The Main-owned Story Bible reference dependency snapshot is unavailable; regenerate the proposal before applying it."
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        const finalized = await options.storyBibleApprovalProofFinalizer.finalize({
+          runId,
+          changeSetId: proposed.value.changeSetId,
+          revision: proposed.value.revision,
+          checksum: proposed.value.checksum,
+          ...(prepared.value.consistencyGroupId === undefined
+            ? {}
+            : { consistencyGroupId: prepared.value.consistencyGroupId }),
+          proposals: [prepared.value.approvalProof],
+          ...(prepared.value.referenceDependencies === undefined
+            ? {}
+            : { referenceDependencies: prepared.value.referenceDependencies }),
+          approvalRuleSetVersion: catalog.approvalRuleSetVersion,
+          approvalRuleSetChecksum: catalog.approvalRuleSetChecksum,
+          providerSemanticVersionSetChecksum: boundary.providerSemanticVersionSetChecksum,
+          workspaceBindingId: options.storyBibleApprovalWorkspaceBindingId,
+          rootBindingId: boundary.canonicalRootIdentityChecksum,
+          policyRevision: boundary.policyRevision,
+          capabilityRevision: catalog.catalogRevision,
+          pathClass: "ordinary",
+          targetFreshness: "clean_stable"
+        });
+        if (!finalized.ok) {
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            finalized.error.code,
+            finalized.error.message,
+            finalized.error
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        storyBibleApproval = finalized.value;
+      }
+      runtime.consecutiveToolFailures = 0;
+      delete runtime.lastFailedToolCall;
+      runtime.changeSet = proposed.value;
+      if (storyBibleApproval === undefined) {
+        delete runtime.pendingStoryBibleApproval;
+      } else {
+        runtime.pendingStoryBibleApproval = {
+          changeSetId: proposed.value.changeSetId,
+          revision: proposed.value.revision,
+          checksum: proposed.value.checksum,
+          proofRef: storyBibleApproval.proofRef,
+          providerSummary: storyBibleApproval.providerSummary
+        };
+      }
+      runtime.messages.push({
+        role: "tool",
+        toolCallId: call.toolCallId,
+        content: JSON.stringify({
+          ok: true,
+          status: "awaiting_approval",
+          changeSetId: proposed.value.changeSetId,
+          revision: proposed.value.revision,
+          checksum: proposed.value.checksum,
+          ...(storyBibleApproval === undefined
+            ? {}
+            : { approval: storyBibleApproval.providerSummary }),
+          proposal: {
+            action: prepared.value.action,
+            assetId: prepared.value.assetId,
+            assetType: prepared.value.assetType,
+            baseRevision: prepared.value.baseRevision ?? null,
+            nextRevision: prepared.value.nextRevision,
+            changedPaths: prepared.value.changedPaths,
+            fieldDiffs: prepared.value.fieldDiffs,
+            rebased: prepared.value.rebased,
+            warnings: prepared.value.warnings,
+            // Main-only impact details (including affected asset IDs) must not be echoed to the
+            // Provider. The approval proof already projects the bounded enum it is allowed to see.
+            referenceImpact: prepared.value.approvalProof.evidence.referenceImpact
+          }
+        })
+      });
+      await recordEvent(runId, {
+        runId,
+        status: "staging_changes",
+        type: "tool_completed",
+        detail: {
+          toolCallId: call.toolCallId,
+          toolName: descriptor.name,
+          assetId: prepared.value.assetId,
+          summary: `Prepared Story Bible Change Set revision ${proposed.value.revision}; target files are unchanged.`
+        }
+      });
+      return "staged";
+    }
+
+    if (isChapterLifecycleToolName(dispatchName)) {
+      if (options.chapterAgentToolSession === undefined || options.changeSetSession === undefined) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "AGENT_CHAPTER_LIFECYCLE_UNAVAILABLE",
+          "Chapter lifecycle preparation is unavailable for this project."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const prepared = await options.chapterAgentToolSession.prepareLifecycle({
+        toolName: dispatchName,
+        arguments: dispatchArguments
+      });
+      if (!prepared.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          prepared.error.code,
+          prepared.error.message,
+          prepared.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const lifecycleDomainOperation = changeSetDomainOperationForLifecycle(prepared.value);
+      if (lifecycleDomainOperation === undefined) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "AGENT_CHAPTER_LIFECYCLE_PROOF_UNAVAILABLE",
+          "Chapter lifecycle preparation is missing its durable Main proof."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const contextSnapshotId =
+        runtime.contextSnapshot?.contextSnapshotId ??
+        options.createContextSnapshotId?.(runId) ??
+        `context_${runId}`;
+      if (runtime.contextSnapshot === undefined) {
+        runtime.contextSnapshot = createAgentContextSnapshot({
+          contextSnapshotId,
+          runId,
+          ...contextSnapshotIdentity(snapshot),
+          createdAt: new Date().toISOString(),
+          sources: snapshotSourcesFor(runtime),
+          ...(promptArtifactBinding(runtime) ?? {})
+        });
+        if (options.repository.writeContextSnapshot !== undefined) {
+          const persisted = await options.repository.writeContextSnapshot(
+            asJsonObject(runtime.contextSnapshot)
+          );
+          if (!persisted.ok) throw persisted.error;
+        }
+      }
+      await recordEvent(runId, {
+        runId,
+        status: "staging_changes",
+        type: "tool_started",
+        snapshotPatch: { contextSnapshotId },
+        detail: { toolCallId: call.toolCallId, toolName: descriptor.name }
+      });
+      const files = [
+        ...prepared.value.chapters.map((file) => ({
+          relativePath: file.relativePath,
+          assetType: "chapter" as const,
+          assetId: file.assetId,
+          baseContent: file.baseContent,
+          candidateContent: file.candidateContent,
+          baseChecksum: file.baseChecksum,
+          candidateChecksum: file.candidateChecksum,
+          ...(prepared.value.proof === undefined || file.assetId !== prepared.value.targetChapterId
+            ? {}
+            : { chapterStatusTransitionProof: prepared.value.proof })
+        })),
+        ...(prepared.value.outline === undefined
+          ? []
+          : [
+              {
+                relativePath: prepared.value.outline.relativePath,
+                assetType: "text" as const,
+                assetId: prepared.value.outline.assetId,
+                baseContent: prepared.value.outline.baseContent,
+                candidateContent: prepared.value.outline.candidateContent,
+                baseChecksum: prepared.value.outline.baseChecksum,
+                candidateChecksum: prepared.value.outline.candidateChecksum
+              }
+            ])
+      ];
+      const proposed = await options.changeSetSession.proposePreparedFileBatch({
+        runId,
+        projectId: snapshot.projectId,
+        checkpointId:
+          runtime.currentCheckpointId ?? `checkpoint_${runId}_r${snapshot.runRevision + 1}`,
+        contextSnapshotId,
+        writePolicy: "write_before_confirmation",
+        consistencyGroupId: prepared.value.consistencyGroupId,
+        domainOperation: lifecycleDomainOperation,
+        files
+      });
+      if (!proposed.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          proposed.error.code,
+          proposed.error.message,
+          proposed.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
       runtime.consecutiveToolFailures = 0;
       delete runtime.lastFailedToolCall;
       runtime.changeSet = proposed.value;
@@ -5600,18 +6085,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           revision: proposed.value.revision,
           checksum: proposed.value.checksum,
           proposal: {
-            action: prepared.value.action,
-            assetId: prepared.value.assetId,
-            assetType: prepared.value.assetType,
-            baseRevision: prepared.value.baseRevision ?? null,
-            nextRevision: prepared.value.nextRevision,
-            changedPaths: prepared.value.changedPaths,
-            fieldDiffs: prepared.value.fieldDiffs,
-            rebased: prepared.value.rebased,
-            warnings: prepared.value.warnings,
-            ...(prepared.value.referenceImpact === undefined
-              ? {}
-              : { referenceImpact: prepared.value.referenceImpact })
+            operation: prepared.value.operation,
+            targetChapterRef: `chapter:${prepared.value.targetChapterId}`,
+            affectedFileCount: files.length,
+            approvalRequirement: "human_confirmation"
           }
         })
       });
@@ -5622,8 +6099,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         detail: {
           toolCallId: call.toolCallId,
           toolName: descriptor.name,
-          assetId: prepared.value.assetId,
-          summary: `Prepared Story Bible Change Set revision ${proposed.value.revision}; target files are unchanged.`
+          summary: `Prepared reviewed chapter ${prepared.value.operation} Change Set revision ${proposed.value.revision}; target files are unchanged.`
         }
       });
       return "staged";
@@ -6551,6 +7027,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     if (isTerminal(snapshot.status)) {
       return failure("AGENT_RUN_ALREADY_TERMINAL", "The Agent run has already ended.");
     }
+    if (!runtime.providerRoundsAllowed) {
+      return failure(
+        "AGENT_GUIDANCE_HANDOFF_REQUIRED",
+        "The run's frozen Guidance contract does not match the active rollout gate; create an explicit handoff before continuing."
+      );
+    }
     if (snapshot.activeErrorId !== command.errorId) {
       return failure(
         "AGENT_RETRY_ERROR_STALE",
@@ -7154,6 +7636,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         commandReceipts.set(receiptKey, rejected);
         return rejected;
       };
+      if (initialCapabilityBoundary !== undefined) {
+        const bound = bindFrozenChangeSetSemanticVersion(
+          result.value.runId,
+          initialCapabilityBoundary.frozen.providerSemanticVersionSetChecksum
+        );
+        if (!bound.ok) return rejectUnpersistedStart(bound.error);
+      }
       // Protocol 2.0 is materialized only after the coordinator assigns the real run id. Preview
       // bindings may use a draft-local placeholder, but a persisted snapshot must bind the actual
       // run and round identity. The canonical prompt is checked against the preflight prompt so
@@ -7405,6 +7894,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         type: "context_refreshed",
         snapshotPatch: { contextSnapshotId },
         detail: {
+          // The frozen prompt already contains these sources. This event is an audit pointer for
+          // the initial materialization, not a provider-visible history turn.
+          initialContextMaterialized: true,
           sourceRefs: initialContextSources.map((source) => source.refId),
           sourceDescriptors: contextSourceDescriptors(initialContextSources),
           dirtySourceRefs: initialContextSources
@@ -8550,6 +9042,18 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           "The execution Guidance 3.0 inputs do not form a valid Provider authority."
         );
       }
+      let executionSharingState: AgentRunContextSharingState | undefined;
+      if (executionGuidanceV3 !== undefined && options.contextSharing !== undefined) {
+        const sharing = await options.contextSharing.readForRun({
+          runId: command.runId,
+          scope: snapshot.scope
+        });
+        if (!sharing.ok) {
+          await cancelExecutionStart();
+          return { ok: false, error: sharing.error };
+        }
+        executionSharingState = sharing.value;
+      }
       let executionCapabilityBoundary:
         | {
             readonly frozen: AgentRunCapabilityBoundary;
@@ -8564,7 +9068,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             providerSemanticVersionSetChecksum:
               executionGuidanceV3.proof.providerSemanticVersionSetChecksum,
             descriptors: executionProviderDescriptors,
-            mapping: executionProviderMapping
+            mapping: executionProviderMapping,
+            ...(executionSharingState === undefined
+              ? {}
+              : { sharingState: executionSharingState })
           });
         }
       } catch {
@@ -8757,6 +9264,35 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         await cancelExecutionStart();
         return { ok: false, error };
       };
+      if (options.contextSharing?.inheritForPlanExecution !== undefined) {
+        const inheritedSharing = await options.contextSharing.inheritForPlanExecution({
+          sourceRunId: command.runId,
+          targetRunId: executionStarted.value.runId,
+          scope: snapshot.scope
+        });
+        if (!inheritedSharing.ok) return rejectUnpersistedExecution(inheritedSharing.error);
+        if (
+          executionCapabilityBoundary !== undefined &&
+          (inheritedSharing.value.defaults.defaultsRevision !==
+            executionCapabilityBoundary.frozen.sharingDefaultsRevision ||
+            inheritedSharing.value.grant.grantRevision !==
+              executionCapabilityBoundary.frozen.sharingGrantRevision)
+        ) {
+          return rejectUnpersistedExecution(
+            applicationError(
+              "AGENT_MODEL_SHARING_BINDING_INVALID",
+              "The approved Plan execution sharing state does not match its frozen capability boundary."
+            )
+          );
+        }
+      }
+      if (executionCapabilityBoundary !== undefined) {
+        const bound = bindFrozenChangeSetSemanticVersion(
+          executionStarted.value.runId,
+          executionCapabilityBoundary.frozen.providerSemanticVersionSetChecksum
+        );
+        if (!bound.ok) return rejectUnpersistedExecution(bound.error);
+      }
       const executionCatalog = useExecutionCatalogV2
         ? createAgentRunToolCatalogSnapshotV2({
             runId: executionStarted.value.runId,
@@ -9217,6 +9753,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       if (snapshot.status !== "awaiting_context_refresh") {
         return failure("AGENT_CONTEXT_NOT_STALE", "The Agent run is not awaiting context refresh.");
       }
+      if (command.decision !== "cancel" && !runtime.providerRoundsAllowed) {
+        return failure(
+          "AGENT_GUIDANCE_HANDOFF_REQUIRED",
+          "The run's frozen Guidance contract does not match the active rollout gate; create an explicit handoff before continuing."
+        );
+      }
       if (command.decision === "cancel") {
         runtime.controller.abort();
         runtime.generation += 1;
@@ -9462,6 +10004,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             latestSnapshot: snapshot
           };
         }
+        const requiresV2ChangeSet = snapshot.toolFacadeVersion === "v2";
+        if (requiresV2ChangeSet && !isChangeSetV2(changeSet) && command.decision !== "reject_all") {
+          return failure(
+            "CHANGE_SET_V2_REQUIRED",
+            "A new v2-facade Agent run may only reject a non-v2 Change Set; prepare a current v2 Change Set to modify or apply it."
+          );
+        }
         if (
           command.decision !== "reject_all" &&
           snapshot.contextSnapshotId !== null &&
@@ -9530,6 +10079,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           }
         }
         if (command.decision === "apply_selected") {
+          if (
+            toolCatalogs.get(command.runId)?.schemaVersion === "2.0" &&
+            isStoryBibleChangeSet(changeSet) &&
+            !matchesPendingStoryBibleApproval(runtime, changeSet)
+          ) {
+            return failure(
+              "STORY_BIBLE_APPROVAL_PROOF_STALE",
+              "This Story Bible Change Set changed after its approval proof was created; prepare it again before applying."
+            );
+          }
           const chapterCatalog = await validateFormalChapterCreateCatalogCas(
             changeSet,
             options.chapterAgentToolSession
@@ -9576,6 +10135,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             );
           }
           runtime.changeSet = selected.value;
+          delete runtime.pendingStoryBibleApproval;
           const revised = await recordEvent(command.runId, {
             runId: command.runId,
             status: "awaiting_write_approval",
@@ -9606,12 +10166,55 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             "The approved Change Set cannot be applied without the Version Group service."
           );
         }
-        const approval = await options.changeSetSession.decide(command);
+        const v2ApprovalContext =
+          isChangeSetV2(changeSet) && command.decision === "apply_selected"
+            ? await prepareV2ApprovalContext({
+                changeSetSession: options.changeSetSession,
+                runtime,
+                changeSet,
+                scope: snapshot.scope,
+                catalog: (() => {
+                  const catalog = toolCatalogs.get(command.runId);
+                  return catalog?.schemaVersion === "2.0" ? catalog : undefined;
+                })()
+              })
+            : undefined;
+        if (v2ApprovalContext !== undefined && !v2ApprovalContext.ok) {
+          const result = {
+            ok: false as const,
+            error: v2ApprovalContext.error,
+            latestSnapshot: snapshot
+          };
+          return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
+        }
+        const approval = isChangeSetV2(changeSet)
+          ? command.decision === "reject_all"
+            ? await options.changeSetSession.rejectV2({
+                changeSetId: changeSet.changeSetId,
+                revision: changeSet.revision,
+                checksum: changeSet.checksum,
+                displayBindingChecksum: changeSet.displayBindingChecksum,
+                resolvedAt: new Date().toISOString()
+              })
+            : await decideChangeSetV2FromTrustedMain(
+                options.changeSetSession,
+                options.changeSetApprovalV2,
+                {
+                  changeSet,
+                  command,
+                  // The preceding guard ensures this is present only for apply_selected.
+                  approvalContext:
+                    v2ApprovalContext?.value as AgentRunChangeSetApprovalV2ApprovalContext
+                }
+              )
+          : requiresV2ChangeSet
+            ? ok(nonV2FacadeRejection(changeSet))
+            : await options.changeSetSession.decide(command);
         if (!approval.ok) {
           const result = { ok: false as const, error: approval.error, latestSnapshot: snapshot };
           return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
         }
-        if (!isChangeSetApproval(approval.value)) {
+        if (!isChangeSetApproval(approval.value) && !isChangeSetV2Rejection(approval.value)) {
           return failure(
             "CHANGE_SET_DECISION_INVALID",
             "The Change Set decision did not produce an approval binding."
@@ -9646,9 +10249,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           };
           return persistCommandReceipt(command.runId, command.projectId, command.commandId, result);
         }
-        const resolvedApproval: ChangeSetApproval =
+        const resolvedApproval: ChangeSetApproval | ChangeSetApprovalV2 | ChangeSetV2Rejection =
           approvalSource === "user_preapproved_run"
-            ? Object.freeze({ ...approval.value, approvalSource })
+            ? Object.freeze({ ...(approval.value as ChangeSetApproval), approvalSource })
             : approval.value;
         if (approvalSource === "user_preapproved_run") {
           const autoApproved = await recordEvent(command.runId, {
@@ -9668,7 +10271,16 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           runId: command.runId,
           status: command.decision === "reject_all" ? "executing_model" : "applying_changes",
           type: "approval_resolved",
-          detail: asJsonObject(resolvedApproval)
+          ...(command.decision === "reject_all"
+            ? {
+                snapshotPatch: {
+                  pendingChangeSetId: null,
+                  pendingChangeSetRevision: null,
+                  pendingChangeSetChecksum: null
+                }
+              }
+            : {}),
+          detail: asJsonObject(resolvedApproval as unknown as JsonObject)
         });
         if (!approvalResolved.ok) return approvalResolved;
 
@@ -9678,6 +10290,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             content: JSON.stringify({ ok: true, decision: "rejected_by_user" })
           });
           delete runtime.changeSet;
+          delete runtime.pendingStoryBibleApproval;
           const rejected = await recordEvent(command.runId, {
             runId: command.runId,
             status: "executing_model",
@@ -9697,6 +10310,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           );
           if (rejected.ok) scheduleDrive(command.runId);
           return rejectedReceipt;
+        }
+
+        if (!isChangeSetApproval(resolvedApproval)) {
+          return failure(
+            "CHANGE_SET_DECISION_INVALID",
+            "A Change Set apply requires an approved v1 or v2 binding."
+          );
         }
 
         if (options.versionGroupExecutor === undefined)
@@ -10156,8 +10776,433 @@ function parseRetryCheckpoint(value: JsonObject | undefined): AssembledToolCall 
     : { toolCallId, name, argumentsText };
 }
 
-function isChangeSetApproval(value: ChangeSet | ChangeSetApproval): value is ChangeSetApproval {
+/**
+ * Produces the only approval-proof handoff accepted by the v2 confirmation bridge.  In
+ * particular, chapter lifecycle's `domainOperation.proofRef` is preparation evidence, not a
+ * human-approval proof, so it is only folded into the bound proposal payload below.
+ */
+async function prepareV2ApprovalContext(input: {
+  readonly changeSetSession: ChangeSetSession;
+  readonly runtime: RunRuntime;
+  readonly changeSet: ChangeSetV2;
+  readonly scope: AgentContextScope;
+  readonly catalog: AgentRunToolCatalogSnapshotV2 | undefined;
+}): Promise<Result<AgentRunChangeSetApprovalV2ApprovalContext, UnifiedError>> {
+  const { changeSet, runtime, catalog } = input;
+  const boundary = runtime.capabilityBoundary;
+  if (boundary === undefined || catalog === undefined) {
+    return err(
+      applicationError(
+        "CHANGE_SET_APPROVAL_PROOF_BINDING_UNAVAILABLE",
+        "The frozen approval catalog or capability boundary is unavailable; this Change Set remains pending."
+      )
+    );
+  }
+  if (
+    changeSet.providerSemanticVersionSetChecksum !== boundary.providerSemanticVersionSetChecksum
+  ) {
+    return err(
+      applicationError(
+        "CHANGE_SET_APPROVAL_PROOF_BINDING_MISMATCH",
+        "The Change Set was not created under the current frozen Provider semantic version boundary."
+      )
+    );
+  }
+
+  const manifests = approvalProofManifests(changeSet);
+  const selectionChecksum = approvalProofSelectionChecksum(changeSet);
+  if (selectionChecksum === undefined) {
+    return err(
+      applicationError(
+        "CHANGE_SET_APPROVAL_PROOF_SELECTION_INVALID",
+        "The Change Set selection cannot be bound to a Main-owned approval proof."
+      )
+    );
+  }
+
+  let proofRef: ApprovalDecisionProofRefV1;
+  let operation: ProviderVisibleWriteOperation;
+  if (matchesPendingStoryBibleApproval(runtime, changeSet)) {
+    const pending = runtime.pendingStoryBibleApproval;
+    // The Story Bible finalizer persisted this exact ref after binding it to this exact revision.
+    // Never substitute the tool/lifecycle proof reference here.
+    if (
+      pending === undefined ||
+      !isApprovalProofRef(pending.proofRef) ||
+      pending.providerSummary.proofChecksum !== pending.proofRef.proofChecksum ||
+      pending.changeSetId !== changeSet.changeSetId ||
+      pending.revision !== changeSet.revision ||
+      pending.checksum !== changeSet.checksum
+    ) {
+      return err(
+        applicationError(
+          "STORY_BIBLE_APPROVAL_PROOF_STALE",
+          "This Story Bible Change Set no longer matches its persisted Main-owned approval proof."
+        )
+      );
+    }
+    proofRef = pending.proofRef;
+    if (!isProviderVisibleWritingOperation(pending.providerSummary.operation)) {
+      return err(
+        applicationError(
+          "STORY_BIBLE_APPROVAL_PROOF_INVALID",
+          "The persisted Story Bible approval proof has no valid operation classification."
+        )
+      );
+    }
+    operation = pending.providerSummary.operation;
+  } else {
+    const proof = createV2AgentRunApprovalProof({
+      changeSet,
+      scope: input.scope,
+      boundary,
+      catalog,
+      selectionChecksum,
+      manifests
+    });
+    if (!proof.ok) return proof;
+    const persisted = await input.changeSetSession.persistApprovalDecisionProof({
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      proof: proof.value
+    });
+    if (!persisted.ok) return persisted;
+    if (!isApprovalProofRef(persisted.value)) {
+      return err(
+        applicationError(
+          "CHANGE_SET_APPROVAL_PROOF_INVALID",
+          "Main approval proof storage returned an invalid proof reference."
+        )
+      );
+    }
+    proofRef = persisted.value;
+    operation = proof.value.operation;
+  }
+
+  return ok(
+    Object.freeze({
+      proofRef: Object.freeze({ ...proofRef }),
+      workspaceBindingId: agentContextScopeKey(input.scope),
+      operation,
+      approvalBindingOperationKind: v2ApprovalBindingOperation(changeSet, operation),
+      approvalRuleSet: Object.freeze({
+        version: catalog.approvalRuleSetVersion,
+        checksum: catalog.approvalRuleSetChecksum,
+        catalogRevision: catalog.catalogRevision
+      }),
+      capabilityBoundary: Object.freeze({ ...boundary }),
+      preview: Object.freeze({
+        changeSetId: changeSet.changeSetId,
+        revision: changeSet.revision,
+        checksum: changeSet.checksum,
+        displayBindingChecksum: changeSet.displayBindingChecksum,
+        providerSemanticVersionSetChecksum: changeSet.providerSemanticVersionSetChecksum,
+        selectionChecksum,
+        baseManifestChecksum: manifests.baseManifestChecksum,
+        candidateManifestChecksum: manifests.candidateManifestChecksum
+      })
+    })
+  );
+}
+
+function createV2AgentRunApprovalProof(input: {
+  readonly changeSet: ChangeSetV2;
+  readonly scope: AgentContextScope;
+  readonly boundary: AgentRunCapabilityBoundary;
+  readonly catalog: AgentRunToolCatalogSnapshotV2;
+  readonly selectionChecksum: string;
+  readonly manifests: {
+    readonly baseManifestChecksum: string;
+    readonly candidateManifestChecksum: string;
+  };
+}): Result<MainOnlyApprovalDecisionProofV1, UnifiedError> {
+  const operation = v2ApprovalOperation(input.changeSet);
+  if (operation === undefined) {
+    return err(
+      applicationError(
+        "CHANGE_SET_APPROVAL_PROOF_OPERATION_INVALID",
+        "The frozen Change Set does not describe one approval-rule operation."
+      )
+    );
+  }
+  const evidence = v2ApprovalEvidence(input.changeSet, operation);
+  const binding = {
+    workspaceBindingId: agentContextScopeKey(input.scope),
+    ...(input.boundary.canonicalRootIdentityChecksum === "not_applicable"
+      ? {}
+      : { rootBindingId: input.boundary.canonicalRootIdentityChecksum }),
+    runId: input.changeSet.runId,
+    changeSetId: input.changeSet.changeSetId,
+    changeSetRevision: input.changeSet.revision,
+    changeSetChecksum: input.changeSet.checksum,
+    consistencyGroupChecksum: input.selectionChecksum,
+    // This includes the lifecycle preparation ref/checksum as immutable proposal data but never
+    // treats it as the authorization proof.
+    proposalPayloadChecksum: capabilityBoundaryChecksum({
+      changeSetId: input.changeSet.changeSetId,
+      revision: input.changeSet.revision,
+      checksum: input.changeSet.checksum,
+      displayBindingChecksum: input.changeSet.displayBindingChecksum,
+      providerSemanticVersionSetChecksum: input.changeSet.providerSemanticVersionSetChecksum,
+      domainOperation: input.changeSet.domainOperation ?? null,
+      files: input.changeSet.files,
+      operations: input.changeSet.operations ?? []
+    }),
+    baseManifestChecksum: input.manifests.baseManifestChecksum,
+    candidateManifestChecksum: input.manifests.candidateManifestChecksum,
+    executionWritePolicy: input.changeSet.writePolicy ?? "write_before_confirmation",
+    policyRevision: input.boundary.policyRevision,
+    capabilityRevision: input.catalog.catalogRevision
+  } as const;
+  try {
+    const effectRuleId = approvalEffectRuleFor(input.catalog, operation);
+    return ok(
+      createMainOnlyApprovalDecisionProofV1({
+        proofId: `approval_${input.changeSet.changeSetId}_${input.changeSet.revision}_${input.changeSet.checksum}`,
+        approvalRuleSetVersion: input.catalog.approvalRuleSetVersion,
+        approvalRuleSetChecksum: input.catalog.approvalRuleSetChecksum,
+        operation,
+        ...(effectRuleId === undefined ? {} : { effectRuleId }),
+        binding,
+        evidence
+      })
+    );
+  } catch {
+    return err(
+      applicationError(
+        "CHANGE_SET_APPROVAL_PROOF_RULE_MISMATCH",
+        "The frozen Change Set cannot be evaluated by the frozen approval rule set."
+      )
+    );
+  }
+}
+
+function approvalEffectRuleFor(
+  catalog: AgentRunToolCatalogSnapshotV2,
+  operation: ProviderVisibleWriteOperation
+): ProviderVisibleConditionalApprovalRuleId | undefined {
+  const rule = catalog.approvalRules.find((candidate) => candidate.operation === operation);
+  return rule !== undefined && rule.reviewMode === "conditional_auto_review"
+    ? rule.effectRuleId
+    : undefined;
+}
+
+function v2ApprovalOperation(changeSet: ChangeSetV2): ProviderVisibleWriteOperation | undefined {
+  const lifecycle = changeSet.domainOperation?.kind;
+  if (lifecycle !== undefined) {
+    switch (lifecycle) {
+      case "chapter_rename":
+        return "chapter_rename";
+      case "chapter_reorder":
+        return "chapter_reorder";
+      case "chapter_status":
+      case "chapter_delete":
+      case "chapter_restore":
+        // Delete is a status-boundary transition in the writing contract and must remain human.
+        return lifecycle === "chapter_restore" ? "chapter_restore" : "chapter_status";
+    }
+  }
+  const selectedFiles = changeSet.files.filter(
+    (file) => file.selected && file.hunks.some((hunk) => hunk.selected)
+  );
+  if (selectedFiles.length === 1 && selectedFiles[0]?.assetType === "chapter") {
+    return selectedFiles[0].baseContent.length === 0 ? "chapter_create" : "chapter_replace";
+  }
+  const selectedOperations = (changeSet.operations ?? []).filter(
+    (operation) => operation.selected !== false
+  );
+  if (selectedOperations.length === 1) {
+    switch (selectedOperations[0]?.kind) {
+      case "create_file":
+        return "create_file";
+      case "move_file":
+        return "move_file";
+      case "delete_file":
+        return "delete_file";
+      case "create_directory":
+        return "create_directory";
+      case "modify":
+        return "replace_file";
+    }
+  }
+  return selectedFiles.length > 0 ? "replace_file" : undefined;
+}
+
+function v2ApprovalEvidence(
+  changeSet: ChangeSetV2,
+  operation: ProviderVisibleWriteOperation
+): ApprovalDecisionProofEvidenceV1 {
+  const lifecycle = changeSet.domainOperation !== undefined;
+  const chapterCreate = operation === "chapter_create";
+  const chapterReplace = operation === "chapter_replace";
+  return {
+    pathClass:
+      operation.startsWith("chapter_") || operation.startsWith("story_bible_")
+        ? "not_applicable"
+        : "unknown",
+    // Lifecycle evidence is deliberately conservative: preparation proves transition validity,
+    // never an approval decision.  The frozen registry therefore retains an always-human path.
+    targetFreshness: chapterReplace ? "unknown" : "not_applicable",
+    createOnly: chapterCreate ? "not_proven" : "not_applicable",
+    referenceImpact: "unknown",
+    limits: "unknown",
+    stateBoundary: lifecycle
+      ? changeSet.domainOperation?.kind === "chapter_restore"
+        ? "restore"
+        : changeSet.domainOperation?.kind === "chapter_delete"
+          ? "delete"
+          : "ordinary"
+      : "ordinary"
+  };
+}
+
+function v2ApprovalBindingOperation(
+  changeSet: ChangeSetV2,
+  operation: ProviderVisibleWriteOperation
+): ApprovalBindingV2OperationKind {
+  const domainKind = changeSet.domainOperation?.kind;
+  if (domainKind !== undefined) return domainKind;
+  switch (operation) {
+    case "story_bible_create":
+    case "story_bible_patch":
+    case "story_bible_status":
+    case "story_bible_restore":
+      return "story_bible_mutation";
+    default:
+      return operation;
+  }
+}
+
+function approvalProofSelectionChecksum(changeSet: ChangeSetV2): string | undefined {
+  if (changeSet.domainOperation !== undefined) return changeSet.domainOperation.selectionChecksum;
+  const groupIds = [
+    ...changeSet.files
+      .filter((file) => file.selected && file.hunks.some((hunk) => hunk.selected))
+      .flatMap((file) => (file.consistencyGroupId === undefined ? [] : [file.consistencyGroupId])),
+    ...(changeSet.operations ?? [])
+      .filter((operation) => operation.selected !== false)
+      .flatMap((operation) =>
+        operation.consistencyGroupId === undefined ? [] : [operation.consistencyGroupId]
+      )
+  ];
+  try {
+    return checksumChangeSetSelection(changeSet, groupIds);
+  } catch {
+    return undefined;
+  }
+}
+
+function approvalProofManifests(changeSet: ChangeSetV2): {
+  readonly baseManifestChecksum: string;
+  readonly candidateManifestChecksum: string;
+} {
+  return Object.freeze({
+    baseManifestChecksum: capabilityBoundaryChecksum({
+      files: changeSet.files.map((file) => ({
+        relativePath: file.relativePath,
+        baseChecksum: file.baseChecksum,
+        selected: file.selected,
+        hunks: file.hunks.map((hunk) => ({ hunkId: hunk.hunkId, selected: hunk.selected }))
+      })),
+      operations: changeSet.operations ?? []
+    }),
+    candidateManifestChecksum: capabilityBoundaryChecksum({
+      files: changeSet.files.map((file) => ({
+        relativePath: file.relativePath,
+        candidateChecksum: file.candidateChecksum,
+        selected: file.selected,
+        hunks: file.hunks.map((hunk) => ({ hunkId: hunk.hunkId, selected: hunk.selected }))
+      })),
+      operations: changeSet.operations ?? []
+    })
+  });
+}
+
+function isApprovalProofRef(value: unknown): value is ApprovalDecisionProofRefV1 {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { readonly proofId?: unknown }).proofId === "string" &&
+    (value as { readonly proofId: string }).proofId.length > 0 &&
+    typeof (value as { readonly proofChecksum?: unknown }).proofChecksum === "string" &&
+    /^[a-f0-9]{64}$/u.test((value as { readonly proofChecksum: string }).proofChecksum)
+  );
+}
+
+async function decideChangeSetV2FromTrustedMain(
+  session: ChangeSetSession,
+  bridge: AgentRunChangeSetApprovalV2Port | undefined,
+  input: {
+    readonly changeSet: ChangeSetV2;
+    readonly command: DecideChangeSetCommand;
+    readonly approvalContext: AgentRunChangeSetApprovalV2ApprovalContext;
+  }
+): Promise<Result<ChangeSetApprovalV2, UnifiedError>> {
+  if (bridge === undefined) {
+    return err(
+      applicationError(
+        "CHANGE_SET_TRUSTED_SURFACE_UNAVAILABLE",
+        "The ADR-0004 qualified confirmation surface is unavailable; this Change Set remains pending."
+      )
+    );
+  }
+  let prepared: Result<DecideChangeSetApprovalV2Input, UnifiedError>;
+  try {
+    prepared = await bridge.prepare(input);
+  } catch {
+    return err(
+      applicationError(
+        "CHANGE_SET_TRUSTED_SURFACE_FAILED",
+        "The ADR-0004 qualified confirmation surface failed; this Change Set remains pending."
+      )
+    );
+  }
+  if (!prepared.ok) return prepared;
+  if (
+    prepared.value.changeSet.changeSetId !== input.changeSet.changeSetId ||
+    prepared.value.changeSet.revision !== input.changeSet.revision ||
+    prepared.value.changeSet.checksum !== input.changeSet.checksum ||
+    prepared.value.decision !== input.command.decision
+  ) {
+    return err(
+      applicationError(
+        "CHANGE_SET_V2_BINDING_MISMATCH",
+        "The Main confirmation did not bind the current Change Set revision."
+      )
+    );
+  }
+  return session.decideV2(prepared.value);
+}
+
+function isChangeSetApproval(
+  value: ChangeSet | ChangeSetApproval | ChangeSetApprovalV2 | ChangeSetV2Rejection
+): value is ChangeSetApproval | ChangeSetApprovalV2 {
   return "decision" in value && "approvalSource" in value && "binding" in value;
+}
+
+function isChangeSetV2Rejection(value: unknown): value is ChangeSetV2Rejection {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "schemaVersion" in value &&
+    value.schemaVersion === "2.0" &&
+    "decision" in value &&
+    value.decision === "reject_all" &&
+    "displayBindingChecksum" in value
+  );
+}
+
+/**
+ * A new v2-facade run may discard an old-shaped pending proposal, but it must never hand that
+ * proposal to the legacy decision token path. This rejection has no approval or reservation.
+ */
+function nonV2FacadeRejection(changeSet: ChangeSet): ChangeSetV2Rejection {
+  return Object.freeze({
+    schemaVersion: "2.0" as const,
+    decision: "reject_all" as const,
+    resolvedAt: new Date().toISOString(),
+    displayBindingChecksum: changeSet.checksum
+  });
 }
 
 function hasDestructiveLifecycleOperations(changeSet: ChangeSet): boolean {
@@ -10809,6 +11854,29 @@ function degradedBucketChangedWithoutMutation(
 
 function isStoryBibleOutlinePath(path: string): boolean {
   return /^(characters|world|outline|foreshadows|timeline)\//u.test(path);
+}
+
+function isStoryBibleChangeSet(changeSet: ChangeSet): boolean {
+  const isStoryPath = (path: string) => isStoryBibleOutlinePath(path.replaceAll("\\", "/"));
+  return (
+    changeSet.files.some((file) => isStoryPath(file.relativePath)) ||
+    (changeSet.operations ?? []).some((operation) => {
+      if (operation.kind === "move_file") {
+        return isStoryPath(operation.sourcePath) || isStoryPath(operation.targetPath);
+      }
+      return isStoryPath(operation.relativePath);
+    })
+  );
+}
+
+function matchesPendingStoryBibleApproval(runtime: RunRuntime, changeSet: ChangeSet): boolean {
+  const pending = runtime.pendingStoryBibleApproval;
+  return (
+    pending !== undefined &&
+    pending.changeSetId === changeSet.changeSetId &&
+    pending.revision === changeSet.revision &&
+    pending.checksum === changeSet.checksum
+  );
 }
 
 function expectedChangedOutlineEntries(

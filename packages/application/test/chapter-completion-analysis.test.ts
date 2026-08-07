@@ -357,6 +357,9 @@ function createProjectWorkspaceSessionStub(
     async createProjectInParent() {
       throw new Error("not used");
     },
+    async refreshFromRepository() {
+      return ok(snapshot);
+    },
     async listChapters() {
       return ok(snapshot.chapters);
     },

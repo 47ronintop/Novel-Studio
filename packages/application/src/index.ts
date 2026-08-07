@@ -73,6 +73,9 @@ export type {
   ReadAgentPermissionSummaryQuery,
   WorkspaceContextPolicyUpdate,
   WorkspaceContextSourcePreferenceUpdate,
+  WritingEditorStateAcknowledgement,
+  WritingEditorStateReport,
+  WritingEditorStateReportResult,
   ProjectDirectorySelectionDto,
   ProjectTextFileSelectionDto
 } from "./novel-studio-api.js";
@@ -770,6 +773,27 @@ export type {
   RecordAgentRunErrorInput
 } from "./agent-diagnostics-session.js";
 export { createChangeSetSession } from "./change-set-session.js";
+export { createStoryBibleApprovalProofSession } from "./story-bible-approval-proof-session.js";
+export type {
+  CreateStoryBibleApprovalProofSessionOptions,
+  FinalizeStoryBibleApprovalProofInput,
+  StoryBibleApprovalProofFinalization,
+  StoryBibleApprovalProofSession
+} from "./story-bible-approval-proof-session.js";
+export {
+  checksumStoryBibleReferenceDependencies,
+  createStoryBibleReferenceDependencyApplyGuard,
+  createStoryBibleReferenceDependencyBinding
+} from "./story-bible-reference-dependency-guard.js";
+export type {
+  CreateStoryBibleReferenceDependencyApplyGuardOptions,
+  CreateStoryBibleReferenceDependencyBindingInput,
+  StoryBibleReferenceDependencyApplyGuard,
+  StoryBibleReferenceDependencyBindingRepositoryPort,
+  StoryBibleReferenceDependencyBindingV1,
+  StoryBibleReferenceDependencyEditorStatePort,
+  StoryBibleReferenceDependencyV1
+} from "./story-bible-reference-dependency-guard.js";
 export {
   authorizeApprovalBindingV2,
   consumeApprovalBindingV2Authorization,
@@ -856,6 +880,8 @@ export type {
   AgentUsageBudgetFacts,
   AgentUsageTimeFacts,
   AgentVersionGroupExecutor,
+  AgentRunChangeSetApprovalV2Port,
+  AgentRunChangeSetApprovalV2ApprovalContext,
   AgentUserInputOption,
   AgentUserInputRequest,
   AnswerAgentUserInputCommand,
@@ -1062,8 +1088,19 @@ export {
 export { createStoryBibleAgentToolSession } from "./story-bible-agent-tool-session.js";
 export {
   createChapterAgentToolSession,
+  type ChapterLifecycleOperation,
+  type ChapterLifecyclePreparationPort,
+  type ChapterLifecycleToolName,
   type ChapterAgentToolSession,
   type ChapterAgentToolSessionOptions,
+  type PrepareChapterDeleteInput,
+  type PrepareChapterLifecycleToolInput,
+  type PrepareChapterRenameInput,
+  type PrepareChapterReorderInput,
+  type PrepareChapterRestoreInput,
+  type PrepareChapterStatusInput,
+  type PreparedChapterLifecycleChange,
+  type PreparedChapterLifecycleFile,
   type ProposeChapterOrderMigrationInput
 } from "./chapter-agent-tool-session.js";
 export {

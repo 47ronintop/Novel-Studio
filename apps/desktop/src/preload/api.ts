@@ -96,6 +96,8 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot,
   WorkspaceContextPolicyUpdate,
+  WritingEditorStateReport,
+  WritingEditorStateReportResult,
   WorkflowRunRecord,
   WorkflowRunSummary
 } from "@novel-studio/application";
@@ -164,6 +166,11 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
           ipc,
           "application:project:get-active-workspace"
+        ),
+      refreshActiveWorkspace: () =>
+        invokeTyped<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>(
+          ipc,
+          "application:project:refresh-active-workspace"
         ),
       chooseOpenCreativeDirectory: () =>
         invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
@@ -624,6 +631,14 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           nextBody
         )
     },
+    writingEditor: {
+      reportState: (report: WritingEditorStateReport) =>
+        invokeTyped<WritingEditorStateReportResult>(
+          ipc,
+          "application:writing-editor:report-state",
+          report
+        )
+    },
     settings: {
       listModelProfiles: () =>
         invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
@@ -991,7 +1006,7 @@ function isAgentRunEvent(value: unknown): value is AgentRunEvent {
   const schemaVersion = event["schemaVersion"];
   const scope = event["scope"];
   const hasScope =
-    schemaVersion === "1.3" &&
+    (schemaVersion === "1.3" || schemaVersion === "2.0") &&
     typeof scope === "object" &&
     scope !== null &&
     !Array.isArray(scope) &&
@@ -1005,7 +1020,8 @@ function isAgentRunEvent(value: unknown): value is AgentRunEvent {
     (schemaVersion === "1.0" ||
       schemaVersion === "1.1" ||
       schemaVersion === "1.2" ||
-      schemaVersion === "1.3") &&
+      schemaVersion === "1.3" ||
+      schemaVersion === "2.0") &&
     typeof event["runId"] === "string" &&
     (hasScope || typeof event["projectId"] === "string") &&
     typeof event["sequence"] === "number" &&

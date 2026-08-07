@@ -4,6 +4,8 @@ import {
   hasMainOwnedEngineeringFileQualification,
   mainOwnedEngineeringFileQualificationRevision
 } from "./engineering-file-access-qualification.js";
+import { isMainOwnedApprovalSurfaceQualification } from "./approval-surface-qualification.js";
+import type { TrustedApprovalSurfaceQualificationV1 } from "./agent-approval-confirmation.js";
 
 /**
  * Main-owned feature flags for the Agent capabilities that remain in product scope.
@@ -112,4 +114,50 @@ export function createAgentFeatureFlags(
       : merged.revision
   };
   return Object.freeze(flags);
+}
+
+/**
+ * Production-only resolver. Unlike the lower-level flag normalizer, it refuses a plain object
+ * or a port's presence as approval evidence: only the verifier's Main-owned object can enable
+ * V2 mutation capabilities.
+ */
+export function createProductionAgentFeatureFlags(
+  overrides: Partial<AgentFeatureFlags>,
+  approvalQualification: TrustedApprovalSurfaceQualificationV1 | undefined,
+  engineeringQualification?: EngineeringFileQualificationAttestationV1,
+  now: () => string = () => new Date().toISOString()
+): AgentFeatureFlags {
+  const qualified = hasCurrentMainOwnedApprovalSurfaceQualification(approvalQualification, now());
+  const flags = createAgentFeatureFlags(
+    {
+      ...overrides,
+      approvalBindingV2: qualified && overrides.approvalBindingV2 === true,
+      writingDomainCrudV2: qualified && overrides.writingDomainCrudV2 === true
+    },
+    engineeringQualification
+  );
+  return Object.freeze({
+    ...flags,
+    revision: `${flags.revision}:approval-surface:${
+      qualified ? approvalQualification.attestationChecksum : "unavailable"
+    }`
+  });
+}
+
+/** Main-only production gate used both by capability resolution and runtime activation. */
+export function hasCurrentMainOwnedApprovalSurfaceQualification(
+  value: unknown,
+  now: string = new Date().toISOString()
+): value is TrustedApprovalSurfaceQualificationV1 {
+  if (!isMainOwnedApprovalSurfaceQualification(value)) return false;
+  const observedAt = Date.parse(now);
+  const issuedAt = Date.parse(value.issuedAt);
+  const expiresAt = Date.parse(value.expiresAt);
+  return (
+    Number.isFinite(observedAt) &&
+    Number.isFinite(issuedAt) &&
+    Number.isFinite(expiresAt) &&
+    issuedAt <= observedAt &&
+    observedAt < expiresAt
+  );
 }

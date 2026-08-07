@@ -862,6 +862,11 @@ async function seedV2Run(): Promise<{
   await rm(join(seeded.projectRoot, "history", "agent-runs", "run_01", "run.json"), {
     force: true
   });
+  // V2 records are read only through the strict repository path. The legacy seed's event stream
+  // must not survive this fixture upgrade, or the repository correctly rejects the mixed history.
+  await rm(join(seeded.projectRoot, "history", "agent-runs", "run_01", "events.json"), {
+    force: true
+  });
   const scope = {
     kind: "workspace" as const,
     workspaceKind: "creativeProject" as const,
@@ -1053,6 +1058,12 @@ async function seedV2Run(): Promise<{
   ).toMatchObject({ ok: true });
   const runWritten = await seeded.repository.writeSnapshotV20(run as never);
   if (!runWritten.ok) throw new Error(`run write failed: ${runWritten.error.code}`);
+  const startedEvent = coordinator.readEvents("run_01")[0];
+  if (startedEvent?.schemaVersion !== "2.0") {
+    throw new Error("V2 seed did not produce a strict run-started event");
+  }
+  const eventWritten = await seeded.repository.appendEventV20(startedEvent);
+  if (!eventWritten.ok) throw new Error(`V2 event write failed: ${eventWritten.error.code}`);
   return seeded;
 }
 

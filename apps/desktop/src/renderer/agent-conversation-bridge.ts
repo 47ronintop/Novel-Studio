@@ -99,9 +99,16 @@ export function createAgentConversationBridge(
   const knownConversations = new Map<string, AgentConversationSummary>();
   let state: BridgeState = emptyState();
   let createInFlight: Promise<void> | undefined;
+  // Main can emit a complete model round (delta, completion, tool events) before the first
+  // conversation lookup resolves. Serialize projection so a late run_started lookup cannot
+  // overwrite the already-streamed assistant turn with an empty placeholder.
+  let runEventRouting = Promise.resolve();
 
   const unsubscribeRunEvents = api.agentRuns.onEvent((event) => {
-    void routeRunEvent(event);
+    runEventRouting = runEventRouting
+      .catch(() => undefined)
+      .then(() => routeRunEvent(event))
+      .catch(() => undefined);
   });
 
   function notify(): void {
@@ -1042,7 +1049,11 @@ function assistantTextPatch(event: AgentRunEvent): Readonly<Record<string, strin
   }
   if (event.type === "run_completed") {
     const summary = event.detail?.["summary"];
-    return typeof summary === "string" && summary.length > 0 ? { assistantText: summary } : {};
+    if (typeof summary === "string" && summary.length > 0) return { assistantText: summary };
+    const finishReport = event.detail?.["finishReport"];
+    if (!isJsonObject(finishReport) || !isJsonObject(finishReport["report"])) return {};
+    const result = finishReport["report"]["result"];
+    return typeof result === "string" && result.length > 0 ? { assistantText: result } : {};
   }
   return {};
 }

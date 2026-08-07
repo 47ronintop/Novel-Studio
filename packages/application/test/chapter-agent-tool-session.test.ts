@@ -9,8 +9,13 @@ import {
   type ChapterCatalogRepositoryPort,
   type CreateAgentChapterResult
 } from "@novel-studio/shared";
+import { createChapterStatusTransitionProof } from "@novel-studio/agent-engine";
 
-import { createChapterAgentToolSession } from "../src/chapter-agent-tool-session.js";
+import {
+  createChapterAgentToolSession,
+  type ChapterLifecyclePreparationPort,
+  type PreparedChapterLifecycleChange
+} from "../src/chapter-agent-tool-session.js";
 import { buildChapterOrderMigrationPreview } from "../src/chapter-order-migration.js";
 
 describe("Chapter Agent tool session", () => {
@@ -315,6 +320,138 @@ describe("Chapter Agent tool session", () => {
     });
     expect(repository.listChapters).not.toHaveBeenCalled();
   });
+
+  test("strictly dispatches rename, reorder, ordinary status, delete, and restore preparation", async () => {
+    const lifecycle = lifecyclePreparationPort();
+    const session = createChapterAgentToolSession({
+      repository: repositoryFor(),
+      lifecyclePreparation: lifecycle
+    });
+
+    await expect(
+      session.prepareLifecycle({
+        toolName: "rename_chapter",
+        arguments: { chapterRef: "chapter:ch_01", baseRevision: 3, title: "Renamed" }
+      })
+    ).resolves.toEqual(ok(preparedLifecycle("rename")));
+    await expect(
+      session.prepareLifecycle({
+        toolName: "reorder_chapter",
+        arguments: {
+          chapterRef: "chapter:ch_01",
+          baseRevision: 3,
+          beforeChapterRef: null,
+          afterChapterRef: "chapter:ch_02",
+          targetVolumeRef: "story_bible:volume_1"
+        }
+      })
+    ).resolves.toEqual(ok(preparedLifecycle("reorder", { outline: true })));
+    await expect(
+      session.prepareLifecycle({
+        toolName: "set_chapter_status",
+        arguments: { chapterRef: "chapter:ch_01", baseRevision: 3, status: "archived" }
+      })
+    ).resolves.toEqual(ok(preparedLifecycle("status")));
+    await expect(
+      session.prepareLifecycle({
+        toolName: "set_chapter_status",
+        arguments: { chapterRef: "chapter:ch_01", baseRevision: 3, status: "deleted" }
+      })
+    ).resolves.toEqual(ok(preparedLifecycle("delete", { proof: deleteProof() })));
+    await expect(
+      session.prepareLifecycle({
+        toolName: "restore_chapter",
+        arguments: { chapterRef: "chapter:ch_01", baseRevision: 3 }
+      })
+    ).resolves.toEqual(ok(preparedLifecycle("restore", { proof: restoreProof() })));
+
+    expect(lifecycle.prepareRename).toHaveBeenCalledWith({
+      chapterId: "ch_01",
+      baseRevision: 3,
+      title: "Renamed"
+    });
+    expect(lifecycle.prepareReorder).toHaveBeenCalledWith({
+      chapterId: "ch_01",
+      baseRevision: 3,
+      beforeChapterRef: null,
+      afterChapterRef: "chapter:ch_02",
+      targetVolumeRef: "story_bible:volume_1"
+    });
+    expect(lifecycle.prepareStatus).toHaveBeenCalledWith({
+      chapterId: "ch_01",
+      baseRevision: 3,
+      status: "archived"
+    });
+    expect(lifecycle.prepareDelete).toHaveBeenCalledWith({ chapterId: "ch_01", baseRevision: 3 });
+    expect(lifecycle.prepareRestore).toHaveBeenCalledWith({ chapterId: "ch_01", baseRevision: 3 });
+  });
+
+  test("fails closed for absent lifecycle preparation, malformed arguments, and unauthenticated proof", async () => {
+    const missing = createChapterAgentToolSession({ repository: repositoryFor() });
+    await expect(
+      missing.prepareLifecycle({
+        toolName: "rename_chapter",
+        arguments: { chapterRef: "chapter:ch_01", baseRevision: 3, title: "Renamed" }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_AGENT_LIFECYCLE_UNAVAILABLE" }
+    });
+
+    const lifecycle = lifecyclePreparationPort();
+    const session = createChapterAgentToolSession({
+      repository: repositoryFor(),
+      lifecyclePreparation: lifecycle
+    });
+    await expect(
+      session.prepareLifecycle({
+        toolName: "rename_chapter",
+        arguments: { chapterRef: "chapter:ch_01", baseRevision: 3, title: "Renamed", path: "x" }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_AGENT_LIFECYCLE_ARGUMENTS_INVALID" }
+    });
+    expect(lifecycle.prepareRename).not.toHaveBeenCalled();
+
+    lifecycle.prepareRestore.mockResolvedValueOnce(ok(preparedLifecycle("restore")));
+    await expect(
+      session.prepareLifecycle({
+        toolName: "restore_chapter",
+        arguments: { chapterRef: "chapter:ch_01", baseRevision: 3 }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_AGENT_LIFECYCLE_PREPARE_INVALID" }
+    });
+  });
+
+  test("rejects a lifecycle preparation result whose atomic candidates do not bind to the tool", async () => {
+    const lifecycle = lifecyclePreparationPort();
+    const prepared = preparedLifecycle("rename");
+    const chapter = prepared.chapters[0];
+    if (chapter === undefined) throw new Error("Expected prepared chapter candidate.");
+    lifecycle.prepareRename.mockResolvedValueOnce(
+      ok({
+        ...prepared,
+        chapters: [{ ...chapter, candidateChecksum: "f".repeat(64) }]
+      })
+    );
+    const session = createChapterAgentToolSession({
+      repository: repositoryFor(),
+      lifecyclePreparation: lifecycle
+    });
+
+    await expect(
+      session.prepareLifecycle({
+        toolName: "rename_chapter",
+        arguments: { chapterRef: "chapter:ch_01", baseRevision: 3, title: "Renamed" }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHAPTER_AGENT_LIFECYCLE_PREPARE_INVALID" }
+    });
+  });
 });
 
 function repositoryFor(
@@ -427,4 +564,102 @@ function migrationPlan(preview: ReturnType<typeof duplicateOrderPreview>) {
 
 function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function lifecyclePreparationPort() {
+  return {
+    prepareRename: vi.fn(async () => ok(preparedLifecycle("rename"))),
+    prepareReorder: vi.fn(async () => ok(preparedLifecycle("reorder", { outline: true }))),
+    prepareStatus: vi.fn(async () => ok(preparedLifecycle("status"))),
+    prepareDelete: vi.fn(async () => ok(preparedLifecycle("delete", { proof: deleteProof() }))),
+    prepareRestore: vi.fn(async () => ok(preparedLifecycle("restore", { proof: restoreProof() })))
+  } satisfies ChapterLifecyclePreparationPort;
+}
+
+function preparedLifecycle(
+  operation: PreparedChapterLifecycleChange["operation"],
+  options: {
+    readonly outline?: boolean;
+    readonly proof?: NonNullable<PreparedChapterLifecycleChange["proof"]>;
+  } = {}
+): PreparedChapterLifecycleChange {
+  const baseContent = "---\nid: ch_01\ntitle: Opening\n---\n\nBody\n";
+  const candidateContent = baseContent.replace("Opening", "Changed");
+  const chapter = {
+    stableRef: "chapter:ch_01",
+    assetId: "ch_01",
+    relativePath: "chapters/ch_01.md",
+    baseContent,
+    candidateContent,
+    baseChecksum: sha256(baseContent),
+    candidateChecksum: sha256(candidateContent)
+  };
+  const outlineBase = '{"id":"outline"}\n';
+  const outlineCandidate = '{"id":"outline","changed":true}\n';
+  return {
+    operation,
+    targetChapterId: "ch_01",
+    consistencyGroupId: `chapter-${operation}-group`,
+    chapters: [chapter],
+    ...(options.outline
+      ? {
+          outline: {
+            stableRef: "story_bible:outline",
+            assetId: "outline",
+            relativePath: "story-bible/outline.json",
+            baseContent: outlineBase,
+            candidateContent: outlineCandidate,
+            baseChecksum: sha256(outlineBase),
+            candidateChecksum: sha256(outlineCandidate)
+          }
+        }
+      : {}),
+    ...(options.proof === undefined ? {} : { proof: options.proof })
+  };
+}
+
+function deleteProof() {
+  return createChapterStatusTransitionProof({
+    proofId: "proof-delete-1",
+    stableRef: "chapter:ch_01",
+    chapterId: "ch_01",
+    action: "delete",
+    beforeStatus: "draft",
+    afterStatus: "deleted",
+    restoreStatus: "draft",
+    beforeRevision: 3,
+    afterRevision: 4,
+    beforeChecksum: "a".repeat(64),
+    afterChecksum: "b".repeat(64),
+    outlineRevision: 2,
+    outlineChecksum: "c".repeat(64),
+    originalVolumeRef: "story_bible:volume_1",
+    beforeNeighborRefs: { before: null, after: "chapter:ch_02" },
+    afterNeighborRefs: { before: null, after: null },
+    referenceImpactChecksum: "d".repeat(64),
+    createdAt: "2026-08-06T00:00:00.000Z"
+  });
+}
+
+function restoreProof() {
+  return createChapterStatusTransitionProof({
+    proofId: "proof-restore-1",
+    stableRef: "chapter:ch_01",
+    chapterId: "ch_01",
+    action: "restore",
+    beforeStatus: "deleted",
+    afterStatus: "draft",
+    restoreStatus: "draft",
+    beforeRevision: 3,
+    afterRevision: 4,
+    beforeChecksum: "a".repeat(64),
+    afterChecksum: "b".repeat(64),
+    outlineRevision: 2,
+    outlineChecksum: "c".repeat(64),
+    originalVolumeRef: "story_bible:volume_1",
+    beforeNeighborRefs: { before: null, after: null },
+    afterNeighborRefs: { before: null, after: "chapter:ch_02" },
+    referenceImpactChecksum: "d".repeat(64),
+    createdAt: "2026-08-06T00:00:00.000Z"
+  });
 }

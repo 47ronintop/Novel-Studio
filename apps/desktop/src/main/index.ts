@@ -1,6 +1,14 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  dialog,
+  ipcMain,
+  safeStorage,
+  type BrowserWindowConstructorOptions
+} from "electron";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -17,7 +25,29 @@ import {
   createDesktopNetworkSettingsSession,
   createDesktopNetworkToolExecutor
 } from "./agent-network-runtime.js";
-import { createAgentFeatureFlags } from "./agent-feature-flags.js";
+import {
+  createProductionAgentFeatureFlags,
+  hasCurrentMainOwnedApprovalSurfaceQualification
+} from "./agent-feature-flags.js";
+import {
+  MainApprovalConfirmationCoordinator,
+  registerTrustedApprovalIpc
+} from "./agent-approval-confirmation.js";
+import { ApprovalHumanIntentEvidenceJournal } from "./approval-human-intent-evidence-journal.js";
+import { bindApprovalParentWindowFailClosedLifecycle } from "./approval-parent-window-lifecycle.js";
+import {
+  createSignedAsarPackageCoverageInspector,
+  createSystemExecutableCodeSignatureInspector,
+  loadApprovalSurfaceQualification,
+  readApprovalElectronFuseState
+} from "./approval-surface-qualification.js";
+import {
+  createMainOwnedNativeConfirmation,
+  TrustedApprovalModalController,
+  type ApprovalModalWindowLike,
+  type TrustedApprovalModalWindowOptions
+} from "./trusted-approval-modal-window.js";
+import { createTrustedChangeSetApprovalV2Port } from "./trusted-change-set-approval-v2.js";
 import {
   createDesktopAgentNetworkSettingsPort,
   createDesktopMcpSettingsPort
@@ -27,6 +57,11 @@ import { createDesktopWorkspaceContextPolicyStore } from "./workspace-context-po
 import { createCreativeGeneralActiveResourceProof } from "./creative-general-active-resource-proof.js";
 import { connectRemoteMcp, createRemoteMcpDispatch } from "./remote-mcp-runtime.js";
 import { createAgentWriteSaveCoordinator, createApplicationIpcHandlers } from "./ipc-handlers.js";
+import {
+  createWritingEditorStateRegistry,
+  type WritingEditorResourceIdentity,
+  type WritingEditorStateRegistry
+} from "./writing-editor-state-registry.js";
 import { createWorkspaceActivationCoordinator } from "./workspace-activation.js";
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
@@ -40,8 +75,12 @@ import {
   reasoningStrengthForModel,
   resolveCatalogAgentModelCapabilities
 } from "@novel-studio/application";
-import { CreativeProjectFileRepository } from "@novel-studio/repository";
+import {
+  ApprovalAuthorizationLedger,
+  CreativeProjectFileRepository
+} from "@novel-studio/repository";
 import type {
+  AgentRunChangeSetApprovalV2Port,
   AgentNetworkPolicy,
   AgentNetworkSettingsPort,
   AgentNetworkSettingsSession,
@@ -73,14 +112,116 @@ import {
 import type { DesktopModelRuntime, ModelSecretStore } from "./model-runtime.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
+const desktopDistributionDirectory = join(currentDirectory, "..");
+const approvalRendererPath = join(desktopDistributionDirectory, "approval", "index.html");
+const approvalPreloadPath = join(desktopDistributionDirectory, "preload", "approval-preload.cjs");
 let activeDesktopApplication: DesktopApplication | undefined;
 let activeAgentRuntimeManager: DesktopAgentRuntimeManager | undefined;
 let activeDesktopModelRuntime: DesktopModelRuntime | undefined;
+let activeMainWindow: BrowserWindow | undefined;
+let activeApprovalCoordinator: MainApprovalConfirmationCoordinator | undefined;
+let trustedApprovalIpcRegistered = false;
 let shutdownInProgress = false;
 
+const activeApprovalCoordinatorProxy = new Proxy(
+  Object.create(
+    MainApprovalConfirmationCoordinator.prototype
+  ) as MainApprovalConfirmationCoordinator,
+  {
+    get(_target, property) {
+      if (property === "readFromModal") {
+        return (senderWebContentsId: number, previewId: string) => {
+          const coordinator = activeApprovalCoordinator;
+          return coordinator === undefined
+            ? trustedApprovalUnavailable()
+            : coordinator.readFromModal(senderWebContentsId, previewId);
+        };
+      }
+      if (property === "decideFromModal") {
+        return async (
+          senderWebContentsId: number,
+          decision: Parameters<MainApprovalConfirmationCoordinator["decideFromModal"]>[1]
+        ) => {
+          const coordinator = activeApprovalCoordinator;
+          return coordinator === undefined
+            ? trustedApprovalUnavailable()
+            : coordinator.decideFromModal(senderWebContentsId, decision);
+        };
+      }
+      return undefined;
+    }
+  }
+);
+
+function registerTrustedApprovalIpcOnce(): void {
+  if (trustedApprovalIpcRegistered) return;
+  registerTrustedApprovalIpc(
+    {
+      handle: (channel, listener) => {
+        ipcMain.handle(channel, (event, ...args) => listener(event, ...args));
+      }
+    },
+    activeApprovalCoordinatorProxy
+  );
+  trustedApprovalIpcRegistered = true;
+}
+
+function replaceActiveApprovalCoordinator(
+  coordinator: MainApprovalConfirmationCoordinator | undefined,
+  reason: string
+): void {
+  if (activeApprovalCoordinator === coordinator) return;
+  activeApprovalCoordinator?.revokeAll(reason);
+  activeApprovalCoordinator = coordinator;
+}
+
+function trustedApprovalUnavailable<T = never>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "TRUSTED_APPROVAL_SURFACE_UNAVAILABLE",
+      category: "AgentError",
+      message: "The active Main-owned approval coordinator is unavailable.",
+      recoverability: "user-action",
+      suggestedAction: "Open the current workspace and request a new confirmation.",
+      traceId: "desktop-trusted-approval-ipc-proxy"
+    })
+  );
+}
+
 export async function registerApplicationIpcHandlers(): Promise<void> {
+  registerTrustedApprovalIpcOnce();
   const userDataRoot = process.env["NOVEL_STUDIO_USER_DATA_ROOT"] ?? app.getPath("userData");
   const fixtureProjectRoot = process.env["NOVEL_STUDIO_PROJECT_ROOT"];
+  const appRoot = app.getAppPath();
+  let embeddedAsarIntegrityValidationEnabled = false;
+  let onlyLoadAppFromAsarEnabled = false;
+  if (app.isPackaged) {
+    const fuseState = await readApprovalElectronFuseState(process.execPath);
+    embeddedAsarIntegrityValidationEnabled =
+      fuseState?.embeddedAsarIntegrityValidationEnabled === true;
+    onlyLoadAppFromAsarEnabled = fuseState?.onlyLoadAppFromAsarEnabled === true;
+  }
+  const packageSignatureInspector = app.isPackaged
+    ? createSignedAsarPackageCoverageInspector({
+        appPath: appRoot,
+        resourcesPath: process.resourcesPath,
+        executablePath: process.execPath,
+        embeddedAsarIntegrityValidationEnabled: () => embeddedAsarIntegrityValidationEnabled,
+        onlyLoadAppFromAsarEnabled: () => onlyLoadAppFromAsarEnabled,
+        executableCodeSignatureInspector: createSystemExecutableCodeSignatureInspector(
+          process.platform
+        )
+      })
+    : undefined;
+  const approvalQualificationResult = await loadApprovalSurfaceQualification({
+    rootDirectory: appRoot,
+    buildManifestPath: join(appRoot, "apps", "desktop", "dist", "build-manifest.json"),
+    mode: app.isPackaged ? "production" : "development",
+    ...(packageSignatureInspector === undefined ? {} : { packageSignatureInspector })
+  });
+  const approvalSurfaceQualification = approvalQualificationResult.ok
+    ? approvalQualificationResult.value
+    : undefined;
   const modelSecretStore = createEncryptedFileModelSecretStore({
     userDataRoot,
     cipher: safeStorage
@@ -92,8 +233,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   activeDesktopModelRuntime = modelRuntime;
   const projectLockOwnerId = createProjectLockOwnerId();
   const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
+  const writingEditorStateRegistry = createWritingEditorStateRegistry();
   const workspaceContextPolicyStore = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
   const creativeGeneralActiveResourceProof = createCreativeGeneralActiveResourceProof();
+  const approvalCoordinatorByRuntime = new WeakMap<object, MainApprovalConfirmationCoordinator>();
   const creativeProjectFileSession = createCreativeProjectFileSession({
     createRepository: (activation) =>
       new CreativeProjectFileRepository({
@@ -180,14 +323,59 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         networkSettingsSession: agentNetworkSettingsSession,
         modelSecretStore
       });
-      const featureFlags = createAgentFeatureFlags({
-        phaseA_searchEnabled: true,
-        phaseB_fileLifecycleEnabled: true,
-        phaseD_networkReadEnabled: networkRuntime.executor !== undefined,
-        phaseE_remoteMcpEnabled: mcpRuntime.executor !== undefined,
-        revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:workspace-context-${workspaceContextPolicy.policyRevision}`
+      const authorizationLedger = new ApprovalAuthorizationLedger({
+        projectRoot: binding.stateRoot,
+        traceId: "desktop-agent-authorization-ledger"
       });
-      return createDesktopAgentRuntime({
+      let changeSetApprovalV2: AgentRunChangeSetApprovalV2Port | undefined;
+      let nextApprovalCoordinator: MainApprovalConfirmationCoordinator | undefined;
+      if (hasCurrentMainOwnedApprovalSurfaceQualification(approvalSurfaceQualification)) {
+        const nativeConfirmation = createMainOwnedNativeConfirmation(
+          dialog,
+          () => BrowserWindow.getFocusedWindow() ?? activeMainWindow,
+          () => app.getLocale()
+        );
+        const coordinator = new MainApprovalConfirmationCoordinator({
+          authorizationLedger,
+          nativeConfirm: nativeConfirmation.confirm,
+          getSurfaceQualification: () => approvalSurfaceQualification,
+          humanIntentEvidenceJournal: new ApprovalHumanIntentEvidenceJournal({
+            userDataRoot
+          })
+        });
+        const modalController = new TrustedApprovalModalController({
+          factory: {
+            create: createApprovalModalWindow
+          },
+          coordinator,
+          approvalRendererPath,
+          approvalPreloadPath,
+          preserveAfterNativeConfirmation: nativeConfirmation.hasAccepted
+        });
+        changeSetApprovalV2 = createTrustedChangeSetApprovalV2Port({
+          authorizationLedger,
+          coordinator,
+          modalController,
+          resolveParentWindow: () => activeMainWindow,
+          surfaceQualification: approvalSurfaceQualification,
+          workspaceLabel: basename(binding.contentRoot) || binding.workspaceId
+        });
+        nextApprovalCoordinator = coordinator;
+      }
+      const featureFlags = createProductionAgentFeatureFlags(
+        {
+          agentGuidanceV3: true,
+          phaseA_searchEnabled: true,
+          phaseB_fileLifecycleEnabled: true,
+          approvalBindingV2: changeSetApprovalV2 !== undefined,
+          writingDomainCrudV2: changeSetApprovalV2 !== undefined,
+          phaseD_networkReadEnabled: networkRuntime.executor !== undefined,
+          phaseE_remoteMcpEnabled: mcpRuntime.executor !== undefined,
+          revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:workspace-context-${workspaceContextPolicy.policyRevision}`
+        },
+        approvalSurfaceQualification
+      );
+      const runtime = createDesktopAgentRuntime({
         workspaceKind: binding.kind,
         projectId: binding.workspaceId,
         contentRoot: binding.contentRoot,
@@ -203,6 +391,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           : { activeChapterId: binding.activeChapterId }),
         userDataRoot,
         featureFlags,
+        authorizationLedger,
+        ...(changeSetApprovalV2 === undefined ? {} : { changeSetApprovalV2 }),
         ...(networkRuntime.executor === undefined
           ? {}
           : { networkToolExecutor: networkRuntime.executor }),
@@ -304,34 +494,28 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                     });
               }
             }),
-        readEditorBuffer: async (refId) => {
-          const chapterId = refId.startsWith("chapter:")
-            ? refId.slice("chapter:".length)
-            : undefined;
-          if (chapterId === undefined || activeDesktopApplication === undefined) return undefined;
-          const activeChapter = await activeDesktopApplication.readActiveChapterState();
-          return activeChapter.ok && activeChapter.value.state.chapter.frontmatter.id === chapterId
-            ? activeChapter.value.state.chapter.body
-            : undefined;
-        },
-        readEditorState: async (relativePath) => {
-          const match = /^chapters\/([A-Za-z0-9_-]+)\.md$/.exec(relativePath);
-          if (match?.[1] === undefined || activeDesktopApplication === undefined) return undefined;
-          const activeChapter = await activeDesktopApplication.readActiveChapterState();
-          if (!activeChapter.ok || activeChapter.value.state.chapter.frontmatter.id !== match[1]) {
-            return undefined;
-          }
-          return {
-            dirty: activeChapter.value.state.dirty,
-            content: activeChapter.value.state.chapter.body
-          };
-        },
+        readEditorBuffer: (refId) =>
+          readWritingEditorBuffer({
+            registry: writingEditorStateRegistry,
+            workspaceId: binding.workspaceId,
+            refId
+          }),
+        readEditorState: (relativePath) =>
+          readWritingEditorState({
+            registry: writingEditorStateRegistry,
+            workspaceId: binding.workspaceId,
+            relativePath
+          }),
         syncSavedEditor: async (relativePath, options) => {
           await syncSavedEditorForPath(activeDesktopApplication, relativePath, options);
         },
         resolveModelProfile: resolveAgentModelProfile,
         resolveModelStartFacts: resolveAgentModelStartFacts
       });
+      if (nextApprovalCoordinator !== undefined) {
+        approvalCoordinatorByRuntime.set(runtime, nextApprovalCoordinator);
+      }
+      return runtime;
     },
     createStandaloneRuntime: async () => {
       const created = await createDesktopStandaloneAgentRuntime({
@@ -346,8 +530,37 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       });
       if (!created.ok) throw new Error(created.error.message);
       return created.value;
+    },
+    onActiveRuntimeChanged: (active) => {
+      replaceActiveApprovalCoordinator(
+        active?.scope === "workspace"
+          ? approvalCoordinatorByRuntime.get(active.runtime)
+          : undefined,
+        active?.scope === "standalone"
+          ? "standalone_runtime_activated"
+          : "workspace_runtime_replaced"
+      );
     }
   });
+  const approvalQualificationExpiresAt = hasCurrentMainOwnedApprovalSurfaceQualification(
+    approvalSurfaceQualification
+  )
+    ? Date.parse(approvalSurfaceQualification.expiresAt)
+    : undefined;
+  if (approvalQualificationExpiresAt !== undefined) {
+    const expireQualification = (): void => {
+      const remaining = approvalQualificationExpiresAt - Date.now();
+      if (remaining > 0) {
+        const timer = setTimeout(expireQualification, Math.min(remaining, 2_147_483_647));
+        timer.unref();
+        return;
+      }
+      activeApprovalCoordinator?.revokeAll("qualification_expired");
+      agentRuntimeManager.revokeCurrentApprovalCapabilities();
+      void agentRuntimeManager.refreshCurrentWorkspace().catch(() => undefined);
+    };
+    expireQualification();
+  }
   if (bootstrapped !== undefined) {
     const workspaceId = bootstrapped.workspace.project.projectId;
     const fileSession = await creativeProjectFileSession.activate({
@@ -431,6 +644,13 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     creativeProjectFileSession,
     creativeGeneralActiveResourceProof,
     agentWriteSaveCoordinator,
+    writingEditorStateRegistry,
+    getActiveWritingEditorWorkspaceId: () => {
+      const active = agentRuntimeManager.active();
+      return active?.scope === "workspace" && active.binding.kind === "creativeProject"
+        ? active.binding.workspaceId
+        : undefined;
+    },
     agentNetworkSettingsSession,
     agentMcpSettingsSession,
     onAgentSettingsChanged: async () => {
@@ -943,6 +1163,71 @@ function mcpRuntimeError(code: string, message: string): UnifiedError {
   });
 }
 
+async function readWritingEditorState(input: {
+  readonly registry: WritingEditorStateRegistry;
+  readonly workspaceId: string;
+  readonly relativePath: string;
+}) {
+  const target = writingEditorIdentityForPath(input.workspaceId, input.relativePath);
+  if (target === undefined) return undefined;
+  return input.registry.readForMutation(target);
+}
+
+async function readWritingEditorBuffer(input: {
+  readonly registry: WritingEditorStateRegistry;
+  readonly workspaceId: string;
+  readonly refId: string;
+}): Promise<{ readonly content: string; readonly sourceRevision: number } | undefined> {
+  const target = writingEditorIdentityForBufferRef(input.workspaceId, input.refId);
+  if (target === undefined) return undefined;
+  const observation = input.registry.observe(target);
+  return observation.status === "connected" && observation.state.dirty
+    ? {
+        content: observation.state.bufferContent,
+        sourceRevision: observation.state.rendererRevision
+      }
+    : undefined;
+}
+
+function writingEditorIdentityForBufferRef(
+  workspaceId: string,
+  refId: string
+): WritingEditorResourceIdentity | undefined {
+  const match = /^editor_buffer:(chapter|story_bible):(.+)$/u.exec(refId);
+  const resourceKind = match?.[1];
+  const resourceId = match?.[2];
+  if (
+    (resourceKind !== "chapter" && resourceKind !== "story_bible") ||
+    resourceId === undefined ||
+    resourceId.trim().length === 0
+  ) {
+    return undefined;
+  }
+  return { workspaceId, resourceKind, resourceId };
+}
+
+function writingEditorIdentityForPath(
+  workspaceId: string,
+  relativePath: string
+): WritingEditorResourceIdentity | undefined {
+  const chapter = /^chapters\/([A-Za-z0-9_-]+)\.md$/u.exec(relativePath)?.[1];
+  if (chapter !== undefined) {
+    return { workspaceId, resourceKind: "chapter", resourceId: chapter };
+  }
+  if (relativePath === "outline/outline.json") {
+    return { workspaceId, resourceKind: "story_bible", resourceId: "outline_main" };
+  }
+  if (relativePath === "timeline/events.json") {
+    return { workspaceId, resourceKind: "story_bible", resourceId: "timeline_main" };
+  }
+  const storyBible = /^(?:characters|world|foreshadows)\/([A-Za-z0-9_-]+)\.json$/u.exec(
+    relativePath
+  )?.[1];
+  return storyBible === undefined
+    ? undefined
+    : { workspaceId, resourceKind: "story_bible", resourceId: storyBible };
+}
+
 export async function syncSavedEditorForPath(
   application: Pick<DesktopApplication, "readActiveChapterState" | "loadActiveChapter"> | undefined,
   relativePath: string,
@@ -983,6 +1268,7 @@ export async function syncSavedEditorForPath(
 }
 
 export async function shutdownDesktopApplication(): Promise<void> {
+  replaceActiveApprovalCoordinator(undefined, "application_shutdown");
   activeAgentRuntimeManager?.dispose();
   activeAgentRuntimeManager = undefined;
   const modelRuntime = activeDesktopModelRuntime;
@@ -993,6 +1279,29 @@ export async function shutdownDesktopApplication(): Promise<void> {
   if (application !== undefined) {
     await application.shutdown();
   }
+}
+
+function createApprovalModalWindow(
+  options: TrustedApprovalModalWindowOptions
+): ApprovalModalWindowLike {
+  const parent = activeMainWindow;
+  if (parent === undefined || parent.isDestroyed() || options.parent !== parent) {
+    throw new Error("The active Main window changed before approval modal creation.");
+  }
+  const browserWindowOptions: BrowserWindowConstructorOptions = {
+    parent,
+    modal: options.modal,
+    show: options.show,
+    width: options.width,
+    height: options.height,
+    resizable: options.resizable,
+    minimizable: options.minimizable,
+    maximizable: options.maximizable,
+    autoHideMenuBar: options.autoHideMenuBar,
+    title: options.title,
+    webPreferences: options.webPreferences
+  };
+  return new BrowserWindow(browserWindowOptions);
 }
 
 async function chooseProjectDirectory(title: string): Promise<string | undefined> {
@@ -1050,6 +1359,9 @@ async function chooseProjectTextFile(workspaceRoot: string): Promise<string | un
 }
 
 export function createMainWindow(): BrowserWindow {
+  if (activeMainWindow !== undefined && !activeMainWindow.isDestroyed()) {
+    return activeMainWindow;
+  }
   const preloadPath = join(currentDirectory, "..", "preload", "index.cjs");
   const rendererPath = join(currentDirectory, "..", "renderer", "index.html");
 
@@ -1060,6 +1372,14 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 640,
     title: "Novel Studio",
     webPreferences: createSecureWebPreferences(preloadPath)
+  });
+
+  activeMainWindow = window;
+  bindApprovalParentWindowFailClosedLifecycle(window, () => activeApprovalCoordinator);
+  window.once("closed", () => {
+    if (activeMainWindow !== window) return;
+    activeMainWindow = undefined;
+    activeApprovalCoordinator?.revokeAll("main_window_closed");
   });
 
   void window.loadFile(rendererPath);
@@ -1089,6 +1409,10 @@ if (process.env["VITEST"] !== "true") {
     createMainWindow();
   });
 
+  app.on("activate", () => {
+    createMainWindow();
+  });
+
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {
       app.quit();
@@ -1096,7 +1420,12 @@ if (process.env["VITEST"] !== "true") {
   });
 
   app.on("before-quit", (event) => {
-    if (shutdownInProgress || activeDesktopApplication === undefined) {
+    if (shutdownInProgress) {
+      return;
+    }
+
+    if (activeDesktopApplication === undefined) {
+      replaceActiveApprovalCoordinator(undefined, "application_shutdown");
       return;
     }
 

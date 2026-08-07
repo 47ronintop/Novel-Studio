@@ -109,6 +109,29 @@ describe("writing editor state registry", () => {
     expect(registry.readInstance(report())).toBeUndefined();
   });
 
+  test("retains only checksum-verified, bounded chapter and Story Bible buffers", () => {
+    const registry = createWritingEditorStateRegistry();
+    const storyBible = report({
+      resourceKind: "story_bible",
+      resourceId: "chr_hero",
+      dirty: true,
+      buffer: '{"id":"chr_hero","summary":"Unsaved Story Bible draft"}'
+    });
+    expect(registry.report(storyBible)).toEqual({ ok: true, state: storyBible });
+
+    expect(
+      registry.report({ ...storyBible, rendererRevision: 2, bufferContent: "tampered" })
+    ).toMatchObject({ ok: false, error: { code: "EDITOR_STATE_UPDATE_INVALID" } });
+    expect(
+      registry.report({
+        ...storyBible,
+        editorInstanceId: "editor_large",
+        bufferContent: "x".repeat(256 * 1024 + 1),
+        bufferChecksum: checksum("x".repeat(256 * 1024 + 1))
+      })
+    ).toMatchObject({ ok: false, error: { code: "EDITOR_STATE_UPDATE_INVALID" } });
+  });
+
   test("treats missing, disconnected, explicitly unknown, and ambiguous instances as unknown", () => {
     const cases = [
       { report: undefined, reason: "missing" },
@@ -136,6 +159,150 @@ describe("writing editor state registry", () => {
       status: "unknown",
       reason: "multiple_connected"
     });
+  });
+
+  test("allows an unopened resource only while a stable managed editor proves the workspace is live", () => {
+    const registry = createWritingEditorStateRegistry();
+    const active = report({ resourceId: "ch_active" });
+    const unopened = target({ resourceKind: "story_bible", resourceId: "outline_main" });
+
+    registry.report(active);
+
+    expect(registry.decideMutation([unopened])).toEqual({
+      ok: true,
+      code: "READY",
+      states: []
+    });
+    expect(registry.readForMutation(unopened)).toEqual({
+      status: "known",
+      dirty: false,
+      content: ""
+    });
+
+    registry.report(
+      report({
+        resourceId: "ch_active",
+        connection: "disconnected",
+        rendererRevision: 2,
+        acknowledgedRevision: 2,
+        buffer: ""
+      })
+    );
+    expect(registry.decideMutation([unopened])).toMatchObject({
+      ok: false,
+      code: EDITOR_STATE_UNKNOWN
+    });
+  });
+
+  test("permits unopened chapter rename, multi-chapter reorder, and Story Bible outline targets", () => {
+    const registry = createWritingEditorStateRegistry();
+    registry.report(report({ resourceId: "ch_current" }));
+    const renamedChapter = target({ resourceId: "ch_rename" });
+    const reorderedChapters = [
+      target({ resourceId: "ch_reorder_first" }),
+      target({ resourceId: "ch_reorder_second" })
+    ];
+    const outline = target({ resourceKind: "story_bible", resourceId: "outline_main" });
+
+    expect(registry.decideMutation([renamedChapter])).toEqual({
+      ok: true,
+      code: "READY",
+      states: []
+    });
+    expect(registry.decideMutation(reorderedChapters)).toEqual({
+      ok: true,
+      code: "READY",
+      states: []
+    });
+    expect(registry.decideMutation([outline])).toEqual({
+      ok: true,
+      code: "READY",
+      states: []
+    });
+  });
+
+  test("uses a clean close as known clean but never upgrades dirty or unknown state", () => {
+    const registry = createWritingEditorStateRegistry();
+    const active = report({ resourceId: "ch_active" });
+    const closed = target({ resourceId: "ch_closed" });
+    registry.report(active);
+    registry.report(report({ resourceId: "ch_closed", buffer: "saved" }));
+    registry.report(
+      report({
+        resourceId: "ch_closed",
+        connection: "disconnected",
+        rendererRevision: 2,
+        acknowledgedRevision: 2,
+        buffer: ""
+      })
+    );
+
+    expect(registry.decideMutation([closed])).toMatchObject({ ok: true, code: "READY" });
+    expect(registry.readForMutation(closed)).toEqual({
+      status: "known",
+      dirty: false,
+      content: ""
+    });
+
+    registry.report(
+      report({
+        resourceId: "ch_closed",
+        editorInstanceId: "editor_dirty",
+        connection: "unknown",
+        rendererRevision: 1,
+        acknowledgedRevision: 1,
+        dirty: true,
+        buffer: "unsaved"
+      })
+    );
+    expect(registry.decideMutation([closed])).toMatchObject({
+      ok: false,
+      code: EDITOR_STATE_UNKNOWN
+    });
+  });
+
+  test("keeps a target fail-closed despite another live editor when its close or handshake is unsafe", () => {
+    const registry = createWritingEditorStateRegistry();
+    registry.report(report({ resourceId: "ch_current" }));
+    const staleClose = target({ resourceId: "ch_stale_close" });
+    const ackPending = target({ resourceId: "ch_ack_pending" });
+    const reportedUnknown = target({ resourceId: "ch_reported_unknown" });
+
+    registry.report(
+      report({
+        resourceId: staleClose.resourceId,
+        connection: "disconnected",
+        buffer: "stale clean buffer"
+      })
+    );
+    registry.report(
+      report({
+        resourceId: ackPending.resourceId,
+        rendererRevision: 2,
+        acknowledgedRevision: 1,
+        buffer: "pending buffer"
+      })
+    );
+    registry.report(
+      report({
+        resourceId: reportedUnknown.resourceId,
+        connection: "unknown",
+        buffer: "unknown buffer"
+      })
+    );
+
+    for (const targetToGuard of [staleClose, ackPending, reportedUnknown]) {
+      expect(registry.decideMutation([targetToGuard])).toMatchObject({
+        ok: false,
+        code: EDITOR_STATE_UNKNOWN,
+        targets: [targetToGuard]
+      });
+      expect(registry.readForMutation(targetToGuard)).toEqual({
+        status: "unknown",
+        dirty: false,
+        content: ""
+      });
+    }
   });
 
   test("uses a new editor instance after disconnect and rejects reconnecting the old instance", () => {
@@ -171,6 +338,14 @@ describe("writing editor state registry", () => {
       resourceId: "outline:main"
     });
     registry.report(report({ resourceId: "ch_dirty", dirty: true, buffer: "unsaved chapter" }));
+    registry.report(
+      report({
+        resourceKind: "story_bible",
+        resourceId: "outline:main",
+        editorInstanceId: "editor_outline",
+        connection: "unknown"
+      })
+    );
 
     expect(registry.decideMutation([dirtyChapter, unknownStoryBible])).toEqual({
       ok: false,
@@ -215,6 +390,7 @@ function report(
     acknowledgedRevision: 1,
     dirty: false,
     bufferChecksum: checksum(buffer),
+    bufferContent: buffer,
     ...reportOverrides
   };
 }

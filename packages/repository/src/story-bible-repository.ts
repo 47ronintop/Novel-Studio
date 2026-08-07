@@ -1556,6 +1556,40 @@ export class StoryBibleFileRepository implements StoryBibleRepositoryPort {
     });
   }
 
+  /**
+   * Main-only lifecycle evidence for a chapter tombstone. This reads the complete Story Bible
+   * reference graph but returns only its stable checksum.
+   */
+  public async getChapterReferenceImpactChecksum(
+    chapterId: string,
+    knownChapterIds: readonly string[]
+  ): Promise<Result<string, UnifiedError>> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(chapterId)) {
+      return err(
+        storyBibleCandidateValidationError(this.traceId, [
+          candidateIssue("/chapterId", "pattern", "must be a stable chapter id")
+        ])
+      );
+    }
+    const known = new Set(knownChapterIds);
+    if (!known.has(chapterId)) {
+      return err(
+        storyBibleCandidateValidationError(this.traceId, [
+          candidateIssue("/chapterId", "knownChapter", "must exist in the current chapter catalog")
+        ])
+      );
+    }
+    const reads = await this.readAllCompatibleStoryAssets();
+    if (!reads.ok) return reads;
+    const incoming = collectStoryBibleReferences(reads.value, known)
+      .filter(
+        (reference) =>
+          reference.targetAssetId === chapterId && reference.targetReferenceType === "chapter"
+      )
+      .sort(compareStoryBibleReferences);
+    return ok(checksumStoryBibleText(JSON.stringify({ chapterId, incoming })));
+  }
+
   public async saveMemory(memory: MemoryRecord): Promise<Result<MemoryRecord, UnifiedError>> {
     return withStoryBibleProjectWriteLock(this.options.projectRoot, () =>
       this.saveMemoryUnlocked(memory)

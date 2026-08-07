@@ -170,7 +170,9 @@ describe("AgentConversationSession", () => {
         providerFrame: "raw-provider-frame"
       }),
       runEvent("run_01", 3, "assistant_text_completed", { text: "第一章线索已经核对。" }),
-      runEvent("run_01", 4, "run_completed", { summary: "核对完成。" })
+      runEvent("run_01", 4, "run_completed", {
+        finishReport: { report: { result: "核对完成。" } }
+      })
     ]);
 
     const read = await session.readConversation({

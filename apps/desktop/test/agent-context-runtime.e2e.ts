@@ -169,6 +169,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
   const engineeringRoot = join(tempRoot, "Engineering Workspace");
   const creativeRoot = join(tempRoot, "Creative Project");
   const modelRequests: Record<string, unknown>[] = [];
+  let activeUserRequest: string | undefined;
 
   await mkdir(join(engineeringRoot, "src"), { recursive: true });
   await writeFile(join(engineeringRoot, "src", "main.ts"), "export {};\n", "utf8");
@@ -248,13 +249,31 @@ test("sends profile-specific conventions and outlines in real workspace provider
 
     modelRequests.push(body);
     const userRequest = lastUserRequest(body);
-    if (userRequest === "CREATIVE_GENERAL_CONTEXT_E2E_REQUEST") {
-      sendTextCompletion(response, `Completed ${userRequest}`);
+    if (providerToolResultCount(body) === 0) {
+      activeUserRequest = userRequest;
+      sendToolCall(response, `context-read-${userRequest}`, contextReadToolName(userRequest), {});
       return;
     }
-    sendToolCall(response, `finish-${String(modelRequests.length)}`, "finish", {
-      summary: `Completed ${userRequest}`
-    });
+    if (providerToolResultCount(body) === 1) {
+      const requestForRead = activeUserRequest ?? userRequest;
+      sendToolCall(
+        response,
+        `context-resource-${requestForRead}`,
+        "read_resource",
+        contextResourceReadArguments(requestForRead)
+      );
+      return;
+    }
+    const evidenceRef = latestCompletedToolEvidenceRef(body);
+    if (evidenceRef === undefined) {
+      throw new Error("Expected a paired persisted tool_completed evidence reference before finish.");
+    }
+    sendToolCall(
+      response,
+      `finish-${activeUserRequest ?? userRequest}`,
+      "finish",
+      completedFinishArguments(activeUserRequest ?? userRequest, evidenceRef)
+    );
   });
   await listen(server);
   const address = server.address();
@@ -291,7 +310,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await sendProviderRequest(page, engineeringRequest);
     await expect
       .poll(() => matchingProviderRequests(modelRequests, engineeringRequest).length)
-      .toBe(1);
+      .toBe(3);
     await expect(page.getByText(`Completed ${engineeringRequest}`, { exact: true })).toBeVisible();
 
     const engineeringPayload = providerRequestFor(modelRequests, engineeringRequest);
@@ -347,7 +366,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
     const writingRequest = "WRITING_CONTEXT_E2E_REQUEST";
     await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
     await sendProviderRequest(page, writingRequest);
-    await expect.poll(() => matchingProviderRequests(modelRequests, writingRequest).length).toBe(1);
+    await expect.poll(() => matchingProviderRequests(modelRequests, writingRequest).length).toBe(3);
     await expect(page.getByText(`Completed ${writingRequest}`, { exact: true })).toBeVisible();
 
     const writingPayload = providerRequestFor(modelRequests, writingRequest);
@@ -385,7 +404,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await sendProviderRequest(page, creativeRequest);
     await expect
       .poll(() => matchingProviderRequests(modelRequests, creativeRequest).length)
-      .toBe(1);
+      .toBe(3);
     await expect(page.getByText(`Completed ${creativeRequest}`, { exact: true })).toBeVisible();
 
     const creativePayload = providerRequestFor(modelRequests, creativeRequest);
@@ -610,7 +629,9 @@ async function sendProviderRequest(page: Page, request: string): Promise<void> {
   ).toBeVisible();
   await composer.getByTitle("查看上下文").click();
   await page.getByRole("tab", { name: "实际发送预览" }).click();
-  await expect(page.getByLabel("实际发送预览")).toBeVisible();
+  const preview = page.getByLabel("实际发送预览");
+  await expect(preview).toBeVisible();
+  await expect(preview).toHaveClass(/ns-agent-send-preview/);
   await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
 }
 
@@ -660,9 +681,9 @@ function providerRequestFor(
   userRequest: string
 ): Record<string, unknown> {
   const matching = matchingProviderRequests(requests, userRequest);
-  if (matching.length !== 1) {
+  if (matching.length < 1) {
     throw new Error(
-      `Expected exactly one provider request for ${userRequest}, received ${matching.length}.`
+      `Expected a provider request for ${userRequest}, received ${matching.length}.`
     );
   }
   return matching[0];
@@ -849,12 +870,70 @@ function sendToolCall(
   response.end("data: [DONE]\n\n");
 }
 
-function sendTextCompletion(response: ServerResponse, text: string): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-    connection: "keep-alive"
-  });
-  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
-  response.end("data: [DONE]\n\n");
+function completedFinishArguments(result: string, evidenceRef: string): Record<string, unknown> {
+  return {
+    schemaVersion: "2.0",
+    outcome: "completed",
+    report: {
+      result: `Completed ${result}`,
+      appliedChanges: [],
+      verification: [evidenceRef],
+      residualRisks: []
+    },
+    evidenceRefs: [evidenceRef]
+  };
+}
+
+function contextReadToolName(userRequest: string): "list_chapters" | "list_project_entries" {
+  return userRequest === "WRITING_CONTEXT_E2E_REQUEST"
+    ? "list_chapters"
+    : "list_project_entries";
+}
+
+function contextResourceReadArguments(userRequest: string): Record<string, string> {
+  return {
+    ref:
+      userRequest === "ENGINEERING_CONTEXT_E2E_REQUEST"
+        ? "file:src/main.ts"
+        : userRequest === "CREATIVE_GENERAL_CONTEXT_E2E_REQUEST"
+          ? "file:notes/brief.md"
+        : "chapter:ch_01JZ7P9QK2R6D4W8K3A1B5C9D0"
+  };
+}
+
+function providerToolResultCount(request: Record<string, unknown>): number {
+  const messages = request["messages"];
+  return Array.isArray(messages)
+    ? messages.filter((message) => isRecord(message) && message["role"] === "tool").length
+    : 0;
+}
+
+function latestCompletedToolEvidenceRef(request: Record<string, unknown>): string | undefined {
+  const messages = request["messages"];
+  if (!Array.isArray(messages)) return undefined;
+  for (const message of [...messages].reverse()) {
+    if (
+      !isRecord(message) ||
+      message["role"] !== "tool" ||
+      typeof message["content"] !== "string" ||
+      typeof message["tool_call_id"] !== "string"
+    ) {
+      continue;
+    }
+    const payload = parseJsonObject(message["content"]);
+    let evidenceRefs: unknown = payload?.["evidenceRefs"];
+    if (!Array.isArray(evidenceRefs) && typeof payload?.["data"] === "string") {
+      evidenceRefs = parseJsonObject(payload["data"])?.["evidenceRefs"];
+    }
+    if (!Array.isArray(evidenceRefs)) continue;
+    const evidenceRef = evidenceRefs.find(
+      (value): value is string =>
+        typeof value === "string" &&
+        /^run-event\/[1-9][0-9]*\/tool_completed\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(
+          value
+        ) && value.endsWith(`/tool_completed/${message["tool_call_id"]}`)
+    );
+    if (evidenceRef !== undefined) return evidenceRef;
+  }
+  return undefined;
 }

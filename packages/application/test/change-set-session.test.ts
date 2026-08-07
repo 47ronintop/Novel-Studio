@@ -27,6 +27,72 @@ import {
 } from "../src/agent-write-authorization.js";
 
 describe("Change Set application session", () => {
+  test("uses a one-time Main-bound semantic checksum in preference to the static fallback", async () => {
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "old", persisted }),
+      providerSemanticVersionSetChecksum: "a".repeat(64),
+      createChangeSetId: () => "change-set-bound-semantic",
+      createHunkId: () => "bound-semantic-hunk",
+      now: () => "2099-01-01T00:00:00.000Z"
+    });
+    expect(
+      session.bindRunProviderSemanticVersionSet("run-bound-semantic", "b".repeat(64))
+    ).toMatchObject({ ok: true });
+
+    const changeSet = expectOk(
+      await session.proposeFileWrite({
+        runId: "run-bound-semantic",
+        projectId: "project-01",
+        checkpointId: "checkpoint-bound-semantic",
+        contextSnapshotId: "context-bound-semantic",
+        path: "notes/outline.md",
+        baseHash: sha256("old"),
+        range: { unit: "character", start: 0, end: 3 },
+        replacement: "new"
+      })
+    );
+    expect(changeSet).toMatchObject({
+      schemaVersion: "2.0",
+      providerSemanticVersionSetChecksum: "b".repeat(64)
+    });
+    expect(
+      session.bindRunProviderSemanticVersionSet("run-bound-semantic", "c".repeat(64))
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_PROVIDER_VERSION_SET_REBIND_FORBIDDEN" }
+    });
+  });
+
+  test("rejects an existing legacy Change Set after a V3 run semantic binding is established", async () => {
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "old", persisted }),
+      createChangeSetId: () => "change-set-legacy-before-binding",
+      createHunkId: () => "legacy-before-binding-hunk",
+      now: () => "2099-01-01T00:00:00.000Z"
+    });
+    const proposal = {
+      runId: "run-bound-after-legacy",
+      projectId: "project-01",
+      checkpointId: "checkpoint-bound-after-legacy",
+      contextSnapshotId: "context-bound-after-legacy",
+      path: "notes/outline.md",
+      baseHash: sha256("old"),
+      range: { unit: "character" as const, start: 0, end: 3 },
+      replacement: "new"
+    };
+    expectOk(await session.proposeFileWrite(proposal));
+    expect(
+      session.bindRunProviderSemanticVersionSet("run-bound-after-legacy", "b".repeat(64))
+    ).toMatchObject({ ok: true });
+
+    await expect(session.proposeFileWrite(proposal)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHANGE_SET_PROVIDER_VERSION_SET_MISMATCH" }
+    });
+  });
+
   test("persists a Main-only proof only for its frozen Change Set revision", async () => {
     const chapterBytes = "First.\n\nOld middle.\n\nLast.";
     const persisted: ChangeSet[] = [];
@@ -109,7 +175,7 @@ describe("Change Set application session", () => {
       operationKind: "replace_file",
       selectionChecksum: "b".repeat(64),
       selectedOperationIds: ["notes/outline.md"],
-      operationOrderChecksum: "c".repeat(64),
+      operationOrderChecksum: sha256("notes/outline.md"),
       sourceRef: "file:notes/outline.md",
       targetRef: "file:notes/outline.md",
       baseChecksum: sha256("old"),
@@ -1062,6 +1128,43 @@ describe("Change Set application session", () => {
     });
     expect(retry).toBe(first);
     expect(persisted).toEqual([first]);
+  });
+
+  test("freezes a Main lifecycle proof reference and ordered selection into the v2 domain identity", async () => {
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "unused", persisted }),
+      providerSemanticVersionSetChecksum: "a".repeat(64),
+      createChangeSetId: () => "change-set-chapter-lifecycle",
+      createHunkId: sequence("lifecycle-hunk-a", "lifecycle-hunk-b"),
+      now: () => "2026-08-05T12:00:00.000Z"
+    });
+    const input = {
+      ...preparedChapterBatch(),
+      consistencyGroupId: "chapter-lifecycle-abc123",
+      domainOperation: {
+        kind: "chapter_reorder" as const,
+        sourceRef: "chapter:ch_a",
+        targetRef: "chapter:ch_a",
+        proofRef: "d".repeat(64),
+        proofChecksum: "e".repeat(64)
+      }
+    };
+
+    const changeSet = expectOk(await session.proposePreparedFileBatch(input));
+
+    expect(changeSet).toMatchObject({
+      schemaVersion: "2.0",
+      domainOperation: {
+        kind: "chapter_reorder",
+        sourceRef: "chapter:ch_a",
+        targetRef: "chapter:ch_a",
+        proofRef: "d".repeat(64),
+        proofChecksum: "e".repeat(64),
+        selectedRelativePaths: ["chapters/ch_a.md", "chapters/ch_b.md"],
+        selectionChecksum: sha256("chapters/ch_a.md\nchapters/ch_b.md")
+      }
+    });
   });
 
   test("rejects a restored prepared batch from another provider semantic version set", async () => {

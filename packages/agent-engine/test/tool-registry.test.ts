@@ -252,7 +252,7 @@ describe("Agent tool registry", () => {
     expect(listTools({ ...input, facadeVersion: "v1" })).toEqual(listTools(input));
   });
 
-  test("publishes the compact v2 core matrix behind capability gates", () => {
+  test("keeps the v2 schema 1 core matrix read-only behind capability gates", () => {
     const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
       input: Record<string, unknown>
     ) => readonly { readonly name: string }[];
@@ -290,7 +290,6 @@ describe("Agent tool registry", () => {
     expect(names("execution", false, false)).toEqual([
       "list_project_entries",
       "read_resource",
-      "edit_text",
       "finish",
       "request_user_input"
     ]);
@@ -299,13 +298,10 @@ describe("Agent tool registry", () => {
       "list_project_entries",
       "read_resource",
       "search_project",
-      "edit_text",
-      "create_resource",
-      "manage_path",
       "finish",
       "request_user_input"
     ]);
-    expect(fullExecution).toHaveLength(8);
+    expect(fullExecution).toHaveLength(5);
 
     const unqualifiedEngineeringTools = listTools({
       facadeVersion: "v2",
@@ -376,7 +372,7 @@ describe("Agent tool registry", () => {
     expect(names).not.toContain("plugin__acme__search");
   });
 
-  test("publishes strict v2 schemas and validates every discriminated branch", () => {
+  test("keeps schema 1 v2 read schemas while withholding mutation aliases", () => {
     const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
       input: Record<string, unknown>
     ) => readonly {
@@ -423,9 +419,6 @@ describe("Agent tool registry", () => {
         arguments: arguments_,
         argumentsText: JSON.stringify(arguments_)
       }).ok;
-    const range = { unit: "character", start: 0, end: 1 };
-    const baseHash = "a".repeat(64);
-
     expect(isValid("read_resource", { ref: "chapter:ch_01" })).toBe(true);
     expect(isValid("read_resource", { ref: "story_bible:character.hero" })).toBe(true);
     expect(isValid("read_resource", { ref: "file:notes/outline.md" })).toBe(true);
@@ -445,66 +438,9 @@ describe("Agent tool registry", () => {
       })
     ).toBe(false);
 
-    expect(
-      isValid("edit_text", {
-        ref: "story_bible:character.hero",
-        baseHash,
-        range,
-        replacement: "Updated"
-      })
-    ).toBe(true);
-    expect(
-      isValid("edit_text", {
-        ref: "file:notes.md",
-        baseHash: "bad",
-        range,
-        replacement: "Updated"
-      })
-    ).toBe(false);
-
-    expect(isValid("create_resource", { kind: "chapter", title: "Opening" })).toBe(true);
-    expect(
-      isValid("create_resource", {
-        kind: "story_bible",
-        assetType: "foreshadow",
-        content: "{}"
-      })
-    ).toBe(true);
-    expect(descriptor("create_resource").description).toContain("foreshadow");
-    expect(descriptor("create_resource").description).toContain("Change Set");
-    expect(
-      isValid("create_resource", { kind: "file", path: "notes/new.md", content: "Draft" })
-    ).toBe(true);
-    expect(
-      isValid("create_resource", { kind: "chapter", title: "Opening", path: "escape.md" })
-    ).toBe(false);
-
-    expect(
-      isValid("manage_path", {
-        operation: "move_file",
-        sourceRef: "file:notes/old.md",
-        targetPath: "notes/new.md",
-        baseHash
-      })
-    ).toBe(true);
-    expect(
-      isValid("manage_path", {
-        operation: "delete_file",
-        ref: "file:notes/old.md",
-        baseHash
-      })
-    ).toBe(true);
-    expect(isValid("manage_path", { operation: "create_directory", path: "notes/archive" })).toBe(
-      true
+    expect(descriptors.map((tool) => tool.name)).not.toEqual(
+      expect.arrayContaining(["edit_text", "create_resource", "manage_path"])
     );
-    expect(
-      isValid("manage_path", {
-        operation: "delete_file",
-        ref: "chapter:ch_01",
-        baseHash
-      })
-    ).toBe(false);
-    expect(descriptor("manage_path").destructive).toBe(true);
   });
 
   test("assigns stable digests to the v2 descriptor set", () => {
@@ -714,7 +650,54 @@ describe("Agent tool registry", () => {
           capabilitySnapshot: legacyCapabilities
         })
         .map((tool) => tool.name)
-    ).toContain("manage_path");
+    ).not.toContain("manage_path");
+  });
+
+  test("keeps v2 facade schema 1 read-only even when legacy mutation switches are set", () => {
+    const tools = engineExports.listAgentTools({
+      facadeVersion: "v2",
+      operationMode: "execution",
+      contextMode: "writing",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: {
+        workspaceKind: "creativeProject",
+        searchEnabled: true,
+        fileLifecycleEnabled: true,
+        storyBibleStructuredToolsEnabled: true,
+        writingOperations: ["chapter_replace", "story_bible_patch"],
+        workspaceFileOperations: ["replace_file", "create_file"],
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "v2-schema-1-no-mutation"
+      }
+    });
+
+    expect(tools.filter((tool) => tool.effect === "propose" || tool.effect === "execute")).toEqual(
+      []
+    );
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "list_project_entries",
+        "read_resource",
+        "list_story_bible",
+        "read_story_bible",
+        "search_project"
+      ])
+    );
+    expect(tools.map((tool) => tool.name)).not.toEqual(
+      expect.arrayContaining([
+        "edit_text",
+        "create_resource",
+        "manage_path",
+        "create_story_bible",
+        "patch_story_bible",
+        "set_story_bible_status",
+        "restore_story_bible"
+      ])
+    );
   });
 
   test("uses profile-specific Catalog 2.0 schemas without aggregate mutation tools", () => {

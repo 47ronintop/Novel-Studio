@@ -11,6 +11,8 @@ import {
   createAgentSendPreviewSession,
   parseAgentFirstRoundSemanticPayloadV2,
   createStoryBibleAgentToolSession,
+  createStoryBibleApprovalProofSession,
+  createStoryBibleReferenceDependencyApplyGuard,
   freezeRunModelSharingGrant,
   freezeWorkspaceModelSharingDefaults,
   filterReadToolsBySharingPolicy,
@@ -33,6 +35,7 @@ import {
   parseFrozenRunModelSharingGrant,
   parseFrozenWorkspaceModelSharingDefaults,
   packAgentContext,
+  createProviderVisibleUntrustedEnvelope,
   parseProviderVisibleUntrustedEnvelope,
   serializeProviderVisibleUntrustedEnvelope,
   isStoryBibleAssetType,
@@ -60,6 +63,7 @@ import {
   type AgentConversationLifecyclePort,
   type AgentConversationPersistencePort,
   type AgentConversationSession,
+  type AgentRunContextSharingState,
   type AgentReadToolExecutor,
   type AgentSearchToolExecutor,
   type AgentStoryBibleToolExecutor,
@@ -68,6 +72,7 @@ import {
   type AgentExternalToolExecutor,
   type AgentFileOperationSessionPort,
   type ChapterAgentToolSession,
+  type ChapterLifecyclePreparationPort,
   type AgentRunModelDriver,
   type AgentRunContextSharingPort,
   type AgentRunSession,
@@ -89,8 +94,11 @@ import {
   type AgentUsageTimeFacts,
   type AgentUsageSession,
   type AgentVersionGroupExecutor,
+  type AgentRunChangeSetApprovalV2Port,
   type StoryBibleAsset,
   type StoryBibleRestoreAuthorization,
+  type StoryBibleReferenceDependencyApplyGuard,
+  type StoryBibleReferenceDependencyV1,
   type ProjectConventionsReader,
   type WorkspaceOutlineDependencyManifest,
   type WorkspaceOutlineReader,
@@ -100,7 +108,8 @@ import {
   type VersionGroupSessionTransactionPort,
   type VersionGroupSession,
   type VersionGroupApplyBatchResult,
-  type VersionGroupTransactionApplyInput
+  type VersionGroupTransactionApplyInput,
+  type WritingTaskIntent
 } from "@novel-studio/application";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
@@ -109,6 +118,11 @@ import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
 import { createDesktopProjectConventionsReader } from "./project-conventions-reader.js";
 import { createDesktopWorkspaceOutlineReader } from "./workspace-outline-reader.js";
 import { createDesktopCreativeProjectFileReceiptStore } from "./creative-project-file-receipt-store.js";
+import {
+  createDesktopChapterLifecyclePreparationPort,
+  isChapterLifecyclePreparationProofBridge,
+  type ChapterLifecyclePreparationProofBridge
+} from "./chapter-lifecycle-preparation.js";
 import { DEFAULT_AGENT_FEATURE_FLAGS, type AgentFeatureFlags } from "./agent-feature-flags.js";
 import type { WorkspaceContextSourcePreference } from "./workspace-context-policy-store.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
@@ -188,6 +202,7 @@ import {
   ProjectLockFileRepository,
   RecoveryRepository,
   StoryBibleFileRepository,
+  StoryBibleReferenceDependencyFileRepository,
   deriveRelatedEntityIds,
   WorkspaceOutlineIndexRepository,
   WorkspaceOutlineProjectEntryRepository,
@@ -263,7 +278,9 @@ export interface DesktopAgentRunSessionOptions {
     profileId: string,
     modelName?: string
   ) => Promise<AgentRunStartModelFacts | undefined>;
-  readonly readEditorBuffer?: (refId: string) => Promise<string | undefined>;
+  readonly readEditorBuffer?: (
+    refId: string
+  ) => Promise<string | { readonly content: string; readonly sourceRevision: number } | undefined>;
   /** Main-owned creative file session reader used for active/general project files. */
   readonly readCreativeProjectFile?: (
     relativePath: string
@@ -274,8 +291,10 @@ export interface DesktopAgentRunSessionOptions {
   ) => Promise<Result<void, UnifiedError>>;
   readonly readEditorState?: (relativePath: string) => Promise<
     | {
+        readonly status?: "known" | "unknown";
         readonly dirty: boolean;
         readonly content: string;
+        readonly rendererRevision?: number;
       }
     | undefined
   >;
@@ -296,6 +315,14 @@ export interface DesktopAgentRunSessionOptions {
   readonly failAgentWriteAt?: number;
   /** Main-owned v2 proposal binding, supplied by a qualified runtime host. */
   readonly providerSemanticVersionSetChecksum?: string;
+  /**
+   * Shared Main-owned ledger for the qualified approval coordinator and the write transaction.
+   * Production must inject the same instance into both sides so an issued/reserved authorization
+   * cannot disappear behind independent in-memory caches.
+   */
+  readonly authorizationLedger?: ApprovalAuthorizationLedger;
+  /** Only a qualified Main confirmation surface may supply this in production. */
+  readonly changeSetApprovalV2?: AgentRunChangeSetApprovalV2Port;
   /**
    * Main-owned release gates. These only request a capability; the runtime also requires the
    * corresponding concrete port to be present before exposing a tool to the model.
@@ -383,6 +410,8 @@ export interface DesktopAgentRuntimeServices {
   readonly releasePromptCacheResources?: () => void;
   /** Immediately fail-close network and external tool capabilities after a settings mutation. */
   readonly revokeSettingsCapabilities: () => void;
+  /** Immediately stops all approval-backed Agent capability before a deferred runtime refresh. */
+  readonly revokeApprovalCapabilities: () => void;
 }
 
 interface DesktopPackedContextCache {
@@ -573,7 +602,8 @@ function resolveWorkspaceProjectContextProfile(
   return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
 }
 
-function requestedCapabilitySnapshot(
+/** @internal Main-owned release request; exported for boundary tests only. */
+export function requestedCapabilitySnapshot(
   options: DesktopAgentRunSessionOptions
 ): AgentToolCapabilitySnapshot {
   const explicit = options.capabilitySnapshot;
@@ -597,6 +627,10 @@ function requestedCapabilitySnapshot(
     ? [
         "chapter_replace",
         "chapter_create",
+        "chapter_rename",
+        "chapter_reorder",
+        "chapter_status",
+        "chapter_restore",
         "story_bible_create",
         "story_bible_patch",
         "story_bible_status",
@@ -637,6 +671,19 @@ function requestedCapabilitySnapshot(
   });
 }
 
+/** @internal Main-owned expiry boundary; exported for focused capability tests only. */
+export function revokeApprovalMutationCapabilities(
+  state: EffectiveCapabilityState,
+  revokedAt: string
+): EffectiveCapabilityState {
+  return revokeCapability(
+    revokeCapability(state, "writing_mutation", "attestation_expired", revokedAt),
+    "workspace_file_mutation",
+    "attestation_expired",
+    revokedAt
+  );
+}
+
 /** @internal Main-composition qualification intersection; exported for boundary tests only. */
 export function buildRuntimeCapabilitySnapshot(input: {
   readonly requested: AgentToolCapabilitySnapshot;
@@ -645,6 +692,8 @@ export function buildRuntimeCapabilitySnapshot(input: {
   readonly networkToolExecutor?: AgentNetworkToolExecutor;
   readonly fileOperationSession?: AgentFileOperationSessionPort;
   readonly storyBibleToolExecutor?: AgentStoryBibleToolExecutor;
+  readonly storyBibleReferenceDependencyApplyGuard?: StoryBibleReferenceDependencyApplyGuard;
+  readonly chapterLifecyclePreparation?: ChapterLifecyclePreparationPort;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
   readonly hasVersionGroupExecutor: boolean;
@@ -673,11 +722,30 @@ export function buildRuntimeCapabilitySnapshot(input: {
     if (operation === "chapter_create") {
       return input.fileOperationSession !== undefined && hasLifecycleBackend;
     }
+    if (
+      operation === "chapter_rename" ||
+      operation === "chapter_reorder" ||
+      operation === "chapter_status" ||
+      operation === "chapter_restore"
+    ) {
+      return (
+        hasReplaceBackend &&
+        isChapterLifecyclePreparationProofBridge(input.chapterLifecyclePreparation)
+      );
+    }
     if (operation === "story_bible_patch" || operation === "story_bible_status") {
-      return input.storyBibleToolExecutor !== undefined && hasReplaceBackend;
+      return (
+        input.storyBibleToolExecutor !== undefined &&
+        input.storyBibleReferenceDependencyApplyGuard !== undefined &&
+        hasReplaceBackend
+      );
     }
     if (operation === "story_bible_create" || operation === "story_bible_restore") {
-      return input.storyBibleToolExecutor !== undefined && hasLifecycleBackend;
+      return (
+        input.storyBibleToolExecutor !== undefined &&
+        input.storyBibleReferenceDependencyApplyGuard !== undefined &&
+        hasLifecycleBackend
+      );
     }
     return false;
   }) satisfies readonly ProviderVisibleWritingOperation[];
@@ -733,6 +801,10 @@ function operationFeatureEnabled(
     switch (operation) {
       case "chapter_replace":
       case "chapter_create":
+      case "chapter_rename":
+      case "chapter_reorder":
+      case "chapter_status":
+      case "chapter_restore":
       case "story_bible_create":
       case "story_bible_patch":
       case "story_bible_status":
@@ -837,10 +909,12 @@ function createDesktopAgentRuntimeServices(
     workspaceId: options.projectId
   };
   const approvalBindingIssuer = createMainApprovalIssuer();
-  const authorizationLedger = new ApprovalAuthorizationLedger({
-    projectRoot: options.stateRoot,
-    traceId: "desktop-agent-authorization-ledger"
-  });
+  const authorizationLedger =
+    options.authorizationLedger ??
+    new ApprovalAuthorizationLedger({
+      projectRoot: options.stateRoot,
+      traceId: "desktop-agent-authorization-ledger"
+    });
   const resolvedFeatureFlags = options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS;
   const packedContextCache = createDesktopPackedContextCache();
   const requestedCapabilities = requestedCapabilitySnapshot(options);
@@ -901,7 +975,25 @@ function createDesktopAgentRuntimeServices(
   const storyBibleToolExecutor =
     storyBible === undefined || chapterRepository === undefined
       ? undefined
-      : createDesktopStoryBibleToolExecutor(storyBible, chapterRepository, options.stateRoot);
+      : createDesktopStoryBibleToolExecutor(
+          storyBible,
+          chapterRepository,
+          options.stateRoot,
+          options.readEditorState
+        );
+  const chapterLifecyclePreparation =
+    chapterRepository === undefined || storyBible === undefined
+      ? undefined
+      : createDesktopChapterLifecyclePreparationPort({
+          chapterRepository,
+          storyBible,
+          historyRepository: new HistoryRepository({
+            projectRoot: options.stateRoot,
+            traceId: "desktop-agent-chapter-lifecycle-history"
+          }),
+          proofRoot: options.stateRoot,
+          traceId: "desktop-agent-chapter-lifecycle"
+        });
   const repository = new AgentRunFileRepository({
     projectRoot: options.stateRoot,
     traceId: "desktop-agent-run-store"
@@ -1015,19 +1107,56 @@ function createDesktopAgentRuntimeServices(
     approvalBindingIssuer,
     ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState })
   });
+  const approvalDecisionProofRepository = new ApprovalDecisionProofFileRepository({
+    projectRoot: options.stateRoot,
+    traceId: "desktop-agent-approval-decision-proof-repository"
+  });
   const proofRepositoryBound = changeSetSession.bindApprovalDecisionProofRepository(
-    new ApprovalDecisionProofFileRepository({
-      projectRoot: options.stateRoot,
-      traceId: "desktop-agent-approval-decision-proof-repository"
-    })
+    approvalDecisionProofRepository
   );
   if (!proofRepositoryBound.ok) throw new Error(proofRepositoryBound.error.message);
+  const storyBibleReferenceDependencyRepository =
+    storyBible === undefined ||
+    chapterRepository === undefined ||
+    options.readEditorState === undefined
+      ? undefined
+      : new StoryBibleReferenceDependencyFileRepository({
+          projectRoot: options.stateRoot,
+          traceId: "desktop-agent-story-bible-reference-dependencies"
+        });
+  const storyBibleApprovalProofFinalizer = createStoryBibleApprovalProofSession({
+    changeSets: changeSetSession,
+    ...(storyBibleReferenceDependencyRepository === undefined
+      ? {}
+      : { referenceDependencyRepository: storyBibleReferenceDependencyRepository })
+  });
+  const storyBibleReferenceDependencyApplyGuard =
+    storyBibleReferenceDependencyRepository === undefined ||
+    storyBible === undefined ||
+    chapterRepository === undefined ||
+    options.readEditorState === undefined
+      ? undefined
+      : createStoryBibleReferenceDependencyApplyGuard({
+          repository: storyBibleReferenceDependencyRepository,
+          proofs: {
+            readApprovalDecisionProof: ({ runId, proofId }) =>
+              approvalDecisionProofRepository.readApprovalDecisionProof(runId, proofId)
+          },
+          editorStates: createDesktopStoryBibleReferenceDependencyEditorStates({
+            storyBible,
+            chapters: chapterRepository,
+            readEditorState: options.readEditorState
+          })
+        });
   const chapterAgentToolSession: ChapterAgentToolSession | undefined =
     chapterRepository === undefined
       ? undefined
       : createChapterAgentToolSession({
           repository: chapterRepository,
           changeSetSession,
+          ...(chapterLifecyclePreparation === undefined
+            ? {}
+            : { lifecyclePreparation: chapterLifecyclePreparation }),
           traceId: "desktop-agent-chapter-tool"
         });
   const readToolExecutor = createDesktopReadToolExecutor(
@@ -1051,8 +1180,14 @@ function createDesktopAgentRuntimeServices(
             : { lifecycleOperations: options.lifecycleOperations }),
           ...(trustedCreativeMutations === undefined ? {} : { trustedCreativeMutations }),
           projectReads,
+          ...(isChapterLifecyclePreparationProofBridge(chapterLifecyclePreparation)
+            ? { chapterLifecyclePreparationProof: chapterLifecyclePreparation }
+            : {}),
           ...(chapterRepository === undefined ? {} : { chapterRepository }),
           ...(storyBible === undefined ? {} : { storyBible }),
+          ...(storyBibleReferenceDependencyApplyGuard === undefined
+            ? {}
+            : { storyBibleReferenceDependencyApplyGuard }),
           ...(options.readEditorState === undefined
             ? {}
             : { readEditorState: options.readEditorState }),
@@ -1099,14 +1234,17 @@ function createDesktopAgentRuntimeServices(
       : { networkToolExecutor: options.networkToolExecutor }),
     ...(fileOperationSession === undefined ? {} : { fileOperationSession }),
     ...(storyBibleToolExecutor === undefined ? {} : { storyBibleToolExecutor }),
+    ...(storyBibleReferenceDependencyApplyGuard === undefined
+      ? {}
+      : { storyBibleReferenceDependencyApplyGuard }),
+    ...(chapterLifecyclePreparation === undefined ? {} : { chapterLifecyclePreparation }),
     ...(options.lifecycleOperations === undefined
       ? {}
       : { lifecycleOperations: options.lifecycleOperations }),
     ...(trustedCreativeMutations === undefined ? {} : { trustedCreativeMutations }),
     hasVersionGroupExecutor: versionGroupServices !== undefined,
     hasTrustedApprovalV2:
-      resolvedFeatureFlags.approvalBindingV2 &&
-      options.providerSemanticVersionSetChecksum !== undefined,
+      resolvedFeatureFlags.approvalBindingV2 && options.changeSetApprovalV2 !== undefined,
     ...(options.externalToolExecutor === undefined
       ? {}
       : { externalToolExecutor: options.externalToolExecutor }),
@@ -1128,6 +1266,10 @@ function createDesktopAgentRuntimeServices(
   const frozenFirstSends = new Map<string, AgentConfirmedFirstSendV2>();
   const preparedSendStates = new Map<string, DesktopPreparedSendState>();
   const sendRoundState = new Map<string, DesktopSendRoundState>();
+  const pendingPlanExecutionSharing = new Map<
+    string,
+    Promise<Result<AgentRunContextSharingState, UnifiedError>>
+  >();
   const reservedRunIds: string[] = [];
   const createRuntimeRunId = (): string =>
     reservedRunIds.shift() ??
@@ -1160,6 +1302,8 @@ function createDesktopAgentRuntimeServices(
             ) {
               return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
             }
+            const pending = pendingPlanExecutionSharing.get(input.runId);
+            if (pending !== undefined) return pending;
             const state = sendRoundState.get(input.runId) ?? preparedSendStates.get(input.runId);
             if (state !== undefined) return ok({ defaults: state.defaults, grant: state.grant });
             const restored = await readPersistedModelSharingState(input.runId);
@@ -1167,6 +1311,93 @@ function createDesktopAgentRuntimeServices(
             return restored.value === undefined
               ? err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"))
               : ok({ defaults: restored.value.defaults, grant: restored.value.grant });
+          },
+          async inheritForPlanExecution(input: {
+            readonly sourceRunId: string;
+            readonly targetRunId: string;
+            readonly scope: AgentContextScope;
+          }) {
+            if (
+              !isMachineToken(input.sourceRunId) ||
+              !isMachineToken(input.targetRunId) ||
+              input.sourceRunId === input.targetRunId ||
+              input.scope.kind !== "workspace" ||
+              input.scope.workspaceId !== runtimeScope.workspaceId ||
+              input.scope.workspaceKind !== runtimeScope.workspaceKind
+            ) {
+              return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+            }
+            const inFlight = pendingPlanExecutionSharing.get(input.targetRunId);
+            if (inFlight !== undefined) return inFlight;
+            const inherit = (async (): Promise<
+              Result<AgentRunContextSharingState, UnifiedError>
+            > => {
+              const sourceInMemory =
+                sendRoundState.get(input.sourceRunId) ?? preparedSendStates.get(input.sourceRunId);
+              const restoredSource =
+                sourceInMemory === undefined
+                  ? await readPersistedModelSharingState(input.sourceRunId)
+                  : ok(undefined);
+              if (!restoredSource.ok) return restoredSource;
+              const source =
+                sourceInMemory ??
+                (restoredSource.value === undefined
+                  ? undefined
+                  : {
+                      defaults: restoredSource.value.defaults,
+                      grant: restoredSource.value.grant
+                    });
+              if (
+                source === undefined ||
+                source.defaults.workspaceBindingId !== expectedSharingWorkspaceBindingId ||
+                source.grant.workspaceBindingId !== source.defaults.workspaceBindingId ||
+                source.grant.defaultsRevision !== source.defaults.defaultsRevision
+              ) {
+                return err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+              }
+
+              const targetInMemory =
+                sendRoundState.get(input.targetRunId) ?? preparedSendStates.get(input.targetRunId);
+              const restoredTarget =
+                targetInMemory === undefined
+                  ? await readPersistedModelSharingState(input.targetRunId)
+                  : ok(undefined);
+              if (!restoredTarget.ok) return restoredTarget;
+              const target =
+                targetInMemory ??
+                (restoredTarget.value === undefined
+                  ? undefined
+                  : {
+                      defaults: restoredTarget.value.defaults,
+                      grant: restoredTarget.value.grant
+                    });
+              if (target !== undefined) {
+                return target.defaults.defaultsRevision === source.defaults.defaultsRevision &&
+                  target.defaults.workspaceBindingId === source.defaults.workspaceBindingId &&
+                  target.grant.grantRevision === source.grant.grantRevision &&
+                  target.grant.workspaceBindingId === source.grant.workspaceBindingId &&
+                  target.grant.defaultsRevision === source.grant.defaultsRevision
+                  ? ok({ defaults: source.defaults, grant: source.grant })
+                  : err(runtimeError("AGENT_MODEL_SHARING_BINDING_INVALID"));
+              }
+
+              const persisted = await persistModelSharingState({
+                runId: input.targetRunId,
+                defaults: source.defaults,
+                grant: source.grant
+              });
+              return persisted.ok
+                ? ok({ defaults: source.defaults, grant: source.grant })
+                : persisted;
+            })();
+            pendingPlanExecutionSharing.set(input.targetRunId, inherit);
+            try {
+              return await inherit;
+            } finally {
+              if (pendingPlanExecutionSharing.get(input.targetRunId) === inherit) {
+                pendingPlanExecutionSharing.delete(input.targetRunId);
+              }
+            }
           },
           async updateGrant(input: {
             readonly runId: string;
@@ -1271,7 +1502,7 @@ function createDesktopAgentRuntimeServices(
         return repository.listSnapshots(projectId);
       },
       readRunEvents(runId) {
-        return repository.readEvents(runId);
+        return readConversationRunEvents(repository, runId);
       },
       async hasPendingReview(input) {
         const listed = await repository.listSnapshots(input.projectId);
@@ -1328,6 +1559,7 @@ function createDesktopAgentRuntimeServices(
   });
   const startPreflight = createDesktopStartPreflight({
     workspaceKind: options.workspaceKind,
+    ...(options.activeChapterId === undefined ? {} : { activeChapterId: options.activeChapterId }),
     draftSession,
     packedContextCache,
     ...(chapterRepository === undefined ? {} : { chapterRepository }),
@@ -1438,6 +1670,17 @@ function createDesktopAgentRuntimeServices(
       revokedAt
     );
   };
+  const revokeApprovalCapabilities = (): void => {
+    const revokedAt = options.now?.() ?? new Date().toISOString();
+    // Expiry removes only approval-backed mutation authority. Keeping read and search capabilities
+    // effective avoids turning an approval-attestation boundary into an unrelated runtime shutdown;
+    // the revision change still makes any active run cross a capability_changed boundary.
+    effectiveCapabilityState = revokeApprovalMutationCapabilities(
+      effectiveCapabilityState,
+      revokedAt
+    );
+    options.releasePromptCacheScope?.();
+  };
   const providerNameMapping = buildRuntimeProviderNameMapping(
     capabilitySnapshot,
     options.externalToolDescriptors
@@ -1459,6 +1702,9 @@ function createDesktopAgentRuntimeServices(
     planExecutionSession,
     contextCompactor: contextSession,
     changeSetSession,
+    ...(options.changeSetApprovalV2 === undefined
+      ? {}
+      : { changeSetApprovalV2: options.changeSetApprovalV2 }),
     ...(searchToolExecutor === undefined ? {} : { searchToolExecutor }),
     ...(creativeProjectFiles === undefined
       ? {}
@@ -1475,6 +1721,12 @@ function createDesktopAgentRuntimeServices(
     ...(fileOperationSession === undefined ? {} : { fileOperationSession }),
     ...(chapterAgentToolSession === undefined ? {} : { chapterAgentToolSession }),
     ...(storyBibleToolExecutor === undefined ? {} : { storyBibleToolExecutor }),
+    ...(storyBibleToolExecutor === undefined
+      ? {}
+      : {
+          storyBibleApprovalProofFinalizer,
+          storyBibleApprovalWorkspaceBindingId: expectedSharingWorkspaceBindingId
+        }),
     ...(options.externalToolExecutor === undefined
       ? {}
       : { externalToolExecutor: options.externalToolExecutor }),
@@ -1594,10 +1846,19 @@ function createDesktopAgentRuntimeServices(
             continue;
           }
           if (source.sourceKind === "editor_buffer") {
-            const editorContent = await options.readEditorBuffer?.(source.refId);
+            const editorSnapshot = await options.readEditorBuffer?.(source.refId);
+            if (options.readEditorBuffer !== undefined && editorSnapshot === undefined) {
+              current.push({ refId: source.refId, status: "missing" });
+              continue;
+            }
+            const editorContent =
+              typeof editorSnapshot === "string" ? editorSnapshot : editorSnapshot?.content;
             current.push({
               refId: source.refId,
-              content: editorContent ?? source.content
+              content: editorContent ?? source.content,
+              ...(typeof editorSnapshot === "object"
+                ? { sourceRevision: editorSnapshot.sourceRevision }
+                : {})
             });
             continue;
           }
@@ -1615,6 +1876,22 @@ function createDesktopAgentRuntimeServices(
               return read;
             }
             current.push({ refId: source.refId, content: JSON.stringify(read.value.asset) });
+            continue;
+          }
+          if (
+            source.assetId !== undefined &&
+            source.refId === `story_bible:${source.assetId}` &&
+            storyBible !== undefined
+          ) {
+            const asset = await findStoryBibleAsset(storyBible, source.assetId);
+            if (!asset.ok) {
+              if (asset.error.code === "AGENT_STORY_BIBLE_ASSET_NOT_FOUND") {
+                current.push({ refId: source.refId, status: "missing" });
+                continue;
+              }
+              return asset;
+            }
+            current.push({ refId: source.refId, content: JSON.stringify(asset.value) });
             continue;
           }
           if (source.relativePath !== undefined) {
@@ -1807,6 +2084,7 @@ function createDesktopAgentRuntimeServices(
     ...(usageSession === undefined ? {} : { agentUsageSession: usageSession }),
     prepare,
     revokeSettingsCapabilities,
+    revokeApprovalCapabilities,
     ...(options.releasePromptCacheScope === undefined
       ? {}
       : { releasePromptCacheResources: options.releasePromptCacheScope }),
@@ -2054,17 +2332,49 @@ function createDesktopSendLedgerModelDriver(input: {
         return;
       }
 
-      if (roundInput.messages.length < existing.messageCount) {
-        throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
-      }
-      const normalizedMessages = roundInput.messages.map(desktopNormalizeModelMessage);
-      const additionsInput = normalizedMessages.slice(existing.messageCount);
-      const additions = additionsInput.map((message) =>
-        createDesktopCanonicalMessageFromModel(message, false)
+      const normalizedMessages = normalizeDesktopRoundMessagesForSendLedger(roundInput.messages);
+      const currentRequestIndex = desktopCurrentRequestMessageIndex(
+        existing.currentManifest,
+        normalizedMessages
       );
-      if (additions.length === 0) {
+      if (currentRequestIndex < 0) throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
+      const currentMessages = normalizedMessages.map((message, index) =>
+        createDesktopCanonicalMessageFromModel(message, index === currentRequestIndex)
+      );
+      const existingMessages = existing.currentManifest.messages.map((message) =>
+        desktopCanonicalMessageInput(message, existing.currentManifest.sourceRefs)
+      );
+      const isExtension =
+        currentMessages.length >= existingMessages.length &&
+        existingMessages.every((message, index) =>
+          desktopProviderMessagesEqual(message, currentMessages[index])
+        );
+      const contextRefreshAdditionStart = isExtension
+        ? undefined
+        : desktopContextRefreshRebaseAdditionStart(existing.currentManifest, currentMessages);
+      if (!isExtension && contextRefreshAdditionStart === undefined) {
         throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
       }
+      const rebaseAdditionStart = contextRefreshAdditionStart ?? 0;
+      const additions = isExtension
+        ? currentMessages.slice(existingMessages.length)
+        : currentMessages;
+      const indexedAdditions = isExtension
+        ? additions.map((message, index) => ({
+            message,
+            messageOrder: existingMessages.length + index
+          }))
+        : currentMessages.slice(rebaseAdditionStart).map((message, index) => ({
+            message,
+            messageOrder: rebaseAdditionStart + index
+          }));
+      if (indexedAdditions.some(({ message }) => !isDesktopLedgerAdditionMessage(message))) {
+        throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
+      }
+      const ledgerAdditions = indexedAdditions.map(({ message, messageOrder }) =>
+        desktopLedgerAddition(message, messageOrder, roundInput.runId, existing.roundNumber + 1)
+      );
+      if (ledgerAdditions.length === 0) throw new Error("AGENT_SEND_LEDGER_SEQUENCE_INVALID");
       const manifest = createCanonicalRoundManifestV2({
         roundId: `round_${roundInput.runId}_${String(existing.roundNumber + 1)}`,
         runId: roundInput.runId,
@@ -2078,21 +2388,8 @@ function createDesktopSendLedgerModelDriver(input: {
         },
         providerSemanticVersionSet: existing.currentManifest.providerSemanticVersionSet,
         packedContextManifestChecksum: existing.currentManifest.packedContextManifestChecksum,
-        messages: [
-          ...existing.currentManifest.messages.map((message) =>
-            desktopCanonicalMessageInput(message, existing.currentManifest.sourceRefs)
-          ),
-          ...additions
-        ]
+        messages: isExtension ? [...existingMessages, ...additions] : currentMessages
       });
-      const ledgerAdditions = additions.map((message, index) =>
-        desktopLedgerAddition(
-          message,
-          existing.messageCount + index,
-          roundInput.runId,
-          existing.roundNumber + 1
-        )
-      );
       const entry = createDesktopLedgerEntry({
         runId: roundInput.runId,
         roundNumber: existing.roundNumber + 1,
@@ -2111,7 +2408,7 @@ function createDesktopSendLedgerModelDriver(input: {
       });
       const appended = await input.repository.appendEntry(roundInput.runId, entry);
       if (!appended.ok) throw new Error(appended.error.code);
-      existing.messageCount += additions.length;
+      existing.messageCount = manifest.messages.length;
       existing.roundNumber += 1;
       existing.currentManifest = manifest;
       yield* input.delegate.streamRound({
@@ -2196,10 +2493,13 @@ function createDesktopCanonicalMessageFromModel(
     };
   }
   if (message.role === "user") {
+    if (allowCurrentRequest) {
+      return { kind: "current_user_request", role: "user", content: message.content };
+    }
     const envelope = desktopTryParseEnvelope(message.content);
     if (envelope === undefined) {
       return {
-        kind: allowCurrentRequest ? "current_user_request" : "user_control",
+        kind: "user_control",
         role: "user",
         content: message.content
       };
@@ -2213,14 +2513,141 @@ function createDesktopCanonicalMessageFromModel(
   return desktopCanonicalEnvelopeMessage(envelope, message.content, message.toolCallId);
 }
 
-function desktopNormalizeModelMessage(message: AgentModelMessage): AgentModelMessage {
-  if (message.role !== "tool") return message;
-  const legacy = desktopTryParseLegacyToolEnvelope(message.content, message.toolCallId);
-  if (legacy === undefined) return message;
+function desktopCurrentRequestMessageIndex(
+  existing: CanonicalRoundManifestV2,
+  messages: readonly AgentModelMessage[]
+): number {
+  const request = existing.messages.find((message) => message.kind === "current_user_request");
+  if (request === undefined) return -1;
+  const firstHistoryIndex = messages.findIndex(
+    (message) => message.role === "assistant" || message.role === "tool"
+  );
+  const requestIndex = (firstHistoryIndex < 0 ? messages.length : firstHistoryIndex) - 1;
+  const candidate = messages[requestIndex];
+  return candidate?.role === "user" && candidate.content === request.content ? requestIndex : -1;
+}
+
+/**
+ * Preserve the assistant/tool-call pairing while normalizing legacy tool envelopes. The evidence
+ * injector runs before this boundary, so the provider tool name must be recovered from the paired
+ * assistant call rather than replaced with a legacy placeholder.
+ */
+export function normalizeDesktopRoundMessagesForSendLedger(
+  messages: readonly AgentModelMessage[]
+): AgentModelMessage[] {
+  const toolNamesByCallId = new Map<string, string>();
+  return messages.map((message) => {
+    if (message.role === "assistant") {
+      for (const call of message.toolCalls ?? []) toolNamesByCallId.set(call.id, call.name);
+      return message;
+    }
+    if (message.role === "tool") {
+      return normalizeDesktopToolMessageForSendLedger(
+        message,
+        toolNamesByCallId.get(message.toolCallId ?? "")
+      );
+    }
+    return message.role === "user"
+      ? normalizeDesktopContextRefreshMessageForSendLedger(message)
+      : message;
+  });
+}
+
+function normalizeDesktopContextRefreshMessageForSendLedger(
+  message: AgentModelMessage
+): AgentModelMessage {
+  if (message.role !== "user" || !isDesktopContextRefreshControl(message)) return message;
+  const control = JSON.parse(message.content) as {
+    readonly kind: "context_refreshed" | "context_excluded";
+    readonly sourceRefs: readonly string[];
+  };
   return {
     ...message,
-    content: serializeProviderVisibleUntrustedEnvelope(legacy)
+    content: serializeProviderVisibleUntrustedEnvelope(
+      createProviderVisibleUntrustedEnvelope({
+        kind: "untrusted_recovery_data",
+        source: { sourceKind: "recovery_summary", recoveryEventKind: control.kind },
+        data: JSON.stringify({ kind: control.kind, sourceRefs: control.sourceRefs })
+      })
+    )
   };
+}
+
+export function normalizeDesktopToolMessageForSendLedger(
+  message: AgentModelMessage,
+  providerToolName?: string
+): AgentModelMessage {
+  if (message.role !== "tool") return message;
+  if (desktopTryParseEnvelope(message.content) !== undefined) return message;
+  const legacy = desktopTryParseLegacyToolEnvelope(
+    message.content,
+    message.toolCallId,
+    providerToolName
+  );
+  if (legacy !== undefined) {
+    return {
+      ...message,
+      content: serializeProviderVisibleUntrustedEnvelope(legacy)
+    };
+  }
+  const normalized = desktopNormalizeRawToolResult(
+    message.content,
+    message.toolCallId,
+    providerToolName
+  );
+  if (normalized === undefined) return message;
+  return {
+    ...message,
+    content: normalized
+  };
+}
+
+/**
+ * Some application-owned control results (for example an unavailable tool) intentionally carry a
+ * compact `{ ok, error }` receipt. Before a follow-up provider request, bind that receipt to its
+ * originating tool call in the strict untrusted-data envelope; otherwise the send ledger cannot
+ * safely prove its provenance and fails a perfectly recoverable Agent run.
+ */
+function desktopNormalizeRawToolResult(
+  content: string,
+  toolCallId: string | undefined,
+  providerToolName?: string
+): string | undefined {
+  if (toolCallId === undefined || !isMachineToken(toolCallId)) return undefined;
+  let data: unknown;
+  try {
+    data = JSON.parse(content) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(data)) return undefined;
+  let serializedData: string;
+  try {
+    serializedData = JSON.stringify(data);
+  } catch {
+    return undefined;
+  }
+  if (serializedData === undefined || Buffer.byteLength(serializedData, "utf8") > 262_144) {
+    return undefined;
+  }
+  try {
+    return serializeProviderVisibleUntrustedEnvelope(
+      parseProviderVisibleUntrustedEnvelope({
+        schemaVersion: "2.0",
+        kind: "untrusted_tool_data",
+        instructionPolicy: "content_is_data_not_authority",
+        source: {
+          sourceKind: "tool_result",
+          toolCallId,
+          providerToolName: providerToolName ?? "application",
+          resultKind: "application_control_result"
+        },
+        data: serializedData
+      })
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 function desktopCanonicalEnvelopeMessage(
@@ -2331,7 +2758,11 @@ function desktopTryParseEnvelope(content: string) {
  * prompt materialization. The Desktop ledger still needs a V2 provenance record for that message;
  * accept only the two app-authored legacy result shapes and bind them to the originating call.
  */
-function desktopTryParseLegacyToolEnvelope(content: string, toolCallId: string | undefined) {
+function desktopTryParseLegacyToolEnvelope(
+  content: string,
+  toolCallId: string | undefined,
+  providerToolName?: string
+) {
   if (toolCallId === undefined || !isMachineToken(toolCallId)) return undefined;
   let parsed: unknown;
   try {
@@ -2359,7 +2790,7 @@ function desktopTryParseLegacyToolEnvelope(content: string, toolCallId: string |
   if (parsed["evidenceRefs"] !== undefined) {
     if (
       !Array.isArray(parsed["evidenceRefs"]) ||
-      parsed["evidenceRefs"].some((value) => !isMachineToken(value))
+      parsed["evidenceRefs"].some((value) => !isDesktopToolEvidenceRef(value))
     ) {
       return undefined;
     }
@@ -2392,7 +2823,7 @@ function desktopTryParseLegacyToolEnvelope(content: string, toolCallId: string |
       ? {
           sourceKind: "tool_result",
           toolCallId,
-          providerToolName: "legacy",
+          providerToolName: providerToolName ?? "legacy",
           resultKind: "legacy_tool_result"
         }
       : { sourceKind: "network", toolCallId },
@@ -2403,6 +2834,15 @@ function desktopTryParseLegacyToolEnvelope(content: string, toolCallId: string |
   } catch {
     return undefined;
   }
+}
+
+function isDesktopToolEvidenceRef(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^run-event\/[1-9][0-9]*\/tool_(?:completed|failed)\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(
+      value
+    )
+  );
 }
 
 function desktopCanonicalMessageInput(
@@ -2445,6 +2885,119 @@ function desktopCanonicalMessageInput(
   };
 }
 
+function desktopCanonicalMessagesEqual(
+  left: CreateCanonicalRoundMessageV2Input,
+  right: CreateCanonicalRoundMessageV2Input | undefined
+): boolean {
+  return right !== undefined && stableDesktopJson(left) === stableDesktopJson(right);
+}
+
+function desktopProviderMessagesEqual(
+  left: CreateCanonicalRoundMessageV2Input,
+  right: CreateCanonicalRoundMessageV2Input | undefined
+): boolean {
+  if (right === undefined) return false;
+  const providerProjection = (message: CreateCanonicalRoundMessageV2Input) => ({
+    role: message.role,
+    content: message.content,
+    ...(message.toolCallId === undefined ? {} : { toolCallId: message.toolCallId }),
+    ...(message.toolCalls === undefined ? {} : { toolCalls: message.toolCalls })
+  });
+  return (
+    stableDesktopJson(providerProjection(left)) === stableDesktopJson(providerProjection(right))
+  );
+}
+
+/**
+ * Context refresh replaces the materialized prompt prefix, while preserving the request and
+ * transcript. Accept that one intentional rebase only when the application appended its exact
+ * refresh control receipt. Tool results may be rewritten by rewriteBoundContextHistory().
+ */
+function desktopContextRefreshRebaseAdditionStart(
+  existing: CanonicalRoundManifestV2,
+  currentMessages: readonly CreateCanonicalRoundMessageV2Input[]
+): number | undefined {
+  const refreshControl = currentMessages.at(-1);
+  if (
+    refreshControl?.kind !== "context_notice" ||
+    refreshControl.role !== "user" ||
+    (refreshControl.source?.sourceRevision !== "context_refreshed" &&
+      refreshControl.source?.sourceRevision !== "context_excluded")
+  ) {
+    return undefined;
+  }
+  const previousRequestIndex = existing.messages.findIndex(
+    (message) => message.kind === "current_user_request"
+  );
+  const currentRequestIndex = currentMessages.findIndex(
+    (message) => message.kind === "current_user_request"
+  );
+  const previousRequest = existing.messages[previousRequestIndex];
+  const currentRequest = currentMessages[currentRequestIndex];
+  if (
+    previousRequestIndex < 0 ||
+    currentRequestIndex < 0 ||
+    previousRequest === undefined ||
+    currentRequest === undefined ||
+    !desktopCanonicalMessagesEqual(
+      desktopCanonicalMessageInput(previousRequest, existing.sourceRefs),
+      currentRequest
+    )
+  ) {
+    return undefined;
+  }
+  const previousHistory = existing.messages.slice(previousRequestIndex + 1);
+  const currentHistory = currentMessages.slice(currentRequestIndex + 1, -1);
+  if (currentHistory.length < previousHistory.length) return undefined;
+  const preservesHistory = previousHistory.every((message, index) => {
+    const current = currentHistory[index];
+    if (current === undefined) return false;
+    if (
+      desktopCanonicalMessagesEqual(
+        desktopCanonicalMessageInput(message, existing.sourceRefs),
+        current
+      )
+    ) {
+      return true;
+    }
+    return (
+      (message.kind === "tool_result" || message.kind === "remote_result") &&
+      current.role === "tool" &&
+      current.toolCallId === message.toolCallId
+    );
+  });
+  return preservesHistory ? currentRequestIndex + 1 + previousHistory.length : undefined;
+}
+
+function isDesktopContextRefreshControl(message: AgentModelMessage | undefined): boolean {
+  if (message?.role !== "user") return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(message.content) as unknown;
+  } catch {
+    return false;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed["sourceRefs"])) return false;
+  const keys = Object.keys(parsed).sort();
+  return (
+    keys.join("\u0000") === "instructionPolicy\u0000kind\u0000sourceRefs" &&
+    (parsed["kind"] === "context_refreshed" || parsed["kind"] === "context_excluded") &&
+    parsed["instructionPolicy"] === "content_is_data_not_authority" &&
+    parsed["sourceRefs"].every(isMachineToken)
+  );
+}
+
+function isDesktopLedgerAdditionMessage(message: CreateCanonicalRoundMessageV2Input): boolean {
+  return (
+    message.kind === "assistant" ||
+    message.kind === "tool_result" ||
+    message.kind === "remote_result" ||
+    message.kind === "user_control" ||
+    message.kind === "context_notice" ||
+    message.kind === "recovery"
+  );
+}
+
 function desktopLedgerAddition(
   message: CreateCanonicalRoundMessageV2Input,
   messageOrder: number,
@@ -2477,15 +3030,19 @@ function desktopLedgerAddition(
   return {
     ...base,
     kind:
-      message.kind === "context_notice" ||
-      message.kind === "explicit_reference" ||
-      message.kind === "active_resource" ||
-      message.kind === "project_conventions" ||
-      message.kind === "workspace_outline" ||
-      message.kind === "prior_conversation" ||
-      message.kind === "compaction"
-        ? "jit_context"
-        : "recovery",
+      message.kind === "context_notice" &&
+      (message.source.sourceRevision === "context_refreshed" ||
+        message.source.sourceRevision === "context_excluded")
+        ? "context_refresh"
+        : message.kind === "context_notice" ||
+            message.kind === "explicit_reference" ||
+            message.kind === "active_resource" ||
+            message.kind === "project_conventions" ||
+            message.kind === "workspace_outline" ||
+            message.kind === "prior_conversation" ||
+            message.kind === "compaction"
+          ? "jit_context"
+          : "recovery",
     role: "user",
     sourceRefId: message.source.refId
   };
@@ -2860,6 +3417,17 @@ async function materializeDesktopSendPreview(input: {
   >
 > {
   const { startCommand } = input.binding;
+  const draft = await input.draftSession.resolveStartDraft({
+    ...(startCommand.scope === undefined ? {} : { scope: startCommand.scope }),
+    ...(startCommand.projectId === undefined ? {} : { projectId: startCommand.projectId }),
+    conversationId: startCommand.conversationId,
+    runDraftId: startCommand.runDraftId,
+    runDraftRevision: startCommand.runDraftRevision,
+    runDraftChecksum: startCommand.runDraftChecksum
+  });
+  if (!draft.ok) return draft;
+  const facts = await input.startPreflight.resolveStart(startCommand);
+  if (!facts.ok) return facts;
   if (input.options.sharingDefaults == null || !isSha256(input.options.sharingDefaultsRevision)) {
     return err(runtimeError("AGENT_MODEL_SHARING_DEFAULTS_REQUIRED"));
   }
@@ -2874,17 +3442,6 @@ async function materializeDesktopSendPreview(input: {
     defaults: input.options.sharingDefaults
   });
   if (!defaults.ok) return defaults;
-  const draft = await input.draftSession.resolveStartDraft({
-    ...(startCommand.scope === undefined ? {} : { scope: startCommand.scope }),
-    ...(startCommand.projectId === undefined ? {} : { projectId: startCommand.projectId }),
-    conversationId: startCommand.conversationId,
-    runDraftId: startCommand.runDraftId,
-    runDraftRevision: startCommand.runDraftRevision,
-    runDraftChecksum: startCommand.runDraftChecksum
-  });
-  if (!draft.ok) return draft;
-  const facts = await input.startPreflight.resolveStart(startCommand);
-  if (!facts.ok) return facts;
   const profile = resolveAgentContextProfile(
     facts.value.scope ??
       startCommand.scope ?? {
@@ -3174,13 +3731,32 @@ async function readRunModelProfileId(
   repository: AgentRunFileRepository,
   runId: string
 ): Promise<Result<string, UnifiedError>> {
-  const read = await repository.readSnapshot(runId);
+  const legacy = await repository.readSnapshot(runId);
+  const read =
+    !legacy.ok && legacy.error.code === "AGENT_RUN_SNAPSHOT_VERSION_UNSUPPORTED"
+      ? await repository.readSnapshotV20(runId)
+      : legacy;
   if (!read.ok) return read;
   const provider = read.value?.["providerCapabilitySnapshot"];
   const profileId = isRecord(provider) ? provider["profileId"] : undefined;
   return typeof profileId === "string" && profileId.length > 0
     ? ok(profileId)
     : err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED", { runId }));
+}
+
+async function readConversationRunEvents(
+  repository: AgentRunFileRepository,
+  runId: string
+): Promise<Result<JsonObject[], UnifiedError>> {
+  const snapshot = await repository.readSnapshotV20(runId);
+  if (snapshot.ok && snapshot.value !== undefined) {
+    const events = await repository.readEventsV20(runId);
+    return events.ok ? ok(events.value as unknown as JsonObject[]) : err(events.error);
+  }
+  if (!snapshot.ok && snapshot.error.code === "AGENT_RUN_SNAPSHOT_V20_LEGACY_RECORD") {
+    return repository.readEvents(runId);
+  }
+  return snapshot.ok ? err(runtimeError("AGENT_RUN_NOT_FOUND", { runId })) : err(snapshot.error);
 }
 
 function permissionRootError(code: string): UnifiedError {
@@ -3282,8 +3858,29 @@ function createDesktopAgentContextSession(input: {
         contextDraft.refs,
         input.contextSourcePreferences ?? []
       );
+      const resolvedWritingIntent =
+        contextDraft.contextMode === "writing"
+          ? await input.draftSession.resolveStartDraft({
+              projectId: input.projectId,
+              scope: {
+                kind: "workspace",
+                workspaceKind: input.workspaceKind,
+                workspaceId: input.projectId
+              },
+              conversationId,
+              runDraftId: draft.runDraftId,
+              runDraftRevision: draft.revision,
+              runDraftChecksum: draft.checksum
+            })
+          : undefined;
+      if (resolvedWritingIntent?.ok === false) return err(resolvedWritingIntent.error);
       const sources = await resolveContextDraftSources(effectiveRefs, {
         ...input,
+        operationMode: draft.operationMode,
+        writingTaskIntent:
+          resolvedWritingIntent === undefined
+            ? null
+            : resolvedWritingIntent.value.writingTaskIntent,
         contextMode: contextDraft.contextMode,
         activeResourceRef: contextDraft.activeResourceRef
       });
@@ -3460,6 +4057,10 @@ export function createDesktopChangeSetSession(input: {
         if (!chapter.ok) return chapter;
         const relativePath = `chapters/${chapterId}.md`;
         const editor = await input.readEditorState?.(relativePath);
+        if (editor?.status === "unknown") return err(runtimeError("EDITOR_STATE_UNKNOWN"));
+        if (editor?.dirty === true) {
+          return err(runtimeError("TARGET_DIRTY", { relativePath }));
+        }
         return ok({
           relativePath,
           assetType: "chapter" as const,
@@ -3475,6 +4076,10 @@ export function createDesktopChangeSetSession(input: {
         const read = await input.projectReads.readText(relativePath);
         if (!read.ok) return read;
         const editor = await input.readEditorState?.(relativePath);
+        if (editor?.status === "unknown") return err(runtimeError("EDITOR_STATE_UNKNOWN"));
+        if (editor?.dirty === true) {
+          return err(runtimeError("TARGET_DIRTY", { relativePath }));
+        }
         return ok({
           relativePath: read.value.relativePath,
           assetType: "text" as const,
@@ -3496,6 +4101,10 @@ export function createDesktopChangeSetSession(input: {
         const read = await input.projectReads.readText(relativePath.value);
         if (!read.ok) return read;
         const editor = await input.readEditorState?.(relativePath.value);
+        if (editor?.status === "unknown") return err(runtimeError("EDITOR_STATE_UNKNOWN"));
+        if (editor?.dirty === true) {
+          return err(runtimeError("TARGET_DIRTY", { relativePath: relativePath.value }));
+        }
         return ok({
           relativePath: relativePath.value,
           assetType: "text" as const,
@@ -3697,6 +4306,25 @@ function isStoryBibleManagedPath(relativePath: string): boolean {
   );
 }
 
+function hasSelectedStoryBibleMutation(changeSet: ChangeSet): boolean {
+  // Chapter lifecycle/order proposals may coordinate an outline file with serialized chapter
+  // metadata. Their separate lifecycle proof owns that group; it must not be relabelled as a
+  // structured Story Bible proposal merely because outline.json participates in the transaction.
+  if (changeSet.files.some((file) => file.selected && file.contentMode === "serialized_chapter")) {
+    return false;
+  }
+  if (changeSet.files.some((file) => file.selected && isStoryBibleManagedPath(file.relativePath))) {
+    return true;
+  }
+  return (changeSet.operations ?? []).some((operation) => {
+    if (operation.selected === false) return false;
+    return operation.kind === "move_file"
+      ? isStoryBibleManagedPath(operation.sourcePath) ||
+          isStoryBibleManagedPath(operation.targetPath)
+      : isStoryBibleManagedPath(operation.relativePath);
+  });
+}
+
 function stableJsonValue(value: unknown): string {
   if (value === undefined) return "undefined";
   if (Array.isArray(value)) return `[${value.map(stableJsonValue).join(",")}]`;
@@ -3741,6 +4369,8 @@ export function createDesktopVersionGroupServices(input: {
   readonly authorizationLedger?: AgentWriteAuthorizationLedgerPort;
   readonly requireV2Authorization?: boolean;
   readonly projectReads: AgentProjectReadRepository;
+  readonly chapterLifecyclePreparationProof?: ChapterLifecyclePreparationProofBridge;
+  readonly storyBibleReferenceDependencyApplyGuard?: StoryBibleReferenceDependencyApplyGuard;
   readonly chapterRepository?: ChapterFileRepository;
   readonly storyBible?: StoryBibleFileRepository;
   readonly readEditorState?: DesktopAgentRunSessionOptions["readEditorState"];
@@ -3785,7 +4415,8 @@ export function createDesktopVersionGroupServices(input: {
               transactionInput,
               storyBible,
               historyRepository,
-              input.chapterRepository
+              input.chapterRepository,
+              input.chapterLifecyclePreparationProof
             )
         }),
     ...(input.lifecycleOperations === undefined
@@ -3876,12 +4507,49 @@ export function createDesktopVersionGroupServices(input: {
         const recovered = await recover();
         if (!recovered.ok) return recovered;
         const dirty = await dirtySelectedPaths(changeSet, input.readEditorState);
-        if (dirty.length > 0) {
+        if (!dirty.ok) return dirty;
+        if (dirty.value.length > 0) {
           return err(
-            runtimeError("AGENT_WRITE_DIRTY_EDITOR", {
-              dirtyTargetPaths: dirty
+            runtimeError("TARGET_DIRTY", {
+              dirtyTargetPaths: dirty.value
             })
           );
+        }
+        if (hasSelectedStoryBibleMutation(changeSet)) {
+          if (
+            changeSet.schemaVersion !== "2.0" ||
+            approval.schemaVersion !== "2.0" ||
+            approval.binding.operationKind !== "story_bible_mutation" ||
+            approval.authorizationId === undefined ||
+            approval.reservationTransactionId === undefined
+          ) {
+            return err(runtimeError("STORY_BIBLE_REFERENCE_DEPENDENCY_AUTHORIZATION_REQUIRED"));
+          }
+          if (input.storyBibleReferenceDependencyApplyGuard === undefined) {
+            return err(runtimeError("STORY_BIBLE_REFERENCE_DEPENDENCY_GUARD_REQUIRED"));
+          }
+          const guarded = await input.storyBibleReferenceDependencyApplyGuard.verifyAndClaim({
+            proofRef: {
+              proofId: approval.binding.proofId,
+              proofChecksum: approval.binding.proofChecksum
+            },
+            runId: changeSet.runId,
+            changeSetId: changeSet.changeSetId,
+            revision: changeSet.revision,
+            checksum: changeSet.checksum,
+            applyAttemptId: `story_bible_apply_${checksumText(
+              [
+                approval.authorizationId,
+                approval.reservationTransactionId,
+                approval.binding.bindingId,
+                changeSet.runId,
+                changeSet.changeSetId,
+                String(changeSet.revision),
+                changeSet.checksum
+              ].join("\n")
+            )}`
+          });
+          if (!guarded.ok) return guarded;
         }
         const consistencyGroups = inspectChangeSetConsistencyGroups(changeSet);
         if (consistencyGroups.selectedGroupIds.length > 0) {
@@ -4187,6 +4855,9 @@ async function prepareTransactionInput(
     ...(input.approvalBindingV2 === undefined
       ? {}
       : { approvalBindingV2: input.approvalBindingV2 }),
+    ...(input.chapterLifecyclePreparationProof === undefined
+      ? {}
+      : { chapterLifecyclePreparationProof: input.chapterLifecyclePreparationProof }),
     ...(input.applyBatchId === undefined ? {} : { applyBatchId: input.applyBatchId }),
     ...(input.consistencyGroupId === undefined
       ? {}
@@ -4206,50 +4877,67 @@ async function validateStoryBibleTransactionCandidates(
   input: AgentWriteTransactionInput,
   storyBible: StoryBibleFileRepository | undefined,
   history: HistoryRepository,
-  chapterRepository: ChapterFileRepository | undefined
+  chapterRepository: ChapterFileRepository | undefined,
+  lifecyclePreparationProof: ChapterLifecyclePreparationProofBridge | undefined
 ): Promise<Result<void, UnifiedError>> {
   const migrationFiles = input.files.filter((file) => file.contentMode === "serialized_chapter");
+  const lifecycleGroup = /^chapter-lifecycle-[a-f0-9]{48}$/u.test(input.consistencyGroupId ?? "");
+  if (lifecycleGroup && migrationFiles.length === 0) {
+    return err(runtimeError("CHAPTER_LIFECYCLE_APPLY_INVALID"));
+  }
   if (migrationFiles.length > 0) {
-    if (
-      chapterRepository === undefined ||
-      migrationFiles.length !== input.files.length ||
-      (input.operations?.length ?? 0) > 0
-    ) {
-      return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
-    }
-    const match = /^chapter-order-migration-([a-f0-9]{64})$/u.exec(input.consistencyGroupId ?? "");
-    if (match?.[1] === undefined) {
-      return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
-    }
-    const preview = await chapterRepository.previewChapterOrderMigration();
-    if (!preview.ok) return preview;
-    if (!preview.value.required || preview.value.checksum !== match[1]) {
-      return err(runtimeError("CHAPTER_ORDER_MIGRATION_PREVIEW_STALE"));
-    }
-    const plan = await chapterRepository.prepareChapterOrderMigration({
-      catalogRevision: preview.value.catalogRevision,
-      previewChecksum: preview.value.checksum
-    });
-    if (!plan.ok) return plan;
-    if (
-      plan.value.consistencyGroupId !== input.consistencyGroupId ||
-      plan.value.files.length !== migrationFiles.length ||
-      migrationFiles.some((file) => {
-        const prepared = plan.value.files.find(
-          (candidate) => candidate.relativePath === file.relativePath
-        );
-        return (
-          prepared === undefined ||
-          file.assetType !== "chapter" ||
-          file.assetId !== prepared.chapterId ||
-          file.baseContent !== prepared.baseContent ||
-          file.candidateContent !== prepared.candidateContent ||
-          file.baseChecksum !== prepared.baseChecksum ||
-          file.candidateChecksum !== prepared.candidateChecksum
-        );
-      })
-    ) {
-      return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
+    if (lifecycleGroup) {
+      const lifecycleValidation = await validateChapterLifecycleTransactionCandidates(
+        input,
+        migrationFiles,
+        chapterRepository,
+        lifecyclePreparationProof
+      );
+      if (!lifecycleValidation.ok) return lifecycleValidation;
+    } else {
+      if (
+        chapterRepository === undefined ||
+        migrationFiles.length !== input.files.length ||
+        (input.operations?.length ?? 0) > 0
+      ) {
+        return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
+      }
+      const match = /^chapter-order-migration-([a-f0-9]{64})$/u.exec(
+        input.consistencyGroupId ?? ""
+      );
+      if (match?.[1] === undefined) {
+        return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
+      }
+      const preview = await chapterRepository.previewChapterOrderMigration();
+      if (!preview.ok) return preview;
+      if (!preview.value.required || preview.value.checksum !== match[1]) {
+        return err(runtimeError("CHAPTER_ORDER_MIGRATION_PREVIEW_STALE"));
+      }
+      const plan = await chapterRepository.prepareChapterOrderMigration({
+        catalogRevision: preview.value.catalogRevision,
+        previewChecksum: preview.value.checksum
+      });
+      if (!plan.ok) return plan;
+      if (
+        plan.value.consistencyGroupId !== input.consistencyGroupId ||
+        plan.value.files.length !== migrationFiles.length ||
+        migrationFiles.some((file) => {
+          const prepared = plan.value.files.find(
+            (candidate) => candidate.relativePath === file.relativePath
+          );
+          return (
+            prepared === undefined ||
+            file.assetType !== "chapter" ||
+            file.assetId !== prepared.chapterId ||
+            file.baseContent !== prepared.baseContent ||
+            file.candidateContent !== prepared.candidateContent ||
+            file.baseChecksum !== prepared.baseChecksum ||
+            file.candidateChecksum !== prepared.candidateChecksum
+          );
+        })
+      ) {
+        return err(runtimeError("CHAPTER_ORDER_MIGRATION_APPLY_INVALID"));
+      }
     }
   }
   const chapterCreates = (input.operations ?? []).flatMap((operation) => {
@@ -4288,10 +4976,14 @@ async function validateStoryBibleTransactionCandidates(
   if (candidates.length === 0) return ok(undefined);
   if (storyBible === undefined) return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
 
-  const chapters =
-    chapterRepository === undefined ? ok(undefined) : await chapterRepository.listChapters();
-  if (!chapters.ok) return chapters;
-  const knownChapterIds = chapters.value?.map((chapter) => chapter.id);
+  const catalog =
+    chapterRepository === undefined
+      ? ok(undefined)
+      : await chapterRepository.listChapterCatalog({ includeDeleted: true, limit: 100 });
+  if (!catalog.ok) return catalog;
+  if (catalog.value !== undefined && catalog.value.nextCursor !== null)
+    return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+  const knownChapterIds = catalog.value?.items.map((chapter) => chapter.chapterId);
   const statusProofs = await validateStoryBibleStatusProofs(
     input,
     storyBible,
@@ -4303,6 +4995,89 @@ async function validateStoryBibleTransactionCandidates(
     candidates,
     ...(knownChapterIds === undefined ? {} : { knownChapterIds })
   });
+}
+
+/**
+ * Lifecycle candidates are prepared read-only by the Main adapter, then staged as one exact
+ * mixed Change Set group. They are deliberately distinct from order migrations: the latter are
+ * regenerated from the current catalog, whereas lifecycle proofs bind the serialized transition.
+ */
+async function validateChapterLifecycleTransactionCandidates(
+  input: AgentWriteTransactionInput,
+  chapterFiles: readonly AgentWriteTransactionInput["files"][number][],
+  chapterRepository: ChapterFileRepository | undefined,
+  lifecyclePreparationProof: ChapterLifecyclePreparationProofBridge | undefined
+): Promise<Result<void, UnifiedError>> {
+  if (
+    chapterRepository === undefined ||
+    lifecyclePreparationProof === undefined ||
+    input.chapterLifecyclePreparationProof === undefined ||
+    (input.operations?.length ?? 0) > 0
+  ) {
+    return err(runtimeError("CHAPTER_LIFECYCLE_APPLY_INVALID"));
+  }
+  const outlineFiles = input.files.filter(
+    (file) =>
+      file.assetType === "text" &&
+      file.assetId === "outline_main" &&
+      file.relativePath === "outline/outline.json" &&
+      file.contentMode === undefined &&
+      file.chapterStatusTransitionProof === undefined
+  );
+  if (
+    chapterFiles.length === 0 ||
+    input.files.length !== chapterFiles.length + outlineFiles.length ||
+    outlineFiles.length > 1 ||
+    chapterFiles.some(
+      (file) =>
+        file.assetType !== "chapter" ||
+        file.assetId === undefined ||
+        file.relativePath !== `chapters/${file.assetId}.md` ||
+        file.baseContent.length === 0 ||
+        file.candidateContent.length === 0
+    )
+  ) {
+    return err(runtimeError("CHAPTER_LIFECYCLE_APPLY_INVALID"));
+  }
+  const proofs = chapterFiles.flatMap((file) =>
+    file.chapterStatusTransitionProof === undefined
+      ? []
+      : [[file, file.chapterStatusTransitionProof] as const]
+  );
+  if (
+    proofs.length > 1 ||
+    proofs.some(
+      ([file, proof]) =>
+        file.assetId !== proof.chapterId ||
+        proof.stableRef !== `chapter:${proof.chapterId}` ||
+        (proof.action === "delete" || proof.action === "restore") !== (outlineFiles.length === 1)
+    )
+  ) {
+    return err(runtimeError("CHAPTER_LIFECYCLE_APPLY_INVALID"));
+  }
+  const proof = await lifecyclePreparationProof.validateAndConsumeLifecyclePreparation({
+    ...(input.consistencyGroupId === undefined
+      ? {}
+      : { consistencyGroupId: input.consistencyGroupId }),
+    ...(input.operations === undefined ? {} : { operations: input.operations }),
+    preparationProof: input.chapterLifecyclePreparationProof,
+    files: input.files.map((file) => ({
+      relativePath: file.relativePath,
+      assetType: file.assetType === "chapter" ? "chapter" : "text",
+      ...(file.contentMode === "serialized_chapter"
+        ? { contentMode: "serialized_chapter" as const }
+        : {}),
+      ...(file.assetId === undefined ? {} : { assetId: file.assetId }),
+      baseContent: file.baseContent,
+      candidateContent: file.candidateContent,
+      baseChecksum: file.baseChecksum,
+      candidateChecksum: file.candidateChecksum,
+      ...(file.chapterStatusTransitionProof === undefined
+        ? {}
+        : { chapterStatusTransitionProof: file.chapterStatusTransitionProof })
+    }))
+  });
+  return proof.ok ? proof : err(runtimeError("CHAPTER_LIFECYCLE_APPLY_INVALID"));
 }
 
 async function validateStoryBibleStatusProofs(
@@ -4474,15 +5249,19 @@ function replaceChapterBody(
 async function dirtySelectedPaths(
   changeSet: ChangeSet,
   readEditorState: DesktopAgentRunSessionOptions["readEditorState"]
-): Promise<string[]> {
-  if (readEditorState === undefined) return [];
+): Promise<Result<string[], UnifiedError>> {
+  if (readEditorState === undefined) return ok([]);
   const dirty: string[] = [];
   for (const file of changeSet.files.filter((candidate) => candidate.selected)) {
-    if ((await readEditorState(file.relativePath))?.dirty === true) {
+    const state = await readEditorState(file.relativePath);
+    if (state?.status === "unknown") {
+      return err(runtimeError("EDITOR_STATE_UNKNOWN", { relativePath: file.relativePath }));
+    }
+    if (state?.dirty === true) {
       dirty.push(file.relativePath);
     }
   }
-  return dirty;
+  return ok(dirty);
 }
 
 async function markRecoveryRecordsClean(
@@ -4722,6 +5501,7 @@ function runtimeErrorDescriptor(code: string): {
  */
 function createDesktopStartPreflight(input: {
   readonly workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"];
+  readonly activeChapterId?: string;
   readonly draftSession: AgentRunDraftSession;
   readonly packedContextCache: DesktopPackedContextCache;
   readonly chapterRepository?: ChapterFileRepository;
@@ -4817,6 +5597,7 @@ async function resolveStartFromDraft(
   command: StartAgentRunCommand,
   input: {
     readonly workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"];
+    readonly activeChapterId?: string;
     readonly draftSession: AgentRunDraftSession;
     readonly packedContextCache: DesktopPackedContextCache;
     readonly chapterRepository?: ChapterFileRepository;
@@ -4887,6 +5668,17 @@ async function resolveStartFromDraft(
     );
     if (!verified.ok) return verified;
   }
+  const editorPreflight = await preflightKnownWritingEditorTarget({
+    operationMode: runDraft.operationMode,
+    ...(resolved.value.writingTaskIntent === undefined
+      ? {}
+      : { writingTaskIntent: resolved.value.writingTaskIntent }),
+    ...(input.activeChapterId === undefined ? {} : { activeChapterId: input.activeChapterId }),
+    activeResourceRef: contextDraft.activeResourceRef,
+    ...(input.storyBible === undefined ? {} : { storyBible: input.storyBible }),
+    ...(input.readEditorState === undefined ? {} : { readEditorState: input.readEditorState })
+  });
+  if (!editorPreflight.ok) return editorPreflight;
   if (input.resolveModelStartFacts === undefined) {
     return err(runtimeError("AGENT_MODEL_CAPABILITY_UNSUPPORTED"));
   }
@@ -4907,6 +5699,8 @@ async function resolveStartFromDraft(
   const sources = await resolveContextDraftSources(effectiveRefs, {
     ...input,
     projectId: workspaceId,
+    operationMode: runDraft.operationMode,
+    writingTaskIntent: resolved.value.writingTaskIntent,
     contextMode: contextDraft.contextMode,
     activeResourceRef: contextDraft.activeResourceRef
   });
@@ -4953,6 +5747,45 @@ async function resolveStartFromDraft(
     excludedContextSourceIds: packedBinding.value.excludedSources.map((source) => source.refId),
     packedContext: packedBinding.value.packedContext
   });
+}
+
+async function preflightKnownWritingEditorTarget(input: {
+  readonly operationMode: AgentRunStartFacts["operationMode"];
+  readonly writingTaskIntent?: WritingTaskIntent | null;
+  readonly activeChapterId?: string;
+  readonly activeResourceRef: ContextDraftActiveResourceRef | null;
+  readonly storyBible?: StoryBibleFileRepository;
+  readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
+}): Promise<Result<void, UnifiedError>> {
+  if (
+    input.operationMode !== "execution" ||
+    input.writingTaskIntent == null ||
+    input.readEditorState === undefined
+  ) {
+    return ok(undefined);
+  }
+
+  let relativePath: string | undefined;
+  if (input.writingTaskIntent.bodyGeneration && input.activeChapterId !== undefined) {
+    relativePath = `chapters/${input.activeChapterId}.md`;
+  } else if (
+    input.writingTaskIntent.kind === "story_bible" &&
+    input.activeResourceRef?.kind === "story_bible" &&
+    input.storyBible !== undefined
+  ) {
+    const asset = await findStoryBibleAsset(input.storyBible, input.activeResourceRef.assetId);
+    if (!asset.ok) return asset;
+    const resolvedPath = resolveStoryBibleAssetRelativePath(asset.value);
+    if (!resolvedPath.ok) return resolvedPath;
+    relativePath = resolvedPath.value;
+  }
+  if (relativePath === undefined) return ok(undefined);
+
+  const editor = await input.readEditorState(relativePath);
+  if (editor === undefined || editor.status === "unknown") {
+    return err(runtimeError("EDITOR_STATE_UNKNOWN", { relativePath }));
+  }
+  return editor.dirty ? err(runtimeError("TARGET_DIRTY", { relativePath })) : ok(undefined);
 }
 
 function validatePackedContextCommandBinding(
@@ -5196,6 +6029,8 @@ async function resolveContextDraftSources(
     readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
     readonly projectId?: string;
     readonly workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"];
+    readonly operationMode?: AgentRunStartFacts["operationMode"];
+    readonly writingTaskIntent?: WritingTaskIntent | null;
     readonly contextMode: "standalone_chat" | "writing" | "general_file";
     readonly activeResourceRef?: ContextDraftActiveResourceRef | null;
   }
@@ -5212,30 +6047,33 @@ async function resolveContextDraftSources(
       const refId = `chapter:${ref.chapterId}`;
       const relativePath = `chapters/${ref.chapterId}.md`;
       const editorState = await input.readEditorState?.(relativePath);
-      const buffered = editorState?.dirty
-        ? editorState.content
-        : editorState === undefined
-          ? await input.readEditorBuffer?.(refId)
-          : undefined;
-      if (buffered !== undefined) {
-        sources.push({
-          refId,
-          sourceKind: "editor_buffer",
-          relativePath,
-          content: buffered,
-          dirty: true
-        });
-        continue;
-      }
       const chapter = await input.chapterRepository.readChapter(ref.chapterId);
       if (!chapter.ok) return err(chapter.error);
       sources.push({
         refId,
         sourceKind: "disk_file",
         relativePath,
+        assetId: ref.chapterId,
         content: chapter.value.body,
         dirty: false
       });
+      if (
+        permitsDirtyEditorContext(input) &&
+        editorState?.status !== "unknown" &&
+        editorState?.dirty
+      ) {
+        sources.push({
+          refId: `editor_buffer:chapter:${ref.chapterId}`,
+          sourceKind: "editor_buffer",
+          relativePath,
+          assetId: ref.chapterId,
+          content: editorState.content,
+          dirty: true,
+          ...(editorState.rendererRevision === undefined
+            ? {}
+            : { sourceRevision: editorState.rendererRevision })
+        });
+      }
       continue;
     }
     if (ref.kind === "project_file" && ref.relativePath !== undefined) {
@@ -5255,48 +6093,86 @@ async function resolveContextDraftSources(
       continue;
     }
     if (ref.kind === "story_bible" && ref.assetId !== undefined) {
-      if (input.storyBible === undefined) {
-        return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
-      }
-      const asset = await findStoryBibleAsset(input.storyBible, ref.assetId);
-      if (!asset.ok) return err(asset.error);
-      sources.push({
-        refId: ref.refId,
-        sourceKind: "disk_file",
-        assetId: ref.assetId,
-        content: JSON.stringify(asset.value),
-        dirty: false
-      });
+      const resolved = await resolveStoryBibleContextSources(ref, input);
+      if (!resolved.ok) return err(resolved.error);
+      sources.push(...resolved.value);
     }
   }
   if (activeResourceRef !== null) {
-    const activeSource =
+    const activeSources =
       activeResourceRef.kind === "story_bible"
-        ? await resolveStoryBibleContextSource(activeResourceRef, input)
+        ? await resolveStoryBibleContextSources(activeResourceRef, input)
         : await resolveActiveCreativeProjectFileSource(activeResourceRef, input);
-    if (!activeSource.ok) return err(activeSource.error);
+    if (!activeSources.ok) return err(activeSources.error);
     // The current file must stay in the dynamic prompt suffix after the request and manual refs.
-    sources.push(activeSource.value);
+    sources.push(
+      ...(Array.isArray(activeSources.value) ? activeSources.value : [activeSources.value])
+    );
   }
   return ok(sources);
 }
 
-async function resolveStoryBibleContextSource(
+async function resolveStoryBibleContextSources(
   ref: Extract<ContextDraftRef, { readonly kind: "story_bible" }>,
-  input: { readonly storyBible?: StoryBibleFileRepository }
-): Promise<Result<AgentContextSourceInput, UnifiedError>> {
+  input: {
+    readonly storyBible?: StoryBibleFileRepository;
+    readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
+    readonly operationMode?: AgentRunStartFacts["operationMode"];
+    readonly writingTaskIntent?: WritingTaskIntent | null;
+  }
+): Promise<Result<readonly AgentContextSourceInput[], UnifiedError>> {
   if (input.storyBible === undefined) {
     return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
   }
   const asset = await findStoryBibleAsset(input.storyBible, ref.assetId);
   if (!asset.ok) return err(asset.error);
-  return ok({
+  const relativePath = resolveStoryBibleAssetRelativePath(asset.value);
+  if (!relativePath.ok) return relativePath;
+  const persisted: AgentContextSourceInput = {
     refId: ref.refId,
     sourceKind: "disk_file",
+    relativePath: relativePath.value,
     assetId: ref.assetId,
     content: JSON.stringify(asset.value),
     dirty: false
-  });
+  };
+  const editorState = await input.readEditorState?.(relativePath.value);
+  if (
+    !permitsDirtyEditorContext(input) ||
+    editorState?.status === "unknown" ||
+    !editorState?.dirty
+  ) {
+    return ok([persisted]);
+  }
+  return ok([
+    persisted,
+    {
+      refId: `editor_buffer:story_bible:${ref.assetId}`,
+      sourceKind: "editor_buffer" as const,
+      relativePath: relativePath.value,
+      assetId: ref.assetId,
+      content: editorState.content,
+      dirty: true,
+      ...(editorState.rendererRevision === undefined
+        ? {}
+        : { sourceRevision: editorState.rendererRevision })
+    }
+  ]);
+}
+
+function permitsDirtyEditorContext(input: {
+  readonly operationMode?: AgentRunStartFacts["operationMode"];
+  readonly writingTaskIntent?: WritingTaskIntent | null;
+}): boolean {
+  if (input.operationMode === "planning" || input.operationMode === "conversation") return true;
+  const intent = input.writingTaskIntent;
+  return (
+    input.operationMode === "execution" &&
+    intent !== null &&
+    intent !== undefined &&
+    !intent.bodyGeneration &&
+    (intent.kind === "analysis" || intent.kind === "brainstorm")
+  );
 }
 
 async function resolveActiveCreativeProjectFileSource(
@@ -5477,7 +6353,8 @@ export function createDesktopCompactionModelAssistant(input: {
 function createDesktopStoryBibleToolExecutor(
   storyBible: StoryBibleFileRepository,
   chapterCatalog: ChapterFileRepository,
-  stateRoot: string
+  stateRoot: string,
+  readEditorState?: DesktopAgentRunSessionOptions["readEditorState"]
 ): AgentStoryBibleToolExecutor {
   const history = new HistoryRepository({
     projectRoot: stateRoot,
@@ -5509,10 +6386,115 @@ function createDesktopStoryBibleToolExecutor(
     traceId: "desktop-agent-story-bible-tools"
   });
   return {
-    prepare(input) {
-      return toolSession.prepare({ toolName: input.toolName, arguments: input.arguments });
+    async prepare(input) {
+      const prepared = await toolSession.prepare({
+        toolName: input.toolName,
+        arguments: input.arguments
+      });
+      if (!prepared.ok || readEditorState === undefined) return prepared;
+      const dependencies = await resolveDesktopStoryBibleReferenceDependencies({
+        refs: prepared.value.referenceDependencyRefs,
+        storyBible,
+        chapters: chapterCatalog,
+        readEditorState
+      });
+      return dependencies.ok
+        ? ok({ ...prepared.value, referenceDependencies: dependencies.value })
+        : dependencies;
     }
   };
+}
+
+async function resolveDesktopStoryBibleReferenceDependencies(input: {
+  readonly refs: readonly {
+    readonly resourceKind: StoryBibleReferenceDependencyV1["resourceKind"];
+    readonly resourceId: string;
+  }[];
+  readonly storyBible: StoryBibleFileRepository;
+  readonly chapters: ChapterFileRepository;
+  readonly readEditorState: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
+}): Promise<Result<readonly StoryBibleReferenceDependencyV1[], UnifiedError>> {
+  const dependencies: StoryBibleReferenceDependencyV1[] = [];
+  for (const ref of input.refs) {
+    const current = await readDesktopStoryBibleReferenceResource(ref, input);
+    if (!current.ok) return current;
+    const editor = await input.readEditorState(current.value.relativePath);
+    if (editor === undefined || editor.status === "unknown") {
+      return err(
+        runtimeError("EDITOR_STATE_UNKNOWN", { relativePath: current.value.relativePath })
+      );
+    }
+    if (editor.dirty) {
+      return err(runtimeError("TARGET_DIRTY", { relativePath: current.value.relativePath }));
+    }
+    dependencies.push(current.value.dependency);
+  }
+  return ok(Object.freeze(dependencies));
+}
+
+/** @internal Main-owned adapter exported only for focused boundary tests. */
+export function createDesktopStoryBibleReferenceDependencyEditorStates(input: {
+  readonly storyBible: StoryBibleFileRepository;
+  readonly chapters: ChapterFileRepository;
+  readonly readEditorState: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
+}) {
+  return {
+    async readManagedResourceState(dependency: StoryBibleReferenceDependencyV1) {
+      const current = await readDesktopStoryBibleReferenceResource(dependency, input);
+      if (!current.ok) return current;
+      const editor = await input.readEditorState(current.value.relativePath);
+      if (editor === undefined || editor.status === "unknown") {
+        return ok({ state: "unknown" as const });
+      }
+      if (editor.dirty) return ok({ state: "dirty" as const });
+      return ok({
+        state: "clean" as const,
+        revision: current.value.dependency.revision,
+        checksum: current.value.dependency.checksum
+      });
+    }
+  };
+}
+
+async function readDesktopStoryBibleReferenceResource(
+  ref: Pick<StoryBibleReferenceDependencyV1, "resourceKind" | "resourceId">,
+  input: {
+    readonly storyBible: StoryBibleFileRepository;
+    readonly chapters: ChapterFileRepository;
+  }
+): Promise<
+  Result<
+    {
+      readonly dependency: StoryBibleReferenceDependencyV1;
+      readonly relativePath: string;
+    },
+    UnifiedError
+  >
+> {
+  if (ref.resourceKind === "story_bible") {
+    const read = await input.storyBible.readCompatibleStoryAsset(ref.resourceId);
+    if (!read.ok) return read;
+    return ok({
+      dependency: {
+        resourceKind: "story_bible",
+        resourceId: ref.resourceId,
+        revision: read.value.revision,
+        checksum: read.value.checksum
+      },
+      relativePath: read.value.relativePath
+    });
+  }
+  const read = await input.chapters.readChapterForAgent(ref.resourceId);
+  if (!read.ok) return read;
+  return ok({
+    dependency: {
+      resourceKind: "chapter",
+      resourceId: ref.resourceId,
+      revision: read.value.revision,
+      checksum: read.value.persistedChecksum
+    },
+    relativePath: read.value.relativePath
+  });
 }
 
 export async function resolveStoryBibleRestoreAuthorization(
@@ -5985,10 +6967,14 @@ function createDesktopScriptedAgentDriver(
       const toolResultCount = input.messages.filter((message) => message.role === "tool").length;
       if (toolResultCount === 0) {
         yield { type: "assistant_text_delta", delta: "我会先读取项目结构和当前章节。" };
-        yield toolCall("desktop_list_entries", "list_project_entries", {
-          path: ""
-        });
-        yield { type: "round_completed", finishReason: "tool_calls" };
+        const initialRead = selectDesktopScriptedInitialReadTool(input.tools, activeChapterId);
+        if (initialRead !== undefined) {
+          yield toolCall(initialRead.toolCallId, initialRead.name, initialRead.argumentsValue);
+          yield { type: "round_completed", finishReason: "tool_calls" };
+          return;
+        }
+        // No read capability was frozen into this run: do not resurrect a legacy alias.
+        yield { type: "round_completed", finishReason: "stop" };
         return;
       }
       if (
@@ -6031,11 +7017,90 @@ function createDesktopScriptedAgentDriver(
           sourceRefs: targetRefs.map((target) => target.refId)
         });
       } else {
-        yield toolCall("desktop_finish", "finish", { summary: "只读 Agent run 已完成。" });
+        const evidenceRef = latestDesktopScriptedToolCompletionEvidenceRef(input.messages);
+        if (evidenceRef === undefined) {
+          yield {
+            type: "assistant_text_delta",
+            delta: "无法确认读取结果的完成证据，因此暂不声明任务完成。"
+          };
+          yield { type: "round_completed", finishReason: "stop" };
+          return;
+        }
+        yield toolCall("desktop_finish", "finish", {
+          outcome: "completed",
+          report: {
+            result: "只读 Agent run 已完成。",
+            appliedChanges: [],
+            verification: [evidenceRef],
+            residualRisks: []
+          },
+          evidenceRefs: [evidenceRef]
+        });
       }
       yield { type: "round_completed", finishReason: "tool_calls" };
     }
   };
+}
+
+/**
+ * The session injects these refs from its persisted event ledger immediately before invoking the
+ * model driver. A scripted driver must reuse that app-authored value, never infer a sequence.
+ */
+function latestDesktopScriptedToolCompletionEvidenceRef(
+  messages: readonly AgentModelMessage[]
+): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "tool" || message.toolCallId === undefined) continue;
+    try {
+      const payload = JSON.parse(message.content) as unknown;
+      if (!isRecord(payload) || !Array.isArray(payload["evidenceRefs"])) continue;
+      const expectedSuffix = `/tool_completed/${message.toolCallId}`;
+      const evidenceRef = payload["evidenceRefs"].find(
+        (value): value is string =>
+          typeof value === "string" &&
+          /^run-event\/[1-9][0-9]*\/tool_completed\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(
+            value
+          ) &&
+          value.endsWith(expectedSuffix)
+      );
+      if (evidenceRef !== undefined) return evidenceRef;
+    } catch {
+      // Tool output is untrusted. Only a valid app-injected evidence reference may be reused.
+    }
+  }
+  return undefined;
+}
+
+export function selectDesktopScriptedInitialReadTool(
+  tools: readonly { readonly name: string }[],
+  activeChapterId: string | undefined
+):
+  | {
+      readonly toolCallId: string;
+      readonly name: string;
+      readonly argumentsValue: JsonObject;
+    }
+  | undefined {
+  const available = new Set(tools.map((tool) => tool.name));
+  if (available.has("list_chapters")) {
+    return { toolCallId: "desktop_list_chapters", name: "list_chapters", argumentsValue: {} };
+  }
+  if (available.has("list_project_entries")) {
+    return {
+      toolCallId: "desktop_list_entries",
+      name: "list_project_entries",
+      argumentsValue: { path: "" }
+    };
+  }
+  if (available.has("read_resource") && activeChapterId !== undefined) {
+    return {
+      toolCallId: "desktop_read_chapter",
+      name: "read_resource",
+      argumentsValue: { ref: `chapter:${activeChapterId}` }
+    };
+  }
+  return undefined;
 }
 
 function toolCall(toolCallId: string, name: string, argumentsValue: JsonObject) {
