@@ -26,15 +26,44 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20.20.0"
-      - name: Install Node-API headers (no native toolchain install)
+      - name: Install Node-API headers and matching import library (no native toolchain install)
         shell: pwsh
         run: |
           npm install --no-save --ignore-scripts node-api-headers@1.9.0
           $include = Join-Path (Resolve-Path "node_modules/node-api-headers") "include"
           if (-not (Test-Path (Join-Path $include "node_api.h"))) { throw "Node-API headers are unavailable" }
+          $ErrorActionPreference = "Stop"
+          $nodeVersion = "20.20.0"
+          $nodeArchiveName = "node-v$nodeVersion-win-x64.zip"
+          $nodeRelease = "https://nodejs.org/dist/v$nodeVersion"
+          $nodeArchive = Join-Path $env:RUNNER_TEMP $nodeArchiveName
+          $checksums = Join-Path $env:RUNNER_TEMP "node-v$nodeVersion-SHASUMS256.txt"
+          $nodeRoot = Join-Path $env:RUNNER_TEMP "node-v$nodeVersion-win-x64"
+          Invoke-WebRequest -Uri "$nodeRelease/$nodeArchiveName" -OutFile $nodeArchive
+          Invoke-WebRequest -Uri "$nodeRelease/SHASUMS256.txt" -OutFile $checksums
+          $checksum = Select-String -LiteralPath $checksums -Pattern ("^([0-9a-fA-F]{64})  " + [regex]::Escape($nodeArchiveName) + "$")
+          if ($checksum.Count -ne 1) { throw "Official Node archive checksum is unavailable" }
+          $expectedHash = $checksum.Matches[0].Groups[1].Value.ToLowerInvariant()
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $nodeArchive).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Official Node archive checksum mismatch" }
+          Expand-Archive -LiteralPath $nodeArchive -DestinationPath $env:RUNNER_TEMP -Force
+          $nodeLibrary = Join-Path $nodeRoot "node.lib"
+          if (-not (Test-Path -LiteralPath $nodeLibrary -PathType Leaf)) { throw "Verified Node archive did not contain node.lib" }
           "NODE_API_INCLUDE_DIR=$include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NODE_LIBRARY=$nodeLibrary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build the canonical addon
-        run: node scripts/build-engineering-file-access-win32.mjs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $logPath = Join-Path $env:RUNNER_TEMP "engineering-file-access-build.log"
+          node scripts/build-engineering-file-access-win32.mjs 2>&1 | Tee-Object -FilePath $logPath
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            $detail = (Get-Content -LiteralPath $logPath -Tail 40) -join "`n"
+            $escaped = $detail.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+            Write-Output "::error title=Native addon build failed::$escaped"
+            exit $exitCode
+          }
       - name: Record unsigned development probe result
         run: node scripts/probe-engineering-file-access-package.mjs
       - name: Record addon SHA-256

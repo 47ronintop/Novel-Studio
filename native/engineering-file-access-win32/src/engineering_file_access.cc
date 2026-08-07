@@ -61,7 +61,7 @@ struct NativeFileBothDirectoryInformation {
 
 using NtCreateFileFn = NTSTATUS(NTAPI *)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
                                           PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
-using NtQueryDirectoryFileFn = NTSTATUS(NTAPI *)(HANDLE, HANDLE, void*, void*, void*, PIO_STATUS_BLOCK,
+using NtQueryDirectoryFileFn = NTSTATUS(NTAPI *)(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK,
                                                   PVOID, ULONG, ULONG, BOOLEAN, PUNICODE_STRING, BOOLEAN);
 
 struct RootSession {
@@ -291,11 +291,13 @@ bool isSafeRootPath(const std::wstring& root) {
 bool isSuccess(NTSTATUS status) { return status >= 0; }
 
 NtCreateFileFn ntCreateFile() {
+#pragma warning(suppress : 4191)
   static const auto fn = reinterpret_cast<NtCreateFileFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtCreateFile"));
   return fn;
 }
 
 NtQueryDirectoryFileFn ntQueryDirectoryFile() {
+#pragma warning(suppress : 4191)
   static const auto fn = reinterpret_cast<NtQueryDirectoryFileFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryDirectoryFile"));
   return fn;
 }
