@@ -7,7 +7,7 @@ import {
   safeStorage,
   type BrowserWindowConstructorOptions
 } from "electron";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,7 +20,7 @@ import {
 import { createDesktopAgentRuntime } from "./agent-run-runtime.js";
 import { createDesktopStandaloneAgentRuntime } from "./standalone-agent-runtime.js";
 import { createDesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
-import type { DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
+import type { DesktopAgentRuntime, DesktopAgentRuntimeManager } from "./agent-runtime-manager.js";
 import {
   createDesktopNetworkSettingsSession,
   createDesktopNetworkToolExecutor
@@ -30,6 +30,9 @@ import {
   hasCurrentMainOwnedApprovalSurfaceQualification
 } from "./agent-feature-flags.js";
 import { createCreativeFileOperationQualificationService } from "./creative-file-operation-qualification.js";
+import { createMainOwnedEngineeringFileAccessFreshProbe } from "./engineering-file-access-fresh-probe.js";
+import { createEngineeringFileAccessQualificationService } from "./engineering-file-access-qualification.js";
+import { createEngineeringWorkspaceAccessRuntime } from "./engineering-workspace-access-runtime.js";
 import {
   MainApprovalConfirmationCoordinator,
   registerTrustedApprovalIpc
@@ -63,6 +66,10 @@ import {
   type WritingEditorResourceIdentity,
   type WritingEditorStateRegistry
 } from "./writing-editor-state-registry.js";
+import {
+  createEngineeringEditorStateRegistry,
+  type EngineeringEditorStateRegistry
+} from "./engineering-editor-state-registry.js";
 import { createWorkspaceActivationCoordinator } from "./workspace-activation.js";
 import { createApplicationMenuTemplate } from "./menu.js";
 import { createDesktopModelRuntime, createEncryptedFileModelSecretStore } from "./model-runtime.js";
@@ -99,6 +106,7 @@ import {
   computeAgentToolDescriptorDigest,
   MAX_EXTERNAL_TOOL_DESCRIPTORS,
   NO_AGENT_PROMPT_CACHE_CAPABILITY,
+  defaultEngineeringPathPolicy,
   validateExternalToolDescriptors
 } from "@novel-studio/agent-engine";
 import type { AgentToolDescriptor } from "@novel-studio/agent-engine";
@@ -123,6 +131,19 @@ let activeMainWindow: BrowserWindow | undefined;
 let activeApprovalCoordinator: MainApprovalConfirmationCoordinator | undefined;
 let trustedApprovalIpcRegistered = false;
 let shutdownInProgress = false;
+
+const ENGINEERING_PATH_POLICY_REVISION = createHash("sha256")
+  .update(
+    JSON.stringify({
+      ignoredRelativeIdentityKeys: [
+        ...defaultEngineeringPathPolicy.ignoredRelativeIdentityKeys
+      ].sort(),
+      ignoredRootKeys: [...defaultEngineeringPathPolicy.ignoredRootKeys].sort(),
+      policyManagedLeafKeys: [...defaultEngineeringPathPolicy.policyManagedLeafKeys].sort()
+    }),
+    "utf8"
+  )
+  .digest("hex");
 
 const activeApprovalCoordinatorProxy = new Proxy(
   Object.create(
@@ -226,6 +247,13 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const creativeFileOperationQualification = createCreativeFileOperationQualificationService({
     packageKind: app.isPackaged ? "production" : "development"
   });
+  // This Main-only authority never treats a locally built or unsigned CI artifact as production.
+  const engineeringFileAccessQualification = createEngineeringFileAccessQualificationService({
+    packageKind: app.isPackaged ? "production" : "development",
+    // The probe owns no paths or trust decisions. Qualification supplies only the fixed installed
+    // artifact set after validating its manifest, signatures, and immutable publisher policy.
+    productionProbe: createMainOwnedEngineeringFileAccessFreshProbe()
+  });
   let creativeQualificationExpiresAt: number | undefined;
   let creativeQualificationExpiryTimer: NodeJS.Timeout | undefined;
   const modelSecretStore = createEncryptedFileModelSecretStore({
@@ -240,6 +268,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const projectLockOwnerId = createProjectLockOwnerId();
   const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
   const writingEditorStateRegistry = createWritingEditorStateRegistry();
+  const engineeringEditorStateRegistry = createEngineeringEditorStateRegistry();
+  const engineeringRootBindingIdByRuntime = new WeakMap<DesktopAgentRuntime, string>();
+  let activeEngineeringEditorRootBindingId: string | undefined;
   const workspaceContextPolicyStore = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
   const creativeGeneralActiveResourceProof = createCreativeGeneralActiveResourceProof();
   const approvalCoordinatorByRuntime = new WeakMap<object, MainApprovalConfirmationCoordinator>();
@@ -384,6 +415,71 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           ? undefined
           : Math.min(...creativeQualificationExpiries);
       scheduleCreativeQualificationExpiry();
+      const engineeringRuntimeForRootBinding: { current: DesktopAgentRuntime | undefined } = {
+        current: undefined
+      };
+      const revokeEngineeringRootBinding = (rootBindingId: string): void => {
+        const runtime = engineeringRuntimeForRootBinding.current;
+        if (
+          runtime === undefined ||
+          engineeringRootBindingIdByRuntime.get(runtime) !== rootBindingId
+        ) {
+          return;
+        }
+        engineeringRootBindingIdByRuntime.delete(runtime);
+        engineeringEditorStateRegistry.clearRootBinding(rootBindingId);
+        if (activeEngineeringEditorRootBindingId === rootBindingId) {
+          activeEngineeringEditorRootBindingId = undefined;
+        }
+        runtime.revokeEngineeringAccessCapabilities?.();
+        // The capability state is synchronously revoked above. Persist the absorbing V2 terminal
+        // event as well, so a root replacement cannot leave an old run visually/live-state active.
+        void (async () => {
+          const listed = await runtime.agentRunSession.listAgentRuns(runtime.workspaceId);
+          if (!listed.ok) return;
+          await Promise.allSettled(
+            listed.value.map((snapshot) =>
+              runtime.agentRunSession.invalidateAgentRunCapabilities({
+                projectId: runtime.workspaceId,
+                runId: snapshot.runId,
+                commandId: `engineering_root_changed_${randomUUID().replaceAll("-", "")}`,
+                expectedRunRevision: snapshot.runRevision,
+                reason: "engineering_root_changed"
+              })
+            )
+          );
+        })();
+      };
+      const engineeringWorkspaceAccessResult =
+        binding.kind !== "engineeringWorkspace"
+          ? undefined
+          : await createEngineeringWorkspaceAccessRuntime({
+              qualificationService: engineeringFileAccessQualification,
+              pathPolicy: defaultEngineeringPathPolicy,
+              onRootChanged: ({ rootBindingId }) => revokeEngineeringRootBinding(rootBindingId),
+              onQualificationRevoked: ({ rootBindingId }) =>
+                revokeEngineeringRootBinding(rootBindingId),
+              issueRootBinding: (nativeIdentity) =>
+                Object.freeze({
+                  schemaVersion: "1.0" as const,
+                  rootBindingId: `engineering_root_${randomUUID().replaceAll("-", "")}`,
+                  workspaceId: binding.workspaceId,
+                  workspaceKind: "engineeringWorkspace" as const,
+                  volumeIdentity: nativeIdentity.volumeIdentity,
+                  directoryIdentity: nativeIdentity.directoryIdentity,
+                  canonicalPathIdentityChecksum: nativeIdentity.canonicalPathIdentityChecksum,
+                  pathPolicyRevision: ENGINEERING_PATH_POLICY_REVISION,
+                  issuedAt: new Date().toISOString()
+                })
+            }).openWorkspace({ rootPath: binding.contentRoot });
+      const engineeringWorkspaceAccessSession =
+        engineeringWorkspaceAccessResult?.status === "available"
+          ? engineeringWorkspaceAccessResult.session
+          : undefined;
+      const engineeringQualification =
+        binding.kind === "engineeringWorkspace"
+          ? await engineeringFileAccessQualification.readAttestation()
+          : undefined;
       const featureFlags = createProductionAgentFeatureFlags(
         {
           agentGuidanceV3: true,
@@ -392,6 +488,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           // operation.  Each creative mutation is projected only from its
           // Main-owned operation qualification below.
           phaseB_fileLifecycleEnabled: false,
+          engineeringHardenedAccessV1: engineeringWorkspaceAccessSession !== undefined,
           ...(binding.kind === "creativeProject"
             ? {
                 creativeTrustedReplaceV2: changeSetApprovalV2 !== undefined,
@@ -407,7 +504,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:workspace-context-${workspaceContextPolicy.policyRevision}`
         },
         approvalSurfaceQualification,
-        undefined,
+        engineeringQualification,
         undefined,
         creativeOperationQualifications
       );
@@ -416,6 +513,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         projectId: binding.workspaceId,
         contentRoot: binding.contentRoot,
         stateRoot: binding.stateRoot,
+        ...(engineeringWorkspaceAccessSession === undefined
+          ? {}
+          : { engineeringWorkspaceAccessSession }),
         workspaceTrust: workspaceContextPolicy.workspaceTrust,
         projectConventionsEnabled: workspaceContextPolicy.projectConventionsEnabled,
         contextSourcePreferences: workspaceContextPolicy.sourcePreferences,
@@ -541,26 +641,52 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                     });
               }
             }),
-        readEditorBuffer: (refId) =>
-          readWritingEditorBuffer({
-            registry: writingEditorStateRegistry,
-            workspaceId: binding.workspaceId,
-            refId
-          }),
-        readEditorState: (relativePath) =>
-          readWritingEditorState({
-            registry: writingEditorStateRegistry,
-            workspaceId: binding.workspaceId,
-            relativePath
-          }),
+        ...(binding.kind === "engineeringWorkspace"
+          ? engineeringWorkspaceAccessSession === undefined
+            ? {}
+            : {
+                readEditorBuffer: (refId: string) =>
+                  readEngineeringEditorBuffer({
+                    registry: engineeringEditorStateRegistry,
+                    rootBindingId: engineeringWorkspaceAccessSession.binding.rootBindingId,
+                    refId
+                  }),
+                readEditorState: (relativePath: string) =>
+                  readEngineeringEditorState({
+                    registry: engineeringEditorStateRegistry,
+                    rootBindingId: engineeringWorkspaceAccessSession.binding.rootBindingId,
+                    relativePath
+                  })
+              }
+          : {
+              readEditorBuffer: (refId: string) =>
+                readWritingEditorBuffer({
+                  registry: writingEditorStateRegistry,
+                  workspaceId: binding.workspaceId,
+                  refId
+                }),
+              readEditorState: (relativePath: string) =>
+                readWritingEditorState({
+                  registry: writingEditorStateRegistry,
+                  workspaceId: binding.workspaceId,
+                  relativePath
+                })
+            }),
         syncSavedEditor: async (relativePath, options) => {
           await syncSavedEditorForPath(activeDesktopApplication, relativePath, options);
         },
         resolveModelProfile: resolveAgentModelProfile,
         resolveModelStartFacts: resolveAgentModelStartFacts
       });
+      engineeringRuntimeForRootBinding.current = runtime;
       if (nextApprovalCoordinator !== undefined) {
         approvalCoordinatorByRuntime.set(runtime, nextApprovalCoordinator);
+      }
+      if (engineeringWorkspaceAccessSession !== undefined) {
+        engineeringRootBindingIdByRuntime.set(
+          runtime,
+          engineeringWorkspaceAccessSession.binding.rootBindingId
+        );
       }
       return runtime;
     },
@@ -579,6 +705,16 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       return created.value;
     },
     onActiveRuntimeChanged: (active) => {
+      const nextEngineeringEditorRootBindingId =
+        active?.scope === "workspace" && active.binding.kind === "engineeringWorkspace"
+          ? engineeringRootBindingIdByRuntime.get(active.runtime)
+          : undefined;
+      if (activeEngineeringEditorRootBindingId !== nextEngineeringEditorRootBindingId) {
+        if (activeEngineeringEditorRootBindingId !== undefined) {
+          engineeringEditorStateRegistry.clearRootBinding(activeEngineeringEditorRootBindingId);
+        }
+        activeEngineeringEditorRootBindingId = nextEngineeringEditorRootBindingId;
+      }
       replaceActiveApprovalCoordinator(
         active?.scope === "workspace"
           ? approvalCoordinatorByRuntime.get(active.runtime)
@@ -722,6 +858,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         ? active.binding.workspaceId
         : undefined;
     },
+    engineeringEditorStateRegistry,
+    getActiveEngineeringEditorRootBindingId: () => activeEngineeringEditorRootBindingId,
     agentNetworkSettingsSession,
     agentMcpSettingsSession,
     onAgentSettingsChanged: async () => {
@@ -1258,6 +1396,78 @@ async function readWritingEditorBuffer(input: {
         sourceRevision: observation.state.rendererRevision
       }
     : undefined;
+}
+
+/**
+ * Reads an engineering draft only from a live, acknowledged, explicitly shared editor state.
+ * The native root binding is Main-owned; neither a pathname nor a workspace ID can select it.
+ */
+async function readEngineeringEditorBuffer(input: {
+  readonly registry: EngineeringEditorStateRegistry;
+  readonly rootBindingId: string;
+  readonly refId: string;
+}): Promise<{ readonly content: string; readonly sourceRevision: number } | undefined> {
+  const relativePath = engineeringRelativePathForBufferRef(input.refId);
+  if (relativePath === undefined) return undefined;
+  const shared = input.registry.readForExplicitShare({
+    rootBindingId: input.rootBindingId,
+    relativePath
+  });
+  return shared.status === "available"
+    ? { content: shared.bufferContent, sourceRevision: shared.rendererRevision }
+    : undefined;
+}
+
+/**
+ * A missing editor is neutral for a read-only context. A reported unknown/ack-pending editor is
+ * not: callers receive an explicit unknown state and must fail closed before using stale disk.
+ */
+async function readEngineeringEditorState(input: {
+  readonly registry: EngineeringEditorStateRegistry;
+  readonly rootBindingId: string;
+  readonly relativePath: string;
+}): Promise<
+  | {
+      readonly status: "known" | "unknown";
+      readonly dirty: boolean;
+      readonly content: string;
+      readonly rendererRevision?: number;
+    }
+  | undefined
+> {
+  const target = { rootBindingId: input.rootBindingId, relativePath: input.relativePath };
+  const observation = input.registry.observe(target);
+  if (observation.status === "unknown") {
+    return observation.reason === "missing"
+      ? undefined
+      : { status: "unknown", dirty: false, content: "" };
+  }
+  if (observation.status === "disconnected") {
+    return { status: "unknown", dirty: false, content: "" };
+  }
+  if (!observation.state.dirty) {
+    return {
+      status: "known",
+      dirty: false,
+      content: "",
+      rendererRevision: observation.state.rendererRevision
+    };
+  }
+  const shared = input.registry.readForExplicitShare(target);
+  return shared.status === "available"
+    ? {
+        status: "known",
+        dirty: true,
+        content: shared.bufferContent,
+        rendererRevision: shared.rendererRevision
+      }
+    : { status: "unknown", dirty: false, content: "" };
+}
+
+function engineeringRelativePathForBufferRef(refId: string): string | undefined {
+  const prefix = "editor_buffer:engineering:";
+  const relativePath = refId.startsWith(prefix) ? refId.slice(prefix.length) : undefined;
+  return relativePath === undefined || relativePath.length === 0 ? undefined : relativePath;
 }
 
 function writingEditorIdentityForBufferRef(

@@ -16,7 +16,7 @@ import type {
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import { AgentModelSharingDialog, ProjectCreateDialog } from "@novel-studio/ui";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
@@ -25,6 +25,7 @@ import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import { createProjectSearchBridge, openProjectSearchResult } from "./project-search-bridge.js";
 import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createEngineeringWorkspaceBridge } from "./engineering-workspace-bridge.js";
+import type { EngineeringEditorStateBinding } from "./plain-file-editor-bridge.js";
 import { createSettingsBridge } from "./settings-bridge.js";
 import { createStudioBridge } from "./studio-bridge.js";
 import { createAgentRunBridge } from "./agent-run-bridge.js";
@@ -67,6 +68,8 @@ import {
   useWorkspaceFileEditorRuntime
 } from "./workspace-file-editor-runtime.js";
 import { useWritingEditorIntegration } from "./use-writing-editor-integration.js";
+
+let nextEngineeringEditorInstanceId = 0;
 
 export function App() {
   const [api] = useState(() => getNovelStudioApi());
@@ -136,9 +139,11 @@ export function App() {
   );
   const standaloneConversationSelection =
     useStandaloneConversationSelection(persistUserPreferences);
+  const engineeringEditorState = useEngineeringEditorStateBinding(engineeringWorkspace);
   const fileEditorRuntime = useWorkspaceFileEditorRuntime({
     api,
     agentRunBridge,
+    ...(engineeringEditorState === undefined ? {} : { engineeringEditorState }),
     activeCreativeProjectId,
     activeCreativeWorkspaceId,
     creativeExpandedPathIds: shellState.creativeFileExpandedPathIds,
@@ -1035,4 +1040,37 @@ export function App() {
       />
     </>
   );
+}
+
+export function useEngineeringEditorStateBinding(
+  workspace: EngineeringWorkspaceSnapshot | undefined
+): EngineeringEditorStateBinding | undefined {
+  const rootBindingId = qualifiedEngineeringRootBindingId(workspace);
+  return useMemo(
+    () =>
+      rootBindingId === undefined
+        ? undefined
+        : {
+            rootBindingId,
+            editorInstanceId: createEngineeringEditorInstanceId()
+          },
+    [rootBindingId]
+  );
+}
+
+function qualifiedEngineeringRootBindingId(
+  workspace: EngineeringWorkspaceSnapshot | undefined
+): string | undefined {
+  // B6 requires Main to include this opaque value only for a qualified native root session.
+  // Keep the local narrowing until that snapshot contract is added to the application API.
+  const rootBindingId = (
+    workspace as (EngineeringWorkspaceSnapshot & { readonly rootBindingId?: unknown }) | undefined
+  )?.rootBindingId;
+  return typeof rootBindingId === "string" && rootBindingId.length > 0 ? rootBindingId : undefined;
+}
+
+function createEngineeringEditorInstanceId(): string {
+  nextEngineeringEditorInstanceId += 1;
+  const randomId = globalThis.crypto?.randomUUID?.();
+  return `engineering_file_editor_${randomId ?? `${Date.now()}_${nextEngineeringEditorInstanceId}`}`;
 }

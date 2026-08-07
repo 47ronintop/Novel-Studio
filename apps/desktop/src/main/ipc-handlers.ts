@@ -26,6 +26,7 @@ import type {
   ProjectCreationPreviewDto,
   ProjectTextFileSelectionDto,
   WorkspaceActivationDto,
+  EngineeringWorkspaceSnapshot,
   PreviewContextBudgetCommand,
   ReadAgentPermissionSummaryQuery,
   ReadAgentRunDraftCommand,
@@ -33,6 +34,8 @@ import type {
   SyncStartDraftCommand,
   UpdateAgentRunDraftCommand,
   UpdateContextDraftCommand,
+  EngineeringEditorStateReport,
+  EngineeringEditorStateReportResult,
   WritingEditorStateReport,
   WritingEditorStateReportResult
 } from "@novel-studio/application";
@@ -130,6 +133,10 @@ import {
 } from "@novel-studio/schemas";
 import { createDesktopProjectConventionsFile } from "./project-conventions-file.js";
 import {
+  MAX_ENGINEERING_EDITOR_BUFFER_BYTES,
+  type EngineeringEditorStateRegistry
+} from "./engineering-editor-state-registry.js";
+import {
   MAX_WRITING_EDITOR_BUFFER_BYTES,
   type WritingEditorStateRegistry
 } from "./writing-editor-state-registry.js";
@@ -159,6 +166,10 @@ export interface ApplicationIpcHandlerOptions {
   readonly writingEditorStateRegistry?: WritingEditorStateRegistry;
   /** The only workspace permitted to report managed writing editor state. */
   readonly getActiveWritingEditorWorkspaceId?: () => string | undefined;
+  /** Main-owned engineering editor registry; renderer input cannot create a root binding. */
+  readonly engineeringEditorStateRegistry?: EngineeringEditorStateRegistry;
+  /** The sole native root binding allowed to accept engineering editor state reports. */
+  readonly getActiveEngineeringEditorRootBindingId?: () => string | undefined;
   readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
   readonly agentMcpSettingsSession?: McpSettingsSession;
   readonly agentTaskCatalogPort?: {
@@ -579,11 +590,21 @@ export function createApplicationIpcHandlers(
       if (options.workspaceActivationCoordinator === undefined) {
         return workspaceActivationUnavailable<WorkspaceActivationDto>();
       }
-      return options.workspaceActivationCoordinator.openEngineeringWorkspace(selection.value.path);
+      return withActiveEngineeringRootBindingActivation(
+        await options.workspaceActivationCoordinator.openEngineeringWorkspace(selection.value.path),
+        options.getActiveEngineeringEditorRootBindingId?.()
+      );
     },
-    "application:workspace:attach-active-creative-project": () =>
-      application.attachActiveCreativeProjectEngineeringWorkspace(),
-    "application:workspace:refresh-engineering-tree": () => application.refreshEngineeringTree(),
+    "application:workspace:attach-active-creative-project": async () =>
+      withActiveEngineeringRootBindingSnapshot(
+        await application.attachActiveCreativeProjectEngineeringWorkspace(),
+        options.getActiveEngineeringEditorRootBindingId?.()
+      ),
+    "application:workspace:refresh-engineering-tree": async () =>
+      withActiveEngineeringRootBindingSnapshot(
+        await application.refreshEngineeringTree(),
+        options.getActiveEngineeringEditorRootBindingId?.()
+      ),
     "application:workspace:read-text-file": (path: unknown) =>
       typeof path === "string"
         ? application.readEngineeringTextFile(path)
@@ -1300,6 +1321,46 @@ export function createApplicationIpcHandlers(
           rendererRevision: updated.state.rendererRevision
         }
       } satisfies WritingEditorStateReportResult);
+    },
+    "application:engineering-editor:report-state": (input: unknown) => {
+      const report = toEngineeringEditorStateReport(input);
+      if (report === undefined) {
+        return Promise.resolve(
+          engineeringEditorStateError(
+            "EDITOR_STATE_INPUT_INVALID",
+            "Invalid engineering editor state report."
+          )
+        );
+      }
+      const registry = options.engineeringEditorStateRegistry;
+      const activeRootBindingId = options.getActiveEngineeringEditorRootBindingId?.();
+      if (registry === undefined || activeRootBindingId === undefined) {
+        return Promise.resolve(
+          engineeringEditorStateError(
+            "EDITOR_STATE_UNAVAILABLE",
+            "Engineering editor state tracking is unavailable for this workspace."
+          )
+        );
+      }
+      if (report.rootBindingId !== activeRootBindingId) {
+        return Promise.resolve(
+          engineeringEditorStateError(
+            "EDITOR_STATE_ROOT_BINDING_MISMATCH",
+            "Engineering editor state does not belong to the active workspace root."
+          )
+        );
+      }
+      const updated = registry.report(report);
+      if (!updated.ok) return Promise.resolve({ ok: false, error: updated.error });
+      return Promise.resolve({
+        ok: true,
+        acknowledgement: {
+          rootBindingId: updated.state.rootBindingId,
+          relativePath: updated.state.relativePath,
+          editorInstanceId: updated.state.editorInstanceId,
+          rendererRevision: updated.state.rendererRevision
+        }
+      } satisfies EngineeringEditorStateReportResult);
     },
     "application:settings:list-model-profiles": () => application.listModelProfiles(),
     "application:settings:discover-models": (profileId: unknown) => {
@@ -2777,14 +2838,68 @@ function toWritingEditorStateReport(value: unknown): WritingEditorStateReport | 
   };
 }
 
+function toEngineeringEditorStateReport(value: unknown): EngineeringEditorStateReport | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "rootBindingId",
+      "relativePath",
+      "editorInstanceId",
+      "connection",
+      "rendererRevision",
+      "acknowledgedRevision",
+      "dirty",
+      "bufferChecksum",
+      "bufferContent"
+    ]) ||
+    !isCanonicalEngineeringEditorIdentityPart(value["rootBindingId"]) ||
+    !isCanonicalEngineeringEditorIdentityPart(value["relativePath"]) ||
+    !isCanonicalEngineeringEditorIdentityPart(value["editorInstanceId"]) ||
+    (value["connection"] !== "connected" &&
+      value["connection"] !== "disconnected" &&
+      value["connection"] !== "unknown") ||
+    !isNonNegativeInteger(value["rendererRevision"]) ||
+    !isNonNegativeInteger(value["acknowledgedRevision"]) ||
+    value["acknowledgedRevision"] > value["rendererRevision"] ||
+    typeof value["dirty"] !== "boolean" ||
+    !isSha256Checksum(value["bufferChecksum"]) ||
+    typeof value["bufferContent"] !== "string" ||
+    Buffer.byteLength(value["bufferContent"], "utf8") > MAX_ENGINEERING_EDITOR_BUFFER_BYTES
+  ) {
+    return undefined;
+  }
+  return {
+    rootBindingId: value["rootBindingId"],
+    relativePath: value["relativePath"],
+    editorInstanceId: value["editorInstanceId"],
+    connection: value["connection"],
+    rendererRevision: value["rendererRevision"],
+    acknowledgedRevision: value["acknowledgedRevision"],
+    dirty: value["dirty"],
+    bufferChecksum: value["bufferChecksum"],
+    bufferContent: value["bufferContent"]
+  };
+}
+
 function isCanonicalWritingEditorIdentityPart(value: unknown): value is string {
   return typeof value === "string" && value.length <= 512 && value.trim().length > 0;
+}
+
+function isCanonicalEngineeringEditorIdentityPart(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 1024 && value.trim().length > 0;
 }
 
 function writingEditorStateError(
   code: Extract<WritingEditorStateReportResult, { readonly ok: false }>["error"]["code"],
   message: string
 ): WritingEditorStateReportResult {
+  return { ok: false, error: { code, message } };
+}
+
+function engineeringEditorStateError(
+  code: Extract<EngineeringEditorStateReportResult, { readonly ok: false }>["error"]["code"],
+  message: string
+): EngineeringEditorStateReportResult {
   return { ok: false, error: { code, message } };
 }
 
@@ -4676,6 +4791,30 @@ function invalidWorkspaceRequest<T>(): Result<T, UnifiedError> {
       traceId: "desktop-workspace-ipc"
     })
   );
+}
+
+function withActiveEngineeringRootBindingActivation(
+  result: Result<WorkspaceActivationDto, UnifiedError>,
+  rootBindingId: string | undefined
+): Result<WorkspaceActivationDto, UnifiedError> {
+  if (!result.ok || rootBindingId === undefined || !("engineeringWorkspace" in result.value)) {
+    return result;
+  }
+  return ok({
+    ...result.value,
+    engineeringWorkspace: {
+      ...result.value.engineeringWorkspace,
+      rootBindingId
+    }
+  });
+}
+
+function withActiveEngineeringRootBindingSnapshot(
+  result: Result<EngineeringWorkspaceSnapshot, UnifiedError>,
+  rootBindingId: string | undefined
+): Result<EngineeringWorkspaceSnapshot, UnifiedError> {
+  if (!result.ok || rootBindingId === undefined) return result;
+  return ok({ ...result.value, rootBindingId });
 }
 
 function workspaceActivationUnavailable<T>(): Result<T, UnifiedError> {

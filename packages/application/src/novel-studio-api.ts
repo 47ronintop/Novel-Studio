@@ -509,6 +509,10 @@ export interface NovelStudioApi {
   writingEditor?: {
     reportState(report: WritingEditorStateReport): Promise<WritingEditorStateReportResult>;
   };
+  /** Optional while the engineering editor handshake is being rolled out; absence is fail-closed. */
+  engineeringEditor?: {
+    reportState(report: EngineeringEditorStateReport): Promise<EngineeringEditorStateReportResult>;
+  };
   settings: {
     listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
     discoverModelOptions(profileId: string): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
@@ -678,6 +682,48 @@ export interface WritingEditorStateAcknowledgement {
   readonly workspaceId: string;
   readonly resourceKind: WritingEditorStateReport["resourceKind"];
   readonly resourceId: string;
+  readonly editorInstanceId: string;
+  /** Renderer revision durably accepted by Main; include it in the next report acknowledgement. */
+  readonly rendererRevision: number;
+}
+
+/** Renderer-to-Main liveness handshake for an engineering workspace file editor. */
+export interface EngineeringEditorStateReport {
+  /** Main-issued opaque binding for the currently open native workspace root. */
+  readonly rootBindingId: string;
+  /** Canonical POSIX workspace-relative identity; absolute paths never cross IPC. */
+  readonly relativePath: string;
+  readonly editorInstanceId: string;
+  readonly connection: "connected" | "disconnected" | "unknown";
+  readonly rendererRevision: number;
+  readonly acknowledgedRevision: number;
+  readonly dirty: boolean;
+  readonly bufferChecksum: string;
+  /** Retained only after Main validates checksum and only for an explicit dirty-buffer share. */
+  readonly bufferContent: string;
+}
+
+export type EngineeringEditorStateReportResult =
+  | {
+      readonly ok: true;
+      readonly acknowledgement: EngineeringEditorStateAcknowledgement;
+    }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code:
+          | "EDITOR_STATE_UNAVAILABLE"
+          | "EDITOR_STATE_INPUT_INVALID"
+          | "EDITOR_STATE_ROOT_BINDING_MISMATCH"
+          | "EDITOR_STATE_UPDATE_INVALID"
+          | "EDITOR_STATE_STALE_UPDATE";
+        readonly message: string;
+      };
+    };
+
+export interface EngineeringEditorStateAcknowledgement {
+  readonly rootBindingId: string;
+  readonly relativePath: string;
   readonly editorInstanceId: string;
   /** Renderer revision durably accepted by Main; include it in the next report acknowledgement. */
   readonly rendererRevision: number;

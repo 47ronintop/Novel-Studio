@@ -1,6 +1,11 @@
 import type { CreativeProjectFileSessionIdentity, NovelStudioApi } from "@novel-studio/application";
 import type { PlainFileEditorProps } from "@novel-studio/ui";
 
+import {
+  createEngineeringEditorStateReporter,
+  type EngineeringEditorStateReporter
+} from "./engineering-editor-state-reporter.js";
+
 export interface PlainFileEditorBridge {
   readonly scope: PlainFileEditorScope;
   getProps(): PlainFileEditorProps | undefined;
@@ -17,8 +22,18 @@ export interface PlainFileEditorBridge {
 
 export type PlainFileEditorScope = "creativeProjectFile" | "engineeringWorkspaceFile";
 
+export interface EngineeringEditorStateBinding {
+  readonly rootBindingId: string;
+  readonly editorInstanceId: string;
+}
+
 export type PlainFileEditorBinding =
-  | { readonly scope: "engineeringWorkspaceFile" }
+  | {
+      readonly scope: "engineeringWorkspaceFile";
+      /** Omitted until Main has supplied the opaque root binding for this workspace. */
+      readonly engineeringEditorState?: EngineeringEditorStateBinding;
+      readonly getEngineeringEditorState?: () => EngineeringEditorStateBinding | undefined;
+    }
   | {
       readonly scope: "creativeProjectFile";
       readonly identity: CreativeProjectFileSessionIdentity;
@@ -52,6 +67,10 @@ export function createPlainFileEditorBridge(
   binding: PlainFileEditorBinding = { scope: "engineeringWorkspaceFile" }
 ): PlainFileEditorBridge {
   let state: PlainFileEditorState | undefined;
+  const engineeringReporter =
+    binding.scope === "engineeringWorkspaceFile"
+      ? createEngineeringEditorStateReporter(api)
+      : undefined;
 
   return {
     scope: binding.scope,
@@ -59,6 +78,9 @@ export function createPlainFileEditorBridge(
     getPersistedChecksum: () => state?.checksum,
     isDirty: () => state !== undefined && state.content !== state.persistedContent,
     async openFile(path) {
+      if (state !== undefined && engineeringReporter !== undefined) {
+        await disconnectEngineeringEditor(engineeringReporter);
+      }
       const read = await readBoundTextFile(api, binding, path);
       if (!read.ok) {
         throw new Error(read.message);
@@ -81,6 +103,7 @@ export function createPlainFileEditorBridge(
           : { readOnlyReason: read.document.readOnlyReason }),
         saveStatus: "Saved"
       };
+      openEngineeringEditor(engineeringReporter, binding, state);
       return toRequiredProps();
     },
     updateContent(content) {
@@ -98,6 +121,7 @@ export function createPlainFileEditorBridge(
           ? {}
           : { conflict: { ...state.conflict, draftContent: content } })
       };
+      reportEngineeringEditor(engineeringReporter, binding, state);
       return toProps();
     },
     beginSave() {
@@ -110,6 +134,7 @@ export function createPlainFileEditorBridge(
         ...state,
         saveStatus: "Saving"
       };
+      reportEngineeringEditor(engineeringReporter, binding, state);
       return toProps();
     },
     async save() {
@@ -129,6 +154,7 @@ export function createPlainFileEditorBridge(
             message: "项目文件树已变化，请刷新后重试。"
           }
         };
+        reportEngineeringEditor(engineeringReporter, binding, state);
         return toProps();
       }
       if (!written.ok) {
@@ -140,6 +166,7 @@ export function createPlainFileEditorBridge(
             message: written.message
           }
         };
+        reportEngineeringEditor(engineeringReporter, binding, state);
         return toProps();
       }
 
@@ -153,6 +180,7 @@ export function createPlainFileEditorBridge(
               message: "项目文件已在外部变化，请刷新文件树后重试。"
             }
           };
+          reportEngineeringEditor(engineeringReporter, binding, state);
           return toProps();
         }
         const current = written.outcome.current;
@@ -162,6 +190,7 @@ export function createPlainFileEditorBridge(
             saveStatus: "Unsaved",
             feedback: { kind: "error", message: "文件已在外部变化，请重新打开后重试。" }
           };
+          reportEngineeringEditor(engineeringReporter, binding, state);
           return toProps();
         }
         state = {
@@ -180,6 +209,7 @@ export function createPlainFileEditorBridge(
               : { diskTreeRevision: current.treeRevision })
           }
         };
+        reportEngineeringEditor(engineeringReporter, binding, state);
         return toProps();
       }
 
@@ -199,6 +229,7 @@ export function createPlainFileEditorBridge(
         },
         savedDocument
       );
+      reportEngineeringEditor(engineeringReporter, binding, state);
       return toProps();
     },
     discard() {
@@ -210,10 +241,12 @@ export function createPlainFileEditorBridge(
         feedback: undefined,
         conflict: undefined
       };
+      reportEngineeringEditor(engineeringReporter, binding, state);
       return toProps();
     },
     clear() {
       state = undefined;
+      if (engineeringReporter !== undefined) void disconnectEngineeringEditor(engineeringReporter);
     }
   };
 
@@ -270,6 +303,7 @@ export function createPlainFileEditorBridge(
         treeRevision: conflict.diskTreeRevision
       }
     );
+    reportEngineeringEditor(engineeringReporter, binding, state);
   }
 
   function keepDraft(): void {
@@ -289,7 +323,58 @@ export function createPlainFileEditorBridge(
         treeRevision: conflict.diskTreeRevision
       }
     );
+    reportEngineeringEditor(engineeringReporter, binding, state);
   }
+}
+
+function reportEngineeringEditor(
+  reporter: EngineeringEditorStateReporter | undefined,
+  binding: PlainFileEditorBinding,
+  state: PlainFileEditorState
+): void {
+  if (reporter === undefined || binding.scope !== "engineeringWorkspaceFile") return;
+  const identity = engineeringEditorStateBinding(binding);
+  if (identity === undefined) return;
+  const snapshot = {
+    rootBindingId: identity.rootBindingId,
+    relativePath: state.path,
+    editorInstanceId: identity.editorInstanceId,
+    dirty: state.content !== state.persistedContent,
+    bufferContent: state.content
+  };
+  void reporter.report(snapshot).then(() => undefined);
+}
+
+function openEngineeringEditor(
+  reporter: EngineeringEditorStateReporter | undefined,
+  binding: PlainFileEditorBinding,
+  state: PlainFileEditorState
+): void {
+  if (reporter === undefined || binding.scope !== "engineeringWorkspaceFile") return;
+  const identity = engineeringEditorStateBinding(binding);
+  if (identity === undefined) return;
+  void reporter
+    .open({
+      rootBindingId: identity.rootBindingId,
+      relativePath: state.path,
+      editorInstanceId: identity.editorInstanceId,
+      dirty: state.content !== state.persistedContent,
+      bufferContent: state.content
+    })
+    .then(() => undefined);
+}
+
+function engineeringEditorStateBinding(
+  binding: Extract<PlainFileEditorBinding, { readonly scope: "engineeringWorkspaceFile" }>
+): EngineeringEditorStateBinding | undefined {
+  return binding.getEngineeringEditorState?.() ?? binding.engineeringEditorState;
+}
+
+async function disconnectEngineeringEditor(
+  reporter: EngineeringEditorStateReporter | undefined
+): Promise<void> {
+  if (reporter === undefined) return;
+  await reporter.disconnect();
 }
 
 interface BoundFileDocument {

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { validateEngineeringRelativePath } from "@novel-studio/agent-engine";
+
 export const ENGINEERING_EDITOR_STATE_UNKNOWN = "EDITOR_STATE_UNKNOWN" as const;
 export const ENGINEERING_EDITOR_TARGET_DIRTY = "TARGET_DIRTY" as const;
 /** Main retains a renderer draft only for an explicitly shared read context. */
@@ -355,21 +357,12 @@ function isOpaqueIdentity(value: unknown): value is string {
 }
 
 function isRelativePath(value: unknown): value is string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > 4096 ||
-    Buffer.byteLength(value, "utf8") > 4096 ||
-    value !== value.normalize("NFC") ||
-    value.includes("\\") ||
-    value.startsWith("/") ||
-    /[\p{Cc}\p{Cf}]/u.test(value)
-  ) {
-    return false;
-  }
-  return value
-    .split("/")
-    .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+  return (
+    typeof value === "string" &&
+    value.length <= 4096 &&
+    Buffer.byteLength(value, "utf8") <= 4096 &&
+    validateEngineeringRelativePath(value).ok
+  );
 }
 
 function isRevision(value: unknown): value is number {

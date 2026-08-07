@@ -35,6 +35,11 @@ export interface EngineeringWorkspaceSnapshot {
   readonly workspaceId: string;
   readonly displayName: string;
   readonly tree: EngineeringWorkspaceTreeSnapshot;
+  /**
+   * Main may attach this opaque identifier only while a qualified B6 native root session is
+   * active for this workspace. It is intentionally absent for legacy or unavailable access.
+   */
+  readonly rootBindingId?: string;
 }
 
 export interface EngineeringWorkspaceActivation {
