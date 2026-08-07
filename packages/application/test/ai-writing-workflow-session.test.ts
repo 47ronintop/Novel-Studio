@@ -314,6 +314,18 @@ describe("M14 AI writing workflow session", () => {
         })
       ])
     });
+    expect(generated.value.styleEvaluation).toMatchObject({
+      enforcement: "advisory",
+      status: "attention",
+      hitCount: 1,
+      hits: [
+        expect.objectContaining({
+          ruleId: "stacked-simile",
+          changeKind: "introduced",
+          confidence: "medium"
+        })
+      ]
+    });
   });
 
   test("keeps single-session chat history and sends prior turns to the next model request", async () => {
@@ -820,6 +832,21 @@ describe("M14 AI writing workflow session", () => {
         }),
         expect.objectContaining({
           ruleId: "direct-realization"
+        })
+      ])
+    });
+    expect(preview.value.styleEvaluation).toMatchObject({
+      enforcement: "advisory",
+      status: "attention",
+      hitCount: 2,
+      hits: expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "explanatory-contrast",
+          changeKind: "introduced"
+        }),
+        expect.objectContaining({
+          ruleId: "direct-realization",
+          changeKind: "introduced"
         })
       ])
     });

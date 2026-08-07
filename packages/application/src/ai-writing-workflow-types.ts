@@ -17,6 +17,7 @@ import type {
   ChapterSuggestionDiffPreview
 } from "./chapter-editor-session.js";
 import type { AiWritingStyleReview } from "./ai-writing-style-rules.js";
+import type { AiWritingStyleEvaluation } from "./ai-writing-style-evaluator.js";
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
 
 export interface AiWritingSuggestionRequest {
@@ -61,6 +62,8 @@ export interface AiWritingSuggestion {
   readonly runtimeNotice?: string;
   readonly conversationMessages: readonly AiWritingConversationMessage[];
   readonly styleReview: AiWritingStyleReview;
+  /** Diff-aware, advisory-only findings comparing the loaded chapter to the proposal. */
+  readonly styleEvaluation?: AiWritingStyleEvaluation;
   readonly diffPreview: ChapterSuggestionDiffPreview;
   readonly contextTrace: ContextBundleTrace;
   readonly observability: AiWritingWorkflowObservability;
@@ -119,6 +122,8 @@ export interface AiWritingSelectionPreview {
   readonly proposedText: string;
   readonly summary: string;
   readonly styleReview: AiWritingStyleReview;
+  /** Diff-aware, advisory-only findings comparing the full chapter before/after selection replacement. */
+  readonly styleEvaluation?: AiWritingStyleEvaluation;
   readonly review: AiWritingSelectionReview;
   readonly selection: AiWritingSelectionRange;
   readonly diffPreview: ChapterSuggestionDiffPreview;

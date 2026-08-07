@@ -4,7 +4,8 @@ import { STANDALONE_AGENT_CONTEXT_SCOPE } from "@novel-studio/agent-engine";
 
 import type {
   AgentConversationMainReview,
-  AgentConversationWorkspaceShellProps
+  AgentConversationWorkspaceShellProps,
+  AiWritingWorkflowProps
 } from "@novel-studio/ui";
 
 import {
@@ -137,5 +138,49 @@ describe("agent conversation workspace presentation", () => {
     expect(decorated?.view.composer?.references).toBeUndefined();
     expect(decorated?.view.composer?.contextStatus).toBeUndefined();
     expect(decorated?.view.composer?.permission).toBeUndefined();
+  });
+
+  test("prefers a 2.0 style evaluation over the legacy review in selection handoff", () => {
+    const styleEvaluation = {
+      schemaVersion: "1.0" as const,
+      ruleVersion: "2.0",
+      enforcement: "advisory" as const,
+      status: "attention" as const,
+      hitCount: 1,
+      hits: []
+    };
+    const workflow = {
+      selectionReview: {
+        status: "pending",
+        originalText: "原文",
+        proposedText: "建议",
+        rangeLabel: "0-2",
+        compareLabel: "原文 -> 建议",
+        canUndo: false
+      },
+      styleEvaluation,
+      styleReview: { status: "attention", hitCount: 9, hits: [] }
+    } as AiWritingWorkflowProps;
+
+    const decorated = decorateAgentConversationWorkspace({
+      workspace: { view: {} } as AgentConversationWorkspaceShellProps,
+      workspaceKind: "creativeProject",
+      chapterEditor: undefined,
+      chapterSelection: undefined,
+      aiWritingWorkflow: workflow,
+      onRewriteSelection: () => undefined,
+      onReviewSelectionStyle: () => undefined,
+      onApplySelection: () => undefined,
+      onRejectSelection: () => undefined,
+      onUndoSelection: () => undefined
+    });
+
+    expect(decorated?.mainReview).toMatchObject({
+      kind: "selection",
+      props: { styleEvaluation }
+    });
+    expect(
+      (decorated?.mainReview as AgentConversationMainReview & { props: object }).props
+    ).not.toHaveProperty("styleReview");
   });
 });

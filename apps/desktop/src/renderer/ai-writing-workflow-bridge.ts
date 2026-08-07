@@ -661,7 +661,9 @@ function toProps(
     observability: toObservabilityProps(suggestion.observability),
     ...(history === undefined ? {} : { history }),
     diffPreview: suggestion.diffPreview,
-    styleReview: suggestion.styleReview
+    ...(suggestion.styleEvaluation === undefined
+      ? { styleReview: suggestion.styleReview }
+      : { styleEvaluation: suggestion.styleEvaluation })
   });
 }
 
@@ -682,7 +684,9 @@ function toSelectionPreviewProps(
     ...(history === undefined ? {} : { history }),
     diffPreview: preview.diffPreview,
     selectionReview: toSelectionReviewProps(preview),
-    styleReview: preview.styleReview
+    ...(preview.styleEvaluation === undefined
+      ? { styleReview: preview.styleReview }
+      : { styleEvaluation: preview.styleEvaluation })
   });
 }
 

@@ -438,11 +438,13 @@ function maximalMaterialization(
   let maximumTokens = -1;
   let maximumBytes = -1;
   for (const writingTaskIntent of budgetCase.writingTaskIntents) {
+    const writingGenerationGuidanceVersion =
+      writingTaskIntent?.bodyGeneration === true ? "2.0" : "not_applicable";
     const materialization = materializeCurrentAgentGuidance({
       profile: budgetCase.profile,
       runtimeFacts: budgetCase.runtimeFacts,
       writingTaskIntent,
-      writingGenerationGuidanceVersion: "not_applicable",
+      writingGenerationGuidanceVersion,
       providerSemanticVersionSet: providerVersionSet(budgetCase.runtimeFacts, writingTaskIntent)
     });
     const tokenCount = AGENT_GUIDANCE_BUDGET_TOKEN_ESTIMATOR.count(
@@ -466,7 +468,8 @@ function providerVersionSet(
 ): ProviderSemanticVersionSetV1 {
   return createProviderSemanticVersionSetV1({
     writingTaskIntentSchemaVersion: writingTaskIntent === null ? "not_applicable" : "1.0",
-    writingGenerationGuidanceVersion: "not_applicable",
+    writingGenerationGuidanceVersion:
+      writingTaskIntent?.bodyGeneration === true ? "2.0" : "not_applicable",
     approvalRuleSetVersion: runtimeFacts.approvalRuleSetVersion,
     approvalRuleSetChecksum: runtimeFacts.approvalRuleSetChecksum
   });

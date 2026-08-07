@@ -292,6 +292,9 @@ export interface AiWritingWorkflowProps {
   readonly retryPolicy?: AiWorkflowRetryPolicyProps;
   readonly diffPreview?: ChapterEditorProps["diffPreview"];
   readonly selectionReview?: AiSelectionReviewProps;
+  /** Diff-aware, advisory-only writing-style findings for the proposed text. */
+  readonly styleEvaluation?: AiWritingStyleEvaluationProps;
+  /** Legacy non-diff-aware review, used only when no 2.0 evaluation is available. */
   readonly styleReview?: AiWritingStyleReviewProps;
   readonly modelDiscovery?: ModelDiscoverySnapshot;
   readonly selectedModelName?: string;
@@ -572,10 +575,7 @@ export interface AgentComposerPermissionControl {
 }
 
 export type AgentCapabilityApprovalSource =
-  | "not_applicable"
-  | "not_approved"
-  | "human_confirmation"
-  | "user_preapproved_run";
+  "not_applicable" | "not_approved" | "human_confirmation" | "user_preapproved_run";
 
 export interface AgentProposalApprovalSummary {
   readonly operation: string;
@@ -791,6 +791,7 @@ export interface AiSelectionReviewProps {
   readonly rangeLabel: string;
   readonly compareLabel: string;
   readonly canUndo: boolean;
+  readonly styleEvaluation?: AiWritingStyleEvaluationProps;
   readonly styleReview?: AiWritingStyleReviewProps;
   readonly diagnostic?: AiWorkflowFailureDiagnosticProps;
   readonly onAccept?: () => void;
@@ -803,6 +804,35 @@ export interface AiWritingStyleReviewProps {
   readonly status: "clean" | "attention";
   readonly hitCount: number;
   readonly hits: readonly AiWritingStyleHitProps[];
+}
+
+export interface AiWritingStyleEvaluationProps {
+  readonly schemaVersion: "1.0";
+  readonly ruleVersion: string;
+  readonly enforcement: "advisory";
+  readonly status: "clean" | "attention";
+  /** Count of introduced medium/high-confidence findings only. */
+  readonly hitCount: number;
+  readonly hits: readonly AiWritingStyleEvaluationHitProps[];
+}
+
+export interface AiWritingStyleEvaluationHitProps {
+  readonly ruleId: string;
+  readonly title: string;
+  readonly suggestion: string;
+  readonly confidence: "low" | "medium" | "high";
+  readonly changeKind: "introduced" | "pre_existing";
+  readonly defaultCollapsed: boolean;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly start: { readonly offset: number; readonly line: number; readonly column: number };
+  readonly end: { readonly offset: number; readonly line: number; readonly column: number };
+  readonly matchedText: string;
+  readonly excerpt: {
+    readonly text: string;
+    readonly startOffset: number;
+    readonly endOffset: number;
+  };
 }
 
 export interface AiWritingStyleHitProps {

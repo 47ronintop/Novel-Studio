@@ -10,6 +10,7 @@ export {
   createConfigWorkflowGraphLayout
 } from "./config-studio-session.js";
 export { LEGACY_AGENT_CONVERSATION_ID } from "./agent-conversation-session.js";
+export { evaluateAiWritingStyle } from "./ai-writing-style-evaluator.js";
 export type { WorkspaceModelSharingDefaults } from "./agent-model-sharing.js";
 export type {
   AgentConversationCommandResult,

@@ -8,6 +8,7 @@ import type {
   AgentConversationWorkspaceShellProps,
   AiWritingWorkflowProps
 } from "../src/workspace-shell-types.js";
+import { ChangeSetReview, type ChangeSetStyleReview } from "../src/change-set-review.js";
 import { WorkspaceShell } from "../src/workspace-shell.js";
 
 describe("Change Set central review", () => {
@@ -95,6 +96,45 @@ describe("Change Set central review", () => {
     expect(html).not.toContain("尚未写入");
   });
 
+  test("shows introduced medium/high style reminders while folding low and pre-existing findings", () => {
+    const application = createDesktopApplication();
+    const workflow = createReviewWorkflow();
+    const review = workflow.agentRun?.changeSetReview;
+    if (review === undefined) throw new Error("Expected a Change Set review fixture.");
+    const styleReview: ChangeSetStyleReview = {
+      schemaVersion: "1.0",
+      ruleVersion: "2.0",
+      enforcement: "advisory",
+      status: "attention",
+      hitCount: 1,
+      hits: [
+        styleHit({ confidence: "high", changeKind: "introduced", defaultCollapsed: false }),
+        styleHit({ confidence: "low", changeKind: "introduced", defaultCollapsed: true }),
+        styleHit({ confidence: "medium", changeKind: "pre_existing", defaultCollapsed: true })
+      ]
+    };
+    const html = renderToStaticMarkup(
+      <ChangeSetReview
+        review={{
+          ...review,
+          changeSet: {
+            ...review.changeSet,
+            files: review.changeSet.files.map((file) => ({ ...file, styleReview }))
+          }
+        }}
+      />
+    );
+
+    expect(html).toContain("新增 1 条提醒");
+    expect(html).toContain("本次新增 · 高置信度");
+    expect(html).toContain("不会阻止审批或应用");
+    expect(html).toContain("summary>查看已有或低置信度提醒（2）</summary>");
+    expect(html).not.toContain('details class="ns-change-set-style-review-collapsed" open');
+    expect(html).toContain('data-change-kind="pre_existing"');
+    expect(html).toContain('data-confidence="low"');
+    void application;
+  });
+
   test("prioritizes rollback review with three-way content decisions statuses and retry", () => {
     const application = createDesktopApplication();
     const workflow = createReviewWorkflow();
@@ -109,13 +149,15 @@ describe("Change Set central review", () => {
             rollbackReview: rollbackReviewFixture()
           }
         } as AiWritingWorkflowProps)}
-        aiWritingWorkflow={{
-          ...workflow,
-          agentRun: {
-            ...agentRunWithoutChangeSetReview,
-            rollbackReview: rollbackReviewFixture()
-          }
-        } as AiWritingWorkflowProps}
+        aiWritingWorkflow={
+          {
+            ...workflow,
+            agentRun: {
+              ...agentRunWithoutChangeSetReview,
+              rollbackReview: rollbackReviewFixture()
+            }
+          } as AiWritingWorkflowProps
+        }
         chapterEditor={chapterEditor}
         commandPaletteOpen={false}
         commands={application.listCommands()}
@@ -142,6 +184,26 @@ interface ReviewOverrides {
   readonly baseHashConflictPaths?: readonly string[];
   readonly status?: string;
   readonly valid?: boolean;
+}
+
+function styleHit(
+  overrides: Partial<ChangeSetStyleReview["hits"][number]>
+): ChangeSetStyleReview["hits"][number] {
+  return {
+    ruleId: "stacked-simile",
+    title: "连续比喻",
+    suggestion: "可以考虑删减一处比喻，让画面更具体。",
+    confidence: "medium",
+    changeKind: "introduced",
+    defaultCollapsed: false,
+    startOffset: 4,
+    endOffset: 8,
+    start: { offset: 4, line: 1, column: 5 },
+    end: { offset: 8, line: 1, column: 9 },
+    matchedText: "像一道光",
+    excerpt: { text: "她像一道光走来。", startOffset: 0, endOffset: 9 },
+    ...overrides
+  };
 }
 
 function createReviewWorkflow(overrides: ReviewOverrides = {}): AiWritingWorkflowProps {
@@ -246,7 +308,9 @@ function reviewWorkspace(workflow: AiWritingWorkflowProps): AgentConversationWor
   };
 }
 
-function reviewShellState(shellState: ReturnType<ReturnType<typeof createDesktopApplication>["getShellState"]>) {
+function reviewShellState(
+  shellState: ReturnType<ReturnType<typeof createDesktopApplication>["getShellState"]>
+) {
   return {
     ...shellState,
     projectTitle: "Review Project",

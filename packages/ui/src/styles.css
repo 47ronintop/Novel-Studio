@@ -3358,6 +3358,91 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
+.ns-change-set-summary-files li:has(.ns-change-set-style-review) {
+  align-items: start;
+  flex-wrap: wrap;
+}
+
+.ns-change-set-style-review {
+  border-top: 1px solid color-mix(in srgb, var(--ns-warning) 38%, var(--ns-border));
+  display: grid;
+  flex-basis: 100%;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 7px;
+}
+
+.ns-change-set-style-review-header,
+.ns-change-set-style-review-hit > div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ns-change-set-style-review-header span,
+.ns-change-set-style-review-hit > div span,
+.ns-change-set-style-review-advisory,
+.ns-change-set-style-review-hit small {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-change-set-style-review-advisory {
+  margin: 0;
+}
+
+.ns-change-set-style-review-list {
+  display: grid;
+  gap: 5px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-change-set-style-review-hit {
+  border: 1px solid color-mix(in srgb, var(--ns-warning) 45%, var(--ns-border));
+  border-radius: 5px;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+}
+
+.ns-change-set-style-review-hit[data-change-kind="pre_existing"] {
+  border-color: var(--ns-border);
+}
+
+.ns-change-set-style-review-hit p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.ns-change-set-style-review-hit q {
+  color: var(--ns-ink);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.ns-change-set-style-review-hit q::before,
+.ns-change-set-style-review-hit q::after {
+  content: none;
+}
+
+.ns-change-set-style-review-hit p span {
+  color: var(--ns-muted);
+  overflow-wrap: anywhere;
+}
+
+.ns-change-set-style-review-collapsed {
+  color: var(--ns-muted);
+  font-size: 11px;
+}
+
+.ns-change-set-style-review-collapsed summary {
+  cursor: pointer;
+}
+
 .ns-change-set-alert {
   color: var(--ns-danger);
   margin: 0;

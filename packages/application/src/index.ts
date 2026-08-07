@@ -426,6 +426,40 @@ export {
   formatAiWritingStyleRulesForPrompt,
   reviewAiWritingStyle
 } from "./ai-writing-style-rules.js";
+export {
+  AI_WRITING_STYLE_RULE_VERSION,
+  evaluateAiWritingStyle
+} from "./ai-writing-style-evaluator.js";
+export type {
+  AiWritingStyleChangeKind,
+  AiWritingStyleConfidence,
+  AiWritingStyleEvaluation,
+  AiWritingStyleEvaluationHit,
+  AiWritingStyleExcerpt,
+  AiWritingStylePosition,
+  EvaluateAiWritingStyleOptions
+} from "./ai-writing-style-evaluator.js";
+export {
+  AI_WRITING_STYLE_CORPUS_SCHEMA_VERSION,
+  AI_WRITING_STYLE_CORPUS_VERSION,
+  AI_WRITING_STYLE_MATCHER_VERSION,
+  AI_WRITING_STYLE_RUBRIC_VERSION,
+  parseWritingStyleCorpus,
+  parseWritingStyleCorpusManifest,
+  qualifyWritingStyleCorpus,
+  sha256Utf8
+} from "./ai-writing-style-corpus.js";
+export type {
+  WritingStyleCorpusAnnotatorLabelsV1,
+  WritingStyleCorpusConfidence,
+  WritingStyleCorpusLabelV1,
+  WritingStyleCorpusManifestV1,
+  WritingStyleCorpusQualificationResult,
+  WritingStyleCorpusRuleId,
+  WritingStyleCorpusSampleV1,
+  WritingStyleCorpusSplit,
+  WritingStyleCorpusV1
+} from "./ai-writing-style-corpus.js";
 export type {
   AiWorkflowObservedStep,
   AiWorkflowObservedStepKind,

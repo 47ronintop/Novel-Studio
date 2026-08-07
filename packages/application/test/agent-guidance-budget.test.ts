@@ -192,16 +192,16 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
     estimatorVersion: "guidance-budget-v1",
     estimatorProfileId: "guidance-budget-v1",
     providerSemanticVersionSetChecksum:
-      "f209e3d18c15d65b3806390cc461c08076d943c2c01ffee2bf8f5401a532cf02",
-    normalizedInputChecksum: "85fe7ef758116f9f648ea9da1e96853fe7cadb5ae725fd43903e16c282dd18b7",
+      "7d36a1c44c5213235361cbd35014e541fd47259b9c4605c0286622ced6dffc6d",
+    normalizedInputChecksum: "c095fe0f222167798a68b3188a60dbafe4d9ebb63ecee359e7e844731d59861b",
     materializedGuidanceChecksum:
-      "efdcd945b409f58ec65563849805888c1bbe8b535a7361145b28825231d078ae",
-    tokenCount: 804,
+      "fb2964e1bacb64c0bfe1b85f3071b7eea1e8ff8e93c33e052e7d56a854ac44b0",
+    tokenCount: 921,
     tokenLimit: 1200,
     writingTaskIntent: {
       schemaVersion: "1.0",
-      kind: "story_bible",
-      bodyGeneration: false,
+      kind: "continue",
+      bodyGeneration: true,
       source: "bounded_request_classifier"
     },
     writingOperations: [],
@@ -216,16 +216,16 @@ const EXPECTED_SNAPSHOT_IDENTITIES = [
     estimatorVersion: "guidance-budget-v1",
     estimatorProfileId: "guidance-budget-v1",
     providerSemanticVersionSetChecksum:
-      "5355b1561c4a34b11038e945ff08517b3fd1c2ce16319de31004557dc997db9d",
-    normalizedInputChecksum: "f34c5a401ca264a515034f400fc4c95031dc6cafc63e43521d13aa194078fa07",
+      "088da57671de422ab515585883488a4d2c90fded9c50266acdcf82ce6c2cea45",
+    normalizedInputChecksum: "cca542f271cc52dc07e8087ead140dabc19faadf477471d8c1b45274dbdfb12c",
     materializedGuidanceChecksum:
-      "cc87910f4efeb43f65b7dee3fcab869ccd72717af1aab99770d858e9bcd4c632",
-    tokenCount: 1078,
+      "25429c8f1384322999056886fbb9ff61dad8ec03f6eb966c90f9a3f5f7f1c9e0",
+    tokenCount: 1196,
     tokenLimit: 1200,
     writingTaskIntent: {
       schemaVersion: "1.0",
-      kind: "story_bible",
-      bodyGeneration: false,
+      kind: "continue",
+      bodyGeneration: true,
       source: "bounded_request_classifier"
     },
     writingOperations: [

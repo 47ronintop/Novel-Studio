@@ -196,6 +196,20 @@ const V3_COMPLETION_GUIDANCE = [
   "待审批、待分享、上下文过期或恢复中不能 completed。"
 ].join("\n");
 
+// This is deliberately app-owned and immutable. It is selected only from the frozen
+// WritingTaskIntent, never from project content, tool output, or model text.
+const WRITING_GENERATION_GUIDANCE_V20 = [
+  "【WRITING_GENERATION_GUIDANCE@2.0】仅用于正文生成/改写；项目文风优先；提醒非禁词，不评价原文/引用/对白/分析。",
+  "1. 连续比喻：同句多个“像”只留一个。",
+  "2. 解释对照：少用“不是...是...”直说心理，改用行动/对白。",
+  "3. 模板情绪：“冷冷”“压下去”仅指导；其他套语重复/聚集才提醒，单次自然用法不改。",
+  "4. 直白顿悟：少用“终于明白”等，以行为呈现。"
+].join("\n");
+
+/** App-owned checksum for the immutable generation fragment; it is included in the registry AST. */
+export const WRITING_GENERATION_GUIDANCE_VERSION = "2.0" as const;
+export const WRITING_GENERATION_GUIDANCE_CHECKSUM = sha256(WRITING_GENERATION_GUIDANCE_V20);
+
 const V3_TEMPLATE_AST_VERSION = "system-guidance-v3-ast@1" as const;
 
 const currentRegistry = new Map<CurrentAgentGuidanceRegistryKey, RegisteredAgentGuidanceV3>(
@@ -220,7 +234,14 @@ const currentRegistry = new Map<CurrentAgentGuidanceRegistryKey, RegisteredAgent
         writingTaskIntentSlot: profileId === "writing" ? "WritingTaskIntent@1.0" : "not_applicable",
         toolAndEvidence: V3_TOOL_AND_EVIDENCE_GUIDANCE,
         completion: V3_COMPLETION_GUIDANCE,
-        writingGenerationSlot: "not_applicable"
+        writingGenerationSlot:
+          profileId === "writing"
+            ? {
+                version: WRITING_GENERATION_GUIDANCE_VERSION,
+                checksum: WRITING_GENERATION_GUIDANCE_CHECKSUM,
+                text: WRITING_GENERATION_GUIDANCE_V20
+              }
+            : "not_applicable"
       })
     );
     const registration = deepFreeze<RegisteredAgentGuidanceV3>({
@@ -398,6 +419,9 @@ function materializeCurrentRegistration(
     `【SANITIZED_RUNTIME_FACTS】\n${serializeProviderVisibleAgentRuntimeFacts(runtimeFacts)}`,
     `【OPERATION】\n${operationGuidance}`,
     `【PROFILE】\n${V3_PROFILE_GUIDANCE[profileId]}${taskIntentGuidance}`,
+    ...(normalizedInput.writingGenerationGuidanceVersion === "2.0"
+      ? [WRITING_GENERATION_GUIDANCE_V20]
+      : []),
     `【TOOL_EVIDENCE】\n${V3_TOOL_AND_EVIDENCE_GUIDANCE}`,
     `【COMPLETION】\n${V3_COMPLETION_GUIDANCE}`
   ].join("\n\n");
@@ -433,6 +457,8 @@ function normalizeCurrentBuildInput(
     input.providerSemanticVersionSet,
     providerSetChecksum
   );
+  const expectedWritingGenerationGuidanceVersion =
+    writingTaskIntent?.bodyGeneration === true ? "2.0" : "not_applicable";
   if (
     runtimeFacts.profileId !== profile.profileId ||
     runtimeFacts.operationMode !== profile.operationMode ||
@@ -444,8 +470,9 @@ function normalizeCurrentBuildInput(
     (profile.profileId === "writing") !== (writingTaskIntent !== null) ||
     providerSemanticVersionSet.writingTaskIntentSchemaVersion !==
       (writingTaskIntent === null ? "not_applicable" : "1.0") ||
-    input.writingGenerationGuidanceVersion !== "not_applicable" ||
-    providerSemanticVersionSet.writingGenerationGuidanceVersion !== "not_applicable"
+    input.writingGenerationGuidanceVersion !== expectedWritingGenerationGuidanceVersion ||
+    providerSemanticVersionSet.writingGenerationGuidanceVersion !==
+      expectedWritingGenerationGuidanceVersion
   ) {
     throw new Error("AGENT_GUIDANCE_REGISTRY_AUTHORITY_INVALID");
   }
@@ -453,7 +480,7 @@ function normalizeCurrentBuildInput(
     profile,
     runtimeFacts,
     writingTaskIntent,
-    writingGenerationGuidanceVersion: "not_applicable",
+    writingGenerationGuidanceVersion: expectedWritingGenerationGuidanceVersion,
     providerSemanticVersionSet
   });
 }

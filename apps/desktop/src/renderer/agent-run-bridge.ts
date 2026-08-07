@@ -40,6 +40,7 @@ import type {
   SyncStartDraftCommand
 } from "@novel-studio/application";
 import {
+  evaluateAiWritingStyle,
   findStoryBibleMentionSuggestions,
   reasoningStrengthForModel
 } from "@novel-studio/application";
@@ -3828,6 +3829,14 @@ function toChangeSetReviewModel(changeSet: ChangeSet): ChangeSetReviewModel {
           )
           .map((check) => check.message ?? "校验失败")
       },
+      ...(file.assetType === "text" || file.assetType === "chapter"
+        ? {
+            styleReview: evaluateAiWritingStyle({
+              baselineText: file.baseContent,
+              candidateText: file.candidateContent
+            })
+          }
+        : {}),
       hunks: file.hunks.map((hunk) => ({
         hunkId: hunk.hunkId,
         label: rangeLabel(hunk.range.unit, hunk.range.start, hunk.range.end),

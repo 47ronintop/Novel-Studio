@@ -227,6 +227,8 @@ export type {
   AgentRunPendingUserInputProps,
   AiWorkflowBranchChoiceProps,
   AiSelectionReviewProps,
+  AiWritingStyleEvaluationProps,
+  AiWritingStyleEvaluationHitProps,
   RecoveryReviewProps,
   CreativeProjectFilesNavigatorProps,
   CreativeWorkspaceNavigatorProps,

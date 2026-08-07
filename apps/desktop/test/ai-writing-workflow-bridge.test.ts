@@ -65,6 +65,33 @@ const suggestion: AiWritingSuggestion = {
       }
     ]
   },
+  styleEvaluation: {
+    schemaVersion: "1.0",
+    ruleVersion: "2.0",
+    enforcement: "advisory",
+    status: "attention",
+    hitCount: 1,
+    hits: [
+      {
+        ruleId: "mechanical-emotion",
+        title: "模板化情绪词",
+        suggestion: "改成可观察的动作、语气或环境反应。",
+        confidence: "high",
+        changeKind: "introduced",
+        defaultCollapsed: false,
+        startOffset: 14,
+        endOffset: 16,
+        start: { offset: 14, line: 2, column: 1 },
+        end: { offset: 16, line: 2, column: 3 },
+        matchedText: "冷冷",
+        excerpt: {
+          text: "Opening line.\n冷冷的风",
+          startOffset: 0,
+          endOffset: 19
+        }
+      }
+    ]
+  },
   diffPreview: {
     title: "AI suggestion",
     changes: [
@@ -151,6 +178,33 @@ const selectionPreview: AiWritingSelectionPreview = {
         matchedText: "冷冷",
         positionLabel: "第 4 字附近",
         suggestion: "改成可观察的动作、语气或环境反应。"
+      }
+    ]
+  },
+  styleEvaluation: {
+    schemaVersion: "1.0",
+    ruleVersion: "2.0",
+    enforcement: "advisory",
+    status: "attention",
+    hitCount: 1,
+    hits: [
+      {
+        ruleId: "mechanical-emotion",
+        title: "模板化情绪词",
+        suggestion: "改成可观察的动作、语气或环境反应。",
+        confidence: "medium",
+        changeKind: "introduced",
+        defaultCollapsed: false,
+        startOffset: 4,
+        endOffset: 6,
+        start: { offset: 4, line: 1, column: 5 },
+        end: { offset: 6, line: 1, column: 7 },
+        matchedText: "冷冷",
+        excerpt: {
+          text: "The 冷冷 opening",
+          startOffset: 0,
+          endOffset: 14
+        }
       }
     ]
   },
@@ -355,7 +409,8 @@ describe("AI writing workflow bridge", () => {
     expect(generated.status).toBe("suggestion-ready");
     expect(generated.summary).toBe("Generated a local mock continuation for review.");
     expect(generated.diffPreview?.changes[0]?.value).toContain("AI continuation draft.");
-    expect(generated.styleReview).toEqual(suggestion.styleReview);
+    expect(generated.styleEvaluation).toEqual(suggestion.styleEvaluation);
+    expect(generated.styleReview).toBeUndefined();
     expect(generated.contextTraceLabel).toBe("1 source / 4 tokens");
     expect(generated.observability?.usageLabel).toBe("24 tokens · estimated");
     expect(generated.observability?.modelLabel).toBe("M14 Mock Writer / mock-writer");
@@ -663,6 +718,21 @@ describe("AI writing workflow bridge", () => {
     expect(calls).toEqual(["ai.generate:续写这段。"]);
   });
 
+  test("falls back to the legacy review only when a 2.0 style evaluation is unavailable", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    api.ai.generateChapterSuggestion = async (request) => {
+      calls.push(`ai.generate:${request.instruction}`);
+      return ok({ ...suggestion, styleEvaluation: undefined });
+    };
+    const bridge = createAiWritingWorkflowBridge(api);
+
+    const generated = await bridge.generateSuggestion("续写当前场景");
+
+    expect(generated.styleEvaluation).toBeUndefined();
+    expect(generated.styleReview).toEqual(suggestion.styleReview);
+  });
+
   test("generates selection-aware preview without creating an applyable suggestion", async () => {
     const calls: string[] = [];
     const bridge = createAiWritingWorkflowBridge(createApi(calls));
@@ -688,7 +758,8 @@ describe("AI writing workflow bridge", () => {
     expect(generated.status).toBe("suggestion-ready");
     expect(generated.summary).toBe("Rewrites only the selected sentence.");
     expect(generated.diffPreview).toEqual(selectionPreview.diffPreview);
-    expect(generated.styleReview).toEqual(selectionPreview.styleReview);
+    expect(generated.styleEvaluation).toEqual(selectionPreview.styleEvaluation);
+    expect(generated.styleReview).toBeUndefined();
     expect(generated.selectionReview).toEqual({
       status: "pending",
       originalText: "Opening line.",

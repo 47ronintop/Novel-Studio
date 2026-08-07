@@ -219,9 +219,11 @@ export function decorateAgentConversationWorkspace(input: {
           kind: "selection",
           props: {
             ...selection,
-            ...(input.aiWritingWorkflow?.styleReview === undefined
-              ? {}
-              : { styleReview: input.aiWritingWorkflow.styleReview }),
+            ...(input.aiWritingWorkflow?.styleEvaluation !== undefined
+              ? { styleEvaluation: input.aiWritingWorkflow.styleEvaluation }
+              : input.aiWritingWorkflow?.styleReview === undefined
+                ? {}
+                : { styleReview: input.aiWritingWorkflow.styleReview }),
             ...(input.aiWritingWorkflow?.failure === undefined
               ? {}
               : { diagnostic: input.aiWritingWorkflow.failure }),

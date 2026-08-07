@@ -31,6 +31,43 @@ describe("AI writing workflow compatibility UI", () => {
         rangeLabel: "0-13",
         compareLabel: "原选区 -> 建议文本",
         canUndo: true,
+        styleEvaluation: {
+          schemaVersion: "1.0",
+          ruleVersion: "2.0",
+          enforcement: "advisory",
+          status: "attention",
+          hitCount: 1,
+          hits: [
+            {
+              ruleId: "mechanical-emotion",
+              title: "模板化情绪词",
+              suggestion: "改成可观察的动作、语气或环境反应。",
+              confidence: "high",
+              changeKind: "introduced",
+              defaultCollapsed: false,
+              startOffset: 0,
+              endOffset: 2,
+              start: { offset: 0, line: 1, column: 1 },
+              end: { offset: 2, line: 1, column: 3 },
+              matchedText: "冷冷",
+              excerpt: { text: "冷冷的风像雨一样落下。", startOffset: 0, endOffset: 11 }
+            },
+            {
+              ruleId: "stacked-simile",
+              title: "连续比喻",
+              suggestion: "保留一个更准确的比喻。",
+              confidence: "low",
+              changeKind: "pre_existing",
+              defaultCollapsed: true,
+              startOffset: 4,
+              endOffset: 6,
+              start: { offset: 4, line: 1, column: 5 },
+              end: { offset: 6, line: 1, column: 7 },
+              matchedText: "像雨",
+              excerpt: { text: "冷冷的风像雨一样落下。", startOffset: 0, endOffset: 11 }
+            }
+          ]
+        },
         styleReview: {
           status: "attention",
           hitCount: 2,
@@ -114,8 +151,12 @@ describe("AI writing workflow compatibility UI", () => {
     );
 
     expect(html).toContain('aria-label="Selection AI review"');
-    expect(html).toContain('aria-label="AI 文风规则检查"');
-    expect(html).toContain("文风规则命中 2 处");
+    expect(html).toContain('aria-label="AI 文风提醒"');
+    expect(html).toContain("新增 1 条提醒");
+    expect(html).toContain("仅供参考；不会阻止接受或应用。");
+    expect(html).toContain("查看已有或低置信度提醒（1）");
+    expect(html).toContain('data-change-kind="introduced"');
+    expect(html).toContain('data-change-kind="pre_existing"');
     expect(html).toContain("AGENT_MODEL_CALL_FAILED");
     expect(html).toContain("可重试");
     expect(html).toContain('aria-label="Retry selection AI preview"');

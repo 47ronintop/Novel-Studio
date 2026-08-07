@@ -32,6 +32,39 @@ export interface ChangeSetReviewFile {
   readonly selected: boolean;
   readonly validation: ChangeSetReviewValidation;
   readonly hunks: readonly ChangeSetReviewHunk[];
+  /** Optional diff-aware writing-style reminders for the candidate text. */
+  readonly styleReview?: ChangeSetStyleReview;
+}
+
+export type ChangeSetStyleReviewConfidence = "low" | "medium" | "high";
+export type ChangeSetStyleReviewChangeKind = "introduced" | "pre_existing";
+
+export interface ChangeSetStyleReviewHit {
+  readonly ruleId: string;
+  readonly title: string;
+  readonly suggestion: string;
+  readonly confidence: ChangeSetStyleReviewConfidence;
+  readonly changeKind: ChangeSetStyleReviewChangeKind;
+  readonly defaultCollapsed: boolean;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly start: { readonly offset: number; readonly line: number; readonly column: number };
+  readonly end: { readonly offset: number; readonly line: number; readonly column: number };
+  readonly matchedText: string;
+  readonly excerpt: {
+    readonly text: string;
+    readonly startOffset: number;
+    readonly endOffset: number;
+  };
+}
+
+export interface ChangeSetStyleReview {
+  readonly schemaVersion: "1.0";
+  readonly ruleVersion: string;
+  readonly enforcement: "advisory";
+  readonly status: "clean" | "attention";
+  readonly hitCount: number;
+  readonly hits: readonly ChangeSetStyleReviewHit[];
 }
 
 export interface ChangeSetReviewValidation {
@@ -183,6 +216,7 @@ export function ChangeSetReview({ review }: { readonly review: ChangeSetReviewPr
             <FileText aria-hidden="true" size={13} />
             <span>{file.relativePath}</span>
             <span>{file.validation.valid ? "校验通过" : "校验失败"}</span>
+            {file.styleReview === undefined ? null : <ChangeSetStyleReviewView file={file} />}
           </li>
         ))}
       </ul>
@@ -214,6 +248,88 @@ export function ChangeSetReview({ review }: { readonly review: ChangeSetReviewPr
       )}
     </section>
   );
+}
+
+/** Renders advisory writing-style findings for a single Change Set file. */
+export function ChangeSetStyleReviewView({
+  file
+}: {
+  readonly file: Pick<ChangeSetReviewFile, "relativePath" | "styleReview">;
+}) {
+  const styleReview = file.styleReview;
+  if (styleReview === undefined) return null;
+
+  const prominentHits = styleReview.hits.filter(
+    (hit) => hit.changeKind === "introduced" && hit.confidence !== "low"
+  );
+  const collapsedHits = styleReview.hits.filter(
+    (hit) => hit.changeKind === "pre_existing" || hit.confidence === "low" || hit.defaultCollapsed
+  );
+
+  return (
+    <section className="ns-change-set-style-review" aria-label={`文风提醒：${file.relativePath}`}>
+      <header className="ns-change-set-style-review-header">
+        <strong>文风检查</strong>
+        <span>
+          {prominentHits.length > 0 ? `新增 ${prominentHits.length} 条提醒` : "未发现新增提醒"}
+        </span>
+      </header>
+      <p
+        className="ns-change-set-style-review-advisory"
+        role={prominentHits.length > 0 ? "status" : undefined}
+      >
+        这些是可能存在的文风问题，仅供参考；不会阻止审批或应用。
+      </p>
+      {prominentHits.length === 0 ? null : (
+        <ul className="ns-change-set-style-review-list" aria-label="新增文风提醒">
+          {prominentHits.map((hit) => (
+            <StyleReviewHit key={styleReviewHitKey(hit)} hit={hit} />
+          ))}
+        </ul>
+      )}
+      {collapsedHits.length === 0 ? null : (
+        <details className="ns-change-set-style-review-collapsed">
+          <summary>查看已有或低置信度提醒（{collapsedHits.length}）</summary>
+          <ul className="ns-change-set-style-review-list" aria-label="已有或低置信度文风提醒">
+            {collapsedHits.map((hit) => (
+              <StyleReviewHit key={styleReviewHitKey(hit)} hit={hit} />
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function StyleReviewHit({ hit }: { readonly hit: ChangeSetStyleReviewHit }) {
+  return (
+    <li
+      className="ns-change-set-style-review-hit"
+      data-change-kind={hit.changeKind}
+      data-confidence={hit.confidence}
+    >
+      <div>
+        <strong>{hit.title}</strong>
+        <span>{styleReviewHitLabel(hit)}</span>
+      </div>
+      <p>
+        <q>{hit.matchedText}</q>
+        <span>{hit.suggestion}</span>
+      </p>
+      <small>{hit.excerpt.text}</small>
+    </li>
+  );
+}
+
+function styleReviewHitLabel(hit: ChangeSetStyleReviewHit): string {
+  const kind = hit.changeKind === "introduced" ? "本次新增" : "原有内容";
+  const confidence =
+    hit.confidence === "high" ? "高置信度" : hit.confidence === "medium" ? "中置信度" : "低置信度";
+  return `${kind} · ${confidence}`;
+}
+
+function styleReviewHitKey(hit: ChangeSetStyleReviewHit): string {
+  return `${hit.ruleId}-${hit.startOffset}-${hit.endOffset}-${hit.changeKind}`;
 }
 
 export function RollbackReview({ review }: { readonly review: RollbackReviewProps }) {

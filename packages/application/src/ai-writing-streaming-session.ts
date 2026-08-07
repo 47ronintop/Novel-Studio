@@ -21,6 +21,7 @@ import type { ModelRuntimeProfile } from "./model-settings-session.js";
 import { createChapterSuggestionLlmRequest } from "./ai-writing-llm-requests.js";
 import { warningRuntimeNotice } from "./ai-writing-runtime-notices.js";
 import { reviewAiWritingStyle } from "./ai-writing-style-rules.js";
+import { evaluateAiWritingStyle } from "./ai-writing-style-evaluator.js";
 import type {
   AiWritingConversationMessage,
   AiWritingSuggestion,
@@ -319,6 +320,10 @@ export async function* streamChapterSuggestionForSession(
     ...(runtimeNotice === undefined ? {} : { runtimeNotice }),
     conversationMessages: nextConversationMessages,
     styleReview: reviewAiWritingStyle(output.proposedBody),
+    styleEvaluation: evaluateAiWritingStyle({
+      baselineText: chapterState.chapter.body,
+      candidateText: output.proposedBody
+    }),
     diffPreview: options.chapterEditorSession.previewSuggestionDiff(output.proposedBody),
     contextTrace: contextBundle.value.trace,
     observability

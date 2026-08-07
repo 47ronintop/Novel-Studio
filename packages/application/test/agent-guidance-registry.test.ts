@@ -223,12 +223,43 @@ describe("Agent guidance 3.0 registry", () => {
       workspaceProfile("engineeringWorkspace", "execution", "general_file")
     ];
     for (const profile of profiles) {
-      const body = buildAgentSystemPromptV3(v3Input(profile));
+      const body = buildAgentSystemPromptV3(v3Input(profile, "请分析当前内容。"));
       expect(body).not.toContain("foreshadow v1.0");
       expect(body).not.toContain("fsh_");
       expect(body).not.toContain("actualPayoffChapterId");
       expect(body).not.toContain("连续比喻");
     }
+  });
+
+  test("selects the frozen 2.0 fragment only for a frozen body-generation intent", () => {
+    const profile = workspaceProfile("creativeProject", "execution", "writing");
+    const generation = materializeAgentSystemPromptV3(v3Input(profile, "请续写下一段。"));
+    const analysis = materializeAgentSystemPromptV3(v3Input(profile, "请分析当前章节。"));
+
+    expect(generation.normalizedInput.writingGenerationGuidanceVersion).toBe("2.0");
+    expect(generation.proof.writingGenerationGuidanceVersion).toBe("2.0");
+    expect(
+      generation.normalizedInput.providerSemanticVersionSet.writingGenerationGuidanceVersion
+    ).toBe("2.0");
+    expect(generation.materializedGuidance).toContain("【WRITING_GENERATION_GUIDANCE@2.0】");
+    expect(analysis.normalizedInput.writingGenerationGuidanceVersion).toBe("not_applicable");
+    expect(analysis.materializedGuidance).not.toContain("【WRITING_GENERATION_GUIDANCE@2.0】");
+    expect(generation.proof.providerSemanticVersionSetChecksum).not.toBe(
+      analysis.proof.providerSemanticVersionSetChecksum
+    );
+  });
+
+  test("rejects a guidance version that disagrees with the frozen writing intent", () => {
+    const input = v3Input(
+      workspaceProfile("creativeProject", "execution", "writing"),
+      "请续写下一段。"
+    );
+    expect(() =>
+      materializeAgentSystemPromptV3({
+        ...input,
+        writingGenerationGuidanceVersion: "not_applicable"
+      })
+    ).toThrow("AGENT_GUIDANCE_REGISTRY_AUTHORITY_INVALID");
   });
 
   test("rebuilds from the registry and rejects body, proof, profile, or version tampering", () => {
@@ -327,14 +358,16 @@ function v3Input(
   });
   const writingTaskIntent =
     profile.profileId === "writing" ? createWritingTaskIntent({ currentRequest }) : null;
+  const writingGenerationGuidanceVersion =
+    writingTaskIntent?.bodyGeneration === true ? "2.0" : "not_applicable";
   return {
     profile,
     runtimeFacts,
     writingTaskIntent,
-    writingGenerationGuidanceVersion: "not_applicable",
+    writingGenerationGuidanceVersion,
     providerSemanticVersionSet: createProviderSemanticVersionSetV1({
       writingTaskIntentSchemaVersion: writingTaskIntent === null ? "not_applicable" : "1.0",
-      writingGenerationGuidanceVersion: "not_applicable",
+      writingGenerationGuidanceVersion,
       approvalRuleSetVersion:
         runtimeFacts.writeCapability === "none"
           ? "not_applicable"
