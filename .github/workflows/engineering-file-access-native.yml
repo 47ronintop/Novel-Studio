@@ -1,0 +1,46 @@
+name: Engineering File Access Native
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "codex/**"
+    paths:
+      - "native/engineering-file-access-win32/**"
+      - "scripts/build-engineering-file-access-win32.mjs"
+      - "scripts/sign-engineering-file-access-win32.mjs"
+      - "scripts/probe-engineering-file-access-package.mjs"
+
+jobs:
+  build-probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.20.0"
+      - name: Install Node-API headers (no native toolchain install)
+        shell: pwsh
+        run: |
+          npm install --no-save --ignore-scripts node-api-headers@9.0.0
+          $include = Join-Path (Resolve-Path "node_modules/node-api-headers") "include"
+          if (-not (Test-Path (Join-Path $include "node_api.h"))) { throw "Node-API headers are unavailable" }
+          "NODE_API_INCLUDE_DIR=$include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build the canonical addon
+        run: node scripts/build-engineering-file-access-win32.mjs
+      - name: Record unsigned development probe result
+        run: node scripts/probe-engineering-file-access-package.mjs
+      - name: Record addon SHA-256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node).Hash.ToLowerInvariant()
+          "$hash  engineering_file_access.node" | Set-Content -NoNewline -Encoding ascii native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.sha256
+      - name: Upload native candidate and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-file-access-win32
+          path: native/engineering-file-access-win32/dist/win32-x64/
+          if-no-files-found: error
