@@ -146,7 +146,9 @@ export type {
   EngineeringWorkspaceAccessPortOptions,
   EngineeringWorkspaceAccessSearchMatch,
   EngineeringWorkspaceAccessSession,
-  EngineeringWorkspaceAccessTextSnapshot
+  EngineeringWorkspaceAccessTextSnapshot,
+  EngineeringWorkspaceNativeRootIdentity,
+  EngineeringWorkspaceRootBindingIssuer
 } from "./engineering-workspace-access-port.js";
 export {
   CREATIVE_PROJECT_FILE_LIFECYCLE_VERSION,

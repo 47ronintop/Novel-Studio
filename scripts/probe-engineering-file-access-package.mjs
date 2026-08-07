@@ -202,6 +202,9 @@ export async function probeReadOnlyAbi(addon) {
     if (openedRoot.capability !== "available") {
       throw new Error("available B6 read-only addon did not issue an available root capability");
     }
+    if (!isNativeRootIdentity(openedRoot.rootIdentity)) {
+      throw new Error("available B6 read-only addon did not return a canonical root identity");
+    }
     const bytes = addon.readFile(openedRoot.rootId, ordinaryRelativePath);
     if (!Buffer.isBuffer(bytes) || bytes.toString("utf8") !== ordinaryUtf8Text) {
       throw new Error("B6 readFile did not return the exact ordinary UTF-8 fixture bytes");
@@ -375,6 +378,19 @@ function assertUnsignedDevelopmentArtifact(manifest, signaturePresent, readOnlyA
 
 function isCliInvocation() {
   return process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+}
+
+function isNativeRootIdentity(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).sort().join(",") ===
+      "canonicalPathIdentityChecksum,directoryIdentity,volumeIdentity" &&
+    /^[a-f0-9]{8}$/u.test(value.volumeIdentity) &&
+    /^[a-f0-9]{16}$/u.test(value.directoryIdentity) &&
+    /^[a-f0-9]{64}$/u.test(value.canonicalPathIdentityChecksum)
+  );
 }
 
 function stable(value) {

@@ -29,19 +29,40 @@ export interface EngineeringWorkspaceAccessNativeAddon {
   buildIndex(rootId: bigint): unknown;
 }
 
+/**
+ * Identity returned by the already-verified native root handle. It intentionally contains no
+ * pathname: only Main uses it to issue a root binding before a session becomes usable.
+ */
+export interface EngineeringWorkspaceNativeRootIdentity {
+  readonly volumeIdentity: string;
+  readonly directoryIdentity: string;
+  readonly canonicalPathIdentityChecksum: string;
+}
+
+export type EngineeringWorkspaceRootBindingIssuer = (
+  nativeIdentity: EngineeringWorkspaceNativeRootIdentity
+) => unknown;
+
 export interface EngineeringWorkspaceAccessPortOptions {
   readonly addon: unknown;
   readonly traceId?: string;
 }
 
-export interface EngineeringWorkspaceAccessOpenRequest {
-  /** Main-owned filesystem path; it is never returned or included in an error. */
-  readonly rootPath: string;
-  /** Frozen by Main before the native handle is opened. */
-  readonly rootBinding: EngineeringWorkspaceRootBindingV1;
-  /** Main-owned policy projection that is applied again to every native result. */
-  readonly pathPolicy: EngineeringPathPolicy;
-}
+export type EngineeringWorkspaceAccessOpenRequest =
+  | {
+      /** Main-owned filesystem path; it is never returned or included in an error. */
+      readonly rootPath: string;
+      /** A previously Main-issued binding, revalidated against this native handle. */
+      readonly rootBinding: EngineeringWorkspaceRootBindingV1;
+      readonly pathPolicy: EngineeringPathPolicy;
+    }
+  | {
+      /** Main-owned filesystem path; it is never returned or included in an error. */
+      readonly rootPath: string;
+      /** Main-owned issuer called only after native has verified the root handle. */
+      readonly issueRootBinding: EngineeringWorkspaceRootBindingIssuer;
+      readonly pathPolicy: EngineeringPathPolicy;
+    };
 
 export interface EngineeringWorkspaceAccessBinding {
   readonly rootBindingId: string;
@@ -143,17 +164,22 @@ export function createEngineeringWorkspaceAccessPort(
       } catch (cause) {
         return nativeFailure(cause, traceId);
       }
-      const rootId = parseOpenedRoot(nativeRoot);
-      if (rootId === undefined) return protocolFailure(traceId);
+      const openedRoot = parseOpenedRoot(nativeRoot);
+      if (openedRoot === undefined) return protocolFailure(traceId);
+      const rootBinding = resolveRootBinding(parsed.value, openedRoot.rootIdentity);
+      if (rootBinding === undefined) {
+        closeOpenedRoot(addon, openedRoot.rootId);
+        return inputRejected(traceId);
+      }
 
       const binding = Object.freeze({
-        rootBindingId: parsed.value.rootBinding.rootBindingId,
-        pathPolicyRevision: parsed.value.rootBinding.pathPolicyRevision
+        rootBindingId: rootBinding.rootBindingId,
+        pathPolicyRevision: rootBinding.pathPolicyRevision
       });
       return ok(
         new NativeEngineeringWorkspaceAccessSession({
           addon,
-          rootId,
+          rootId: openedRoot.rootId,
           binding,
           pathPolicy: parsed.value.pathPolicy,
           traceId
@@ -330,36 +356,116 @@ function parseAddon(value: unknown): EngineeringWorkspaceAccessNativeAddon | und
     : undefined;
 }
 
-function parseOpenRequest(
-  value: unknown
-):
-  | { readonly ok: true; readonly value: EngineeringWorkspaceAccessOpenRequest }
+function parseOpenRequest(value: unknown):
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly rootPath: string;
+        readonly pathPolicy: EngineeringPathPolicy;
+        readonly rootBinding?: EngineeringWorkspaceRootBindingV1;
+        readonly issueRootBinding?: EngineeringWorkspaceRootBindingIssuer;
+      };
+    }
   | { readonly ok: false } {
-  if (!hasExactKeys(value, ["pathPolicy", "rootBinding", "rootPath"])) return { ok: false };
   if (
+    !isRecord(value) ||
     !isSafeRootPath(value["rootPath"]) ||
-    !isRootBinding(value["rootBinding"]) ||
     !isPathPolicy(value["pathPolicy"])
   ) {
     return { ok: false };
   }
-  return {
-    ok: true,
-    value: {
-      rootPath: value["rootPath"],
-      rootBinding: value["rootBinding"],
-      pathPolicy: value["pathPolicy"]
-    }
-  };
+  if (
+    hasExactKeys(value, ["pathPolicy", "rootBinding", "rootPath"]) &&
+    isRootBinding(value["rootBinding"])
+  ) {
+    return {
+      ok: true,
+      value: {
+        rootPath: value["rootPath"],
+        rootBinding: value["rootBinding"],
+        pathPolicy: value["pathPolicy"]
+      }
+    };
+  }
+  if (
+    hasExactKeys(value, ["issueRootBinding", "pathPolicy", "rootPath"]) &&
+    typeof value["issueRootBinding"] === "function"
+  ) {
+    return {
+      ok: true,
+      value: {
+        rootPath: value["rootPath"],
+        issueRootBinding: value["issueRootBinding"] as EngineeringWorkspaceRootBindingIssuer,
+        pathPolicy: value["pathPolicy"]
+      }
+    };
+  }
+  return { ok: false };
 }
 
-function parseOpenedRoot(value: unknown): bigint | undefined {
-  return hasExactKeys(value, ["capability", "rootId"]) &&
-    value["capability"] === "available" &&
-    typeof value["rootId"] === "bigint" &&
-    value["rootId"] > 0n
-    ? value["rootId"]
+function parseOpenedRoot(
+  value: unknown
+):
+  | { readonly rootId: bigint; readonly rootIdentity: EngineeringWorkspaceNativeRootIdentity }
+  | undefined {
+  if (
+    !hasExactKeys(value, ["capability", "rootId", "rootIdentity"]) ||
+    value["capability"] !== "available" ||
+    typeof value["rootId"] !== "bigint" ||
+    value["rootId"] <= 0n ||
+    !isNativeRootIdentity(value["rootIdentity"])
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ rootId: value["rootId"], rootIdentity: value["rootIdentity"] });
+}
+
+function resolveRootBinding(
+  request: {
+    readonly rootBinding?: EngineeringWorkspaceRootBindingV1;
+    readonly issueRootBinding?: EngineeringWorkspaceRootBindingIssuer;
+  },
+  nativeIdentity: EngineeringWorkspaceNativeRootIdentity
+): EngineeringWorkspaceRootBindingV1 | undefined {
+  let binding: unknown;
+  try {
+    binding = request.rootBinding ?? request.issueRootBinding?.(nativeIdentity);
+  } catch {
+    return undefined;
+  }
+  return isRootBinding(binding) && rootBindingMatchesNativeIdentity(binding, nativeIdentity)
+    ? binding
     : undefined;
+}
+
+function closeOpenedRoot(addon: EngineeringWorkspaceAccessNativeAddon, rootId: bigint): void {
+  try {
+    addon.closeWorkspaceRoot(rootId);
+  } catch {
+    // A rejected binding must not become an observable native error or a leaked root session.
+  }
+}
+
+function isNativeRootIdentity(value: unknown): value is EngineeringWorkspaceNativeRootIdentity {
+  return (
+    hasExactKeys(value, ["canonicalPathIdentityChecksum", "directoryIdentity", "volumeIdentity"]) &&
+    typeof value["volumeIdentity"] === "string" &&
+    /^[0-9a-f]{8}$/u.test(value["volumeIdentity"]) &&
+    typeof value["directoryIdentity"] === "string" &&
+    /^[0-9a-f]{16}$/u.test(value["directoryIdentity"]) &&
+    isSha256(value["canonicalPathIdentityChecksum"])
+  );
+}
+
+function rootBindingMatchesNativeIdentity(
+  binding: EngineeringWorkspaceRootBindingV1,
+  nativeIdentity: EngineeringWorkspaceNativeRootIdentity
+): boolean {
+  return (
+    binding.volumeIdentity === nativeIdentity.volumeIdentity &&
+    binding.directoryIdentity === nativeIdentity.directoryIdentity &&
+    binding.canonicalPathIdentityChecksum === nativeIdentity.canonicalPathIdentityChecksum
+  );
 }
 
 function parseOptionalRelativePath(

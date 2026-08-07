@@ -17,7 +17,7 @@ const fixturePath = fileURLToPath(
 
 describe("engineering file access development probe contract", () => {
   test("exercises the read-only ABI with a deterministic ordinary UTF-8 read and safe traversal canaries", async () => {
-    const fixture = await readFile(fixturePath, "utf8");
+    const fixture = normalizeProbeFixture(await readFile(fixturePath, "utf8"));
     const adapter = hardenedReadOnlyFixtureAdapter(fixture);
 
     await expect(probeReadOnlyAbi(adapter)).resolves.toMatchObject({
@@ -43,7 +43,9 @@ describe("engineering file access development probe contract", () => {
   });
 
   test("fails closed when an otherwise available ABI reads an adversarial path", async () => {
-    const adapter = hardenedReadOnlyFixtureAdapter(await readFile(fixturePath, "utf8"));
+    const adapter = hardenedReadOnlyFixtureAdapter(
+      normalizeProbeFixture(await readFile(fixturePath, "utf8"))
+    );
     const hardenedRead = adapter.readFile;
     adapter.readFile = (rootId: bigint, relativePath: string) => {
       adapter.paths.push(relativePath);
@@ -97,7 +99,15 @@ function hardenedReadOnlyFixtureAdapter(expectedFixture: string) {
     paths: [] as string[],
     openWorkspaceRoot(root: string) {
       workspaceRoot = root;
-      return { rootId: 1n, capability: "available" };
+      return {
+        rootId: 1n,
+        capability: "available",
+        rootIdentity: {
+          volumeIdentity: "d0c0b0a0",
+          directoryIdentity: "0000000000000001",
+          canonicalPathIdentityChecksum: "a".repeat(64)
+        }
+      };
     },
     readFile(rootId: bigint, relativePath: string) {
       adapter.paths.push(relativePath);
@@ -153,4 +163,8 @@ function hardenedReadOnlyFixtureAdapter(expectedFixture: string) {
     }
   };
   return adapter;
+}
+
+function normalizeProbeFixture(value: string): string {
+  return value.replace(/\r\n/gu, "\n");
 }

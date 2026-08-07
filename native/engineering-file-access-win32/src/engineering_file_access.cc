@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <bcrypt.h>
 #include <winternl.h>
 
 #include <algorithm>
@@ -68,6 +69,28 @@ struct RootSession {
   HANDLE handle;
   std::wstring path;
   BY_HANDLE_FILE_INFORMATION identity;
+  std::string canonicalPathIdentityChecksum;
+};
+
+class ScopedHandle {
+ public:
+  explicit ScopedHandle(HANDLE handle) : handle_(handle) {}
+  ~ScopedHandle() {
+    if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_);
+  }
+
+  ScopedHandle(const ScopedHandle&) = delete;
+  ScopedHandle& operator=(const ScopedHandle&) = delete;
+
+  HANDLE get() const { return handle_; }
+  HANDLE release() {
+    const HANDLE released = handle_;
+    handle_ = INVALID_HANDLE_VALUE;
+    return released;
+  }
+
+ private:
+  HANDLE handle_;
 };
 
 std::mutex g_rootsMutex;
@@ -164,6 +187,70 @@ bool wideToUtf8(const std::wstring& input, std::string* output) {
   output->resize(static_cast<size_t>(required));
   return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input.data(), static_cast<int>(input.size()),
                              output->data(), required, nullptr, nullptr) == required;
+}
+
+bool sha256Hex(const std::string& input, std::string* output) {
+  BCRYPT_ALG_HANDLE algorithm = nullptr;
+  BCRYPT_HASH_HANDLE hash = nullptr;
+  DWORD objectLength = 0;
+  DWORD hashLength = 0;
+  DWORD received = 0;
+  bool success = false;
+  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0 ||
+      BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLength),
+                        sizeof(objectLength), &received, 0) < 0 ||
+      received != sizeof(objectLength) || objectLength == 0 ||
+      BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashLength),
+                        sizeof(hashLength), &received, 0) < 0 ||
+      received != sizeof(hashLength) || hashLength != 32) {
+    if (algorithm != nullptr) BCryptCloseAlgorithmProvider(algorithm, 0);
+    return false;
+  }
+  std::vector<UCHAR> object(objectLength);
+  std::vector<UCHAR> digest(hashLength);
+  if (BCryptCreateHash(algorithm, &hash, object.data(), static_cast<ULONG>(object.size()), nullptr, 0, 0) >= 0 &&
+      BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(input.data())),
+                     static_cast<ULONG>(input.size()), 0) >= 0 &&
+      BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) >= 0) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    output->clear();
+    output->reserve(digest.size() * 2);
+    for (const UCHAR byte : digest) {
+      output->push_back(kHex[(byte >> 4) & 0x0f]);
+      output->push_back(kHex[byte & 0x0f]);
+    }
+    success = true;
+  }
+  if (hash != nullptr) BCryptDestroyHash(hash);
+  BCryptCloseAlgorithmProvider(algorithm, 0);
+  return success;
+}
+
+std::string fixedWidthHex(uint64_t value, size_t width) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string result(width, '0');
+  for (size_t index = 0; index < width; ++index) {
+    result[width - index - 1] = kHex[value & 0x0f];
+    value >>= 4;
+  }
+  return result;
+}
+
+bool canonicalRootPathChecksum(HANDLE handle, std::string* output) {
+  const DWORD required = GetFinalPathNameByHandleW(
+      handle, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
+  if (required == 0 || required > static_cast<DWORD>(kMaxRootUtf16Units)) return false;
+  std::vector<wchar_t> buffer(static_cast<size_t>(required) + 1, L'\0');
+  const DWORD written = GetFinalPathNameByHandleW(
+      handle, buffer.data(), static_cast<DWORD>(buffer.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
+  if (written == 0 || written >= static_cast<DWORD>(buffer.size())) return false;
+  const std::wstring value(buffer.data(), written);
+  const int normalizedLength = NormalizeString(NormalizationC, value.data(), static_cast<int>(value.size()), nullptr, 0);
+  if (normalizedLength <= 0 || normalizedLength > static_cast<int>(kMaxRootUtf16Units)) return false;
+  std::wstring normalized(static_cast<size_t>(normalizedLength), L'\0');
+  if (NormalizeString(NormalizationC, value.data(), static_cast<int>(value.size()), normalized.data(), normalizedLength) != normalizedLength) return false;
+  std::string utf8;
+  return wideToUtf8(normalized, &utf8) && sha256Hex(utf8, output);
 }
 
 bool readUtf16String(napi_env env, napi_value value, size_t maxUnits, std::wstring* output) {
@@ -347,14 +434,18 @@ AccessError duplicateRoot(uint64_t rootId, HANDLE* output) {
   HANDLE currentRoot = CreateFileW(found->second.path.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-  if (currentRoot == INVALID_HANDLE_VALUE) return AccessError::kRootChanged;
+  ScopedHandle currentRootHandle(currentRoot);
+  if (currentRootHandle.get() == INVALID_HANDLE_VALUE) return AccessError::kRootChanged;
   BY_HANDLE_FILE_INFORMATION currentIdentity{};
-  const AccessError currentChecked = verifyDirectory(currentRoot);
-  const bool sameRoot = currentChecked == AccessError::kOk && GetFileInformationByHandle(currentRoot, &currentIdentity) != FALSE &&
+  std::string currentCanonicalPathIdentityChecksum;
+  const AccessError currentChecked = verifyDirectory(currentRootHandle.get());
+  const bool sameRoot = currentChecked == AccessError::kOk &&
+      GetFileInformationByHandle(currentRootHandle.get(), &currentIdentity) != FALSE &&
       currentIdentity.dwVolumeSerialNumber == found->second.identity.dwVolumeSerialNumber &&
       currentIdentity.nFileIndexHigh == found->second.identity.nFileIndexHigh &&
-      currentIdentity.nFileIndexLow == found->second.identity.nFileIndexLow;
-  CloseHandle(currentRoot);
+      currentIdentity.nFileIndexLow == found->second.identity.nFileIndexLow &&
+      canonicalRootPathChecksum(currentRootHandle.get(), &currentCanonicalPathIdentityChecksum) &&
+      currentCanonicalPathIdentityChecksum == found->second.canonicalPathIdentityChecksum;
   if (!sameRoot) return AccessError::kRootChanged;
   HANDLE duplicate = INVALID_HANDLE_VALUE;
   if (!DuplicateHandle(GetCurrentProcess(), found->second.handle, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS))
@@ -600,6 +691,35 @@ napi_value adapterInfo(napi_env env, napi_callback_info) {
   return result;
 }
 
+bool createOpenWorkspaceRootResponse(napi_env env, uint64_t rootId,
+                                     const BY_HANDLE_FILE_INFORMATION& rootInfo,
+                                     const std::string& canonicalPathIdentityChecksum,
+                                     napi_value* output) {
+  napi_value rootIdValue;
+  napi_value capability;
+  napi_value rootIdentity;
+  napi_value volumeIdentity;
+  napi_value directoryIdentity;
+  napi_value checksum;
+  const uint64_t directoryFileIndex =
+      (static_cast<uint64_t>(rootInfo.nFileIndexHigh) << 32) | rootInfo.nFileIndexLow;
+  const std::string volumeIdentityValue = fixedWidthHex(rootInfo.dwVolumeSerialNumber, 8);
+  const std::string directoryIdentityValue = fixedWidthHex(directoryFileIndex, 16);
+  return napi_create_object(env, output) == napi_ok &&
+      napi_create_bigint_uint64(env, rootId, &rootIdValue) == napi_ok &&
+      napi_create_string_utf8(env, "available", NAPI_AUTO_LENGTH, &capability) == napi_ok &&
+      napi_create_object(env, &rootIdentity) == napi_ok &&
+      napi_create_string_utf8(env, volumeIdentityValue.c_str(), NAPI_AUTO_LENGTH, &volumeIdentity) == napi_ok &&
+      napi_create_string_utf8(env, directoryIdentityValue.c_str(), NAPI_AUTO_LENGTH, &directoryIdentity) == napi_ok &&
+      napi_create_string_utf8(env, canonicalPathIdentityChecksum.c_str(), NAPI_AUTO_LENGTH, &checksum) == napi_ok &&
+      napi_set_named_property(env, rootIdentity, "volumeIdentity", volumeIdentity) == napi_ok &&
+      napi_set_named_property(env, rootIdentity, "directoryIdentity", directoryIdentity) == napi_ok &&
+      napi_set_named_property(env, rootIdentity, "canonicalPathIdentityChecksum", checksum) == napi_ok &&
+      napi_set_named_property(env, *output, "rootId", rootIdValue) == napi_ok &&
+      napi_set_named_property(env, *output, "capability", capability) == napi_ok &&
+      napi_set_named_property(env, *output, "rootIdentity", rootIdentity) == napi_ok;
+}
+
 napi_value openWorkspaceRoot(napi_env env, napi_callback_info info) {
 #ifdef _WIN32
   try {
@@ -612,29 +732,35 @@ napi_value openWorkspaceRoot(napi_env env, napi_callback_info info) {
   if (!readUtf16String(env, argv[0], kMaxRootUtf16Units, &wide) || !isSafeRootPath(wide)) {
     throwAccessError(env, AccessError::kUnsafePath); return nullptr;
   }
-  HANDLE handle = CreateFileW(wide.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                              nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-  if (handle == INVALID_HANDLE_VALUE) { throwAccessError(env, AccessError::kNotFound); return nullptr; }
-  const AccessError checked = verifyDirectory(handle);
-  if (checked != AccessError::kOk) { CloseHandle(handle); throwAccessError(env, checked); return nullptr; }
+  ScopedHandle handle(CreateFileW(wide.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                  nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (handle.get() == INVALID_HANDLE_VALUE) { throwAccessError(env, AccessError::kNotFound); return nullptr; }
+  const AccessError checked = verifyDirectory(handle.get());
+  if (checked != AccessError::kOk) { throwAccessError(env, checked); return nullptr; }
   const uint64_t rootId = g_nextRoot.fetch_add(1);
+  BY_HANDLE_FILE_INFORMATION rootInfo{};
+  if (!GetFileInformationByHandle(handle.get(), &rootInfo)) {
+    throwAccessError(env, AccessError::kIo); return nullptr;
+  }
+  std::string canonicalPathIdentityChecksum;
+  if (!canonicalRootPathChecksum(handle.get(), &canonicalPathIdentityChecksum)) {
+    throwAccessError(env, AccessError::kIo); return nullptr;
+  }
+  napi_value result;
+  if (!createOpenWorkspaceRootResponse(env, rootId, rootInfo, canonicalPathIdentityChecksum, &result)) {
+    throwAccessError(env, AccessError::kIo); return nullptr;
+  }
   {
     std::scoped_lock lock(g_rootsMutex);
-    BY_HANDLE_FILE_INFORMATION identity{};
-    if (!GetFileInformationByHandle(handle, &identity)) { CloseHandle(handle); throwAccessError(env, AccessError::kIo); return nullptr; }
-    try {
-      g_roots.emplace(rootId, RootSession{handle, wide, identity});
-    } catch (...) {
-      CloseHandle(handle);
-      throw;
+    const bool inserted = g_roots.emplace(
+        rootId, RootSession{handle.get(), wide, rootInfo, canonicalPathIdentityChecksum}).second;
+    if (!inserted) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
     }
   }
-  napi_value result, id;
-  napi_create_object(env, &result);
-  napi_create_bigint_uint64(env, rootId, &id);
-  napi_set_named_property(env, result, "rootId", id);
-  napi_set_named_property(env, result, "capability", makeString(env, "available"));
+  handle.release();
   return result;
   } catch (const std::bad_alloc&) {
     throwAccessError(env, AccessError::kResourceLimit); return nullptr;

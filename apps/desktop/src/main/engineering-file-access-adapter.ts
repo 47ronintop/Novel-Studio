@@ -26,11 +26,13 @@ export interface EngineeringFileAccessAddonMetadata {
 }
 
 export interface EngineeringFileAccessAddon {
-  /**
-   * The only ABI surface B6 validates. Access method signatures remain private to the native
-   * adapter until the repository access-port contract is wired in a later task.
-   */
   readonly adapterInfo: () => unknown;
+  readonly openWorkspaceRoot: (rootPath: string) => unknown;
+  readonly closeWorkspaceRoot: (rootId: bigint) => unknown;
+  readonly listDirectory: (rootId: bigint, relativePath?: string) => unknown;
+  readonly readFile: (rootId: bigint, relativePath: string) => unknown;
+  readonly searchText: (rootId: bigint, query: string) => unknown;
+  readonly buildIndex: (rootId: bigint) => unknown;
 }
 
 export type EngineeringFileAccessAddonLoadResult =
@@ -152,11 +154,17 @@ function portUnavailable(
 }
 
 function isEngineeringFileAccessAddon(value: unknown): value is EngineeringFileAccessAddon {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    typeof (value as Record<string, unknown>)["adapterInfo"] === "function"
-  );
+  if (value === null || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return [
+    "adapterInfo",
+    "openWorkspaceRoot",
+    "closeWorkspaceRoot",
+    "listDirectory",
+    "readFile",
+    "searchText",
+    "buildIndex"
+  ].every((name) => typeof record[name] === "function");
 }
 
 function isEngineeringFileAccessAddonMetadata(

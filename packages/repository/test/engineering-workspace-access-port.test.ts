@@ -187,6 +187,37 @@ describe("EngineeringWorkspaceAccessPort", () => {
     });
   });
 
+  test("binds a session only to the identity returned by the opened native root and closes mismatches", async () => {
+    const addon = nativeAddon();
+    const port = createEngineeringWorkspaceAccessPort({ addon });
+
+    const mismatch = await port.open({
+      ...openRequest(),
+      rootBinding: {
+        ...openRequest().rootBinding,
+        directoryIdentity: "0000000000000022"
+      }
+    });
+    expect(mismatch).toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_WORKSPACE_ACCESS_INPUT_REJECTED" }
+    });
+    expect(addon.closeWorkspaceRoot).toHaveBeenCalledWith(17n);
+
+    const issued = await port.open({
+      rootPath: "C:\\workspace",
+      pathPolicy: defaultEngineeringPathPolicy,
+      issueRootBinding: (identity) => ({
+        ...openRequest().rootBinding,
+        ...identity,
+        rootBindingId: "issued_root_binding_01"
+      })
+    });
+    expect(issued).toMatchObject({ ok: true });
+    if (!issued.ok) throw new Error(issued.error.message);
+    expect(issued.value.binding.rootBindingId).toBe("issued_root_binding_01");
+  });
+
   test("closes the native root once and makes the session unavailable afterwards", async () => {
     const addon = nativeAddon();
     const port = createEngineeringWorkspaceAccessPort({ addon });
@@ -207,7 +238,15 @@ describe("EngineeringWorkspaceAccessPort", () => {
 function nativeAddon(): EngineeringWorkspaceAccessNativeAddon &
   Record<string, ReturnType<typeof vi.fn>> {
   return {
-    openWorkspaceRoot: vi.fn(() => ({ rootId: 17n, capability: "available" })),
+    openWorkspaceRoot: vi.fn(() => ({
+      rootId: 17n,
+      capability: "available",
+      rootIdentity: {
+        volumeIdentity: "d0c0b0a0",
+        directoryIdentity: "0000000000000011",
+        canonicalPathIdentityChecksum: "a".repeat(64)
+      }
+    })),
     closeWorkspaceRoot: vi.fn(() => true),
     listDirectory: vi.fn(() => []),
     readFile: vi.fn(() => Buffer.from("text", "utf8")),
@@ -224,8 +263,8 @@ function openRequest(overrides: Record<string, unknown> = {}) {
       rootBindingId: "root_binding_01",
       workspaceId: "workspace_01",
       workspaceKind: "engineeringWorkspace",
-      volumeIdentity: "volume_01",
-      directoryIdentity: "directory_01",
+      volumeIdentity: "d0c0b0a0",
+      directoryIdentity: "0000000000000011",
       canonicalPathIdentityChecksum: "a".repeat(64),
       pathPolicyRevision: "engineering-policy-01",
       issuedAt: "2026-08-07T00:00:00.000Z"

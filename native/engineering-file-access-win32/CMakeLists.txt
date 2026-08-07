@@ -19,7 +19,7 @@ endif()
 
 add_library(engineering_file_access MODULE src/engineering_file_access.cc)
 target_include_directories(engineering_file_access PRIVATE "${NODE_API_INCLUDE_DIR}")
-target_link_libraries(engineering_file_access PRIVATE "${NODE_LIBRARY}" normaliz)
+target_link_libraries(engineering_file_access PRIVATE "${NODE_LIBRARY}" normaliz bcrypt)
 target_compile_definitions(engineering_file_access PRIVATE NAPI_VERSION=8 NODE_GYP_MODULE_NAME=engineering_file_access)
 set_target_properties(engineering_file_access PROPERTIES PREFIX "" SUFFIX ".node" OUTPUT_NAME "engineering_file_access")
 target_compile_options(engineering_file_access PRIVATE /W4 /WX)
