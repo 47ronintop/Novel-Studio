@@ -6,7 +6,8 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   createEngineeringWorkspaceAccessPort,
-  type EngineeringWorkspaceAccessNativeAddon
+  type EngineeringWorkspaceAccessNativeAddon,
+  type EngineeringWorkspaceNativeRootIdentity
 } from "../src/engineering-workspace-access-port.js";
 
 describe("EngineeringWorkspaceAccessPort", () => {
@@ -207,7 +208,7 @@ describe("EngineeringWorkspaceAccessPort", () => {
     const issued = await port.open({
       rootPath: "C:\\workspace",
       pathPolicy: defaultEngineeringPathPolicy,
-      issueRootBinding: (identity) => ({
+      issueRootBinding: (identity: EngineeringWorkspaceNativeRootIdentity) => ({
         ...openRequest().rootBinding,
         ...identity,
         rootBindingId: "issued_root_binding_01"

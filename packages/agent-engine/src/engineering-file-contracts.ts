@@ -137,6 +137,8 @@ export interface EngineeringFileQualificationAttestationV1 {
   readonly artifactSha256: string | null;
   readonly artifactManifestSha256: string | null;
   readonly probeReportChecksum: string | null;
+  /** Available Main-issued evidence expires with its fresh packaged probe; unavailable is null. */
+  readonly expiresAt: string | null;
   readonly failureReasons: readonly EngineeringFileQualificationFailureReason[];
   readonly checkedAt: string;
   readonly attestationChecksum: string;
@@ -273,6 +275,7 @@ export function createUnavailableEngineeringFileQualificationAttestation(input: 
     artifactSha256: null,
     artifactManifestSha256: null,
     probeReportChecksum: null,
+    expiresAt: null,
     failureReasons,
     checkedAt: input.checkedAt
   };
@@ -312,6 +315,7 @@ export function validateEngineeringFileQualificationAttestation(
     ) ||
     !isCanonicalFailureReasonList(failureReasons) ||
     !isCanonicalUtcTimestamp(value["checkedAt"]) ||
+    (value["expiresAt"] !== null && !isCanonicalUtcTimestamp(value["expiresAt"])) ||
     !isSha256(value["attestationChecksum"])
   ) {
     return false;
@@ -326,6 +330,7 @@ export function validateEngineeringFileQualificationAttestation(
       value["artifactSha256"] === null &&
       value["artifactManifestSha256"] === null &&
       value["probeReportChecksum"] === null &&
+      value["expiresAt"] === null &&
       failureReasons.length > 0 &&
       (isEngineeringFileSupportedTarget(value["target"])
         ? !failureReasons.includes("unsupported_platform")
@@ -348,7 +353,9 @@ export function validateEngineeringFileQualificationAttestation(
     (capabilities["recovery"] !== "available" || capabilities["mutation"] === "available") &&
     isSha256(value["artifactSha256"]) &&
     isSha256(value["artifactManifestSha256"]) &&
-    isSha256(value["probeReportChecksum"])
+    isSha256(value["probeReportChecksum"]) &&
+    typeof value["expiresAt"] === "string" &&
+    Date.parse(value["expiresAt"]) > Date.parse(value["checkedAt"])
   );
 }
 
@@ -386,6 +393,7 @@ const attestationKeys = [
   "artifactSha256",
   "artifactManifestSha256",
   "probeReportChecksum",
+  "expiresAt",
   "failureReasons",
   "checkedAt",
   "attestationChecksum"

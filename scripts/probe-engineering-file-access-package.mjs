@@ -1,25 +1,20 @@
-import { execFile } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
-import { promisify } from "node:util";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
-const run = promisify(execFile);
 const require = createRequire(import.meta.url);
-const root = process.cwd();
-const dist = join(root, "native", "engineering-file-access-win32", "dist", "win32-x64");
-const paths = {
-  addon: join(dist, "engineering_file_access.node"),
-  manifest: join(dist, "engineering_file_access.manifest.json"),
-  signature: join(dist, "engineering_file_access.manifest.p7s")
-};
-const reportPath =
-  process.env.ENGINEERING_FILE_ACCESS_PROBE_REPORT ??
-  join(dist, "engineering_file_access.probe.json");
+const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const developmentDist = join(
+  sourceRoot,
+  "native",
+  "engineering-file-access-win32",
+  "dist",
+  "win32-x64"
+);
 const protections = [
   "rootRelativeTraversal",
   "noFollowTraversal",
@@ -50,20 +45,74 @@ const traversalPaths = [
   "\\\\?\\C:\\engineering-file-access-probe-outside.txt"
 ];
 
+/**
+ * @typedef {object} EngineeringFileAccessPackageProbeRequest
+ * @property {string} artifactPath Absolute path to the exact installed `.node` artifact.
+ * @property {string} manifestPath Absolute path to that artifact's manifest.
+ * @property {string} signaturePath Absolute path to that manifest's detached CMS signature.
+ * @property {string} reportPath Absolute Main-owned output path. It must not be an artifact input.
+ * @property {"development" | "production"} [packageKind] Development remains the CI default.
+ * @property {string} [evidencePath] Absolute positive/negative protection evidence path for a production probe.
+ */
+
+/**
+ * @typedef {object} EngineeringFileAccessPackageProbeResult
+ * @property {string} reportPath
+ * @property {"development" | "production"} packageKind
+ * @property {string} artifactSha256
+ * @property {string} artifactManifestSha256
+ * @property {string | null} artifactManifestSignatureSha256
+ * @property {"available" | "unavailable"} readOnlyAvailability
+ * @property {object} developmentProbe
+ * @property {object | undefined} protectionEvidence
+ * @property {object} report
+ */
+
 if (isCliInvocation()) await main();
 
 async function main() {
-  await Promise.all([stat(paths.addon), stat(paths.manifest)]);
-  const signaturePresent = await stat(paths.signature)
+  const result = await runEngineeringFileAccessPackageProbe(cliProbeRequest());
+  console.log(
+    JSON.stringify({
+      reportPath: result.reportPath,
+      productionQualified: false,
+      reason: result.report.reason,
+      packageKind: result.packageKind,
+      readOnlyAvailability: result.readOnlyAvailability
+    })
+  );
+}
+
+/**
+ * Runs a fresh B6 ABI/protection probe for the exact files supplied by Electron Main.
+ *
+ * This runner deliberately does not verify Authenticode, CMS, publishers, or trust stores and
+ * never grants production qualification. Main must independently verify the fixed installed
+ * artifact set before it decides whether this fresh observation can contribute to an attestation.
+ * The serialized report is diagnostic evidence only; it is not read as package authority.
+ *
+ * @param {EngineeringFileAccessPackageProbeRequest} input
+ * @returns {Promise<EngineeringFileAccessPackageProbeResult>}
+ */
+export async function runEngineeringFileAccessPackageProbe(input) {
+  const request = createEngineeringFileAccessPackageProbeRequest(input);
+  await Promise.all([stat(request.artifactPath), stat(request.manifestPath)]);
+  const signaturePresent = await stat(request.signaturePath)
     .then(() => true)
     .catch(() => false);
+  if (request.packageKind === "production" && !signaturePresent) {
+    throw new Error("production probe requires the explicit installed manifest signature");
+  }
   const digest = async (path) =>
     createHash("sha256")
       .update(await readFile(path))
       .digest("hex");
-  const [addonSha, manifestSha] = await Promise.all([digest(paths.addon), digest(paths.manifest)]);
-  const signatureSha = signaturePresent ? await digest(paths.signature) : null;
-  const manifest = JSON.parse(await readFile(paths.manifest, "utf8"));
+  const [addonSha, manifestSha] = await Promise.all([
+    digest(request.artifactPath),
+    digest(request.manifestPath)
+  ]);
+  const signatureSha = signaturePresent ? await digest(request.signaturePath) : null;
+  const manifest = JSON.parse(await readFile(request.manifestPath, "utf8"));
   if (
     manifest.target !== "win32-x64" ||
     manifest.adapterId !== "novel_studio_engineering_file_access" ||
@@ -73,59 +122,52 @@ async function main() {
     throw new Error("native manifest or addon digest mismatch");
   }
 
-  const verification = await verifyProductionEvidence(manifest, signaturePresent);
-  const addon = require(paths.addon);
+  const addon = require(request.artifactPath);
   const readOnlyAvailability = readOnlyAvailabilityFor(manifest);
   assertAdapterInfo(addon.adapterInfo?.(), readOnlyAvailability);
 
-  if (!verification.production) {
+  if (request.packageKind === "development") {
     assertUnsignedDevelopmentArtifact(manifest, signaturePresent, readOnlyAvailability);
     const developmentProbe =
       readOnlyAvailability === "available"
         ? await probeReadOnlyAbi(addon)
         : { status: "unavailable", reason: "manifest_read_only_capabilities_unavailable" };
-    await writeFile(
-      reportPath,
-      `${JSON.stringify(
-        {
-          schemaVersion: "development-1.1",
-          adapterId: manifest.adapterId,
-          target: manifest.target,
-          packageKind: "development",
-          productionQualified: false,
-          capabilities: developmentCapabilities(readOnlyAvailability),
-          developmentProbe,
-          reason: verification.reason,
-          artifactSha256: addonSha,
-          artifactManifestSha256: manifestSha,
-          artifactManifestSignatureSha256: signatureSha
-        },
-        null,
-        2
-      )}\n`,
-      "utf8"
-    );
-    console.log(
-      JSON.stringify({
-        reportPath,
-        productionQualified: false,
-        reason: verification.reason,
-        readOnlyAvailability
-      })
-    );
-    return;
+    const report = {
+      schemaVersion: "development-1.1",
+      adapterId: manifest.adapterId,
+      target: manifest.target,
+      packageKind: "development",
+      productionQualified: false,
+      capabilities: developmentCapabilities(readOnlyAvailability),
+      developmentProbe,
+      reason: "unsigned_development_artifact",
+      artifactSha256: addonSha,
+      artifactManifestSha256: manifestSha,
+      artifactManifestSignatureSha256: signatureSha
+    };
+    await writeProbeReport(request.reportPath, report);
+    return Object.freeze({
+      reportPath: request.reportPath,
+      packageKind: request.packageKind,
+      artifactSha256: addonSha,
+      artifactManifestSha256: manifestSha,
+      artifactManifestSignatureSha256: signatureSha,
+      readOnlyAvailability,
+      developmentProbe,
+      protectionEvidence: undefined,
+      report
+    });
   }
 
   if (readOnlyAvailability !== "available") {
     throw new Error("production probe requires all B6 read-only capabilities to be available");
   }
-  await probeReadOnlyAbi(addon);
-  const evidencePath = process.env.ENGINEERING_FILE_ACCESS_PROBE_EVIDENCE;
-  if (!evidencePath)
+  const developmentProbe = await probeReadOnlyAbi(addon);
+  if (!request.evidencePath)
     throw new Error(
-      "Production probe requires ENGINEERING_FILE_ACCESS_PROBE_EVIDENCE from the actual package protection and fault runner"
+      "production probe requires explicit evidencePath from the actual package protection and fault runner"
     );
-  const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+  const evidence = JSON.parse(await readFile(request.evidencePath, "utf8"));
   if (
     !hasExactMap(evidence.positiveProtections, protections, "passed") ||
     !hasExactMap(evidence.negativeControls, controls, "canary_exposed")
@@ -136,15 +178,16 @@ async function main() {
   }
   const now = new Date();
   const report = {
-    schemaVersion: "1.0",
+    schemaVersion: "fresh-probe-1.0",
+    authority: "probe_runner_diagnostic_only",
     adapterId: "novel_studio_engineering_file_access",
     target: "win32-x64",
     packageKind: "production",
+    productionQualified: false,
+    signatureVerification: "not_performed_by_probe",
     artifactSha256: addonSha,
     artifactManifestSha256: manifestSha,
     artifactManifestSignatureSha256: signatureSha,
-    artifactSignatureVerification: "trusted_publisher",
-    manifestSignatureVerification: "trusted_publisher",
     digestVerification: "match",
     publisherPolicyChecksum: manifest.publisherPolicyChecksum,
     generatedAt: now.toISOString(),
@@ -153,8 +196,96 @@ async function main() {
     negativeControls: evidence.negativeControls
   };
   report.reportChecksum = sha256(stable(report));
+  await writeProbeReport(request.reportPath, report);
+  return Object.freeze({
+    reportPath: request.reportPath,
+    packageKind: request.packageKind,
+    artifactSha256: addonSha,
+    artifactManifestSha256: manifestSha,
+    artifactManifestSignatureSha256: signatureSha,
+    readOnlyAvailability,
+    developmentProbe,
+    protectionEvidence: evidence,
+    report
+  });
+}
+
+/**
+ * Validates the ESM API request. The paths are deliberately absolute: callers cannot redirect a
+ * packaged probe through the source checkout or their current working directory.
+ *
+ * @param {EngineeringFileAccessPackageProbeRequest} input
+ * @returns {Readonly<Required<EngineeringFileAccessPackageProbeRequest>>}
+ */
+export function createEngineeringFileAccessPackageProbeRequest(input) {
+  if (!input || typeof input !== "object") throw new Error("probe request must be an object");
+  const packageKind = input.packageKind ?? "development";
+  if (packageKind !== "development" && packageKind !== "production") {
+    throw new Error("probe request packageKind must be development or production");
+  }
+  const request = {
+    artifactPath: input.artifactPath,
+    manifestPath: input.manifestPath,
+    signaturePath: input.signaturePath,
+    reportPath: input.reportPath,
+    packageKind,
+    evidencePath: input.evidencePath
+  };
+  for (const [name, path] of Object.entries(request)) {
+    if (name === "packageKind" || (name === "evidencePath" && path === undefined)) continue;
+    if (typeof path !== "string" || !isAbsolute(path)) {
+      throw new Error(`probe request ${name} must be an absolute path`);
+    }
+  }
+  if (
+    request.reportPath === request.artifactPath ||
+    request.reportPath === request.manifestPath ||
+    request.reportPath === request.signaturePath
+  ) {
+    throw new Error("probe request reportPath must be separate from installed artifact inputs");
+  }
+  if (packageKind === "production" && request.evidencePath === undefined) {
+    throw new Error("production probe request requires an absolute evidencePath");
+  }
+  return Object.freeze(request);
+}
+
+function cliProbeRequest() {
+  const packageKind = process.env.ENGINEERING_FILE_ACCESS_PROBE_PACKAGE_KIND ?? "development";
+  if (packageKind === "production") {
+    for (const name of [
+      "ENGINEERING_FILE_ACCESS_PROBE_ARTIFACT",
+      "ENGINEERING_FILE_ACCESS_PROBE_MANIFEST",
+      "ENGINEERING_FILE_ACCESS_PROBE_SIGNATURE",
+      "ENGINEERING_FILE_ACCESS_PROBE_REPORT",
+      "ENGINEERING_FILE_ACCESS_PROBE_EVIDENCE"
+    ]) {
+      if (!process.env[name]) {
+        throw new Error(`production CLI probe requires ${name}; it has no source-tree defaults`);
+      }
+    }
+  }
+  return createEngineeringFileAccessPackageProbeRequest({
+    artifactPath:
+      process.env.ENGINEERING_FILE_ACCESS_PROBE_ARTIFACT ??
+      join(developmentDist, "engineering_file_access.node"),
+    manifestPath:
+      process.env.ENGINEERING_FILE_ACCESS_PROBE_MANIFEST ??
+      join(developmentDist, "engineering_file_access.manifest.json"),
+    signaturePath:
+      process.env.ENGINEERING_FILE_ACCESS_PROBE_SIGNATURE ??
+      join(developmentDist, "engineering_file_access.manifest.p7s"),
+    reportPath:
+      process.env.ENGINEERING_FILE_ACCESS_PROBE_REPORT ??
+      join(developmentDist, "engineering_file_access.probe.json"),
+    packageKind,
+    evidencePath: process.env.ENGINEERING_FILE_ACCESS_PROBE_EVIDENCE
+  });
+}
+
+async function writeProbeReport(reportPath, report) {
+  await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  console.log(JSON.stringify({ reportPath, productionQualified: true, artifactSha256: addonSha }));
 }
 
 export function readOnlyAvailabilityFor(manifest) {
@@ -288,47 +419,6 @@ function developmentCapabilities(readOnlyAvailability) {
     mutation: "unavailable",
     recovery: "unavailable"
   };
-}
-
-async function verifyProductionEvidence(manifest, signaturePresent) {
-  if (!signaturePresent) {
-    return { production: false, reason: "unsigned_or_untrusted_development_artifact" };
-  }
-  if (
-    process.platform !== "win32" ||
-    !process.env.CMS_TRUST_STORE ||
-    manifest.signing?.authenticode !== "trusted_publisher" ||
-    manifest.signing?.detachedCms !== "trusted_publisher"
-  ) {
-    return { production: false, reason: "unsigned_or_untrusted_development_artifact" };
-  }
-  const command =
-    "if ((Get-AuthenticodeSignature -LiteralPath $env:ENGINEERING_FILE_ACCESS_ADDON).Status -ne 'Valid') { exit 1 }";
-  try {
-    await run("powershell.exe", ["-NoProfile", "-Command", command], {
-      env: { ...process.env, ENGINEERING_FILE_ACCESS_ADDON: paths.addon }
-    });
-    await run("openssl", [
-      "cms",
-      "-verify",
-      "-binary",
-      "-inform",
-      "DER",
-      "-in",
-      paths.signature,
-      "-content",
-      paths.manifest,
-      "-CAfile",
-      process.env.CMS_TRUST_STORE,
-      "-purpose",
-      "any",
-      "-out",
-      "NUL"
-    ]);
-    return { production: true };
-  } catch {
-    return { production: false, reason: "signature_or_trust_verification_failed" };
-  }
 }
 
 function assertAdapterInfo(info, readOnlyAvailability) {

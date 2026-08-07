@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { join } from "node:path";
 
 import { ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT } from "./engineering-file-access-qualification.js";
 
@@ -79,8 +80,7 @@ export function createEngineeringFileAccessAddonLoader(options?: {
   readonly addonPath?: string;
   readonly loadModule?: (path: string) => unknown;
 }): EngineeringFileAccessAddonLoader {
-  const addonPath =
-    options?.addonPath ?? ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.candidateArtifact;
+  const addonPath = options?.addonPath ?? resolveEngineeringFileAccessAddonPath();
   const loadModule = options?.loadModule ?? createRequire(import.meta.url);
   let cached: EngineeringFileAccessAddonLoadResult | undefined;
 
@@ -90,6 +90,26 @@ export function createEngineeringFileAccessAddonLoader(options?: {
       return cached;
     }
   });
+}
+
+/**
+ * Development/probe builds use the source-tree artifact; packaged production builds load the
+ * same artifact from Electron's asar-unpacked location. This selects a path only after Main's
+ * separate qualification service has accepted the installed artifact set.
+ */
+export function resolveEngineeringFileAccessAddonPath(
+  resourcesPath: string | undefined = (
+    process as NodeJS.Process & { readonly resourcesPath?: string }
+  ).resourcesPath
+): string {
+  if (resourcesPath === undefined) {
+    return ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.candidateArtifact;
+  }
+  return join(
+    resourcesPath,
+    "app.asar.unpacked",
+    ...ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.candidateArtifact.split("/")
+  );
 }
 
 export function createEngineeringWorkspaceAccessPort(options: {

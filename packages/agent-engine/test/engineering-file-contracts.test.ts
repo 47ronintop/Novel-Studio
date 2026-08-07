@@ -302,6 +302,7 @@ function availableAttestation(report: EngineeringFileProbeReportV1) {
     artifactSha256: report.artifactSha256,
     artifactManifestSha256: report.artifactManifestSha256,
     probeReportChecksum: report.reportChecksum,
+    expiresAt: report.expiresAt,
     failureReasons: [] as const,
     checkedAt: "2026-08-02T00:30:00.000Z"
   };

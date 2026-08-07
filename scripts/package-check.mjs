@@ -346,10 +346,110 @@ async function checkEngineeringFileAccessPackagingContract() {
     );
   }
   if (candidateCount === engineeringFileAccessArtifacts.length) {
-    failures.push(
-      "Engineering native candidate exists, but Batch 0 has no packaged positive/negative probe authority."
+    await checkSignedEngineeringFileAccessCandidate(
+      engineeringFileAccessArtifacts.map((artifact) => join(root, artifact))
     );
   }
+}
+
+/**
+ * This is package-shape validation, not a trust decision: Main later verifies both signer pins,
+ * the detached CMS, every installed digest, and a fresh add-on probe before B6 becomes available.
+ */
+async function checkSignedEngineeringFileAccessCandidate([addonPath, manifestPath, signaturePath]) {
+  let addon;
+  let manifest;
+  let signature;
+  try {
+    [addon, manifest, signature] = await Promise.all([
+      readFile(addonPath),
+      readFile(manifestPath, "utf8").then(JSON.parse),
+      readFile(signaturePath)
+    ]);
+  } catch {
+    failures.push("Engineering native candidate must contain a readable signed B6 manifest.");
+    return;
+  }
+
+  if (signature.byteLength === 0 || !isSignedBatch6Manifest(manifest, sha256(addon))) {
+    failures.push(
+      "Engineering native candidate must use the signed B6 manifest with complete positive/negative probe evidence."
+    );
+  }
+}
+
+function isSignedBatch6Manifest(value, addonSha256) {
+  if (!isRecord(value)) return false;
+  const artifact = value.artifact;
+  const signing = value.signing;
+  const eligibility = value.eligibility;
+  const qualification = value.qualification;
+  return (
+    value.adapterId === "novel_studio_engineering_file_access" &&
+    value.target === "win32-x64" &&
+    typeof value.publisherPolicyChecksum === "string" &&
+    /^[a-f0-9]{64}$/iu.test(value.publisherPolicyChecksum) &&
+    isRecord(artifact) &&
+    artifact.sha256 === addonSha256 &&
+    isRecord(signing) &&
+    signing.authenticode === "trusted_publisher" &&
+    signing.detachedCms === "trusted_publisher" &&
+    signing.developmentUnsigned === undefined &&
+    hasExactValues(eligibility, {
+      batch: "6",
+      root: "available",
+      access: "available",
+      read: "available",
+      index: "available",
+      mutation: "unavailable",
+      recovery: "unavailable"
+    }) &&
+    isRecord(qualification) &&
+    qualification.productionQualified === true &&
+    hasExactArray(qualification.eligibleCapabilities, ["root", "access", "read", "index"]) &&
+    hasExactArray(qualification.unavailableCapabilities, ["mutation", "recovery"]) &&
+    isRecord(qualification.probeEvidence) &&
+    hasExactValues(qualification.probeEvidence.positiveProtections, {
+      rootRelativeTraversal: "passed",
+      noFollowTraversal: "passed",
+      rawByteIdentity: "passed",
+      receiptBinding: "passed",
+      durability: "passed",
+      recoveryRootBinding: "passed"
+    }) &&
+    hasExactValues(qualification.probeEvidence.negativeControls, {
+      rootRelativeDisabled: "canary_exposed",
+      noFollowDisabled: "canary_exposed",
+      rawByteIdentityDisabled: "canary_exposed",
+      receiptBindingDisabled: "canary_exposed",
+      durabilityDisabled: "canary_exposed",
+      recoveryRootBindingDisabled: "canary_exposed"
+    })
+  );
+}
+
+function hasExactValues(value, expected) {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === Object.keys(expected).length &&
+    Object.entries(expected).every(([key, expectedValue]) => value[key] === expectedValue)
+  );
+}
+
+function hasExactArray(value, expected) {
+  return (
+    Array.isArray(value) &&
+    value.length === expected.length &&
+    value.every((item, index) => item === expected[index])
+  );
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 async function checkAgentAutonomyPrerequisites() {

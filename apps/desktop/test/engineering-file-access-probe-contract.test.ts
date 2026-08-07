@@ -7,6 +7,7 @@ import { describe, expect, test } from "vitest";
 
 // @ts-expect-error The probe is executable JavaScript and intentionally has no desktop type surface.
 import {
+  createEngineeringFileAccessPackageProbeRequest,
   probeReadOnlyAbi,
   readOnlyAvailabilityFor
 } from "../../../scripts/probe-engineering-file-access-package.mjs";
@@ -16,6 +17,42 @@ const fixturePath = fileURLToPath(
 );
 
 describe("engineering file access development probe contract", () => {
+  test("requires Main to provide absolute installed inputs and a distinct output path", () => {
+    const request = createEngineeringFileAccessPackageProbeRequest({
+      artifactPath: "C:\\Program Files\\Novel Studio\\engineering_file_access.node",
+      manifestPath: "C:\\Program Files\\Novel Studio\\engineering_file_access.manifest.json",
+      signaturePath: "C:\\Program Files\\Novel Studio\\engineering_file_access.manifest.p7s",
+      reportPath: "C:\\Users\\main\\AppData\\Local\\Temp\\engineering-file-access.probe.json",
+      packageKind: "production",
+      evidencePath: "C:\\Users\\main\\AppData\\Local\\Temp\\engineering-file-access.evidence.json"
+    });
+
+    expect(request).toMatchObject({
+      artifactPath: "C:\\Program Files\\Novel Studio\\engineering_file_access.node",
+      packageKind: "production",
+      reportPath: "C:\\Users\\main\\AppData\\Local\\Temp\\engineering-file-access.probe.json"
+    });
+    expect(Object.isFrozen(request)).toBe(true);
+    expect(() =>
+      createEngineeringFileAccessPackageProbeRequest({
+        ...request,
+        artifactPath: "native/engineering_file_access.node"
+      })
+    ).toThrow("artifactPath must be an absolute path");
+    expect(() =>
+      createEngineeringFileAccessPackageProbeRequest({
+        ...request,
+        evidencePath: undefined
+      })
+    ).toThrow("production probe request requires an absolute evidencePath");
+    expect(() =>
+      createEngineeringFileAccessPackageProbeRequest({
+        ...request,
+        reportPath: request.artifactPath
+      })
+    ).toThrow("reportPath must be separate from installed artifact inputs");
+  });
+
   test("exercises the read-only ABI with a deterministic ordinary UTF-8 read and safe traversal canaries", async () => {
     const fixture = normalizeProbeFixture(await readFile(fixturePath, "utf8"));
     const adapter = hardenedReadOnlyFixtureAdapter(fixture);
