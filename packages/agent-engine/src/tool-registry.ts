@@ -492,7 +492,16 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
       ["create_directory", "propose_directory_create"]
     ] as const) {
       if (workspaceOperations.has(operation)) {
-        mutations.push(coreTool(name, "file_tool", "propose", { writeOperation: operation }));
+        mutations.push(
+          coreTool(name, "file_tool", "propose", {
+            writeOperation: operation,
+            ...(!engineering && operation === "move_file"
+              ? { inputSchema: v2FileMoveSchema() }
+              : !engineering && operation === "delete_file"
+                ? { inputSchema: v2FileDeleteSchema() }
+                : {})
+          })
+        );
       }
     }
   }
@@ -1326,6 +1335,17 @@ const STABLE_CHAPTER_REF_PATTERN = "^chapter:[^\\s]+$";
 const STABLE_FILE_REF_PATTERN = "^file:[^\\s]+$";
 
 function strictStableRefObject(key: string, kind?: "chapter" | "file"): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [key],
+    properties: {
+      [key]: stableRefSchema(kind)
+    }
+  };
+}
+
+function stableRefSchema(kind?: "chapter" | "file"): JsonObject {
   const pattern =
     kind === "chapter"
       ? STABLE_CHAPTER_REF_PATTERN
@@ -1333,17 +1353,10 @@ function strictStableRefObject(key: string, kind?: "chapter" | "file"): JsonObje
         ? STABLE_FILE_REF_PATTERN
         : STABLE_RESOURCE_REF_PATTERN;
   return {
-    type: "object",
-    additionalProperties: false,
-    required: [key],
-    properties: {
-      [key]: {
-        type: "string",
-        minLength: 6,
-        maxLength: 1036,
-        pattern
-      }
-    }
+    type: "string",
+    minLength: 6,
+    maxLength: 1036,
+    pattern
   };
 }
 
@@ -1446,10 +1459,10 @@ function v2CreateSchema(kind?: "chapter" | "story_bible" | "file"): JsonObject {
     file: {
       type: "object",
       additionalProperties: false,
-      required: ["kind", "path", "content"],
+      required: ["kind", "ref", "content"],
       properties: {
         kind: { const: "file" },
-        path: { type: "string", minLength: 1, maxLength: 1024 },
+        ref: stableRefSchema("file"),
         content: { type: "string", maxLength: 10_485_760 },
         dependsOn
       }
@@ -1458,6 +1471,33 @@ function v2CreateSchema(kind?: "chapter" | "story_bible" | "file"): JsonObject {
   return kind === undefined
     ? { oneOf: [variants.chapter, variants.story_bible, variants.file] }
     : variants[kind];
+}
+
+function v2FileMoveSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["sourceRef", "targetRef", "baseHash"],
+    properties: {
+      sourceRef: stableRefSchema("file"),
+      targetRef: stableRefSchema("file"),
+      baseHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      dependsOn: dependencyIdArraySchema()
+    }
+  };
+}
+
+function v2FileDeleteSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["ref", "baseHash"],
+    properties: {
+      ref: stableRefSchema("file"),
+      baseHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      dependsOn: dependencyIdArraySchema()
+    }
+  };
 }
 
 function renameChapterSchema(): JsonObject {

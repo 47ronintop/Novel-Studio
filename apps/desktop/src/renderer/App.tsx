@@ -138,6 +138,7 @@ export function App() {
     useStandaloneConversationSelection(persistUserPreferences);
   const fileEditorRuntime = useWorkspaceFileEditorRuntime({
     api,
+    agentRunBridge,
     activeCreativeProjectId,
     activeCreativeWorkspaceId,
     creativeExpandedPathIds: shellState.creativeFileExpandedPathIds,

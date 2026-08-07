@@ -155,6 +155,18 @@ export interface ProposeOperationInput {
   readonly operation: ChangeSetOperation;
 }
 
+/**
+ * The four ordinary creative-file effects share one Change Set orchestration entry point. The
+ * effect-specific target/operation validators remain in the existing methods below; this union
+ * only prevents callers from creating parallel proposal sessions for each effect.
+ */
+export type ProposeWorkspaceFileMutationInput =
+  | { readonly kind: "replace_file"; readonly file: ProposeFileWriteInput }
+  | {
+      readonly kind: "create_file" | "move_file" | "delete_file";
+      readonly operation: ProposeOperationInput;
+    };
+
 export interface ProposeOperationBatchInput {
   readonly runId: string;
   readonly projectId: string;
@@ -199,6 +211,9 @@ export interface ChangeSetSession {
   ): Result<void, UnifiedError>;
   proposeChapterWrite(input: ProposeChapterWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
   proposeFileWrite(input: ProposeFileWriteInput): Promise<Result<ChangeSet, UnifiedError>>;
+  proposeWorkspaceFileMutation?(
+    input: ProposeWorkspaceFileMutationInput
+  ): Promise<Result<ChangeSet, UnifiedError>>;
   proposeStoryBibleWrite(
     input: ProposeStoryBibleWriteInput
   ): Promise<Result<ChangeSet, UnifiedError>>;
@@ -964,6 +979,20 @@ export function createChangeSetSession(options: CreateChangeSetSessionOptions): 
         );
       }
       return propose(input, target.value);
+    },
+
+    async proposeWorkspaceFileMutation(input) {
+      if (input.kind === "replace_file") {
+        return this.proposeFileWrite(input.file);
+      }
+      if (input.operation.operation.kind !== input.kind) {
+        return failure(
+          "CHANGE_SET_OPERATION_KIND_MISMATCH",
+          "The workspace file mutation effect did not match its Change Set operation.",
+          "Refresh the proposal and retry the same operation."
+        );
+      }
+      return this.proposeOperation(input.operation);
     },
 
     async proposeStoryBibleWrite(input) {

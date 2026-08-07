@@ -27,6 +27,74 @@ import {
 } from "../src/agent-write-authorization.js";
 
 describe("Change Set application session", () => {
+  test("routes replace/create/move/delete through one parameterized workspace mutation entry point", async () => {
+    const persisted: ChangeSet[] = [];
+    const session = createChangeSetSession({
+      port: targetPort({ chapter: () => "unused", file: () => "before", persisted }),
+      createChangeSetId: (() => {
+        let index = 0;
+        return () => `workspace-mutation-${++index}`;
+      })(),
+      createHunkId: (() => {
+        let index = 0;
+        return () => `workspace-hunk-${++index}`;
+      })(),
+      now: () => "2099-01-01T00:00:00.000Z"
+    });
+    const base = {
+      runId: "run-workspace-mutations",
+      projectId: "project-01",
+      checkpointId: "checkpoint-workspace-mutations",
+      contextSnapshotId: "context-workspace-mutations"
+    };
+    const checksum = sha256("before");
+
+    const replace = await session.proposeWorkspaceFileMutation?.({
+      kind: "replace_file",
+      file: {
+        ...base,
+        path: "notes/outline.md",
+        baseHash: checksum,
+        range: { unit: "character", start: 0, end: 6 },
+        replacement: "after"
+      }
+    });
+    expect(replace).toMatchObject({ ok: true });
+
+    for (const [kind, operation] of [
+      ["create_file", { kind: "create_file", relativePath: "notes/new.md", content: "new" }],
+      [
+        "move_file",
+        {
+          kind: "move_file",
+          sourcePath: "notes/file.md",
+          targetPath: "notes/moved.md",
+          sourceChecksum: checksum
+        }
+      ],
+      [
+        "delete_file",
+        { kind: "delete_file", relativePath: "notes/obsolete.md", baseChecksum: checksum }
+      ]
+    ] as const) {
+      const result = await session.proposeWorkspaceFileMutation?.({
+        kind,
+        operation: {
+          ...base,
+          writePolicy: "write_before_confirmation",
+          toolCallId: `tool-${kind}`,
+          operation: {
+            ...operation,
+            operationId: `operation-${kind}`,
+            toolCallIdempotencyKey: `tool-${kind}`
+          }
+        }
+      });
+      expect(result).toMatchObject({ ok: true });
+    }
+    expect(persisted).toHaveLength(4);
+  });
+
   test("uses a one-time Main-bound semantic checksum in preference to the static fallback", async () => {
     const persisted: ChangeSet[] = [];
     const session = createChangeSetSession({

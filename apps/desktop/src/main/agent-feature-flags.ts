@@ -4,6 +4,13 @@ import {
   hasMainOwnedEngineeringFileQualification,
   mainOwnedEngineeringFileQualificationRevision
 } from "./engineering-file-access-qualification.js";
+import {
+  CREATIVE_FILE_OPERATIONS,
+  hasMainOwnedCreativeFileOperationQualification,
+  creativeFileOperationQualificationRevision,
+  type CreativeFileOperation,
+  type CreativeFileOperationQualificationV1
+} from "./creative-file-operation-qualification.js";
 import { isMainOwnedApprovalSurfaceQualification } from "./approval-surface-qualification.js";
 import type { TrustedApprovalSurfaceQualificationV1 } from "./agent-approval-confirmation.js";
 
@@ -125,23 +132,59 @@ export function createProductionAgentFeatureFlags(
   overrides: Partial<AgentFeatureFlags>,
   approvalQualification: TrustedApprovalSurfaceQualificationV1 | undefined,
   engineeringQualification?: EngineeringFileQualificationAttestationV1,
-  now: () => string = () => new Date().toISOString()
+  now: () => string = () => new Date().toISOString(),
+  creativeQualifications?: Readonly<
+    Partial<Record<CreativeFileOperation, CreativeFileOperationQualificationV1>>
+  >
 ): AgentFeatureFlags {
-  const qualified = hasCurrentMainOwnedApprovalSurfaceQualification(approvalQualification, now());
+  const observedAt = now();
+  const qualified = hasCurrentMainOwnedApprovalSurfaceQualification(
+    approvalQualification,
+    observedAt
+  );
+  const creativeQualified = (operation: CreativeFileOperation): boolean =>
+    qualified &&
+    hasMainOwnedCreativeFileOperationQualification(
+      creativeQualifications?.[operation],
+      operation,
+      observedAt
+    );
   const flags = createAgentFeatureFlags(
     {
       ...overrides,
       approvalBindingV2: qualified && overrides.approvalBindingV2 === true,
-      writingDomainCrudV2: qualified && overrides.writingDomainCrudV2 === true
+      writingDomainCrudV2: qualified && overrides.writingDomainCrudV2 === true,
+      creativeTrustedReplaceV2:
+        creativeQualified("replace_file") && overrides.creativeTrustedReplaceV2 === true,
+      creativeFileCreateV2:
+        creativeQualified("create_file") && overrides.creativeFileCreateV2 === true,
+      creativeFileMoveV2: creativeQualified("move_file") && overrides.creativeFileMoveV2 === true,
+      creativeFileDeleteV2:
+        creativeQualified("delete_file") && overrides.creativeFileDeleteV2 === true
     },
     engineeringQualification
   );
+  const creativeRevision =
+    creativeQualifications === undefined
+      ? ""
+      : `:creative-qualification:${creativeQualificationRevision(creativeQualifications)}`;
   return Object.freeze({
     ...flags,
     revision: `${flags.revision}:approval-surface:${
       qualified ? approvalQualification.attestationChecksum : "unavailable"
-    }`
+    }${creativeRevision}`
   });
+}
+
+function creativeQualificationRevision(
+  qualifications:
+    | Readonly<Partial<Record<CreativeFileOperation, CreativeFileOperationQualificationV1>>>
+    | undefined
+): string {
+  if (qualifications === undefined) return "unavailable";
+  return CREATIVE_FILE_OPERATIONS.map((operation) =>
+    creativeFileOperationQualificationRevision(qualifications[operation])
+  ).join(".");
 }
 
 /** Main-only production gate used both by capability resolution and runtime activation. */

@@ -29,6 +29,7 @@ import {
   createProductionAgentFeatureFlags,
   hasCurrentMainOwnedApprovalSurfaceQualification
 } from "./agent-feature-flags.js";
+import { createCreativeFileOperationQualificationService } from "./creative-file-operation-qualification.js";
 import {
   MainApprovalConfirmationCoordinator,
   registerTrustedApprovalIpc
@@ -222,6 +223,11 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const approvalSurfaceQualification = approvalQualificationResult.ok
     ? approvalQualificationResult.value
     : undefined;
+  const creativeFileOperationQualification = createCreativeFileOperationQualificationService({
+    packageKind: app.isPackaged ? "production" : "development"
+  });
+  let creativeQualificationExpiresAt: number | undefined;
+  let creativeQualificationExpiryTimer: NodeJS.Timeout | undefined;
   const modelSecretStore = createEncryptedFileModelSecretStore({
     userDataRoot,
     cipher: safeStorage
@@ -362,18 +368,48 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         });
         nextApprovalCoordinator = coordinator;
       }
+      const creativeOperationQualifications =
+        binding.kind === "creativeProject"
+          ? await creativeFileOperationQualification.readAll()
+          : undefined;
+      const creativeQualificationExpiries =
+        creativeOperationQualifications === undefined
+          ? []
+          : Object.values(creativeOperationQualifications)
+              .filter((attestation) => attestation.status === "qualified")
+              .map((attestation) => Date.parse(attestation.expiresAt))
+              .filter((expiresAt) => Number.isFinite(expiresAt));
+      creativeQualificationExpiresAt =
+        creativeQualificationExpiries.length === 0
+          ? undefined
+          : Math.min(...creativeQualificationExpiries);
+      scheduleCreativeQualificationExpiry();
       const featureFlags = createProductionAgentFeatureFlags(
         {
           agentGuidanceV3: true,
           phaseA_searchEnabled: true,
-          phaseB_fileLifecycleEnabled: true,
+          // The legacy broad lifecycle switch must not authorize a Catalog 2.0
+          // operation.  Each creative mutation is projected only from its
+          // Main-owned operation qualification below.
+          phaseB_fileLifecycleEnabled: false,
+          ...(binding.kind === "creativeProject"
+            ? {
+                creativeTrustedReplaceV2: changeSetApprovalV2 !== undefined,
+                creativeFileCreateV2: changeSetApprovalV2 !== undefined,
+                creativeFileMoveV2: changeSetApprovalV2 !== undefined,
+                creativeFileDeleteV2: changeSetApprovalV2 !== undefined
+              }
+            : {}),
           approvalBindingV2: changeSetApprovalV2 !== undefined,
           writingDomainCrudV2: changeSetApprovalV2 !== undefined,
           phaseD_networkReadEnabled: networkRuntime.executor !== undefined,
           phaseE_remoteMcpEnabled: mcpRuntime.executor !== undefined,
           revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:workspace-context-${workspaceContextPolicy.policyRevision}`
         },
-        approvalSurfaceQualification
+        approvalSurfaceQualification,
+        undefined,
+        undefined,
+        creativeOperationQualifications
       );
       const runtime = createDesktopAgentRuntime({
         workspaceKind: binding.kind,
@@ -421,12 +457,23 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         ...(binding.kind !== "creativeProject"
           ? {}
           : {
-              notifyProjectFilesChanged: (input) =>
-                application.notifyProjectSearchSourcesChanged({
+              notifyProjectFilesChanged: async (input) => {
+                const identity = creativeProjectFileSession.getActiveIdentity();
+                if (
+                  identity === undefined ||
+                  identity.projectId !== binding.workspaceId ||
+                  identity.workspaceId !== binding.workspaceId
+                ) {
+                  throw new Error("CREATIVE_PROJECT_FILE_SESSION_IDENTITY_REJECTED");
+                }
+                const refreshed = await creativeProjectFileSession.refresh(identity);
+                if (!refreshed.ok) throw new Error(refreshed.error.code);
+                await application.notifyProjectSearchSourcesChanged({
                   projectId: binding.workspaceId,
                   reason: input.reason,
                   relativePaths: input.relativePaths
-                }),
+                });
+              },
               getCreativeProjectFileTreeSnapshot: () => {
                 const identity = creativeProjectFileSession.getActiveIdentity();
                 const snapshot = creativeProjectFileSession.getSnapshot();
@@ -542,6 +589,30 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       );
     }
   });
+  function scheduleCreativeQualificationExpiry(): void {
+    if (creativeQualificationExpiryTimer !== undefined) {
+      clearTimeout(creativeQualificationExpiryTimer);
+      creativeQualificationExpiryTimer = undefined;
+    }
+    const expiresAt = creativeQualificationExpiresAt;
+    if (expiresAt === undefined) return;
+    const expireQualification = (): void => {
+      const remaining = expiresAt - Date.now();
+      if (remaining > 0) {
+        creativeQualificationExpiryTimer = setTimeout(
+          expireQualification,
+          Math.min(remaining, 2_147_483_647)
+        );
+        creativeQualificationExpiryTimer.unref();
+        return;
+      }
+      creativeQualificationExpiresAt = undefined;
+      activeApprovalCoordinator?.revokeAll("qualification_expired");
+      agentRuntimeManager.revokeCurrentApprovalCapabilities();
+      void agentRuntimeManager.refreshCurrentWorkspace().catch(() => undefined);
+    };
+    expireQualification();
+  }
   const approvalQualificationExpiresAt = hasCurrentMainOwnedApprovalSurfaceQualification(
     approvalSurfaceQualification
   )

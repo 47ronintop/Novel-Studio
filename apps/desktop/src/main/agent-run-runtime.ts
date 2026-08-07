@@ -3529,6 +3529,8 @@ async function materializeDesktopSendPreview(input: {
       ? (facts.value.writingTaskIntent ??
         createWritingTaskIntent({ currentRequest: facts.value.userRequest }))
       : null;
+  const writingGenerationGuidanceVersion =
+    writingTaskIntent?.bodyGeneration === true ? "2.0" : "not_applicable";
   const approvalProjection =
     runtimeFacts.writeCapability === "none"
       ? { version: "not_applicable", checksum: "not_applicable" }
@@ -3538,7 +3540,7 @@ async function materializeDesktopSendPreview(input: {
         };
   const providerSemanticVersionSet = createProviderSemanticVersionSetV1({
     writingTaskIntentSchemaVersion: writingTaskIntent === null ? "not_applicable" : "1.0",
-    writingGenerationGuidanceVersion: "not_applicable",
+    writingGenerationGuidanceVersion,
     approvalRuleSetVersion: approvalProjection.version,
     approvalRuleSetChecksum: approvalProjection.checksum
   });
@@ -3546,7 +3548,7 @@ async function materializeDesktopSendPreview(input: {
     profile,
     runtimeFacts,
     writingTaskIntent,
-    writingGenerationGuidanceVersion: "not_applicable",
+    writingGenerationGuidanceVersion,
     providerSemanticVersionSet
   });
   const catalogRevision = computeCatalogV2RevisionForDescriptors(providerDescriptors);
@@ -5252,13 +5254,25 @@ async function dirtySelectedPaths(
 ): Promise<Result<string[], UnifiedError>> {
   if (readEditorState === undefined) return ok([]);
   const dirty: string[] = [];
-  for (const file of changeSet.files.filter((candidate) => candidate.selected)) {
-    const state = await readEditorState(file.relativePath);
+  const selectedPaths = new Set<string>(
+    changeSet.files.filter((candidate) => candidate.selected).map((file) => file.relativePath)
+  );
+  for (const operation of changeSet.operations ?? []) {
+    if (operation.selected === false) continue;
+    if (operation.kind === "move_file") {
+      selectedPaths.add(operation.sourcePath);
+      selectedPaths.add(operation.targetPath);
+    } else {
+      selectedPaths.add(operation.relativePath);
+    }
+  }
+  for (const relativePath of selectedPaths) {
+    const state = await readEditorState(relativePath);
     if (state?.status === "unknown") {
-      return err(runtimeError("EDITOR_STATE_UNKNOWN", { relativePath: file.relativePath }));
+      return err(runtimeError("EDITOR_STATE_UNKNOWN", { relativePath }));
     }
     if (state?.dirty === true) {
-      dirty.push(file.relativePath);
+      dirty.push(relativePath);
     }
   }
   return ok(dirty);

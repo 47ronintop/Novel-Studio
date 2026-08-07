@@ -24,6 +24,7 @@ import {
   type TrustedApprovalSurfaceQualificationAttestationV1
 } from "../src/main/approval-surface-qualification.js";
 import { createProductionAgentFeatureFlags } from "../src/main/agent-feature-flags.js";
+import { createCreativeFileOperationQualificationService } from "../src/main/creative-file-operation-qualification.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -78,6 +79,47 @@ describe("approval surface qualification", () => {
     expect(activeFlags.revision).toBe(
       `qualification-test:approval-surface:${loaded.value.attestationChecksum}`
     );
+
+    const creativeQualifications = await createCreativeFileOperationQualificationService({
+      packageKind: "production",
+      now: () => "2026-08-06T01:00:00.000Z",
+      candidateInspector: {
+        async inspect(operation) {
+          return operation === "create_file"
+            ? {
+                status: "qualified" as const,
+                evidenceChecksum: "a".repeat(64),
+                issuedAt: "2026-08-01T00:00:00.000Z",
+                expiresAt: "2026-08-20T00:00:00.000Z"
+              }
+            : { status: "unavailable" as const, failureReasons: ["evidence_missing"] as const };
+        }
+      }
+    }).readAll();
+    const operationFlags = createProductionAgentFeatureFlags(
+      {
+        agentGuidanceV3: true,
+        approvalBindingV2: true,
+        creativeTrustedReplaceV2: true,
+        creativeFileCreateV2: true,
+        creativeFileMoveV2: true,
+        creativeFileDeleteV2: true,
+        revision: "creative-qualification-test"
+      },
+      loaded.value,
+      undefined,
+      () => "2026-08-06T01:00:00.000Z",
+      creativeQualifications
+    );
+    expect(operationFlags).toMatchObject({
+      approvalBindingV2: true,
+      creativeTrustedReplaceV2: false,
+      creativeFileCreateV2: true,
+      creativeFileMoveV2: false,
+      creativeFileDeleteV2: false
+    });
+    expect(operationFlags.revision).toContain("creative-qualification:");
+
     const expiredFlags = createProductionAgentFeatureFlags(
       {
         agentGuidanceV3: true,

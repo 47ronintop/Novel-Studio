@@ -832,14 +832,28 @@ describe("Agent tool registry", () => {
         ...baseCapabilities,
         workspaceKind: "creativeProject",
         writingOperations: [],
-        workspaceFileOperations: ["replace_file", "create_file"]
+        workspaceFileOperations: ["replace_file", "create_file", "move_file", "delete_file"]
       }
     });
     const creativeNames = creative.map((tool) => tool.name);
-    expect(creativeNames).toContain("edit_text");
-    expect(creativeNames).toContain("create_resource");
+    expect(
+      creative
+        .filter((tool) => tool.effect === "propose")
+        .map((tool) => ({
+          name: tool.name,
+          writeOperation: tool.writeOperation,
+          destructive: tool.destructive
+        }))
+    ).toEqual([
+      { name: "edit_text", writeOperation: "replace_file", destructive: false },
+      { name: "create_resource", writeOperation: "create_file", destructive: false },
+      { name: "propose_file_move", writeOperation: "move_file", destructive: true },
+      { name: "propose_file_delete", writeOperation: "delete_file", destructive: true }
+    ]);
     expect(creativeNames).not.toContain("manage_path");
     expect(creativeNames).not.toContain("propose_file_write");
+    expect(creativeNames).not.toContain("propose_file_create");
+    expect(creativeNames).not.toContain("propose_directory_create");
     expect(
       isValid(requireDescriptor(creative, "edit_text"), {
         ref: "file:notes.md",
@@ -854,6 +868,80 @@ describe("Agent tool registry", () => {
         baseHash,
         range,
         replacement: "Updated"
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(creative, "create_resource"), {
+        kind: "file",
+        ref: "file:notes/new.md",
+        content: "Draft"
+      })
+    ).toBe(true);
+    expect(
+      isValid(requireDescriptor(creative, "propose_file_move"), {
+        sourceRef: "file:notes/old.md",
+        targetRef: "file:notes/new.md",
+        baseHash
+      })
+    ).toBe(true);
+    expect(
+      isValid(requireDescriptor(creative, "propose_file_move"), {
+        sourcePath: "notes/old.md",
+        targetRef: "file:notes/new.md",
+        baseHash
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(creative, "propose_file_delete"), {
+        ref: "file:notes/old.md",
+        baseHash
+      })
+    ).toBe(true);
+    expect(
+      isValid(requireDescriptor(creative, "create_resource"), {
+        kind: "file",
+        path: "notes/new.md",
+        content: "Draft"
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(creative, "propose_file_move"), {
+        sourceRef: "file:notes/old.md",
+        targetPath: "notes/new.md",
+        baseHash
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(creative, "propose_file_delete"), {
+        relativePath: "notes/old.md",
+        baseHash
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(creative, "create_resource"), {
+        kind: "file",
+        ref: "notes/new.md",
+        content: "Draft"
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(creative, "propose_file_move"), {
+        sourceRef: "notes/old.md",
+        targetRef: "file:notes/new.md",
+        baseHash
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(creative, "propose_file_delete"), {
+        ref: "chapter:ch_01",
+        baseHash
+      })
+    ).toBe(false);
+    expect(
+      isValid(requireDescriptor(creative, "propose_file_delete"), {
+        relativePath: "notes/old.md",
+        baseHash,
+        recursive: true
       })
     ).toBe(false);
 

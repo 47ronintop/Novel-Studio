@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type { ChapterEditorBridge } from "./chapter-editor-bridge.js";
+import type { AgentRunBridge } from "./agent-run-bridge.js";
 import {
   createCreativeProjectFilesBridge,
   type CreativeProjectFilesBridge
@@ -33,6 +34,7 @@ import {
 
 export interface WorkspaceFileEditorRuntimeOptions {
   readonly api: NovelStudioApi | undefined;
+  readonly agentRunBridge?: Pick<AgentRunBridge, "subscribeProjectFilesChanged"> | undefined;
   readonly activeCreativeProjectId: string | undefined;
   readonly activeCreativeWorkspaceId: string | undefined;
   readonly creativeExpandedPathIds: readonly string[];
@@ -118,6 +120,7 @@ export function useWorkspaceFileEditorRuntime(
 ): WorkspaceFileEditorRuntime {
   const {
     api,
+    agentRunBridge,
     activeCreativeProjectId,
     activeCreativeWorkspaceId,
     creativeExpandedPathIds,
@@ -147,6 +150,8 @@ export function useWorkspaceFileEditorRuntime(
   creativeExpandedPathIdsRef.current = creativeExpandedPathIds;
   const creativePlainFileBridgeRef = useRef<PlainFileEditorBridge | undefined>(undefined);
   const creativeProjectFilesBridgeRef = useRef<CreativeProjectFilesBridge | undefined>(undefined);
+  const creativeProjectFilesSyncRef = useRef(0);
+  const creativeProjectFilesRefreshRef = useRef<Promise<void>>(Promise.resolve());
   const decorateFileEditorRef = useRef<
     (
       bridge: PlainFileEditorBridge,
@@ -268,6 +273,126 @@ export function useWorkspaceFileEditorRuntime(
     api,
     clearFileEditor,
     creativeProjectFilesBridge
+  ]);
+
+  useEffect(() => {
+    if (
+      agentRunBridge === undefined ||
+      activeCreativeWorkspaceId === undefined ||
+      creativeProjectFilesBridge === undefined
+    ) {
+      return;
+    }
+    let active = true;
+    const unsubscribe = agentRunBridge.subscribeProjectFilesChanged((event) => {
+      if (event.projectId !== activeCreativeWorkspaceId) return;
+      const sync = ++creativeProjectFilesSyncRef.current;
+      const editorBridge = creativePlainFileBridgeRef.current;
+      const editor = editorBridge?.getProps();
+      const previousSnapshot = creativeProjectFilesBridge.getSnapshot();
+      const affected =
+        editor !== undefined &&
+        event.relativePaths.some((relativePath) =>
+          projectFilePathAffected(editor.path, relativePath)
+        );
+
+      const synchronize = async () => {
+        await creativeProjectFilesBridge.refresh();
+        if (
+          !active ||
+          sync !== creativeProjectFilesSyncRef.current ||
+          creativePlainFileBridgeRef.current !== editorBridge
+        ) {
+          return;
+        }
+        if (editorBridge === undefined || editor === undefined || !affected) return;
+        if (editorBridge.getProps()?.path !== editor.path || editorBridge.isDirty()) {
+          updateVisibleFileEditor(editorBridge, editorBridge.getProps());
+          return;
+        }
+        const snapshot = creativeProjectFilesBridge.getSnapshot();
+        const movedPath = projectFileMovedPath({
+          activePath: editor.path,
+          relativePaths: event.relativePaths,
+          previousSnapshot,
+          snapshot
+        });
+        if (movedPath !== undefined) {
+          const opened = await creativeProjectFilesBridge.requestOpenFile(movedPath);
+          if (
+            !active ||
+            sync !== creativeProjectFilesSyncRef.current ||
+            !opened ||
+            creativePlainFileBridgeRef.current !== editorBridge ||
+            editorBridge.getProps()?.path !== editor.path ||
+            creativeProjectFilesBridge.getActiveFilePath() !== movedPath
+          ) {
+            return;
+          }
+          try {
+            const reloaded = await editorBridge.openFile(movedPath);
+            if (
+              !active ||
+              sync !== creativeProjectFilesSyncRef.current ||
+              creativePlainFileBridgeRef.current !== editorBridge ||
+              creativeProjectFilesBridge.getActiveFilePath() !== movedPath
+            ) {
+              return;
+            }
+            updateVisibleFileEditor(editorBridge, reloaded);
+          } catch {
+            if (
+              active &&
+              sync === creativeProjectFilesSyncRef.current &&
+              creativePlainFileBridgeRef.current === editorBridge &&
+              creativeProjectFilesBridge.getActiveFilePath() === movedPath
+            ) {
+              creativeProjectFilesBridge.clearActiveFile();
+            }
+          }
+          return;
+        }
+        if (!projectFileExists(snapshot, editor.path)) {
+          if (creativeProjectFilesBridge.getActiveFilePath() === editor.path) {
+            creativeProjectFilesBridge.clearActiveFile();
+          }
+          return;
+        }
+        try {
+          const reloaded = await editorBridge.openFile(editor.path);
+          if (
+            !active ||
+            sync !== creativeProjectFilesSyncRef.current ||
+            creativePlainFileBridgeRef.current !== editorBridge ||
+            editorBridge.getProps()?.path !== editor.path ||
+            creativeProjectFilesBridge.getActiveFilePath() !== editor.path
+          ) {
+            return;
+          }
+          updateVisibleFileEditor(editorBridge, reloaded);
+        } catch {
+          if (
+            active &&
+            sync === creativeProjectFilesSyncRef.current &&
+            creativePlainFileBridgeRef.current === editorBridge &&
+            creativeProjectFilesBridge.getActiveFilePath() === editor.path
+          ) {
+            creativeProjectFilesBridge.clearActiveFile();
+          }
+        }
+      };
+      const queued = creativeProjectFilesRefreshRef.current.then(synchronize, synchronize);
+      creativeProjectFilesRefreshRef.current = queued.catch(() => undefined);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [
+    activeCreativeWorkspaceId,
+    agentRunBridge,
+    creativeProjectFilesBridge,
+    updateVisibleFileEditor
   ]);
 
   const activeCreativeFileRef = useMemo<Extract<
@@ -425,4 +550,56 @@ export function useWorkspaceFileEditorRuntime(
     guardCreativeFile,
     guardWorkspaceFileEditors
   };
+}
+
+function projectFilePathAffected(activePath: string, changedPath: string): boolean {
+  const active = activePath.replace(/\\/g, "/");
+  const changed = changedPath.replace(/\\/g, "/");
+  return active === changed || active.startsWith(`${changed}/`);
+}
+
+function projectFileMovedPath(input: {
+  readonly activePath: string;
+  readonly relativePaths: readonly string[];
+  readonly previousSnapshot: ReturnType<CreativeProjectFilesBridge["getSnapshot"]>;
+  readonly snapshot: ReturnType<CreativeProjectFilesBridge["getSnapshot"]>;
+}): string | undefined {
+  if (projectFileExists(input.snapshot, input.activePath)) return undefined;
+
+  for (let index = 0; index < input.relativePaths.length - 1; index += 1) {
+    const sourcePath = input.relativePaths[index];
+    const targetPath = input.relativePaths[index + 1];
+    if (
+      sourcePath === undefined ||
+      targetPath === undefined ||
+      !projectFilePathAffected(input.activePath, sourcePath)
+    ) {
+      continue;
+    }
+    const candidate = `${targetPath}${input.activePath.slice(sourcePath.length)}`;
+    if (
+      projectFileExists(input.snapshot, candidate) &&
+      !projectFileExists(input.previousSnapshot, candidate)
+    ) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function projectFileExists(
+  snapshot: ReturnType<CreativeProjectFilesBridge["getSnapshot"]>,
+  path: string
+): boolean {
+  return snapshot?.nodes.some((node) => projectFileNodeExists(node, path)) ?? false;
+}
+
+function projectFileNodeExists(
+  node: NonNullable<ReturnType<CreativeProjectFilesBridge["getSnapshot"]>>["nodes"][number],
+  path: string
+): boolean {
+  return (
+    (node.kind === "file" && node.path === path) ||
+    node.children?.some((child) => projectFileNodeExists(child, path)) === true
+  );
 }

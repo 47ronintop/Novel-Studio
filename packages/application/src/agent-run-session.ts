@@ -213,7 +213,11 @@ import {
   type AgentPlanExecutionRepositoryPort,
   type AgentPlanExecutionSession
 } from "./agent-plan-execution-session.js";
-import type { ChangeSetSession, ChangeSetV2Rejection } from "./change-set-session.js";
+import type {
+  ChangeSetSession,
+  ChangeSetV2Rejection,
+  ProposeWorkspaceFileMutationInput
+} from "./change-set-session.js";
 import {
   authorizeAgentRunApproval,
   authorizeAgentRunProposal,
@@ -1178,6 +1182,15 @@ const fileLifecycleToolNames = new Set<string>([
   "manage_path"
 ]);
 
+function workspaceFileMutationKindForTool(
+  toolName: string
+): "create_file" | "move_file" | "delete_file" | undefined {
+  if (toolName === "propose_file_create") return "create_file";
+  if (toolName === "propose_file_move") return "move_file";
+  if (toolName === "propose_file_delete") return "delete_file";
+  return undefined;
+}
+
 const chapterLifecycleToolNames = new Set<ChapterLifecycleToolName>([
   "rename_chapter",
   "reorder_chapter",
@@ -1824,11 +1837,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     const observed = observedCapabilityBoundary(input.scope);
     if (
       input.sharingState !== undefined &&
-      (input.sharingState.grant.defaultsRevision !==
-        input.sharingState.defaults.defaultsRevision ||
+      (input.sharingState.grant.defaultsRevision !== input.sharingState.defaults.defaultsRevision ||
         (observed !== undefined &&
-          (observed.sharingDefaultsRevision !==
-            input.sharingState.defaults.defaultsRevision ||
+          (observed.sharingDefaultsRevision !== input.sharingState.defaults.defaultsRevision ||
             observed.sharingGrantRevision !== input.sharingState.grant.grantRevision)))
     ) {
       throw new Error("AGENT_CAPABILITY_BOUNDARY_INVALID");
@@ -1957,10 +1968,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? createWritingTaskIntent({ currentRequest: input.userRequest })
           : parseWritingTaskIntent(input.writingTaskIntent)
         : null;
+    const writingGenerationGuidanceVersion =
+      writingTaskIntent?.bodyGeneration === true ? "2.0" : "not_applicable";
     const providerSemanticVersionSet: ProviderSemanticVersionSetV1 =
       createProviderSemanticVersionSetV1({
         writingTaskIntentSchemaVersion: writingTaskIntent === null ? "not_applicable" : "1.0",
-        writingGenerationGuidanceVersion: "not_applicable",
+        writingGenerationGuidanceVersion,
         approvalRuleSetVersion:
           runtimeFacts.writeCapability === "none"
             ? "not_applicable"
@@ -1974,7 +1987,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       profile: input.profile,
       runtimeFacts,
       writingTaskIntent,
-      writingGenerationGuidanceVersion: "not_applicable",
+      writingGenerationGuidanceVersion,
       providerSemanticVersionSet
     });
   }
@@ -2042,7 +2055,8 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
   function toolPayloadWithFinishEvidence(payload: JsonObject, evidenceRef: string): JsonObject {
     const data = payload["data"];
     if (data === undefined) return { ...payload, evidenceRefs: [evidenceRef] };
-    const legacyEvidence = payload["schemaVersion"] === "2.0" ? {} : { evidenceRefs: [evidenceRef] };
+    const legacyEvidence =
+      payload["schemaVersion"] === "2.0" ? {} : { evidenceRefs: [evidenceRef] };
     if (typeof data === "string") {
       try {
         const parsed = JSON.parse(data) as unknown;
@@ -6191,7 +6205,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         snapshotPatch: { contextSnapshotId },
         detail: { toolCallId: call.toolCallId, toolName: descriptor.name }
       });
-      const proposed = await options.changeSetSession.proposeOperation({
+      const operationProposalInput = {
         runId,
         projectId: snapshot.projectId,
         checkpointId:
@@ -6200,7 +6214,15 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         writePolicy: snapshot.writePolicy,
         toolCallId: call.toolCallId,
         operation: proposalResult.value.operation
-      });
+      };
+      const workspaceMutationKind = workspaceFileMutationKindForTool(dispatchName);
+      const proposed =
+        workspaceMutationKind === undefined
+          ? await options.changeSetSession.proposeOperation(operationProposalInput)
+          : await proposeWorkspaceFileMutation(options.changeSetSession, {
+              kind: workspaceMutationKind,
+              operation: operationProposalInput
+            });
       if (!proposed.ok) {
         return (await toolFailure(
           runtime,
@@ -6738,7 +6760,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         const proposalInput = { ...binding, path: targetPath ?? "" };
         const authorized = authorizeProposalIfPreapproved(proposalInput);
         try {
-          proposed = await options.changeSetSession.proposeFileWrite(proposalInput);
+          proposed = await proposeWorkspaceFileMutation(options.changeSetSession, {
+            kind: "replace_file",
+            file: proposalInput
+          });
         } finally {
           if (authorized) revokeAgentRunProposalAuthorization(proposalInput);
         }
@@ -9069,9 +9094,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               executionGuidanceV3.proof.providerSemanticVersionSetChecksum,
             descriptors: executionProviderDescriptors,
             mapping: executionProviderMapping,
-            ...(executionSharingState === undefined
-              ? {}
-              : { sharingState: executionSharingState })
+            ...(executionSharingState === undefined ? {} : { sharingState: executionSharingState })
           });
         }
       } catch {
@@ -12005,13 +12028,14 @@ function adaptToolInvocation(
       return ok({ name: "propose_story_bible_write", arguments: resourceArguments });
     }
     if (kind === "file") {
-      const path = readString(argumentsValue, "path");
-      if (path === undefined) return err(invalidV2ResourceRef(toolName));
+      const ref = readString(argumentsValue, "ref");
+      const resource = ref === undefined ? undefined : parseResourceRef(ref);
+      if (resource?.kind !== "file") return err(invalidV2ResourceRef(toolName));
       const fileArguments = { ...resourceArguments };
-      delete fileArguments.path;
+      delete fileArguments.ref;
       return ok({
         name: "propose_file_create",
-        arguments: { ...fileArguments, relativePath: path }
+        arguments: { ...fileArguments, relativePath: resource.value }
       });
     }
     return err(
@@ -12125,12 +12149,29 @@ function validateProjectResourceInvocation(
     if (path !== undefined && path.length > 0) paths.push({ path, kind: "directory" });
   } else if (toolName === "read_project_text" || toolName === "propose_file_write") {
     paths.push({ path: readString(argumentsValue, "path"), kind: "file" });
-  } else if (toolName === "propose_file_create" || toolName === "propose_file_delete") {
+  } else if (toolName === "propose_file_create") {
     paths.push({ path: readString(argumentsValue, "relativePath"), kind: "file" });
+  } else if (toolName === "propose_file_delete") {
+    const ref = readString(argumentsValue, "ref");
+    const resource = ref === undefined ? undefined : parseResourceRef(ref);
+    paths.push({
+      path: resource?.kind === "file" ? resource.value : readString(argumentsValue, "relativePath"),
+      kind: "file"
+    });
   } else if (toolName === "propose_file_move") {
+    const sourceRef = readString(argumentsValue, "sourceRef");
+    const targetRef = readString(argumentsValue, "targetRef");
+    const source = sourceRef === undefined ? undefined : parseResourceRef(sourceRef);
+    const target = targetRef === undefined ? undefined : parseResourceRef(targetRef);
     paths.push(
-      { path: readString(argumentsValue, "sourcePath"), kind: "file" },
-      { path: readString(argumentsValue, "targetPath"), kind: "file" }
+      {
+        path: source?.kind === "file" ? source.value : readString(argumentsValue, "sourcePath"),
+        kind: "file"
+      },
+      {
+        path: target?.kind === "file" ? target.value : readString(argumentsValue, "targetPath"),
+        kind: "file"
+      }
     );
   } else if (toolName === "propose_directory_create") {
     paths.push({ path: readString(argumentsValue, "relativePath"), kind: "directory" });
@@ -12273,6 +12314,23 @@ function parseFormalChapterCreateBinding(
   return match?.[1] === undefined ? undefined : { catalogRevision: match[1] };
 }
 
+/**
+ * Shared creative-general proposal entry point. The Change Set session owns the effect-specific
+ * validators and persistence; this adapter keeps replace/create/move/delete on one parameterized
+ * orchestration path while remaining compatible with older test/session ports.
+ */
+async function proposeWorkspaceFileMutation(
+  session: ChangeSetSession,
+  input: ProposeWorkspaceFileMutationInput
+): Promise<Result<ChangeSet, UnifiedError>> {
+  if (session.proposeWorkspaceFileMutation !== undefined) {
+    return session.proposeWorkspaceFileMutation(input);
+  }
+  return input.kind === "replace_file"
+    ? session.proposeFileWrite(input.file)
+    : session.proposeOperation(input.operation);
+}
+
 /** Task B.3 — routes a file lifecycle tool call to the matching AgentFileOperationSessionPort method. */
 function buildFileOperationProposal(
   session: AgentFileOperationSessionPort,
@@ -12302,9 +12360,13 @@ function buildFileOperationProposal(
     return castOperationResult(result);
   }
   if (toolName === "propose_file_move") {
-    const sourcePath = readString(args, "sourcePath");
-    const targetPath = readString(args, "targetPath");
-    const sourceChecksum = readString(args, "sourceChecksum");
+    const sourceRef = readString(args, "sourceRef");
+    const targetRef = readString(args, "targetRef");
+    const source = sourceRef === undefined ? undefined : parseResourceRef(sourceRef);
+    const target = targetRef === undefined ? undefined : parseResourceRef(targetRef);
+    const sourcePath = source?.kind === "file" ? source.value : readString(args, "sourcePath");
+    const targetPath = target?.kind === "file" ? target.value : readString(args, "targetPath");
+    const sourceChecksum = readString(args, "baseHash") ?? readString(args, "sourceChecksum");
     if (sourcePath === undefined || targetPath === undefined || sourceChecksum === undefined) {
       return err(
         applicationError(
@@ -12323,8 +12385,11 @@ function buildFileOperationProposal(
     return castOperationResult(result);
   }
   if (toolName === "propose_file_delete") {
-    const relativePath = readString(args, "relativePath");
-    const baseChecksum = readString(args, "baseChecksum");
+    const ref = readString(args, "ref");
+    const resource = ref === undefined ? undefined : parseResourceRef(ref);
+    const relativePath =
+      resource?.kind === "file" ? resource.value : readString(args, "relativePath");
+    const baseChecksum = readString(args, "baseHash") ?? readString(args, "baseChecksum");
     if (relativePath === undefined || baseChecksum === undefined) {
       return err(
         applicationError(

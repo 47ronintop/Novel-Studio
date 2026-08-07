@@ -4114,7 +4114,8 @@ describe("AgentRunSession", () => {
       readAgentRun(runId: string): Promise<Record<string, unknown>>;
     };
 
-    await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    const started = await session.startAgentRun({ ...startCommand(), contextMode: "general_file" });
+    expect(started).toMatchObject({ ok: true, value: { runId } });
     await vi.waitFor(async () => {
       expect(await session.readAgentRun(runId)).toMatchObject({
         ok: true,
@@ -7852,6 +7853,194 @@ describe("AgentRunSession v2 tool facade", () => {
     });
   });
 
+  test.each([
+    {
+      name: "create",
+      toolCallId: "v2-create-file-ref",
+      toolName: "create_resource",
+      arguments: {
+        kind: "file",
+        ref: "file:notes/new.md",
+        content: "new",
+        dependsOn: ["op-parent"]
+      },
+      expectedProposal: {
+        kind: "create",
+        toolCallId: "v2-create-file-ref",
+        relativePath: "notes/new.md",
+        content: "new",
+        dependsOn: ["op-parent"]
+      },
+      mutationKind: "create_file",
+      expectedPolicyPaths: [{ path: "notes/new.md", kind: "file" }]
+    },
+    {
+      name: "move",
+      toolCallId: "v2-move-file-ref",
+      toolName: "propose_file_move",
+      arguments: {
+        sourceRef: "file:notes/old.md",
+        targetRef: "file:notes/renamed.md",
+        baseHash: "b".repeat(64),
+        dependsOn: ["op-directory"]
+      },
+      expectedProposal: {
+        kind: "move",
+        toolCallId: "v2-move-file-ref",
+        sourcePath: "notes/old.md",
+        targetPath: "notes/renamed.md",
+        sourceChecksum: "b".repeat(64),
+        dependsOn: ["op-directory"]
+      },
+      mutationKind: "move_file",
+      expectedPolicyPaths: [
+        { path: "notes/old.md", kind: "file" },
+        { path: "notes/renamed.md", kind: "file" }
+      ]
+    },
+    {
+      name: "delete",
+      toolCallId: "v2-delete-file-ref",
+      toolName: "propose_file_delete",
+      arguments: {
+        ref: "file:notes/obsolete.md",
+        baseHash: "c".repeat(64)
+      },
+      expectedProposal: {
+        kind: "delete",
+        toolCallId: "v2-delete-file-ref",
+        relativePath: "notes/obsolete.md",
+        baseChecksum: "c".repeat(64)
+      },
+      mutationKind: "delete_file",
+      expectedPolicyPaths: [{ path: "notes/obsolete.md", kind: "file" }]
+    }
+  ])(
+    "dispatches Catalog 2.0 creative $name file refs through the legacy file-operation ports",
+    async ({
+      toolCallId,
+      toolName,
+      arguments: argumentsValue,
+      expectedProposal,
+      mutationKind,
+      expectedPolicyPaths
+    }) => {
+      const runId = "run_v2_creative_file_refs";
+      const fileProposals: Record<string, unknown>[] = [];
+      const stagedMutations: Record<string, unknown>[] = [];
+      const policyPaths: { path: string; kind: string }[] = [];
+      let providerToolNames: string[] = [];
+      const session = createSession({
+        coordinatorOptions: { createRunId: () => runId },
+        repository: durableMemoryRepository(),
+        newRunToolFacadeVersion: "v2",
+        agentGuidanceV3: true,
+        capabilitySnapshot: {
+          ...creativeV2Capabilities(),
+          workspaceFileOperations: ["create_file", "move_file", "delete_file"]
+        },
+        modelDriver: {
+          async *streamRound(input: { readonly tools: readonly { readonly name: string }[] }) {
+            providerToolNames = input.tools.map((tool) => tool.name);
+            yield toolCall(toolCallId, toolName, argumentsValue);
+            yield { type: "round_completed", finishReason: "tool_calls" };
+          }
+        },
+        startPreflight: echoStartPreflight(),
+        readToolExecutor: readExecutor,
+        generalFilePathPolicy(path: string, kind: "file" | "directory") {
+          policyPaths.push({ path, kind });
+          return { ok: true, value: path };
+        },
+        fileOperationSession: {
+          proposeFileCreate(input: Record<string, unknown>) {
+            fileProposals.push({ kind: "create", ...input });
+            return {
+              ok: true,
+              value: {
+                operation: {
+                  kind: "create_file",
+                  operationId: "op-create",
+                  relativePath: input["relativePath"],
+                  content: input["content"]
+                },
+                operationId: "op-create"
+              }
+            };
+          },
+          proposeFileMove(input: Record<string, unknown>) {
+            fileProposals.push({ kind: "move", ...input });
+            return {
+              ok: true,
+              value: {
+                operation: {
+                  kind: "move_file",
+                  operationId: "op-move",
+                  sourcePath: input["sourcePath"],
+                  targetPath: input["targetPath"],
+                  sourceChecksum: input["sourceChecksum"]
+                },
+                operationId: "op-move"
+              }
+            };
+          },
+          proposeFileDelete(input: Record<string, unknown>) {
+            fileProposals.push({ kind: "delete", ...input });
+            return {
+              ok: true,
+              value: {
+                operation: {
+                  kind: "delete_file",
+                  operationId: "op-delete",
+                  relativePath: input["relativePath"],
+                  baseChecksum: input["baseChecksum"]
+                },
+                operationId: "op-delete"
+              }
+            };
+          }
+        },
+        changeSetSession: {
+          bindRunProviderSemanticVersionSet() {
+            return { ok: true, value: undefined };
+          },
+          async proposeWorkspaceFileMutation(input: Record<string, unknown>) {
+            stagedMutations.push(input);
+            const operation = (
+              input["operation"] as { readonly operation: Record<string, unknown> }
+            ).operation;
+            return {
+              ok: true,
+              value: {
+                ...diagnosticChangeSet(runId),
+                schemaVersion: "1.1",
+                writePolicy: "write_before_confirmation",
+                files: [],
+                operationsSchemaVersion: "1.1",
+                operations: [operation]
+              }
+            };
+          }
+        }
+      });
+
+      const started = await session.startAgentRun({
+        ...startCommand(),
+        contextMode: "general_file",
+        writePolicyAcknowledged: true
+      });
+      expect(started).toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(providerToolNames).not.toEqual([]));
+      expect(providerToolNames).toEqual(
+        expect.arrayContaining(["create_resource", "propose_file_move", "propose_file_delete"])
+      );
+      await vi.waitFor(() => expect(fileProposals).toEqual([expectedProposal]));
+
+      expect(stagedMutations.map((mutation) => mutation["kind"])).toEqual([mutationKind]);
+      expect(policyPaths).toEqual(expectedPolicyPaths);
+    }
+  );
+
   test("rejects a schema 1 v2 Story Bible mutation alias at dispatch", async () => {
     const proposals: Record<string, unknown>[] = [];
     const runId = "run_v2_story_edit";
@@ -8134,17 +8323,19 @@ describe("AgentRunSession v2 tool facade", () => {
           source: "composer_action"
         },
         runtimeFacts: { activeResourceKind: "story_bible" },
-        writingGenerationGuidanceVersion: "not_applicable",
+        writingGenerationGuidanceVersion: "2.0",
         providerSemanticVersionSet: {
           systemGuidanceVersion: "3.0",
           promptArtifactSchemaVersion: "2.0",
-          writingTaskIntentSchemaVersion: "1.0"
+          writingTaskIntentSchemaVersion: "1.0",
+          writingGenerationGuidanceVersion: "2.0"
         }
       }
     });
     const body = String((stored.value as Record<string, unknown>)["systemPrompt"]);
     expect(body).not.toContain("foreshadow v1.0");
     expect(body).not.toContain("actualPayoffChapterId");
+    expect(body).toContain("【WRITING_GENERATION_GUIDANCE@2.0】");
   });
 
   test("binds Catalog 2.0 and Guidance 3.0 to the same operation rule set", async () => {

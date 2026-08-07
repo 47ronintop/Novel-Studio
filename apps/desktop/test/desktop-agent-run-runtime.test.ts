@@ -1449,6 +1449,83 @@ describe("desktop Agent Run runtime", () => {
   });
 
   test.each([
+    ["move source", "move_file", "notes/source.md", "dirty", "TARGET_DIRTY"],
+    ["move target", "move_file", "notes/target.md", "unknown", "EDITOR_STATE_UNKNOWN"],
+    ["create target", "create_file", "notes/created.md", "dirty", "TARGET_DIRTY"],
+    ["delete target", "delete_file", "notes/deleted.md", "unknown", "EDITOR_STATE_UNKNOWN"]
+  ] as const)(
+    "rejects a selected creative %s editor state before transaction apply",
+    async (_label, kind, guardedPath, status, expectedCode) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-lifecycle-editor-guard-"));
+      roots.push(projectRoot);
+      const lockOwnerId = `desktop-lifecycle-editor-guard-${kind}`;
+      const lock = new ProjectLockFileRepository({ projectRoot, ownerId: lockOwnerId });
+      expect(await lock.acquireProjectLock()).toMatchObject({ ok: true });
+      const operation =
+        kind === "move_file"
+          ? {
+              kind,
+              operationId: `operation-${kind}`,
+              toolCallIdempotencyKey: `tool-${kind}`,
+              sourcePath: "notes/source.md",
+              targetPath: "notes/target.md",
+              sourceChecksum: "a".repeat(64)
+            }
+          : kind === "create_file"
+            ? {
+                kind,
+                operationId: `operation-${kind}`,
+                toolCallIdempotencyKey: `tool-${kind}`,
+                relativePath: "notes/created.md",
+                content: "Created.\n"
+              }
+            : {
+                kind,
+                operationId: `operation-${kind}`,
+                toolCallIdempotencyKey: `tool-${kind}`,
+                relativePath: "notes/deleted.md",
+                baseChecksum: "b".repeat(64)
+              };
+      const changeSet = createOperationsChangeSetRevisionV2({
+        changeSetId: `changes-${kind}`,
+        runId: `run-${kind}`,
+        projectId: "project-01",
+        checkpointId: `checkpoint-${kind}`,
+        contextSnapshotId: `context-${kind}`,
+        providerSemanticVersionSetChecksum: "c".repeat(64),
+        createdAt: "2099-01-01T00:00:00.000Z",
+        operations: [operation]
+      });
+      const services = runtimeExports.createDesktopVersionGroupServices({
+        contentRoot: projectRoot,
+        stateRoot: projectRoot,
+        projectId: "project-01",
+        projectLockOwnerId: lockOwnerId,
+        projectReads: new AgentProjectReadRepository({ projectRoot }),
+        readEditorState: async (relativePath) =>
+          relativePath !== guardedPath
+            ? { status: "known", dirty: false }
+            : status === "unknown"
+              ? { status: "unknown" }
+              : { status: "known", dirty: true }
+      });
+
+      const rejected = await services.executor.apply({
+        changeSet,
+        approval: {} as ChangeSetApproval
+      });
+      expect(rejected).toMatchObject({ ok: false, error: { code: expectedCode } });
+      if (!rejected.ok) {
+        expect(rejected.error.redactedDetail).toMatchObject(
+          expectedCode === "TARGET_DIRTY"
+            ? { dirtyTargetPaths: expect.arrayContaining([guardedPath]) }
+            : { relativePath: guardedPath }
+        );
+      }
+    }
+  );
+
+  test.each([
     ["dirty dependency", "TARGET_DIRTY"],
     ["unknown dependency", "EDITOR_STATE_UNKNOWN"],
     ["stale dependency", "STORY_BIBLE_REFERENCE_DEPENDENCY_STALE"],
@@ -6769,8 +6846,7 @@ describe("desktop Agent Run runtime", () => {
           } else {
             expect(
               input.messages.find(
-                (message) =>
-                  message.role === "tool" && message.toolCallId === "plan-sharing-read"
+                (message) => message.role === "tool" && message.toolCallId === "plan-sharing-read"
               )?.content
             ).toContain("evidenceRefs");
             const evidenceRef = `run-event/${String(
