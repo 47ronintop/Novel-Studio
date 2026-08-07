@@ -1,14 +1,12 @@
 import type { ChapterDocument, ChapterStatus } from "@novel-studio/shared";
 import { ChevronRight, Eye, History, RotateCcw } from "lucide-react";
 import { useCallback, useMemo, useRef, type CSSProperties } from "react";
+import { ChapterNarrationPlayer } from "./chapter-narration-player.js";
 import {
   CodeMirrorDocumentEditor,
   type CodeMirrorDocumentSelection
 } from "./codemirror-document-editor.js";
-import {
-  EditorFindReplace,
-  type EditorFindMode
-} from "./editor-find-replace.js";
+import { EditorFindReplace, type EditorFindMode } from "./editor-find-replace.js";
 import {
   DEFAULT_EDITOR_PREFERENCES,
   editorFontFamilyValue,
@@ -172,9 +170,7 @@ export function ChapterEditor({
 
   return (
     <section className="ns-editor-layout" aria-label="章节编辑器">
-      {runtime === undefined ? null : (
-        <ChapterEditorRuntime runtime={runtime} />
-      )}
+      {runtime === undefined ? null : <ChapterEditorRuntime runtime={runtime} />}
 
       <EditorFindReplace
         body={chapter.body}
@@ -184,6 +180,8 @@ export function ChapterEditor({
         onSelectionChange={requestEditorSelection}
         {...(onBodyChange === undefined ? {} : { onBodyChange })}
       />
+
+      <ChapterNarrationPlayer body={chapter.body} />
 
       <div
         className="ns-editor-body"
