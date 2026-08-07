@@ -35,7 +35,7 @@ for (const [label, path] of [
 const toolchainEnvironment = { ...process.env };
 const vsEnvironment = await run(
   "cmd.exe",
-  ["/d", "/s", "/c", `call "${vsDevCmd}" -no_logo -host_arch=x64 -arch=x64 >nul && set`],
+  ["/d", "/c", `call "${vsDevCmd}" -no_logo -host_arch=x64 -arch=x64 >nul && set`],
   { cwd: root, env: toolchainEnvironment, maxBuffer: 1024 * 1024 }
 );
 for (const line of vsEnvironment.stdout.split(/\r?\n/u)) {
