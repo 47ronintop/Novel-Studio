@@ -1,0 +1,2 @@
+B6 ordinary UTF-8 fixture: 你好, café, 😀
+needle: deterministic-search

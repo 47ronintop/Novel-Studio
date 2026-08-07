@@ -90,10 +90,13 @@ const manifest = {
   },
   eligibility: {
     batch: "6",
-    access: "unavailable",
-    root: "unavailable",
-    read: "unavailable",
-    index: "unavailable",
+    // These describe the development ABI that CI must probe. They are not production
+    // qualification: the separate qualification block remains fail-closed until a signed,
+    // packaged artifact and its evidence have been verified by Main.
+    access: "available",
+    root: "available",
+    read: "available",
+    index: "available",
     mutation: "unavailable",
     recovery: "unavailable"
   },
