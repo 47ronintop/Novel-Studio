@@ -1,12 +1,13 @@
 # Novel Studio Agent 完整化与 System Guidance 3.0 实施计划
 
-**目标：** 在保留现有 Agent loop、Context Profile、Change Set、审批、事务恢复和 Provider 接线的前提下，使四种 profile 的系统权限、真实工具、上下文分享、Plan/Act、写入审批和完成证据保持一致；补齐写作领域 CRUD、创作普通文件可信替换，以及工程工作区内经过 hardened backend 资格化的 UTF-8 文本文件查、增、改、删、移动/重命名。
+**目标：** 在保留现有 Agent loop、Context Profile、Change Set、审批、事务恢复和 Provider 接线的前提下，使四种 profile 的系统权限、真实工具、上下文分享、Plan/Act、写入审批和完成证据保持一致；补齐写作领域 CRUD、创作普通 UTF-8 文件 list/read/search/replace/create/move/delete，以及工程工作区内经过 hardened backend 资格化的 UTF-8 文本文件查、增、改、删、移动/重命名与单层目录创建。
 
 **日期：** 2026-08-02<br>
 **设计依据：** `docs/superpowers/specs/2026-08-02-agent-completion-and-system-guidance-v3-design.md`<br>
 **前次已提交设计版本：** `9453448`（本文同时以当前工作树中的同步修订为合同源头）<br>
 **计划实现基线：** `5c234d4`<br>
 **计划状态：** Candidate。本文是实施合同和验收顺序，不是完成记录；任何能力只有在生产接线、用户控制、安全资格和打包 E2E 同时存在后才能标为 Complete。
+**2026-08-07 范围修订：** 保留 creative lifecycle、engineering `create-directory`、multi-file/recovery、editor/tree/index sync 和文风 2.0 的完整功能；只通过复用现有管线、单一 native 实现链、参数化测试、Windows CI artifact 和并行工作流缩短工期。
 
 ## 1. 范围锁定
 
@@ -18,8 +19,8 @@
 - 首次发送预览、后续 round 发送账本、sharing defaults/run grant、确定性预算和 stale/capability-changed 门禁。
 - Plan/Act 与“请求批准/替我审批”分层：Plan 当前始终只读，只保存未来 Act 的审批策略草稿；进入 Act 时按真实 operation 子集重新确认。
 - writing 的章节和 Story Bible 领域 CRUD，包括章节改名、排序/卷归属、archive、tombstone delete/restore、完整 metadata history、dirty editor 协调和 UI 同步。
-- `creative_general` 普通 UTF-8 文本 list/read/search 和可信局部 replacement；create/move/delete 分别作为可选能力资格化。
-- engineering 的 root-handle list/read/search/index 与文件 replace/create/move/delete，配套 raw-byte mutation V2、审批 binding v2、事务、同卷可恢复删除、启动恢复门禁和 editor/tree 同步。
+- `creative_general` 普通 UTF-8 文本 list/read/search/replace/create/move/delete；各 operation 独立资格，但全部属于本计划交付。
+- engineering 的 root-handle list/read/search/index、文件 replace/create/move/delete 和单层 create-directory，配套 raw-byte mutation V2、审批 binding v2、Engineering V2 Journal、同卷可恢复删除、启动恢复门禁和 editor/tree 同步。
 - 文风规则 2.0、跨 Provider 合同矩阵、安全/隐私/恢复 E2E 和发布证据。
 
 本计划不交付：
@@ -31,33 +32,33 @@
 - 向量检索、自动记忆写入、无用户确认的语义上下文扩张或整项目自动上传。
 - 把“安全文件 CRUD 的工程 Agent”宣传成能够运行测试、构建和 Git 的完整工程执行 Agent。
 
-网络读取、远程 MCP、创作普通文件 create/move/delete 和工程 create-directory 都是独立可选资格。未完成时必须同时满足：工具不进入目录、runtime facts 表示不可用、UI 隐藏或禁用、发布证据标为 Disabled/Incomplete；不得用降级实现冒充完成。
+网络读取和远程 MCP 是独立可选资格。创作普通文件 create/move/delete 与工程 create-directory 使用独立资格门和逐 operation fail-closed，但不是可从本计划删除或延后的功能；缺少任一项都不能标记 Agent Core Complete。任何未通过资格的能力都必须同时满足：工具不进入目录、runtime facts 表示不可用、UI 隐藏或禁用、发布证据标为 Disabled/Incomplete；不得用降级实现冒充完成。
 
 ## 2. 基线事实与不可绕过的前置决定
 
-| 领域                                   | `5c234d4` 基线                                                | 本计划的目标变化                                                                           |
-| -------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| System Guidance                        | `2.1`，正文由当前 builder 生成                                | 注册并冻结 `2.1`；新增注册的 `3.0` builder 和 materialization proof                        |
-| Prompt Artifact                        | `1.1`                                                         | 新增不兼容 `2.0` artifact；保存 registry key、冻结输入和独立 checksum                      |
-| Agent Run Tool Catalog                 | `1.0`，facade v1/v2 名称可能并存于代码                        | 新增 catalog 2.0；新 Run 只公开收敛后的 facade，旧 catalog 只按 legacy reader 恢复         |
-| Context Snapshot                       | `1.4`                                                         | 新写入固定为 `2.0` authority/provenance/sharing 合同；旧 snapshot 只走旧 reader            |
-| Message order                          | `1.0`                                                         | 新 Run 使用 `2.0`；current request 为首轮最后一条真实 user 指令                            |
-| Untrusted envelope                     | 多个 legacy family                                            | 新增严格 `2.0` writer/parser；未知 kind/version 或 role 映射拒绝                           |
-| Packed context manifest                | `1.2`                                                         | 新增 `2.0` canonical source/order/sharing/round identity                                   |
-| Canonical round manifest               | 无                                                            | 新增 `2.0`，与消息协议版本同步                                                             |
-| Runtime facts/task intent              | 无                                                            | 分别新增 `1.0`，只从 app-owned frozen inputs 派生                                          |
-| Writing generation guidance            | 旧永久文风包                                                  | 新增 `2.0`，只在正文生成/改写 task intent 注入                                             |
-| Permission Summary                     | `1.1`                                                         | 新增 `2.0` 单一能力真值和逐 operation approval rules                                       |
-| Provider semantic version set          | 无                                                            | 新增严格 `1.0` version-set/checksum，统一绑定 artifact/预算/上下文/预览/cache/native proof |
-| Approval rule/proof                    | 无                                                            | 新增 Schema/proof `1.0`；rule-set 实例使用不可变 version/checksum                          |
-| Change Set                             | `1.0 / 1.1`，含确定性 `approvalToken`                         | 新 mutation 使用 `2.0`；公开 display checksum 与 Main-only apply capability 分离           |
-| Approval binding/ledger                | 确定性 token                                                  | 新增 `2.0` Main-only capability 与 durable ledger；旧 token 不迁移                         |
-| Run Snapshot/Event                     | `1.3`                                                         | 新增 `2.0` authority/protocol/finish/capability-changed/pending 状态合同                   |
-| Run Draft/Plan Artifact/Plan Execution | `1.1 / 1.0 / 1.0`                                             | 新增 `2.0` policy-draft/handoff 合同；旧记录只能恢复为请求逐项批准                         |
-| Engineering journal                    | legacy/shared namespace                                       | 新增独立 engineering `2.0` WAL/schema；旧 WAL 只由 legacy reader 处理                      |
-| Engineering                            | pathname read/save 与测试 lifecycle port；生产 Agent 实质只读 | root-handle access + mutation V2 通过安装包资格后逐 operation 开放                         |
-| Writing                                | 正文、创建和 Story Bible 多数提案已存在                       | 补齐专用查询、领域 lifecycle、metadata/outline inverse、审批 proof 和 editor sync          |
-| `creative_general`                     | 普通文件 UI/可信后端已存在，Agent schema 边界仍需证明         | replacement 成为 Core；生命周期逐项可选资格化                                              |
+| 领域                                   | `5c234d4` 基线                                                | 本计划的目标变化                                                                                    |
+| -------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| System Guidance                        | `2.1`，正文由当前 builder 生成                                | 注册并冻结 `2.1`；新增注册的 `3.0` builder 和 materialization proof                                 |
+| Prompt Artifact                        | `1.1`                                                         | 新增不兼容 `2.0` artifact；保存 registry key、冻结输入和独立 checksum                               |
+| Agent Run Tool Catalog                 | `1.0`，facade v1/v2 名称可能并存于代码                        | 新增 catalog 2.0；新 Run 只公开收敛后的 facade，旧 catalog 只按 legacy reader 恢复                  |
+| Context Snapshot                       | `1.4`                                                         | 新写入固定为 `2.0` authority/provenance/sharing 合同；旧 snapshot 只走旧 reader                     |
+| Message order                          | `1.0`                                                         | 新 Run 使用 `2.0`；current request 为首轮最后一条真实 user 指令                                     |
+| Untrusted envelope                     | 多个 legacy family                                            | 新增严格 `2.0` writer/parser；未知 kind/version 或 role 映射拒绝                                    |
+| Packed context manifest                | `1.2`                                                         | 新增 `2.0` canonical source/order/sharing/round identity                                            |
+| Canonical round manifest               | 无                                                            | 新增 `2.0`，与消息协议版本同步                                                                      |
+| Runtime facts/task intent              | 无                                                            | 分别新增 `1.0`，只从 app-owned frozen inputs 派生                                                   |
+| Writing generation guidance            | 旧永久文风包                                                  | 新增 `2.0`，只在正文生成/改写 task intent 注入                                                      |
+| Permission Summary                     | `1.1`                                                         | 新增 `2.0` 单一能力真值和逐 operation approval rules                                                |
+| Provider semantic version set          | 无                                                            | 新增严格 `1.0` version-set/checksum，统一绑定 artifact/预算/上下文/预览/cache/native proof          |
+| Approval rule/proof                    | 无                                                            | 新增 Schema/proof `1.0`；rule-set 实例使用不可变 version/checksum                                   |
+| Change Set                             | `1.0 / 1.1`，含确定性 `approvalToken`                         | 新 mutation 使用 `2.0`；公开 display checksum 与 Main-only apply capability 分离                    |
+| Approval binding/ledger                | 确定性 token                                                  | 新增 `2.0` Main-only capability 与 durable ledger；旧 token 不迁移                                  |
+| Run Snapshot/Event                     | `1.3`                                                         | 新增 `2.0` authority/protocol/finish/capability-changed/pending 状态合同                            |
+| Run Draft/Plan Artifact/Plan Execution | `1.1 / 1.0 / 1.0`                                             | 新增 `2.0` policy-draft/handoff 合同；旧记录只能恢复为请求逐项批准                                  |
+| Engineering journal                    | legacy/shared namespace                                       | 新增独立 Engineering V2 Journal namespace/schema/repository/reader；旧 journal 只走 legacy recovery |
+| Engineering                            | pathname read/save 与测试 lifecycle port；生产 Agent 实质只读 | root-handle access + mutation V2 通过安装包资格后逐 operation 开放                                  |
+| Writing                                | 正文、创建和 Story Bible 多数提案已存在                       | 补齐专用查询、领域 lifecycle、metadata/outline inverse、审批 proof 和 editor sync                   |
+| `creative_general`                     | 普通文件 UI/可信后端已存在，Agent schema 边界仍需证明         | 复用现有 lifecycle/session/backend，逐项资格化 replacement/create/move/delete 并全部纳入完成定义    |
 
 ### 2.1 工程 native adapter 的架构闸门
 
@@ -111,10 +112,10 @@ Batch 2/3/4/5/8 完成后 --> Batch 9  跨 Provider 评测、打包 E2E、发布
 | 2    | 消息协议 2.0、sharing、preview/ledger                          | 1                        | 可与 4 的 Repository 准备并行 | spy Provider 隐私与 preview binding 通过 |
 | 3    | 工作台命名和能力摘要 UI                                        | 1、2 的 DTO              | 可与 4/5 后端并行             | 展示与最终目录/Permission Summary 一致   |
 | 4    | Writing 领域 CRUD                                              | 1；启用/E2E 还需 2       | Repository 可与 2、5、6 并行  | 领域事务、dirty/editor sync、安装包 E2E  |
-| 5    | creative replacement、文风 2.0                                 | 1；启用/E2E 还需 2       | 后端/语料可与 2、4、6 并行    | replacement Core 闭环和检测 precision    |
+| 5    | creative 文件全 lifecycle、文风 2.0                            | 1；启用/E2E 还需 2       | 后端/语料可与 2、4、6 并行    | 全 operation 闭环和检测 precision        |
 | 6    | Engineering hardened access/read/index                         | 0、1、ADR；启用/E2E 需 2 | backend 可与 2、4、5 并行     | 正/负资格 probe；否则只读                |
 | 7    | Engineering mutation V2、replace/create                        | 1、2、6                  | 无                            | raw-byte/receipt/WAL/重放测试            |
-| 8    | move/delete/recovery/multi-file/editor sync                    | 1、2、7                  | create-directory 可独立       | 全 CRUD 安装包 E2E                       |
+| 8    | move/delete/create-directory/recovery/multi-file/editor sync   | 1、2、7                  | directory gate 可独立验证     | 全 CRUD 安装包 E2E                       |
 | 9    | 全局评测和发布收口                                             | 2-8 中准备发布的核心批次 | 无                            | release evidence 不得超报                |
 
 共享热点 `tool-registry.ts`、`agent-run-session.ts`、`agent-run-runtime.ts`、IPC 合同、Change Set/approval 和 Run schema 由主集成分支持有；并行任务通过新增小模块和已冻结接口对接，避免多个执行者同时重写共享文件。
@@ -154,19 +155,21 @@ Batch 2/3/4/5/8 完成后 --> Batch 9  跨 Provider 评测、打包 E2E、发布
 | `phaseE_remoteMcpEnabled`      | off  | network gate、Batch 1、9 | 移除全部 remote MCP descriptor/tool，令 `externalTools=none`；保留当前对 network gate 的依赖，撤销时不重放未知外部 action                                           |
 | `writingDomainCrudV2`          | off  | Batch 1、2、4            | 隐藏新增领域 mutation；保留已验证的旧只读/正文能力                                                                                                                  |
 | `creativeTrustedReplaceV2`     | off  | Batch 1、2、5            | `creative_general` 回到只读 Agent，普通编辑器不受影响                                                                                                               |
-| `creativeFileCreateV2`         | off  | Batch 1、2、独立资格     | 只移除 create 工具、operation 和 UI 标签                                                                                                                            |
-| `creativeFileMoveV2`           | off  | Batch 1、2、独立资格     | 只移除 move 工具、operation 和 UI 标签                                                                                                                              |
-| `creativeFileDeleteV2`         | off  | Batch 1、2、独立资格     | 只移除 delete 工具、operation 和 UI 标签                                                                                                                            |
+| `creativeFileCreateV2`         | off  | Batch 1、2、5 独立资格   | 资格完成前只移除 create 工具、operation 和 UI 标签；不得从本计划完成范围省略                                                                                        |
+| `creativeFileMoveV2`           | off  | Batch 1、2、5 独立资格   | 资格完成前只移除 move 工具、operation 和 UI 标签；不得从本计划完成范围省略                                                                                          |
+| `creativeFileDeleteV2`         | off  | Batch 1、2、5 独立资格   | 资格完成前只移除 delete 工具、operation 和 UI 标签；不得从本计划完成范围省略                                                                                        |
 | `engineeringHardenedAccessV1`  | off  | ADR、Batch 2、6          | engineering Agent 全部只读或不可索引；绝不 fallback pathname reader                                                                                                 |
 | `engineeringReplaceV2`         | off  | Batch 1、2、7            | 只移除 replace operation；不得影响其他已资格 operation                                                                                                              |
 | `engineeringCreateV2`          | off  | Batch 1、2、7            | 只移除 create operation；不得影响其他已资格 operation                                                                                                               |
 | `engineeringMoveV2`            | off  | Batch 1、2、8            | 只移除 move/rename operation；不得影响其他已资格 operation                                                                                                          |
 | `engineeringDeleteV2`          | off  | Batch 1、2、8            | 只移除 delete/recovery operation；不得影响其他已资格 operation                                                                                                      |
-| `engineeringDirectoryCreateV1` | off  | Batch 1、2、独立资格     | 不影响文件 CRUD Core 的其余 operation                                                                                                                               |
+| `engineeringDirectoryCreateV1` | off  | Batch 1、2、8 独立资格   | 资格完成前只移除 create-directory operation；本计划完成前必须通过                                                                                                   |
 | `approvalBindingV2`            | off  | Batch 1                  | 禁止所有 v2 mutation apply；不回退 deterministic token；因此 writing/creative/engineering 新 mutation 均不可标记 Complete                                           |
 | `writingStyleRulesV2`          | off  | Batch 1、2、5            | 回到旧检测展示；不得改变已冻结 Run guidance                                                                                                                         |
 
 能力撤销、flag 变化、root/policy/provider projection 漂移不在同一 Run 内热替换 guidance/tools；旧 Run进入 `capability_changed`，停止新的 Provider 调用，并要求显式创建 execution handoff 或新 Run。
+
+默认关闭和逐 operation 独立资格表示 fail-closed 发布门禁，不表示可以删除功能。creative create/move/delete 与 engineering create-directory 必须在本计划结束前各自通过资格；只有网络读取和远程 MCP 仍可按真实产品决定保持 Disabled。
 
 ### 4.3 回滚单位
 
@@ -185,6 +188,20 @@ Batch 2/3/4/5/8 完成后 --> Batch 9  跨 Provider 评测、打包 E2E、发布
 5. 每个子任务开始前声明独占文件、依赖接口和目标测试；交付时报告实际修改、实际测试、跳过项和残余风险。
 6. 批次内只跑最窄测试；批次门禁统一跑相关 suite、`typecheck` 和 `lint`，避免每个小任务重复跑全仓。
 7. 涉及 native、恢复或安装包安全的结论必须有真实 packaged black-box probe 和故意关闭保护的负对照；Mock/源码分支检查只能作补充。
+
+### 5.1 保留功能的执行压缩与 Windows CI
+
+本节只压缩重复实现和等待，不修改设计范围、完成定义或安全资格：
+
+1. Batch 5 的 creative lifecycle、文风 2.0 与 Batch 6 的 native source stream 在 Batch 1 接口冻结后并行启动；启用和 production E2E 仍分别等待 Batch 2，不得把另一个工作流的完成作为 source 开发前置。
+2. 复用现有 `creative-project-file-session.ts`、`agent-file-operation-session.ts`、`trusted-creative-file-operations.ts`、Change Set 2.0、Approval Binding/Ledger、Version Group、save coordinator 和 editor/tree/index sync。creative 的 replace/create/move/delete 使用一条按 operation 参数化的 proposal/apply 编排路径和 effect-specific validator，不建立四套 session/backend、profile-specific approval token 或第二套应用层文件操作框架。
+3. ADR-0003 的 access、mutation、receipt 与 recovery primitives 在同一个 Windows C++ Node-API addon、CMake 工程、manifest、签名链和 probe harness 中实现。B6 可同时落下后续 primitive，但只开放 access；replace/create 仍由 B7 gate，move/delete/create-directory 仍由 B8 gate。
+4. Engineering V2 Journal 的 schema/namespace/repository/strict reader、raw-byte blob/staging/receipt 与 recovery scanner 保持独立，不复用 writing/creative legacy journal。共享的是上层 Change Set、审批、版本组和 UI 合同，不是 durable authority。
+5. 共用合同和 happy-path 测试按 profile/operation 参数化，每个 operation 只另增 effect-specific 安全差异用例；native 保护负对照、trusted creative 竞态、Engineering V2 Journal 故障点和 packaged E2E 仍分别保留，不能用参数化 mock 代替。
+6. native 规范构建 workflow 固定为 `.github/workflows/engineering-file-access-native.yml`，在 `windows-latest` 使用 MSVC、Windows SDK 和 CMake，记录 toolchain/source identity，运行正向 probe、故意关闭保护的负对照和 fault probe，并上传 `.node`、manifest、SHA-256 与 probe report。本地机器可只消费校验后的 CI artifact，不要求安装 Visual Studio/Build Tools。
+7. 未签名 CI artifact 只能用于开发构建和 probe；production capability 仍要求安装包内 digest、Authenticode publisher、detached CMS、owner trust store 和 packaged qualification，不能由下载成功或普通 SHA 自洽代替。
+8. creative/language/native/application integration/qualification 分别提交；主代理持有共享热点与最终 gate，避免跨批次积累未提交改动或在上下文压缩后重复实施。
+9. 各 Task 的“修改文件”是候选 touchpoint，不是要求重写每个文件的清单。先审计已有能力与测试，只补缺失合同；批次以行为闭环和 gate 证据完成，不以修改文件数或新增代码量完成。
 
 ## 6. Batch 0：冻结基线与架构资格
 
@@ -234,6 +251,7 @@ Batch 2/3/4/5/8 完成后 --> Batch 9  跨 Provider 评测、打包 E2E、发布
 - `packages/agent-engine/test/engineering-file-contracts.test.ts`
 - `apps/desktop/src/main/engineering-file-access-qualification.ts`
 - `apps/desktop/test/engineering-file-access-qualification.test.ts`
+- `.github/workflows/engineering-file-access-native.yml`（Batch 0 落合同骨架，Batch 6 实现构建/probe job）
 
 **修改文件**
 
@@ -243,15 +261,15 @@ Batch 2/3/4/5/8 完成后 --> Batch 9  跨 Provider 评测、打包 E2E、发布
 - `apps/desktop/electron-builder.config.cjs`
 - `scripts/package-check.mjs`
 - `package.json`（仅在 ADR 决定需要新增构建/资格命令时）
-- `.github/workflows/ci.yml`（仅接入 ADR 定义的可重复构建/资格门）
+- `.github/workflows/ci.yml`（接入 native artifact/qualification 汇总门）
 
 **实施步骤**
 
-1. ADR 明确 native 源码和产物路径后，再把这些精确路径补入构建与打包配置；禁止在 ADR 前创建猜测性的 host 工程。
+1. ADR 采用本设计已固定的 `.github/workflows/engineering-file-access-native.yml`，并冻结唯一 addon 的 native 源码、产物、本机 artifact 消费及其他构建/打包精确路径。Batch 0 只落可验证的 workflow 合同骨架，Batch 6 在该固定路径补全实际构建与 probe；禁止创建猜测性 host 工程或第二套构建链。
 2. 定义 root/access/mutation/recovery attestation，missing、partial、unknown、stale、digest/signature mismatch、OS 不支持都归一化为 unavailable。
 3. qualification service 只由 Main 创建，Renderer、模型、项目文件和 IPC 输入不能构造或刷新 attestation。
 4. 建立正/负 probe 合同：负对照故意关闭 root-relative/no-follow/receipt/durability 保护，必须暴露 canary，否则 probe 无效。
-5. 明确开发包和发布包的资格差异；未签名/开发 host 不得产生 production attestation。
+5. 明确开发包和发布包的资格差异；Windows CI 可以使用 MSVC/Windows SDK/CMake 构建并上传开发 artifact，使本地 C++ 工具链成为可选，但未签名/开发 host 不得产生 production attestation。
 
 **验收**
 
@@ -989,7 +1007,7 @@ git diff --check
 
 ## 11. Batch 5：creative_general 与文风规则 2.0
 
-### Task 5.1：资格化普通文本 replacement
+### Task 5.1：资格化普通文本 replacement 与完整 lifecycle
 
 **修改文件**
 
@@ -1014,21 +1032,21 @@ git diff --check
 **实施步骤**
 
 1. `creative_general` 只接受项目 policy 允许的普通 UTF-8 文本 `file:` ref；managed chapter/Story Bible/app-state 路径在 schema 和后端双重拒绝。
-2. 生产 capability 从当前 bundled `phaseB_fileLifecycleEnabled` 迁移为逐 operation gates；首个 Core 目录只声明 `workspaceFileOperations=["replace_file"]`，旧 broad flag 不再自动开放 create/move/delete。
+2. 生产 capability 从当前 bundled `phaseB_fileLifecycleEnabled` 迁移为逐 operation gates；资格顺序先 replacement，再分别开放 create/move/delete，旧 broad flag 不再自动开放任何 operation。Batch 5 完成时四项必须全部通过，过程中未通过项保持 fail closed。
 3. replacement 绑定 Main 重读的 clean base checksum、selection/replacement 和 candidate checksum；dirty/stale/target race 生成新预览，不覆盖。
 4. 只有被选择分享或被解析为写入目标的 dirty 普通文件在 start 前要求保存/放弃/取消；未分享且无关的 dirty 文件不阻止只读运行。处理后由 Main 重读，Renderer buffer 不作为 base。
 5. 保持格式、缩进、EOL 和未修改区域，只提交请求所需最小 replacement；完整 apply/readback 后才报告已写入。
 6. 文件系统 search 只发可由 `read_resource` 继续读取的 `file:` ref；writing 的不可读 `memory:` 命中不进入 Provider result。
-7. create/move/delete 各自建立独立 capability/测试/evidence；若资格化，Provider 名称固定为 `create_resource(kind=file)`、`propose_file_move`、`propose_file_delete`，不复活宽泛 `manage_path`。未通过者保持关闭，不影响 replacement Core 结论。
+7. create/move/delete 各自建立独立 capability/测试/evidence，Provider 名称固定为 `create_resource(kind=file)`、`propose_file_move`、`propose_file_delete`，不复活宽泛 `manage_path`。每项绑定 exact base/absence/source/destination proof、共享 v2 approval reservation、transaction/recovery、undo 和 editor/tree sync；未通过者保持关闭，但缺少任一项都不能结束本计划或标记 Agent Core Complete。
 8. `trusted_creative` 的安全描述保持现有边界，不宣传为抵御恶意同用户路径竞态的 hardened native。
 9. catalog 2.0 snapshot 精确断言 creative replacement 使用 `edit_text(file:)`；同一目录不存在 `propose_file_write`/`manage_path` 或其他 legacy 同义入口，未资格化 lifecycle 名称完全缺席。
 10. creative replacement/lifecycle apply 只消费 Task 1.2b 的共享 v2 approval reservation；binding flag 或可信确认来源不可用时保持只读/提案预览，不得回退旧 token。
 
 **验收**
 
-- list/read/search/replace 在真实 Desktop 生产接线通过；managed path、project switch、dirty/stale、symlink/reparse 和竞态 fail closed。
-- 至少 replacement 具备 Change Set、审批、version group、transaction/recovery、undo 和 editor sync。
-- catalog exact-name/no-legacy-synonym 测试在后续逐项开放 lifecycle 时持续通过。
+- list/read/search/replace/create/move/delete 在真实 Desktop 生产接线和安装包 E2E 通过；managed path、project switch、dirty/stale、symlink/reparse 和竞态 fail closed。
+- replacement 与全部 lifecycle operation 具备 Change Set、审批、version group、transaction/recovery、undo 和 editor sync。
+- catalog exact-name/no-legacy-synonym 测试在逐项开放 lifecycle 时持续通过，最终目录包含且只包含已完成资格的四项 mutation。
 
 ### Task 5.2：实现 task intent 与 diff-aware 文风检测
 
@@ -1086,16 +1104,17 @@ git diff --check
 
 建议提交：
 
-1. `feat(agent): qualify trusted creative text replacement`
+1. `feat(agent): qualify trusted creative text lifecycle`
 2. `feat(writing): add task-scoped diff-aware style guidance`
 
 ## 12. Batch 6：Engineering hardened access、索引与当前文件
 
-### Task 6.1：实现 ADR 指定的打包 native access backend
+### Task 6.1：实现单一 native addon 的 access 与后续 mutation/recovery primitives
 
 **新增文件**
 
 - ADR-0003 指定的 native host/source/build/probe 文件
+- `.github/workflows/engineering-file-access-native.yml`
 - `packages/agent-engine/src/canonical-leaf-name.ts`
 - `packages/agent-engine/src/engineering-path-policy.ts`
 - `packages/agent-engine/test/canonical-leaf-name.test.ts`
@@ -1114,7 +1133,8 @@ git diff --check
 - `apps/desktop/src/main/agent-run-runtime.ts`
 - `apps/desktop/electron-builder.config.cjs`
 - `scripts/package-check.mjs`
-- ADR 指定的构建/签名/CI 文件
+- ADR 指定的构建/签名文件
+- `.github/workflows/ci.yml`
 
 **实施步骤**
 
@@ -1126,11 +1146,15 @@ git diff --check
 6. `AGENTS.md`、`.gitignore` 等 policy-managed 默认只读；若产品明确允许编辑，只能在用户显式目标下生成独立、始终人工审批的精确 Change Set，应用后终止旧 Run 并重新派生能力。ignored-generated 仅接受 Main UI 的本 Run 精确路径 grant，且 mutation 始终人工。
 7. access snapshot/snippet/ref 绑定 root/policy revision；发送前重验，stale index 清空，不能泄露已变 hard-denied 的名称/正文。
 8. 资格 probe 同时覆盖 Windows reparse 和 POSIX symlink；只有实际支持平台通过才生成 `hardened_native`。
+9. access、mutation、receipt 与 recovery primitives 共用 ADR-0003 的唯一 addon/source/CMake/manifest/sign/probe 路径。可以在本任务提前实现并测试后续 primitive，但 Batch 6 attestation 只授予 root/access/read/index；任何 mutation flag、tool、runtime fact 和 UI 仍保持关闭。
+10. `.github/workflows/engineering-file-access-native.yml` 在 `windows-latest` 构建唯一 addon，记录 runner/toolchain/Node-API/source identity，运行 ABI/load、正向保护、故意关闭保护的负对照和 fault probe，并上传 `.node`、manifest、SHA-256 与 probe report。开发机可以只下载校验后的 artifact，不要求安装本地 C++ 工具链。
+11. 未签名 CI artifact 不能产生 production attestation。正式资格仍以安装包内 digest、Authenticode publisher、detached CMS、owner trust store 与 packaged probe 为准；任何 access/mutation/recovery source 变化都重建同一 artifact 并重跑完整 probe。
 
 **验收**
 
 - 安装包正/负 probe 覆盖 root replacement、nested reparse/symlink、ADS/device/UNC、hard link、special file 和 stale index，断言零根外读取/名称泄露。
 - pathname repository 只作迁移参考/普通 UI 后端，不可注入 Agent hardened capability。
+- Windows CI artifact 的 source/toolchain/manifest/probe identity 可复现；本机下载产物与 CI SHA-256 不一致时拒绝加载，且未签名产物始终保持 production capability off。
 
 ### Task 6.2：迁移工程 list/read/search/index 到同一 access port
 
@@ -1200,6 +1224,8 @@ git diff --check
 
 另运行 ADR 指定的 packaged black-box access qualification 命令和负对照。任一平台未通过时，该平台保持 engineering read-only，不能进入 Batch 7 发布资格。
 
+native source 可以从专用 Windows CI 构建并下载实际 artifact；本地 Visual Studio/Build Tools 不是门禁。无论产物在本机还是 CI 构建，package/probe/签名/manifest 资格完全相同。
+
 建议提交：
 
 1. `feat(engineering): add qualified root-handle workspace access`
@@ -1253,7 +1279,7 @@ git diff --check
 - `packages/repository/test/engineering-recovery-gate.test.ts`
 - `apps/desktop/src/main/engineering-recovery-runtime.ts`
 - `apps/desktop/test/engineering-recovery-runtime.test.ts`
-- ADR-0003 指定的 native mutation/receipt/probe 文件
+- 扩展 Task 6.1 同一 addon/source stream 的 mutation/receipt/recovery exports 与 probe cases
 
 **修改文件**
 
@@ -1272,8 +1298,8 @@ git diff --check
 
 1. V2 输入绑定 content root、tx/op、before/after raw-byte manifest、不可变 candidate/before blob、预分配 staging/recovery object；delete 的 recovery root 留给 Batch 8。
 2. manifest 保存 bytes SHA-256、size、encoding/BOM/EOL、identity 和必要 metadata；JS string/void legacy port 永远不能取得 engineering 资格。
-3. native 在一次边界内完成 handle-relative revalidation + mutation，返回绑定 root/tx/op/observed before/after/durability 的 receipt；外层验证 receipt 后才推进 WAL。
-4. engineering V2 使用与 writing/creative legacy journal 分离的 schema namespace、repository 和 strict parser；Engineering Transaction Journal writer 固定 `schemaVersion: "2.0"` 并绑定 Change Set/approval ledger 的同一 `providerSemanticVersionSetChecksum`，unknown/mismatch 拒绝，legacy journal 只由 legacy recovery reader 处理且不能迁移后继续 apply。prepared record、blob、WAL、staging ID 和 inverse 在首笔 mutation 前 durable，步骤顺序固定为文件/目录 flush -> receipt/after 验证 -> progress WAL flush。
+3. native 在 Task 6.1 的同一 addon/root-handle session 内完成 handle-relative revalidation + mutation，返回绑定 root/tx/op/observed before/after/durability 的 receipt；不得创建第二个 native host、构建链或 probe harness，外层验证 receipt 后才推进 Engineering V2 Journal。
+4. 复用共享 Change Set、Approval Binding/Ledger、runtime/session、Version Group、save coordinator 和 editor/tree/index sync；仅 Engineering V2 Journal、raw-byte receipt/blob/staging/WAL/recovery schema、repository 与 strict parser 保持独立，不复用 writing/creative journal。Engineering V2 Journal writer 固定 `schemaVersion: "2.0"` 并绑定 Change Set/approval ledger 的同一 `providerSemanticVersionSetChecksum`，unknown/mismatch 拒绝，legacy journal 只由 legacy recovery reader 处理且不能迁移后继续 apply。prepared record、blob、staging ID 和 inverse 在首笔 mutation 前 durable，步骤顺序固定为文件/目录 flush -> receipt/after 验证 -> progress record flush。
 5. replace 保留 BOM、EOL、逐字节未修改区域和已资格化 metadata；已有多 hard-link 叶节点默认拒绝，或仅使用另行资格化的 copy-on-replace 切断别名，绝不原地改外部 alias。create 使用固定安全 metadata，不接收 mode/owner。
 6. commit marker 前重验完整 after manifest；外部新编辑导致 neither/unknown 时零覆盖进入 recovery review。
 7. 测试每个 blob/WAL/staging/rename/receipt/progress/commit 崩溃点，不能把多文件称作文件系统原子写。
@@ -1350,7 +1376,7 @@ git diff --check
 **修改文件**
 
 - `packages/repository/src/engineering-file-mutation-port-v2.ts`
-- ADR-0003 指定的 native mutation 文件
+- 扩展 Task 6.1 同一 addon/source stream 的 move/case-rename exports 与 probe cases
 - `packages/repository/test/engineering-file-mutation-port-v2.test.ts`
 - `packages/application/src/agent-file-operation-session.ts`
 - `packages/application/test/agent-file-operation-session.test.ts`
@@ -1400,9 +1426,9 @@ git diff --check
 **实施步骤**
 
 1. delete 工具仅在 Task 7 的 workspace recovery gate clear，且 content root 同卷存在独立授权、identity-disjoint、app-owned recovery root handle 时公开；父目录可写不是第二根授权。
-2. 扩展既有 gate 校验 volume-local recovery authority、容量、manifest/孤儿状态。recovery binding 冻结 root ID、volume/device、directory identity、grant/authority revision、ownership marker 和 ACL/mode qualification，并进入 approval side-effect preview、WAL、native input 和 receipt；delete Approval Binding 2.0 强制绑定 `recoveryRootBindingId + recoveryGrantRevision + recoverySideEffectChecksum` 与既有 provider version-set checksum，任一缺失/变化要求重审批。
+2. 扩展既有 gate 校验 volume-local recovery authority、容量、manifest/孤儿状态。recovery binding 冻结 root ID、volume/device、directory identity、grant/authority revision、ownership marker 和 ACL/mode qualification，并进入 approval side-effect preview、Engineering V2 Journal record、native input 和 receipt；delete Approval Binding 2.0 强制绑定 `recoveryRootBindingId + recoveryGrantRevision + recoverySideEffectChecksum` 与既有 provider version-set checksum，任一缺失/变化要求重审批。
 3. delete 语义是原子移动到同卷 quarantine，不 unlink；Provider 无法列出、寻址、restore 或 purge quarantine。
-4. global WAL 与 volume object manifest 双向绑定并扫描孤儿；capacity/retention/pin 可审计，未完成 recovery/undo window 内不可 purge。
+4. Engineering V2 global record 与 volume-local object manifest 双向绑定并扫描孤儿；二者都属于 Engineering V2 Journal，capacity/retention/pin 可审计，未完成 recovery/undo window 内不可 purge。
 5. restore 仅在原路径仍允许且不存在时生成用户预览；冲突/策略变化不覆盖。永久 purge 只属独立本地用户操作或到期策略。
 6. 受信 UI 显示用户可识别的 recovery storage label、authority/grant 状态、容量和保留期。当 app `stateRoot` 与 content root 不同卷时，安装程序预配置位置或用户通过独立 OS 目录授权选择的位置仍必须位于 content root 所在卷；“跨卷”只表示它相对 app `stateRoot` 的位置，绝不允许 quarantine 与 content root 跨卷。实际路径、handle 和 quarantine object 不进入 Provider 或 Renderer 可编辑状态。
 7. move/delete 始终人工；“替我审批”不扩大 recovery root、path 或 sharing grant。
@@ -1445,7 +1471,7 @@ git diff --check
 6. commit 后统一刷新 editor/tree/index；rollback/undo/recovery 同步同样路径。已提交 undo 使用当前 hash 生成新 inverse Change Set 并重新审批。
 7. Renderer 延迟 dirty event、crash/unknown state、跨 workspace 同名路径和 apply 中途变 dirty 都 fail closed。
 
-### Task 8.4：独立资格化 create-directory（可选）
+### Task 8.4：资格化 create-directory（独立门）
 
 **修改文件**
 
@@ -1458,7 +1484,7 @@ git diff --check
 
 1. 只允许 parentRef + 单一 canonical leaf；不支持 recursive、parents、overwrite 或目录删除。
 2. 始终人工审批；内部补偿可使用 `remove_empty_directory`，但 Provider 不公开该工具。
-3. 未单独通过 native/transaction/recovery/UI/E2E 时 flag 保持关闭；不阻止文件 CRUD Core 完成。
+3. 未单独通过 native/transaction/recovery/UI/E2E 时 flag 保持关闭；但本计划和 Agent Core Complete 要求该独立门最终通过，不能以其他文件 CRUD 已完成替代。
 
 **Batch 8 门禁与建议提交**
 
@@ -1473,14 +1499,14 @@ git diff --check
 
 另运行 ADR 指定的安装包 E2E：root replacement、read/write reparse race、hard-link、case-only 两步崩溃、`stateRoot`/content root 跨卷但 recovery root 与 content root 同卷的场景、每个 durable flush/receipt/commit 故障点、startup hydrate/autosave 竞争、multi-file compensation 和 undo。
 
-只有 replace/create/move/delete 全部通过，engineering 才计入 Agent Core Complete；create-directory 可单独 Disabled。
+只有 replace/create/move/delete/create-directory 全部通过，engineering 才计入 Agent Core Complete。任一项资格失败时仍按逐 operation fail closed 展示真实能力，但不得把本计划或 Agent Core 标为完成。
 
 建议提交：
 
 1. `feat(engineering): add reviewed file move and case rename recovery`
 2. `feat(engineering): add volume-local recoverable deletion`
 3. `feat(engineering): gate workspace recovery and synchronize editors`
-4. `feat(engineering): qualify directory creation`（可选且独立）
+4. `feat(engineering): qualify directory creation`（独立资格提交）
 
 ## 15. Batch 9：评测、打包验证与发布收口
 
@@ -1569,8 +1595,8 @@ git diff --check
 1. 四 profile 的名称、能力标签和 system/context/tool 预览准确。
 2. Plan 可见未来审批策略但当前只读；Act 边界重新确认；新 Run 不继承有限预授权。
 3. writing 完成章节/Story Bible 查增改、archive、逻辑删除/恢复、改名/排序，dirty 内容不丢失。
-4. creative file replacement 可审阅、应用、恢复和撤销；未资格化 lifecycle 不出现。
-5. engineering 完成文件查增改删移动/重命名，删除可恢复，重启 recovery gate 有效，且 UI 明示无 Shell/任务/Git。
+4. creative file replacement/create/move/delete 可审阅、应用、恢复和撤销；每项都通过真实安装包入口，未通过时整个 Agent Core release gate 保持阻塞。
+5. engineering 完成文件查增改删移动/重命名与单层目录创建，删除可恢复，重启 recovery gate 有效，且 UI 明示无 Shell/任务/Git。
 6. 首次预览与首轮一致，后续发送账本可审计，未选择内容和敏感 metadata 不上传。
 7. 旧 2.1 Run 可逐字恢复；未知/篡改版本、旧 token 和旧 pending Change Set 不能越权应用。
 
@@ -1618,8 +1644,8 @@ git diff --check
 2. system runtime facts、Permission Summary、UI 和 Provider tools 对真实能力逐项一致。
 3. Plan 当前只读；未来 Act 策略可见但不授权；进入 Act 只在 Accepted ADR-0004 指定的可信表面显式确认，有限预授权仍只适用合格 proposal proof；TCB 资格缺失时按合同禁用。
 4. writing 完成章节和 Story Bible 领域查增改、archive、tombstone delete/restore、章节 rename/reorder/volume，且事务/history/dirty/editor sync 完整。
-5. `creative_general` 至少完成普通文本 list/read/search/replacement 的生产闭环；create/move/delete 未完成时准确禁用。
-6. engineering 在支持平台通过 hardened list/read/search/index 和 UTF-8 文件 replace/create/move/delete；所有 mutation 使用 v2 receipt、审批 binding、WAL、恢复、undo 和 editor/tree sync。
+5. `creative_general` 完成普通 UTF-8 文本 list/read/search/replace/create/move/delete 的生产闭环；缺少任一项时不能标记 Agent Core Complete。
+6. engineering 在支持平台通过 hardened list/read/search/index 和 UTF-8 文件 replace/create/move/delete/create-directory；所有 mutation 使用 v2 receipt、审批 binding、独立 Engineering V2 Journal、恢复、undo 和 editor/tree sync。
 7. context 可预览、可预算、最小披露；未授权正文、敏感名称和本地 identity 不进入 Provider，四 profile materialized authority 通过固定 estimator token 上限。
 8. start/preview/refresh/exclude/compact/hydrate/handoff 不改变 authority、版本、能力或审批分类。
 9. completion、blocking、pending、apply、verification 和 recovery 都有可持久化证据；模型不能只靠文字声明完成。
@@ -1632,4 +1658,4 @@ git diff --check
 - 本计划保持 Candidate，执行过程中只在每个批次真实完成后记录提交和证据，不预先改 Complete。
 - `docs/releases/stage5-agent-tool-evidence.json` 是发布能力真值；设计/计划中的目标文字不能替代它。
 - ADR-0003、ADR-0004、schema migration notes、legacy recovery policy 和 packaged qualification report 必须随实现存在。
-- 未通过的 optional capability 明确记录为 Disabled/Deferred，并保持 flag/tool/UI 三处关闭。
+- 未通过的真正 optional capability 明确记录为 Disabled/Deferred，并保持 flag/tool/UI 三处关闭；creative lifecycle 与 engineering create-directory 不属于可省略项。
