@@ -37,7 +37,9 @@ try {
   throw new Error("Production signing requires readable native positive/negative probe evidence");
 }
 if (!hasProductionProbeEvidence(probeEvidence)) {
-  throw new Error("Production signing requires every native protection and disabled-protection canary");
+  throw new Error(
+    "Production signing requires every native protection and disabled-protection canary"
+  );
 }
 const signtool = (await run("where.exe", ["signtool.exe"])).stdout.trim().split(/\r?\n/u)[0];
 await run(signtool, [
