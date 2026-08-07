@@ -6,8 +6,13 @@ on:
     branches:
       - "codex/**"
     paths:
+      - ".github/workflows/engineering-file-access-native.yml"
       - "native/engineering-file-access-win32/**"
+      - "apps/desktop/electron-builder.config.cjs"
+      - "apps/desktop/src/main/engineering-file-access-qualification.ts"
+      - "apps/desktop/test/engineering-file-access-package.e2e.ts"
       - "scripts/build-engineering-file-access-win32.mjs"
+      - "scripts/package-check.mjs"
       - "scripts/sign-engineering-file-access-win32.mjs"
       - "scripts/probe-engineering-file-access-package.mjs"
 
