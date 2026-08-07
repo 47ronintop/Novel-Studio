@@ -39,10 +39,22 @@ jobs:
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw "Visual Studio discovery tool is unavailable" }
           $vsRoot = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          $vsVersion = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion).Trim()
           $vsDevCmd = Join-Path $vsRoot "Common7\Tools\VsDevCmd.bat"
-          if ([string]::IsNullOrWhiteSpace($vsRoot) -or -not (Test-Path -LiteralPath $vsDevCmd -PathType Leaf)) {
+          if ([string]::IsNullOrWhiteSpace($vsRoot) -or [string]::IsNullOrWhiteSpace($vsVersion) -or -not (Test-Path -LiteralPath $vsDevCmd -PathType Leaf)) {
             throw "Visual Studio C++ tools are unavailable"
           }
+          # Do not ask CMake to rediscover a registered Visual Studio instance.  The hosted
+          # image exposes the C++ toolset through VsDevCmd, and CMake's bundled Ninja can use
+          # that already-qualified environment directly.
+          $ninja = (Get-Command ninja.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
+          if (-not $ninja) {
+            $bundledNinja = Join-Path $vsRoot "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+            if (Test-Path -LiteralPath $bundledNinja -PathType Leaf) {
+              $ninja = $bundledNinja
+            }
+          }
+          if (-not $ninja) { throw "Ninja is unavailable from the discovered Visual Studio toolchain" }
           $command = 'call "{0}" -no_logo -host_arch=x64 -arch=x64 && lib.exe /nologo /machine:X64 /def:"{1}" /out:"{2}"' -f $vsDevCmd, $nodeApiDef, $nodeLibrary
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $nodeLibrary -PathType Leaf)) {
@@ -50,6 +62,10 @@ jobs:
           }
           "NODE_API_INCLUDE_DIR=$include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "NODE_LIBRARY=$nodeLibrary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ENGINEERING_FILE_ACCESS_VSDEVCMD=$vsDevCmd" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ENGINEERING_FILE_ACCESS_VS_VERSION=$vsVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ENGINEERING_FILE_ACCESS_CMAKE_GENERATOR=Ninja" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_MAKE_PROGRAM=$ninja" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build the canonical addon
         shell: pwsh
         run: |
