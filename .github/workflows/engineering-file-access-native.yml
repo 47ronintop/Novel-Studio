@@ -24,7 +24,7 @@ jobs:
       - name: Install Node-API headers (no native toolchain install)
         shell: pwsh
         run: |
-          npm install --no-save --ignore-scripts node-api-headers@9.0.0
+          npm install --no-save --ignore-scripts node-api-headers@1.9.0
           $include = Join-Path (Resolve-Path "node_modules/node-api-headers") "include"
           if (-not (Test-Path (Join-Path $include "node_api.h"))) { throw "Node-API headers are unavailable" }
           "NODE_API_INCLUDE_DIR=$include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
