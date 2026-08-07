@@ -20,7 +20,7 @@ const nodeLibrary = process.env.NODE_LIBRARY ?? join(process.execPath, "..", "no
 try {
   await stat(nodeLibrary);
 } catch {
-  throw new Error("NODE_LIBRARY must point to node.lib from the CI Node runtime");
+  throw new Error("NODE_LIBRARY must point to the CI-provided Node-API import library");
 }
 const cmakeVersion = (await run("cmake", ["--version"])).stdout.split(/\r?\n/u)[0].trim();
 const buildDir = join(root, "native", "engineering-file-access-win32", ".build", "win32-x64");
