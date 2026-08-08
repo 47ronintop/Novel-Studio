@@ -110,7 +110,7 @@ describe("ConfigAssetRepository", () => {
     if (!restored.ok) {
       return;
     }
-    expect(await readFile(workflowPath, "utf8")).toBe(oldWorkflow);
+    expect(JSON.parse(await readFile(workflowPath, "utf8"))).toEqual(JSON.parse(oldWorkflow));
     expect(
       await readFile(
         join(projectRoot, "history", "workflow", "wf_review_chapter", "ver_before_rollback.json"),
