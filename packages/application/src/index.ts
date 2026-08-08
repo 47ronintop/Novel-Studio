@@ -450,9 +450,12 @@ export {
   parseWritingStyleCorpus,
   parseWritingStyleCorpusManifest,
   qualifyWritingStyleCorpus,
-  sha256Utf8
+  sha256Utf8,
+  verifyWritingStyleCorpusArtifact
 } from "./ai-writing-style-corpus.js";
 export type {
+  WritingStyleCorpusArtifactVerificationInput,
+  WritingStyleCorpusArtifactVerificationResult,
   WritingStyleCorpusAnnotatorLabelsV1,
   WritingStyleCorpusConfidence,
   WritingStyleCorpusLabelV1,

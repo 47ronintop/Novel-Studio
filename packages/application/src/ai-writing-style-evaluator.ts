@@ -92,26 +92,48 @@ export function evaluateAiWritingStyle(
   options: EvaluateAiWritingStyleOptions
 ): AiWritingStyleEvaluation {
   const rulePack = options.rulePack ?? DEFAULT_AI_WRITING_STYLE_RULE_PACK;
-  // Keep the baseline scan on the same frozen rule pack.  Classification is
-  // range-based, so duplicate phrases do not need a lossy occurrence counter.
-  scanText(options.baselineText, rulePack);
+  // Keep the baseline scan on the same frozen rule pack. Equivalent findings
+  // are consumed as a multiset: unchanged candidate findings claim their
+  // baseline counterpart first, so a newly-added duplicate cannot inherit the
+  // old finding's pre-existing status.
+  const baselineFindings = scanText(options.baselineText, rulePack);
   const candidateFindings = scanText(options.candidateText, rulePack);
   const changedCandidateRanges = findChangedCandidateRanges(
     options.baselineText,
     options.candidateText
   );
-  const hits = candidateFindings
+  const sortedCandidateFindings = candidateFindings
     .sort((left, right) => left.startOffset - right.startOffset || left.endOffset - right.endOffset)
-    .map((finding) => {
-      const intersectsChangedRange = changedCandidateRanges.some((range) =>
+    .map((finding) => ({
+      finding,
+      intersectsChangedRange: changedCandidateRanges.some((range) =>
         rangesIntersect(finding, range)
-      );
-      const changeKind: AiWritingStyleChangeKind = intersectsChangedRange
-        ? "introduced"
-        : "pre_existing";
+      )
+    }));
+  const availableBaselineFindings = baselineFindingMultiset(baselineFindings);
+  const changeKinds = new Map<CandidateFinding, AiWritingStyleChangeKind>();
 
-      return toEvaluationHit(options.candidateText, finding, changeKind);
-    });
+  // Claim equivalents for unchanged findings before examining changed spans.
+  // An unchanged span is always pre-existing; consuming its baseline
+  // counterpart only prevents a later added duplicate from inheriting that
+  // identity.
+  for (const candidate of sortedCandidateFindings) {
+    if (candidate.intersectsChangedRange) continue;
+    consumeEquivalentBaselineFinding(availableBaselineFindings, candidate.finding);
+    changeKinds.set(candidate.finding, "pre_existing");
+  }
+  for (const candidate of sortedCandidateFindings) {
+    if (!candidate.intersectsChangedRange) continue;
+    changeKinds.set(
+      candidate.finding,
+      consumeEquivalentBaselineFinding(availableBaselineFindings, candidate.finding)
+        ? "pre_existing"
+        : "introduced"
+    );
+  }
+  const hits = sortedCandidateFindings.map(({ finding }) =>
+    toEvaluationHit(options.candidateText, finding, changeKinds.get(finding) ?? "introduced")
+  );
 
   const hitCount = hits.filter(
     (hit) => hit.changeKind === "introduced" && hit.confidence !== "low"
@@ -128,6 +150,7 @@ export function evaluateAiWritingStyle(
 
 function scanText(text: string, pack: AiWritingStyleRulePack): CandidateFinding[] {
   const findings: CandidateFinding[] = [];
+  const quotedRanges = quotedTextRanges(text);
   for (const rule of pack.rules) {
     if (rule.ruleId === "mechanical-emotion") {
       findings.push(...scanMechanicalEmotion(text, rule));
@@ -143,30 +166,42 @@ function scanText(text: string, pack: AiWritingStyleRulePack): CandidateFinding[
     }
     for (const phrase of rule.phrases ?? []) {
       for (const startOffset of findPhraseOffsets(text, phrase)) {
+        const endOffset = startOffset + phrase.length;
+        // Generic phrase rules must not diagnose quoted prose or dialogue.
+        // Structural rules retain their existing sentence-level quote handling.
+        if (isWithinQuotedRange(startOffset, endOffset, quotedRanges)) continue;
         findings.push({
           rule,
           startOffset,
-          endOffset: startOffset + phrase.length,
+          endOffset,
           matchedText: phrase,
           confidence: "medium"
         });
       }
     }
   }
-  return findings;
+  const uniqueFindings = new Map<string, CandidateFinding>();
+  for (const finding of findings) {
+    const key = `${finding.rule.ruleId}\u0000${finding.startOffset}\u0000${finding.endOffset}\u0000${finding.confidence}`;
+    if (!uniqueFindings.has(key)) uniqueFindings.set(key, finding);
+  }
+  return [...uniqueFindings.values()];
 }
 
 function scanMechanicalEmotion(text: string, rule: AiWritingStyleRule): CandidateFinding[] {
   const lowFindings: CandidateFinding[] = [];
+  const quotedRanges = quotedTextRanges(text);
   for (const phrase of rule.phrases ?? []) {
     if (GUIDANCE_ONLY_PHRASES.has(phrase) || !MECHANICAL_EMOTION_PHRASES.has(phrase)) {
       continue;
     }
     for (const startOffset of findPhraseOffsets(text, phrase)) {
+      const endOffset = startOffset + phrase.length;
+      if (isWithinQuotedRange(startOffset, endOffset, quotedRanges)) continue;
       lowFindings.push({
         rule,
         startOffset,
-        endOffset: startOffset + phrase.length,
+        endOffset,
         matchedText: phrase,
         confidence: "low"
       });
@@ -204,16 +239,29 @@ function scanStackedSimile(text: string, rule: AiWritingStyleRule): CandidateFin
       return [];
     }
     const startOffset = sentence.startOffset + first.index;
+    const secondSimileEndOffset = second.index + "像".length;
+    const localEndOffset = endAfterNextNonWhitespaceGrapheme(sentence.text, secondSimileEndOffset);
+    const endOffset = sentence.startOffset + localEndOffset;
     return [
       {
         rule,
         startOffset,
-        endOffset: sentence.startOffset + second.index + 1,
-        matchedText: text.slice(startOffset, sentence.startOffset + second.index + 1),
+        endOffset,
+        matchedText: text.slice(startOffset, endOffset),
         confidence: "medium" as const
       }
     ];
   });
+}
+
+function endAfterNextNonWhitespaceGrapheme(text: string, startOffset: number): number {
+  for (const range of graphemeRanges(text)) {
+    if (range.startOffset < startOffset) continue;
+    if (/\S/u.test(text.slice(range.startOffset, range.endOffset))) {
+      return range.endOffset;
+    }
+  }
+  return startOffset;
 }
 
 function scanExplanatoryContrast(text: string, rule: AiWritingStyleRule): CandidateFinding[] {
@@ -259,7 +307,7 @@ function splitSentences(
 }
 
 function containsQuotedText(text: string): boolean {
-  return /[“”"'‘’]/u.test(text);
+  return /[“”"'‘’「」『』]/u.test(text);
 }
 
 function findPhraseOffsets(text: string, phrase: string): number[] {
@@ -274,6 +322,84 @@ function findPhraseOffsets(text: string, phrase: string): number[] {
     cursor = startOffset + Math.max(phrase.length, 1);
   }
   return offsets;
+}
+
+function baselineFindingMultiset(
+  findings: readonly CandidateFinding[]
+): Map<string, CandidateFinding[]> {
+  const multiset = new Map<string, CandidateFinding[]>();
+  for (const finding of findings) {
+    const key = equivalentFindingKey(finding);
+    const entries = multiset.get(key);
+    if (entries === undefined) {
+      multiset.set(key, [finding]);
+    } else {
+      entries.push(finding);
+    }
+  }
+  return multiset;
+}
+
+function consumeEquivalentBaselineFinding(
+  multiset: Map<string, CandidateFinding[]>,
+  finding: CandidateFinding
+): boolean {
+  const key = equivalentFindingKey(finding);
+  const entries = multiset.get(key);
+  if (entries === undefined || entries.length === 0) return false;
+  entries.pop();
+  return true;
+}
+
+function equivalentFindingKey(finding: CandidateFinding): string {
+  return `${finding.rule.ruleId}\u0000${finding.matchedText}\u0000${finding.confidence}`;
+}
+
+function quotedTextRanges(text: string): TextRange[] {
+  const ranges: TextRange[] = [];
+  const openToClose: Readonly<Record<string, string>> = {
+    "“": "”",
+    "‘": "’",
+    "「": "」",
+    "『": "』"
+  };
+  const stack: Array<{ readonly startOffset: number; readonly close: string }> = [];
+  for (let offset = 0; offset < text.length; offset += 1) {
+    const character = text[offset] ?? "";
+    const expectedClose = stack.at(-1)?.close;
+    if (expectedClose === character) {
+      const opened = stack.pop();
+      if (opened !== undefined)
+        ranges.push({ startOffset: opened.startOffset, endOffset: offset + 1 });
+      continue;
+    }
+    const close = openToClose[character];
+    if (close !== undefined) {
+      stack.push({ startOffset: offset, close });
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      if (expectedClose === character) {
+        const opened = stack.pop();
+        if (opened !== undefined)
+          ranges.push({ startOffset: opened.startOffset, endOffset: offset + 1 });
+      } else {
+        stack.push({ startOffset: offset, close: character });
+      }
+    }
+  }
+  for (const opened of stack) {
+    ranges.push({ startOffset: opened.startOffset, endOffset: text.length });
+  }
+  return ranges;
+}
+
+function isWithinQuotedRange(
+  startOffset: number,
+  endOffset: number,
+  ranges: readonly TextRange[]
+): boolean {
+  return ranges.some((range) => startOffset >= range.startOffset && endOffset <= range.endOffset);
 }
 
 function findChangedCandidateRanges(baseline: string, candidate: string): TextRange[] {
@@ -520,7 +646,11 @@ function graphemeRanges(text: string): TextRange[] {
     const nextIndex = index + codePoint.length;
     const joinsPrevious =
       index > 0 &&
-      (previousWasJoiner || isCombiningMark(codePoint) || isVariationSelector(codePoint));
+      (codePoint === "\u200d" ||
+        previousWasJoiner ||
+        isCombiningMark(codePoint) ||
+        isVariationSelector(codePoint) ||
+        isEmojiModifier(codePoint));
     if (!joinsPrevious) {
       if (index > clusterStart) {
         ranges.push({ startOffset: clusterStart, endOffset: index });
@@ -545,4 +675,9 @@ function isVariationSelector(value: string): boolean {
   return (
     (codePoint >= 0xfe00 && codePoint <= 0xfe0f) || (codePoint >= 0xe0100 && codePoint <= 0xe01ef)
   );
+}
+
+function isEmojiModifier(value: string): boolean {
+  const codePoint = value.codePointAt(0) ?? 0;
+  return codePoint >= 0x1f3fb && codePoint <= 0x1f3ff;
 }

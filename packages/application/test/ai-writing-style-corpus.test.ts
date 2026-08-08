@@ -7,7 +7,8 @@ import {
   parseWritingStyleCorpus,
   parseWritingStyleCorpusManifest,
   qualifyWritingStyleCorpus,
-  sha256Utf8
+  sha256Utf8,
+  verifyWritingStyleCorpusArtifact
 } from "../src/ai-writing-style-corpus.js";
 
 const fixtureDirectory = join(process.cwd(), "packages/application/test/fixtures");
@@ -93,4 +94,168 @@ describe("Writing Style 2.0 corpus contract", () => {
       "AI_WRITING_STYLE_CORPUS_INVALID"
     );
   });
+
+  test("computes qualification from frozen evaluator output rather than manifest claims", () => {
+    const rawCorpus = JSON.parse(corpusBytes) as Record<string, unknown>;
+    const reviewedCorpusBytes = jsonBytes({
+      ...rawCorpus,
+      annotationStatus: "human_qualified",
+      samples: (rawCorpus.samples as Array<Record<string, unknown>>).map((sample) => ({
+        ...sample,
+        reviewStatus: "human_reviewed",
+        annotatorLabels: {
+          annotatorA: { status: "human_complete", labels: sample.goldLabels },
+          annotatorB: { status: "human_complete", labels: sample.goldLabels }
+        }
+      }))
+    });
+    const reviewedCorpus = parseWritingStyleCorpus(JSON.parse(reviewedCorpusBytes));
+    const rawManifest = JSON.parse(manifestBytes) as Record<string, unknown>;
+    const preliminaryManifest = parseWritingStyleCorpusManifest({
+      ...rawManifest,
+      corpusSha256: sha256Utf8(reviewedCorpusBytes),
+      qualification: {
+        eligible: false,
+        precisionNumerator: null,
+        precisionDenominator: null,
+        fixedNegativeFalsePositives: null,
+        blockedBy: ["metrics pending"]
+      },
+      qualityOwner: { id: null, signed: false, decision: "pending_human_review" }
+    });
+    const computed = qualifyWritingStyleCorpus(reviewedCorpus, preliminaryManifest, {
+      corpusBytes: reviewedCorpusBytes,
+      rubricBytes
+    });
+    const qualifiedManifest = parseWritingStyleCorpusManifest({
+      ...rawManifest,
+      corpusSha256: sha256Utf8(reviewedCorpusBytes),
+      qualification: {
+        eligible: true,
+        precisionNumerator: computed.precisionNumerator,
+        precisionDenominator: computed.precisionDenominator,
+        fixedNegativeFalsePositives: computed.fixedNegativeFalsePositives,
+        blockedBy: []
+      },
+      qualityOwner: { id: "editorial-owner", signed: true, decision: "qualified" }
+    });
+
+    expect(
+      qualifyWritingStyleCorpus(reviewedCorpus, qualifiedManifest, {
+        corpusBytes: reviewedCorpusBytes,
+        rubricBytes
+      })
+    ).toMatchObject({
+      eligible: true,
+      precisionNumerator: 41,
+      precisionDenominator: 41,
+      fixedNegativeFalsePositives: 0
+    });
+
+    const forgedMetrics = parseWritingStyleCorpusManifest({
+      ...qualifiedManifest,
+      qualification: { ...qualifiedManifest.qualification, precisionNumerator: 40 }
+    });
+    expect(
+      qualifyWritingStyleCorpus(reviewedCorpus, forgedMetrics, {
+        corpusBytes: reviewedCorpusBytes,
+        rubricBytes
+      }).reasons
+    ).toContain("qualification_metrics_mismatch");
+
+    const forgedEligibility = parseWritingStyleCorpusManifest({
+      ...qualifiedManifest,
+      qualification: { ...qualifiedManifest.qualification, eligible: false, blockedBy: ["forged"] }
+    });
+    expect(
+      qualifyWritingStyleCorpus(reviewedCorpus, forgedEligibility, {
+        corpusBytes: reviewedCorpusBytes,
+        rubricBytes
+      }).reasons
+    ).toContain("manifest_eligibility_mismatch");
+  });
+
+  test("fails closed on missing artifact evidence, stale fixed-negative sets, and non-canonical labels", () => {
+    const corpus = parseWritingStyleCorpus(JSON.parse(corpusBytes));
+    const manifest = parseWritingStyleCorpusManifest(JSON.parse(manifestBytes));
+    expect(verifyWritingStyleCorpusArtifact(corpus, manifest, undefined)).toMatchObject({
+      verified: false,
+      reasons: expect.arrayContaining(["corpus_checksum_unverified", "rubric_checksum_unverified"])
+    });
+    expect(
+      verifyWritingStyleCorpusArtifact(corpus, manifest, { corpusBytes, rubricBytes })
+    ).toEqual({ verified: true, reasons: [] });
+
+    const staleNegativeSet = parseWritingStyleCorpusManifest({
+      ...manifest,
+      fixedNegativeSampleIds: [...manifest.fixedNegativeSampleIds].reverse()
+    });
+    expect(
+      qualifyWritingStyleCorpus(corpus, staleNegativeSet, { corpusBytes, rubricBytes }).reasons
+    ).toContain("fixed_negative_set_mismatch");
+
+    const rawCorpus = JSON.parse(corpusBytes) as Record<string, unknown>;
+    const samples = [...(rawCorpus.samples as Array<Record<string, unknown>>)];
+    const unicodeSampleIndex = samples.findIndex((sample) => sample.sampleId === "ws2-011");
+    const unicodeSample = samples[unicodeSampleIndex] as Record<string, unknown>;
+    samples[unicodeSampleIndex] = {
+      ...unicodeSample,
+      goldLabels: [
+        {
+          ...(unicodeSample.goldLabels as Array<Record<string, unknown>>)[0],
+          startOffset: 1
+        }
+      ]
+    };
+    expect(() => parseWritingStyleCorpus({ ...rawCorpus, samples })).toThrow(
+      "AI_WRITING_STYLE_CORPUS_INVALID"
+    );
+    const duplicatedSample = samples.find((sample) => sample.sampleId === "ws2-002") as Record<
+      string,
+      unknown
+    >;
+    const duplicateLabels = duplicatedSample.goldLabels as Array<Record<string, unknown>>;
+    expect(() =>
+      parseWritingStyleCorpus({
+        ...rawCorpus,
+        samples: (rawCorpus.samples as Array<Record<string, unknown>>).map((sample) =>
+          sample.sampleId === "ws2-002"
+            ? { ...sample, goldLabels: [...duplicateLabels, duplicateLabels[0]] }
+            : sample
+        )
+      })
+    ).toThrow("AI_WRITING_STYLE_CORPUS_INVALID");
+    expect(() =>
+      parseWritingStyleCorpusManifest({
+        ...manifest,
+        qualityOwner: { id: null, signed: true, decision: "qualified" }
+      })
+    ).toThrow("AI_WRITING_STYLE_CORPUS_INVALID");
+    expect(() =>
+      parseWritingStyleCorpusManifest({
+        ...manifest,
+        qualification: {
+          ...manifest.qualification,
+          precisionNumerator: 1,
+          precisionDenominator: null,
+          fixedNegativeFalsePositives: null
+        }
+      })
+    ).toThrow("AI_WRITING_STYLE_CORPUS_INVALID");
+    expect(() =>
+      parseWritingStyleCorpusManifest({
+        ...manifest,
+        qualification: {
+          ...manifest.qualification,
+          precisionNumerator: 2,
+          precisionDenominator: 1,
+          fixedNegativeFalsePositives: 0
+        }
+      })
+    ).toThrow("AI_WRITING_STYLE_CORPUS_INVALID");
+  });
 });
+
+function jsonBytes(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}

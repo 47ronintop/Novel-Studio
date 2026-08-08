@@ -153,7 +153,7 @@ async function buildArtifacts() {
     corpusVersion: CORPUS_VERSION,
     rubricVersion: RUBRIC_VERSION,
     ruleVersion: RULE_VERSION,
-    matcherVersion: "utf16-span-v1",
+    matcherVersion: "utf16-span-v2",
     sampleCount: corpus.samples.length,
     splitCounts: {
       development: corpus.samples.filter((sample) => sample.split === "development").length,

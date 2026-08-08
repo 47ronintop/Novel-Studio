@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 
+import { evaluateAiWritingStyle } from "./ai-writing-style-evaluator.js";
+
 export const AI_WRITING_STYLE_CORPUS_SCHEMA_VERSION = "1.0" as const;
 export const AI_WRITING_STYLE_CORPUS_VERSION = "writing-style-corpus@2.0.0" as const;
 export const AI_WRITING_STYLE_RUBRIC_VERSION = "writing-style-rubric@2.0.0" as const;
-export const AI_WRITING_STYLE_MATCHER_VERSION = "utf16-span-v1" as const;
+export const AI_WRITING_STYLE_MATCHER_VERSION = "utf16-span-v2" as const;
 
 export type WritingStyleCorpusSplit = "development" | "qualification";
 export type WritingStyleCorpusConfidence = "low" | "medium" | "high";
@@ -76,6 +78,21 @@ export interface WritingStyleCorpusManifestV1 {
 export interface WritingStyleCorpusQualificationResult {
   readonly eligible: boolean;
   readonly reasons: readonly string[];
+  readonly precisionNumerator: number;
+  readonly precisionDenominator: number;
+  readonly fixedNegativeFalsePositives: number;
+}
+
+export interface WritingStyleCorpusArtifactVerificationInput {
+  /** Exact checked-in corpus bytes, including the final newline. */
+  readonly corpusBytes?: string;
+  /** Exact checked-in rubric bytes. Omit only while evidence is unavailable. */
+  readonly rubricBytes?: string;
+}
+
+export interface WritingStyleCorpusArtifactVerificationResult {
+  readonly verified: boolean;
+  readonly reasons: readonly string[];
 }
 
 export function parseWritingStyleCorpus(value: unknown): WritingStyleCorpusV1 {
@@ -113,6 +130,16 @@ export function parseWritingStyleCorpusManifest(value: unknown): WritingStyleCor
   const qualification = value.qualification;
   const qualityOwner = value.qualityOwner;
   const qualityOwnerDecision = isRecord(qualityOwner) ? qualityOwner.decision : undefined;
+  const hasCompleteQualificationMetrics =
+    isRecord(qualification) &&
+    isNonNegativeSafeInteger(qualification.precisionNumerator) &&
+    isNonNegativeSafeInteger(qualification.precisionDenominator) &&
+    isNonNegativeSafeInteger(qualification.fixedNegativeFalsePositives);
+  const hasPendingQualificationMetrics =
+    isRecord(qualification) &&
+    qualification.precisionNumerator === null &&
+    qualification.precisionDenominator === null &&
+    qualification.fixedNegativeFalsePositives === null;
   if (
     value.corpusVersion !== AI_WRITING_STYLE_CORPUS_VERSION ||
     value.rubricVersion !== AI_WRITING_STYLE_RUBRIC_VERSION ||
@@ -129,18 +156,34 @@ export function parseWritingStyleCorpusManifest(value: unknown): WritingStyleCor
     !value.fixedNegativeSampleIds.every((id): id is string => typeof id === "string") ||
     !isRecord(qualification) ||
     typeof qualification.eligible !== "boolean" ||
-    !isNullableSafeInteger(qualification.precisionNumerator) ||
-    !isNullableSafeInteger(qualification.precisionDenominator) ||
-    !isNullableSafeInteger(qualification.fixedNegativeFalsePositives) ||
+    (!hasCompleteQualificationMetrics && !hasPendingQualificationMetrics) ||
+    (hasCompleteQualificationMetrics &&
+      Number(qualification.precisionNumerator) > Number(qualification.precisionDenominator)) ||
     !Array.isArray(qualification.blockedBy) ||
     !qualification.blockedBy.every((reason): reason is string => typeof reason === "string") ||
     !isRecord(qualityOwner) ||
     (qualityOwner.id !== null && typeof qualityOwner.id !== "string") ||
     typeof qualityOwner.signed !== "boolean" ||
-    !isQualityOwnerDecision(qualityOwnerDecision)
+    !isQualityOwnerDecision(qualityOwnerDecision) ||
+    (qualityOwner.signed === true &&
+      (typeof qualityOwner.id !== "string" ||
+        qualityOwner.id.trim().length === 0 ||
+        qualityOwnerDecision !== "qualified"))
   ) {
     invalid();
   }
+  const parsedQualification = qualification as {
+    readonly eligible: boolean;
+    readonly precisionNumerator: number | null;
+    readonly precisionDenominator: number | null;
+    readonly fixedNegativeFalsePositives: number | null;
+    readonly blockedBy: readonly string[];
+  };
+  const parsedQualityOwner = qualityOwner as {
+    readonly id: string | null;
+    readonly signed: boolean;
+    readonly decision: WritingStyleCorpusManifestV1["qualityOwner"]["decision"];
+  };
   return deepFreeze({
     schemaVersion: "1.0",
     corpusVersion: AI_WRITING_STYLE_CORPUS_VERSION,
@@ -157,41 +200,103 @@ export function parseWritingStyleCorpusManifest(value: unknown): WritingStyleCor
     goldLabelsSha256: value.goldLabelsSha256,
     fixedNegativeSampleIds: [...value.fixedNegativeSampleIds],
     qualification: {
-      eligible: qualification.eligible,
-      precisionNumerator: qualification.precisionNumerator,
-      precisionDenominator: qualification.precisionDenominator,
-      fixedNegativeFalsePositives: qualification.fixedNegativeFalsePositives,
-      blockedBy: [...qualification.blockedBy]
+      eligible: parsedQualification.eligible,
+      precisionNumerator: parsedQualification.precisionNumerator,
+      precisionDenominator: parsedQualification.precisionDenominator,
+      fixedNegativeFalsePositives: parsedQualification.fixedNegativeFalsePositives,
+      blockedBy: [...parsedQualification.blockedBy]
     },
     qualityOwner: {
-      id: qualityOwner.id,
-      signed: qualityOwner.signed,
-      decision: qualityOwnerDecision
+      id: parsedQualityOwner.id,
+      signed: parsedQualityOwner.signed,
+      decision: parsedQualityOwner.decision
     }
   });
 }
 
 export function qualifyWritingStyleCorpus(
   corpus: WritingStyleCorpusV1,
-  manifest: WritingStyleCorpusManifestV1
+  manifest: WritingStyleCorpusManifestV1,
+  artifact?: WritingStyleCorpusArtifactVerificationInput
 ): WritingStyleCorpusQualificationResult {
   const reasons: string[] = [];
+  const computed = computeQualificationMetrics(corpus);
   if (manifest.sampleCount !== corpus.samples.length) reasons.push("sample_count_mismatch");
-  if (corpus.annotationStatus !== "human_qualified") reasons.push("human_annotation_pending");
-  if (!manifest.qualityOwner.signed || manifest.qualityOwner.decision !== "qualified") {
+  if (!sameSplitCounts(corpus, manifest.splitCounts)) reasons.push("split_counts_mismatch");
+  if (!sameFixedNegativeIds(corpus, manifest.fixedNegativeSampleIds)) {
+    reasons.push("fixed_negative_set_mismatch");
+  }
+  if (!hasCompleteHumanAnnotations(corpus)) reasons.push("human_annotation_pending");
+  if (
+    !manifest.qualityOwner.signed ||
+    manifest.qualityOwner.id === null ||
+    manifest.qualityOwner.id.trim().length === 0 ||
+    manifest.qualityOwner.decision !== "qualified"
+  ) {
     reasons.push("quality_owner_signoff_pending");
   }
+  if (
+    manifest.qualification.precisionNumerator !== computed.precisionNumerator ||
+    manifest.qualification.precisionDenominator !== computed.precisionDenominator ||
+    manifest.qualification.fixedNegativeFalsePositives !== computed.fixedNegativeFalsePositives
+  ) {
+    reasons.push("qualification_metrics_mismatch");
+  }
   const precision =
-    manifest.qualification.precisionNumerator === null ||
-    manifest.qualification.precisionDenominator === null ||
-    manifest.qualification.precisionDenominator === 0
+    computed.precisionDenominator === 0
       ? undefined
-      : manifest.qualification.precisionNumerator / manifest.qualification.precisionDenominator;
+      : computed.precisionNumerator / computed.precisionDenominator;
   if (precision === undefined || precision < 0.9) reasons.push("precision_not_qualified");
-  if (manifest.qualification.fixedNegativeFalsePositives !== 0) {
+  if (computed.fixedNegativeFalsePositives !== 0) {
     reasons.push("fixed_negative_false_positive");
   }
-  return { eligible: reasons.length === 0, reasons };
+  reasons.push(...verifyWritingStyleCorpusArtifact(corpus, manifest, artifact).reasons);
+
+  const eligibleWithoutManifestClaim = reasons.length === 0;
+  if (manifest.qualification.eligible !== eligibleWithoutManifestClaim) {
+    reasons.push("manifest_eligibility_mismatch");
+  }
+  if (
+    (eligibleWithoutManifestClaim && manifest.qualification.blockedBy.length > 0) ||
+    (!eligibleWithoutManifestClaim && manifest.qualification.blockedBy.length === 0)
+  ) {
+    reasons.push("manifest_blocked_by_mismatch");
+  }
+  return {
+    eligible: reasons.length === 0,
+    reasons: [...new Set(reasons)],
+    ...computed
+  };
+}
+
+/**
+ * Verifies the immutable artifact bytes that are deliberately not retained by
+ * the parsed corpus model. A missing byte source is evidence missing, never a
+ * successful verification.
+ */
+export function verifyWritingStyleCorpusArtifact(
+  corpus: WritingStyleCorpusV1,
+  manifest: WritingStyleCorpusManifestV1,
+  input: WritingStyleCorpusArtifactVerificationInput | undefined
+): WritingStyleCorpusArtifactVerificationResult {
+  const reasons: string[] = [];
+  if (input?.corpusBytes === undefined) {
+    reasons.push("corpus_checksum_unverified");
+  } else if (
+    sha256Utf8(input.corpusBytes) !== manifest.corpusSha256 ||
+    !sameCorpusJson(input.corpusBytes, corpus)
+  ) {
+    reasons.push("corpus_checksum_mismatch");
+  }
+  if (input?.rubricBytes === undefined) {
+    reasons.push("rubric_checksum_unverified");
+  } else if (sha256Utf8(input.rubricBytes) !== manifest.rubricSha256) {
+    reasons.push("rubric_checksum_mismatch");
+  }
+  if (manifest.goldLabelsSha256 !== sha256Utf8(canonicalGoldLabels(corpus))) {
+    reasons.push("gold_labels_checksum_mismatch");
+  }
+  return { verified: reasons.length === 0, reasons };
 }
 
 export function sha256Utf8(value: string): string {
@@ -230,6 +335,16 @@ function parseSample(value: unknown): WritingStyleCorpusSampleV1 {
     invalid();
   }
   if (sample.fixedNegative && sample.goldLabels.length > 0) invalid();
+  validateLabelsForText(sample.text, sample.goldLabels);
+  validateLabelsForText(sample.text, sample.annotatorLabels.annotatorA.labels);
+  validateLabelsForText(sample.text, sample.annotatorLabels.annotatorB.labels);
+  if (
+    sample.fixedNegative &&
+    (sample.annotatorLabels.annotatorA.labels.length > 0 ||
+      sample.annotatorLabels.annotatorB.labels.length > 0)
+  ) {
+    invalid();
+  }
   return sample as WritingStyleCorpusSampleV1;
 }
 
@@ -267,6 +382,140 @@ function parseLabels(value: unknown): readonly WritingStyleCorpusLabelV1[] {
   });
 }
 
+function validateLabelsForText(text: string, labels: readonly WritingStyleCorpusLabelV1[]): void {
+  const keys = new Set<string>();
+  let previous: string | undefined;
+  for (const label of labels) {
+    if (
+      label.endOffset > text.length ||
+      !isUtf16Boundary(text, label.startOffset) ||
+      !isUtf16Boundary(text, label.endOffset)
+    ) {
+      invalid();
+    }
+    const key = labelKey(label);
+    if (keys.has(key) || (previous !== undefined && previous > key)) invalid();
+    keys.add(key);
+    previous = key;
+  }
+}
+
+function isUtf16Boundary(text: string, offset: number): boolean {
+  if (offset < 0 || offset > text.length) return false;
+  if (offset === 0 || offset === text.length) return true;
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return !(before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff);
+}
+
+function labelKey(label: WritingStyleCorpusLabelV1): string {
+  return `${label.startOffset.toString().padStart(12, "0")}:${label.endOffset
+    .toString()
+    .padStart(12, "0")}:${label.ruleId}`;
+}
+
+function computeQualificationMetrics(corpus: WritingStyleCorpusV1): {
+  readonly precisionNumerator: number;
+  readonly precisionDenominator: number;
+  readonly fixedNegativeFalsePositives: number;
+} {
+  let precisionNumerator = 0;
+  let precisionDenominator = 0;
+  let fixedNegativeFalsePositives = 0;
+  for (const sample of corpus.samples) {
+    const predictions = evaluateAiWritingStyle({
+      baselineText: "",
+      candidateText: sample.text
+    }).hits;
+    if (sample.fixedNegative) fixedNegativeFalsePositives += predictions.length;
+    if (sample.split !== "qualification") continue;
+    const expected = new Set(
+      sample.goldLabels
+        .filter((label) => label.confidence !== "low")
+        .map((label) => `${label.ruleId}:${label.startOffset}:${label.endOffset}`)
+    );
+    for (const prediction of predictions) {
+      if (prediction.confidence === "low") continue;
+      precisionDenominator += 1;
+      const predictionKey = `${prediction.ruleId}:${prediction.startOffset}:${prediction.endOffset}`;
+      if (expected.delete(predictionKey)) {
+        precisionNumerator += 1;
+      }
+    }
+  }
+  return { precisionNumerator, precisionDenominator, fixedNegativeFalsePositives };
+}
+
+function sameSplitCounts(
+  corpus: WritingStyleCorpusV1,
+  expected: WritingStyleCorpusManifestV1["splitCounts"]
+): boolean {
+  return (
+    corpus.samples.filter((sample) => sample.split === "development").length ===
+      expected.development &&
+    corpus.samples.filter((sample) => sample.split === "qualification").length ===
+      expected.qualification
+  );
+}
+
+function sameFixedNegativeIds(corpus: WritingStyleCorpusV1, ids: readonly string[]): boolean {
+  const expected = corpus.samples
+    .filter((sample) => sample.fixedNegative)
+    .map((sample) => sample.sampleId);
+  return expected.length === ids.length && expected.every((id, index) => id === ids[index]);
+}
+
+function hasCompleteHumanAnnotations(corpus: WritingStyleCorpusV1): boolean {
+  return (
+    corpus.annotationStatus === "human_qualified" &&
+    corpus.samples.every((sample) => {
+      const { annotatorA, annotatorB } = sample.annotatorLabels;
+      return (
+        sample.reviewStatus === "human_reviewed" &&
+        annotatorA.status === "human_complete" &&
+        annotatorB.status === "human_complete" &&
+        sameLabels(sample.goldLabels, annotatorA.labels) &&
+        sameLabels(sample.goldLabels, annotatorB.labels)
+      );
+    })
+  );
+}
+
+function sameLabels(
+  left: readonly WritingStyleCorpusLabelV1[],
+  right: readonly WritingStyleCorpusLabelV1[]
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((label, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        label.ruleId === other.ruleId &&
+        label.startOffset === other.startOffset &&
+        label.endOffset === other.endOffset &&
+        label.confidence === other.confidence
+      );
+    })
+  );
+}
+
+function canonicalGoldLabels(corpus: WritingStyleCorpusV1): string {
+  return `${JSON.stringify(
+    corpus.samples.map((sample) => ({ sampleId: sample.sampleId, labels: sample.goldLabels })),
+    null,
+    2
+  )}\n`;
+}
+
+function sameCorpusJson(bytes: string, corpus: WritingStyleCorpusV1): boolean {
+  try {
+    return JSON.stringify(JSON.parse(bytes)) === JSON.stringify(corpus);
+  } catch {
+    return false;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -294,8 +543,8 @@ function isSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
 }
 
-function isNullableSafeInteger(value: unknown): value is number | null {
-  return value === null || isSafeInteger(value);
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return isSafeInteger(value) && value >= 0;
 }
 
 function isSha256(value: unknown): value is string {

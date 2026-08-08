@@ -3,7 +3,7 @@
   "corpusVersion": "writing-style-corpus@2.0.0",
   "rubricVersion": "writing-style-rubric@2.0.0",
   "ruleVersion": "2.0",
-  "matcherVersion": "utf16-span-v1",
+  "matcherVersion": "utf16-span-v2",
   "sampleCount": 200,
   "splitCounts": {
     "development": 140,
