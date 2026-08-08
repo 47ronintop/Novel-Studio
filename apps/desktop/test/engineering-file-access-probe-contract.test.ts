@@ -48,12 +48,12 @@ describe("engineering file access development probe contract", () => {
     expect(nativeSource).toContain('return stagingLeafName("before-" + stagingId);');
     expect(
       nativeSource.match(
-        /renameOpenedFileCreateOnly\(targetHandle\.get\(\), parentHandle\.get\(\), recoveryLeaf\)/gu
+        /renameOpenedFileCreateOnly\(targetHandle\.get\(\), handoffParentHandle\.get\(\), recoveryLeaf\)/gu
       )?.length
     ).toBe(2);
     expect(
       nativeSource.match(
-        /renameOpenedFileCreateOnly\(stageHandle\.get\(\), parentHandle\.get\(\), leafName\)/gu
+        /renameOpenedFileCreateOnly\(stageHandle\.get\(\), handoffParentHandle\.get\(\), leafName\)/gu
       )?.length
     ).toBeGreaterThanOrEqual(4);
     expect(nativeSource).not.toContain(
@@ -61,7 +61,7 @@ describe("engineering file access development probe contract", () => {
     );
     expect(
       nativeSource.match(
-        /deleteRecoveryBeforeFile\(targetHandle\.get\(\), recoveryLeaf,[\s\S]{0,240}targetHandle\.close\(\)[\s\S]{0,240}FlushFileBuffers\(parentHandle\.get\(\)\)/gu
+        /deleteRecoveryBeforeFile\(targetHandle\.get\(\), recoveryLeaf,[\s\S]{0,240}targetHandle\.close\(\)[\s\S]{0,240}FlushFileBuffers\(handoffParentHandle\.get\(\)\)/gu
       )?.length
     ).toBe(2);
     for (const faultPath of [
@@ -90,6 +90,22 @@ describe("engineering file access development probe contract", () => {
     expect(nativeSource).toContain("link->rootDirectory = parent;");
     expect(nativeSource).toContain("kFileLinkInformation");
     expect(nativeSource).not.toContain("SetFileInformationByHandle(existing, FileLinkInfo");
+    expect(nativeSource).toContain("constexpr ULONG kFileRenameInformation = 10;");
+    expect(nativeSource).toContain("rename->replaceIfExists = FALSE;");
+    expect(nativeSource).toContain("rename->rootDirectory = parent;");
+    expect(nativeSource).toContain("kFileRenameInformation");
+    expect(nativeSource).toContain("openMutationHandoffDirectory");
+    expect(nativeSource).toContain("FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE");
+    expect(nativeSource).toContain("!sameObjectKey(expectedIdentity, observedIdentity)");
+    expect(nativeSource.match(/parentHandle\.close\(\)/gu)?.length).toBe(4);
+    expect(nativeSource.match(/openMutationHandoffDirectory\(/gu)?.length).toBe(5);
+    expect(
+      nativeSource.match(/revalidateReplaceNamespace\(handoffParentHandle\.get\(\)/gu)?.length
+    ).toBe(1);
+    expect(
+      nativeSource.match(/revalidateV2ReplaceNamespace\(handoffParentHandle\.get\(\)/gu)?.length
+    ).toBe(1);
+    expect(nativeSource).toContain("ShareAccess=0 pins this staged object");
   });
 
   test("requires Main to provide absolute installed inputs and a distinct output path", () => {

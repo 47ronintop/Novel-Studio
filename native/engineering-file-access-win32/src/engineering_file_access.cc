@@ -48,6 +48,7 @@ constexpr ULONG kFileNonDirectoryFile = 0x00000040;
 constexpr ULONG kFileOpenReparsePoint = 0x00200000;
 constexpr NTSTATUS kStatusObjectNameNotFound = static_cast<NTSTATUS>(0xC0000034L);
 constexpr NTSTATUS kStatusObjectNameCollision = static_cast<NTSTATUS>(0xC0000035L);
+constexpr ULONG kFileRenameInformation = 10;
 // FILE_LINK_INFO / FileLinkInfo are not exposed by every supported Windows SDK.  The native
 // FileLinkInformation ABI is stable and is invoked through ntdll below to keep this addon
 // buildable against the SDK supplied by the Windows CI image.
@@ -78,6 +79,23 @@ struct NativeFileLinkInformation {
   ULONG fileNameLength;
   WCHAR fileName[1];
 };
+
+static_assert(offsetof(NativeFileLinkInformation, replaceIfExists) == 0);
+static_assert(offsetof(NativeFileLinkInformation, rootDirectory) == 8);
+static_assert(offsetof(NativeFileLinkInformation, fileNameLength) == 16);
+static_assert(offsetof(NativeFileLinkInformation, fileName) == 20);
+
+struct NativeFileRenameInformation {
+  BOOLEAN replaceIfExists;
+  HANDLE rootDirectory;
+  ULONG fileNameLength;
+  WCHAR fileName[1];
+};
+
+static_assert(offsetof(NativeFileRenameInformation, replaceIfExists) == 0);
+static_assert(offsetof(NativeFileRenameInformation, rootDirectory) == 8);
+static_assert(offsetof(NativeFileRenameInformation, fileNameLength) == 16);
+static_assert(offsetof(NativeFileRenameInformation, fileName) == 20);
 
 using NtCreateFileFn = NTSTATUS(NTAPI *)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
                                           PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
@@ -1191,13 +1209,13 @@ AccessError rootSessionSnapshot(uint64_t rootId, RootSession* output) {
   return AccessError::kOk;
 }
 
-AccessError openMutationRoot(uint64_t rootId, HANDLE* output) {
+AccessError openMutationRootWithShare(uint64_t rootId, DWORD shareMode, HANDLE* output) {
   RootSession session{};
   const AccessError snapshot = rootSessionSnapshot(rootId, &session);
   if (snapshot != AccessError::kOk) return snapshot;
   const DWORD desiredAccess = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
       FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE;
-  ScopedHandle handle(CreateFileW(session.path.c_str(), desiredAccess, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+  ScopedHandle handle(CreateFileW(session.path.c_str(), desiredAccess, shareMode, nullptr, OPEN_EXISTING,
                                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   if (handle.get() == INVALID_HANDLE_VALUE) return AccessError::kRootChanged;
   BY_HANDLE_FILE_INFORMATION identity{};
@@ -1213,9 +1231,11 @@ AccessError openMutationRoot(uint64_t rootId, HANDLE* output) {
 }
 
 AccessError openMutationRelative(uint64_t rootId, const std::vector<std::wstring>& segments, bool directory,
-                                 DWORD finalDesiredAccess, HANDLE* output) {
+                                  DWORD finalDesiredAccess, HANDLE* output,
+                                  DWORD finalShareMode = FILE_SHARE_READ) {
   HANDLE current = INVALID_HANDLE_VALUE;
-  AccessError result = openMutationRoot(rootId, &current);
+  AccessError result = openMutationRootWithShare(
+      rootId, segments.empty() ? finalShareMode : FILE_SHARE_READ, &current);
   if (result != AccessError::kOk) return result;
   if (segments.empty()) {
     if (!directory) {
@@ -1244,8 +1264,9 @@ AccessError openMutationRelative(uint64_t rootId, const std::vector<std::wstring
     InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, current, nullptr);
     IO_STATUS_BLOCK statusBlock{};
     HANDLE next = INVALID_HANDLE_VALUE;
+    const DWORD shareMode = index + 1 == segments.size() ? finalShareMode : FILE_SHARE_READ;
     const NTSTATUS status = create(
-        &next, desiredAccess, &attributes, &statusBlock, nullptr, 0, FILE_SHARE_READ, kFileOpen,
+        &next, desiredAccess, &attributes, &statusBlock, nullptr, 0, shareMode, kFileOpen,
         expectedDirectory ? (kFileDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint)
                           : (kFileNonDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint),
         nullptr, 0);
@@ -1273,6 +1294,29 @@ AccessError openMutationDirectory(uint64_t rootId, const std::wstring& relative,
       FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES |
           FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE,
       output);
+}
+
+// The initial traversal is restrictive.  Once a same-directory stage exists, reopen only the
+// final parent with delete sharing so a handle-relative create-only handoff can proceed; prove
+// it is still the exact parent observed before staging before returning it to the caller.
+AccessError openMutationHandoffDirectory(uint64_t rootId, const std::wstring& relative,
+                                         const BY_HANDLE_FILE_INFORMATION& expectedIdentity, HANDLE* output) {
+  std::vector<std::wstring> segments;
+  if (!parseRelativePath(relative, true, &segments)) return AccessError::kUnsafePath;
+  HANDLE parent = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationRelative(
+      rootId, segments, true,
+      FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES |
+          FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE,
+      &parent, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+  if (result != AccessError::kOk) return result;
+  BY_HANDLE_FILE_INFORMATION observedIdentity{};
+  if (!GetFileInformationByHandle(parent, &observedIdentity) || !sameObjectKey(expectedIdentity, observedIdentity)) {
+    CloseHandle(parent);
+    return AccessError::kPrecondition;
+  }
+  *output = parent;
+  return AccessError::kOk;
 }
 
 AccessError openMutationFile(uint64_t rootId, const std::wstring& relative, HANDLE* output) {
@@ -1379,6 +1423,8 @@ AccessError createStagingFile(HANDLE parent, const std::string& stagingId, HANDL
   InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, parent, nullptr);
   IO_STATUS_BLOCK statusBlock{};
   HANDLE stage = INVALID_HANDLE_VALUE;
+  // ShareAccess=0 pins this staged object and its parent/ancestors while the restrictive
+  // traversal parent is exchanged for the short permissive handoff parent.
   const NTSTATUS status = create(
       &stage, FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | DELETE |
                   SYNCHRONIZE,
@@ -1435,10 +1481,22 @@ AccessError renameOpenedFile(HANDLE file, HANDLE parent, const std::wstring& lea
 }
 
 // The mutation handoff never uses pathname overwrite.  If another process installs a leaf in
-// either window, SetFileInformationByHandle fails and both the candidate stage and (if moved)
-// original recovery stage remain visible to recovery.
+// either window, the handle-relative native rename fails and both the candidate stage and (if
+// moved) original recovery stage remain visible to recovery.
 AccessError renameOpenedFileCreateOnly(HANDLE file, HANDLE parent, const std::wstring& leaf) {
-  return renameOpenedFile(file, parent, leaf, false);
+  const auto setInformation = ntSetInformationFile();
+  if (setInformation == nullptr) return AccessError::kUnavailable;
+  const size_t byteLength = leaf.size() * sizeof(wchar_t);
+  std::vector<unsigned char> storage(offsetof(NativeFileRenameInformation, fileName) + byteLength, 0);
+  auto* rename = reinterpret_cast<NativeFileRenameInformation*>(storage.data());
+  rename->replaceIfExists = FALSE;
+  rename->rootDirectory = parent;
+  rename->fileNameLength = static_cast<ULONG>(byteLength);
+  std::memcpy(rename->fileName, leaf.data(), byteLength);
+  IO_STATUS_BLOCK statusBlock{};
+  const NTSTATUS status = setInformation(file, &statusBlock, rename, static_cast<ULONG>(storage.size()),
+                                         kFileRenameInformation);
+  return isSuccess(status) ? AccessError::kOk : AccessError::kRecoveryRequired;
 }
 
 AccessError deleteRecoveryBeforeFile(HANDLE recovery, const std::wstring& expectedLeaf,
@@ -4040,6 +4098,11 @@ napi_value replaceFileV2(napi_env env, napi_callback_info info) {
       return nullptr;
     }
     ScopedHandle parentHandle(parent);
+    BY_HANDLE_FILE_INFORMATION parentIdentity{};
+    if (!GetFileInformationByHandle(parentHandle.get(), &parentIdentity)) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
     HANDLE target = INVALID_HANDLE_VALUE;
     result = openMutationReplaceLeaf(parentHandle.get(), leafName, &target);
     if (result != AccessError::kOk) {
@@ -4080,15 +4143,31 @@ napi_value replaceFileV2(napi_env env, napi_callback_info info) {
       throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
       return nullptr;
     }
+    if (!parentHandle.close()) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    HANDLE handoffParent = INVALID_HANDLE_VALUE;
+    result = openMutationHandoffDirectory(rootId, parentRelativePath, parentIdentity, &handoffParent);
+    ScopedHandle handoffParentHandle(handoffParent);
+    if (result == AccessError::kOk) {
+      result = revalidateReplaceNamespace(handoffParentHandle.get(), leafName, targetHandle.get(), observedBefore,
+                                          beforeManifest, beforeBytes);
+    }
+    if (result == AccessError::kOk) result = verifyRootStillCurrent(rootId);
+    if (result != AccessError::kOk) {
+      throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
+      return nullptr;
+    }
     // Move the exact observed target away first.  Both renames are create-only: an external
     // replacement in either window is left untouched and the staging namespace records recovery.
-    result = renameOpenedFileCreateOnly(targetHandle.get(), parentHandle.get(), recoveryLeaf);
-    if (result == AccessError::kOk && !FlushFileBuffers(parentHandle.get())) result = AccessError::kDurability;
+    result = renameOpenedFileCreateOnly(targetHandle.get(), handoffParentHandle.get(), recoveryLeaf);
+    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
     if (result == AccessError::kOk) {
-      result = renameOpenedFileCreateOnly(stageHandle.get(), parentHandle.get(), leafName);
+      result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
     }
     if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-    if (result == AccessError::kOk && !FlushFileBuffers(parentHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
     if (result != AccessError::kOk) {
       throwAccessError(env, result);
       return nullptr;
@@ -4110,7 +4189,7 @@ napi_value replaceFileV2(napi_env env, napi_callback_info info) {
       result = deleteRecoveryBeforeFile(targetHandle.get(), recoveryLeaf, observedBefore.identity);
     }
     if (result == AccessError::kOk && !targetHandle.close()) result = AccessError::kRecoveryRequired;
-    if (result == AccessError::kOk && !FlushFileBuffers(parentHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
     if (result != AccessError::kOk) {
       throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
       return nullptr;
@@ -4211,11 +4290,19 @@ napi_value createFileV2(napi_env env, napi_callback_info info) {
     result = writeAndFlush(stageHandle.get(), candidateBytes);
     if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
     if (result == AccessError::kOk) result = verifyRootStillCurrent(rootId);
+    if (result == AccessError::kOk && !parentHandle.close()) result = AccessError::kIo;
+    HANDLE handoffParent = INVALID_HANDLE_VALUE;
     if (result == AccessError::kOk) {
-      result = renameOpenedFileCreateOnly(stageHandle.get(), parentHandle.get(), leafName);
+      result = openMutationHandoffDirectory(rootId, parentRelativePath, parentIdentity, &handoffParent);
+    }
+    ScopedHandle handoffParentHandle(handoffParent);
+    if (result == AccessError::kOk) result = checkRelativeLeafAbsent(handoffParentHandle.get(), leafName);
+    if (result == AccessError::kOk) result = verifyRootStillCurrent(rootId);
+    if (result == AccessError::kOk) {
+      result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
     }
     if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-    if (result == AccessError::kOk && !FlushFileBuffers(parentHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
     if (result != AccessError::kOk) {
       throwAccessError(env, result);
       return nullptr;
@@ -4329,6 +4416,11 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
     }
 
     if (request.operationKind == "replace_file") {
+      BY_HANDLE_FILE_INFORMATION parentIdentity{};
+      if (!GetFileInformationByHandle(parentHandle.get(), &parentIdentity)) {
+        throwAccessError(env, AccessError::kIo);
+        return nullptr;
+      }
       HANDLE target = INVALID_HANDLE_VALUE;
       result = openMutationReplaceLeaf(parentHandle.get(), leafName, &target);
       if (result != AccessError::kOk) {
@@ -4371,16 +4463,32 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
         throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
         return nullptr;
       }
+      if (!parentHandle.close()) {
+        throwAccessError(env, AccessError::kIo);
+        return nullptr;
+      }
+      HANDLE handoffParent = INVALID_HANDLE_VALUE;
+      result = openMutationHandoffDirectory(rootId, parentRelativePath, parentIdentity, &handoffParent);
+      ScopedHandle handoffParentHandle(handoffParent);
+      if (result == AccessError::kOk) {
+        result = revalidateV2ReplaceNamespace(handoffParentHandle.get(), leafName, targetHandle.get(), beforeObservation,
+                                              request.before.manifest, beforeBytes);
+      }
+      if (result == AccessError::kOk) result = verifyRootStillCurrent(rootId);
+      if (result != AccessError::kOk) {
+        throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
+        return nullptr;
+      }
       // Rename the verified original by handle before installing the candidate.  Neither rename
       // permits replacement, so a final-window target swap wins over this mutation rather than
       // being silently overwritten.
-      result = renameOpenedFileCreateOnly(targetHandle.get(), parentHandle.get(), recoveryLeaf);
-      if (result == AccessError::kOk && !FlushFileBuffers(parentHandle.get())) result = AccessError::kDurability;
+      result = renameOpenedFileCreateOnly(targetHandle.get(), handoffParentHandle.get(), recoveryLeaf);
+      if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
       if (result == AccessError::kOk) {
-        result = renameOpenedFileCreateOnly(stageHandle.get(), parentHandle.get(), leafName);
+        result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
       }
       if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-      if (result == AccessError::kOk && !FlushFileBuffers(parentHandle.get())) result = AccessError::kDurability;
+      if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
       if (result != AccessError::kOk) {
         throwAccessError(env, result);
         return nullptr;
@@ -4404,7 +4512,7 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
         result = deleteRecoveryBeforeFile(targetHandle.get(), recoveryLeaf, beforeObservation.identity);
       }
       if (result == AccessError::kOk && !targetHandle.close()) result = AccessError::kRecoveryRequired;
-      if (result == AccessError::kOk && !FlushFileBuffers(parentHandle.get())) result = AccessError::kDurability;
+      if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
       if (result != AccessError::kOk) {
         throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
         return nullptr;
@@ -4445,22 +4553,21 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
     result = writeAndFlush(stageHandle.get(), candidateBytes);
     if (result == AccessError::kOk) result = applyFixedCreateMetadataV2(stageHandle.get());
     if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-    BY_HANDLE_FILE_INFORMATION finalParentIdentity{};
-    if (result == AccessError::kOk && !GetFileInformationByHandle(parentHandle.get(), &finalParentIdentity)) {
-      result = AccessError::kIo;
+    if (result == AccessError::kOk && !parentHandle.close()) result = AccessError::kIo;
+    HANDLE handoffParent = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) {
+      result = openMutationHandoffDirectory(rootId, parentRelativePath, parentIdentity, &handoffParent);
     }
-    if (result == AccessError::kOk && !sameObjectKey(parentIdentity, finalParentIdentity)) {
-      result = AccessError::kPrecondition;
-    }
-    if (result == AccessError::kOk) result = checkRelativeLeafAbsent(parentHandle.get(), leafName);
+    ScopedHandle handoffParentHandle(handoffParent);
+    if (result == AccessError::kOk) result = checkRelativeLeafAbsent(handoffParentHandle.get(), leafName);
     if (result == AccessError::kOk) result = verifyRootStillCurrent(rootId);
     if (result != AccessError::kOk) {
       throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
       return nullptr;
     }
-    result = renameOpenedFileCreateOnly(stageHandle.get(), parentHandle.get(), leafName);
+    result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
     if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-    if (result == AccessError::kOk && !FlushFileBuffers(parentHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
     if (result != AccessError::kOk) {
       throwAccessError(env, result);
       return nullptr;
