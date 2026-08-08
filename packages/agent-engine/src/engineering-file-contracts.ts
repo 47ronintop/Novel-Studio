@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 export const ENGINEERING_FILE_CONTRACT_VERSION = "1.0" as const;
 export const ENGINEERING_FILE_QUALIFICATION_VERSION = "1.0" as const;
 export const ENGINEERING_FILE_PROBE_CONTRACT_VERSION = "1.0" as const;
+export const ENGINEERING_FILE_BATCH_7_PROBE_CONTRACT_VERSION = "2.0" as const;
 export const ENGINEERING_FILE_NATIVE_ADAPTER_ID = "novel_studio_engineering_file_access" as const;
 export const ENGINEERING_FILE_PROBE_MAX_LIFETIME_MS = 60 * 60 * 1000;
 
@@ -24,6 +25,22 @@ export const ENGINEERING_FILE_NEGATIVE_CONTROLS = Object.freeze([
   "receiptBindingDisabled",
   "durabilityDisabled",
   "recoveryRootBindingDisabled"
+] as const);
+
+/** Batch 7 installed-package evidence; this remains distinct from B8 lifecycle/recovery features. */
+export const ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS = Object.freeze([
+  "replace",
+  "create",
+  "receiptBinding",
+  "walPreparation",
+  "recoveryScan"
+] as const);
+
+export const ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS = Object.freeze([
+  "rawByteManifestMismatch",
+  "staleBase",
+  "createRace",
+  "faultRecoveryRequired"
 ] as const);
 
 export type EngineeringFileSupportedTarget = (typeof ENGINEERING_FILE_SUPPORTED_TARGETS)[number];
@@ -114,6 +131,35 @@ export interface EngineeringFileProbeReportV1 {
   readonly negativeControls: Readonly<
     Record<(typeof ENGINEERING_FILE_NEGATIVE_CONTROLS)[number], "canary_exposed">
   >;
+  readonly reportChecksum: string;
+}
+
+export interface EngineeringFileMutationRecoveryProbeEvidenceV1 {
+  readonly positiveProtections: Readonly<
+    Record<
+      (typeof ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS)[number],
+      "passed"
+    >
+  >;
+  readonly negativeControls: Readonly<
+    Record<
+      (typeof ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS)[number],
+      "canary_exposed"
+    >
+  >;
+}
+
+/**
+ * Batch 7 report. It is a new strict contract rather than an in-place extension of the B6
+ * report, so a signed B6 report cannot accidentally authorize mutation or recovery.
+ */
+export interface EngineeringFileProbeReportV2 extends Omit<
+  EngineeringFileProbeReportV1,
+  "schemaVersion" | "reportChecksum"
+> {
+  readonly schemaVersion: typeof ENGINEERING_FILE_BATCH_7_PROBE_CONTRACT_VERSION;
+  readonly batch: "7";
+  readonly mutationRecoveryEvidence: EngineeringFileMutationRecoveryProbeEvidenceV1;
   readonly reportChecksum: string;
 }
 
@@ -229,8 +275,102 @@ export function validateEngineeringFileProbeReport(
   return frozenProbeResult([...reasons]);
 }
 
+export function validateEngineeringFileProbeReportV2(
+  value: unknown,
+  checkedAt: string
+): EngineeringFileProbeValidationResult {
+  const reasons = new Set<EngineeringFileQualificationFailureReason>();
+  if (!isPlainRecordWithExactKeys(value, batch7ProbeReportKeys)) {
+    return frozenProbeResult(["probe_contract_mismatch"]);
+  }
+  if (
+    value["schemaVersion"] !== ENGINEERING_FILE_BATCH_7_PROBE_CONTRACT_VERSION ||
+    value["batch"] !== "7" ||
+    value["adapterId"] !== ENGINEERING_FILE_NATIVE_ADAPTER_ID ||
+    !isEngineeringFileSupportedTarget(value["target"]) ||
+    value["packageKind"] !== "production"
+  ) {
+    reasons.add("probe_contract_mismatch");
+  }
+  if (
+    !isSha256(value["artifactSha256"]) ||
+    !isSha256(value["artifactManifestSha256"]) ||
+    !isSha256(value["artifactManifestSignatureSha256"]) ||
+    !isSha256(value["publisherPolicyChecksum"])
+  ) {
+    reasons.add("digest_missing");
+  }
+  if (value["digestVerification"] !== "match") reasons.add("digest_mismatch");
+  if (
+    value["artifactSignatureVerification"] !== "trusted_publisher" ||
+    value["manifestSignatureVerification"] !== "trusted_publisher"
+  ) {
+    reasons.add("signature_mismatch");
+  }
+  if (
+    !isCanonicalUtcTimestamp(value["generatedAt"]) ||
+    !isCanonicalUtcTimestamp(value["expiresAt"]) ||
+    !isCanonicalUtcTimestamp(checkedAt)
+  ) {
+    reasons.add("probe_contract_mismatch");
+  } else {
+    const generatedAt = Date.parse(value["generatedAt"]);
+    const expiresAt = Date.parse(value["expiresAt"]);
+    const observedAt = Date.parse(checkedAt);
+    if (
+      generatedAt > observedAt ||
+      observedAt >= expiresAt ||
+      expiresAt <= generatedAt ||
+      expiresAt - generatedAt > ENGINEERING_FILE_PROBE_MAX_LIFETIME_MS
+    ) {
+      reasons.add("evidence_stale");
+    }
+  }
+  if (
+    !hasExactStatusMap(
+      value["positiveProtections"],
+      ENGINEERING_FILE_POSITIVE_PROTECTIONS,
+      "passed"
+    ) ||
+    !hasExactStatusMap(
+      value["mutationRecoveryEvidence"] &&
+        (value["mutationRecoveryEvidence"] as Record<string, unknown>)["positiveProtections"],
+      ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS,
+      "passed"
+    )
+  ) {
+    reasons.add("positive_probe_failed");
+  }
+  if (
+    !hasExactStatusMap(
+      value["negativeControls"],
+      ENGINEERING_FILE_NEGATIVE_CONTROLS,
+      "canary_exposed"
+    ) ||
+    !hasExactStatusMap(
+      value["mutationRecoveryEvidence"] &&
+        (value["mutationRecoveryEvidence"] as Record<string, unknown>)["negativeControls"],
+      ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS,
+      "canary_exposed"
+    )
+  ) {
+    reasons.add("negative_control_failed");
+  }
+  if (isSha256(value["reportChecksum"])) {
+    const unsigned = withoutKey(value, "reportChecksum");
+    if (value["reportChecksum"] !== sha256(stableSerialize(unsigned))) {
+      reasons.add("digest_mismatch");
+    }
+  } else {
+    reasons.add("digest_missing");
+  }
+  return frozenProbeResult([...reasons]);
+}
+
 export function engineeringFileProbeReportChecksum(
-  value: Omit<EngineeringFileProbeReportV1, "reportChecksum">
+  value:
+    | Omit<EngineeringFileProbeReportV1, "reportChecksum">
+    | Omit<EngineeringFileProbeReportV2, "reportChecksum">
 ): string {
   return sha256(stableSerialize(value));
 }
@@ -375,6 +515,13 @@ const probeReportKeys = [
   "expiresAt",
   "positiveProtections",
   "negativeControls",
+  "reportChecksum"
+] as const;
+
+const batch7ProbeReportKeys = [
+  ...probeReportKeys.slice(0, -1),
+  "batch",
+  "mutationRecoveryEvidence",
   "reportChecksum"
 ] as const;
 

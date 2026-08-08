@@ -49,6 +49,8 @@ interface DesktopAgentRuntimeSessions {
   readonly revokeApprovalCapabilities?: () => void;
   /** Root identity drift terminates the current engineering capability boundary. */
   readonly revokeEngineeringAccessCapabilities?: () => void;
+  /** Recovery or sync drift removes mutation while qualified read access remains active. */
+  readonly revokeEngineeringMutationCapabilities?: () => void;
 }
 
 export interface DesktopAgentRuntime extends DesktopAgentRuntimeSessions {

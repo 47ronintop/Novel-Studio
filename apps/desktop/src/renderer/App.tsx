@@ -143,6 +143,7 @@ export function App() {
   const fileEditorRuntime = useWorkspaceFileEditorRuntime({
     api,
     agentRunBridge,
+    ...(engineeringWorkspaceBridge === undefined ? {} : { engineeringWorkspaceBridge }),
     ...(engineeringEditorState === undefined ? {} : { engineeringEditorState }),
     activeCreativeProjectId,
     activeCreativeWorkspaceId,

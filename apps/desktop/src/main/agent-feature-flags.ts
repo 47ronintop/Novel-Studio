@@ -110,8 +110,8 @@ export function createAgentFeatureFlags(
     creativeFileDeleteV2: approvalBindingV2 && merged.creativeFileDeleteV2,
     phaseE_remoteMcpEnabled: merged.phaseE_remoteMcpEnabled && merged.phaseD_networkReadEnabled,
     engineeringHardenedAccessV1: accessEnabled,
-    engineeringReplaceV2: approvalBindingV2 && merged.engineeringReplaceV2 && mutationEnabled,
-    engineeringCreateV2: approvalBindingV2 && merged.engineeringCreateV2 && mutationEnabled,
+    engineeringReplaceV2: approvalBindingV2 && merged.engineeringReplaceV2 && recoveryEnabled,
+    engineeringCreateV2: approvalBindingV2 && merged.engineeringCreateV2 && recoveryEnabled,
     engineeringMoveV2: approvalBindingV2 && merged.engineeringMoveV2 && mutationEnabled,
     engineeringDeleteV2: approvalBindingV2 && merged.engineeringDeleteV2 && recoveryEnabled,
     engineeringDirectoryCreateV1:

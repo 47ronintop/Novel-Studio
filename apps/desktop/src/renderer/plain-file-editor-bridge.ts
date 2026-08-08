@@ -103,7 +103,11 @@ export function createPlainFileEditorBridge(
           : { readOnlyReason: read.document.readOnlyReason }),
         saveStatus: "Saved"
       };
-      openEngineeringEditor(engineeringReporter, binding, state);
+      const editorReport = openEngineeringEditor(engineeringReporter, binding, state);
+      if (editorReport !== undefined) {
+        const editorStatus = await editorReport;
+        if (editorStatus.status === "unknown") throw new Error(editorStatus.code);
+      }
       return toRequiredProps();
     },
     updateContent(content) {
@@ -349,19 +353,17 @@ function openEngineeringEditor(
   reporter: EngineeringEditorStateReporter | undefined,
   binding: PlainFileEditorBinding,
   state: PlainFileEditorState
-): void {
-  if (reporter === undefined || binding.scope !== "engineeringWorkspaceFile") return;
+): ReturnType<EngineeringEditorStateReporter["open"]> | undefined {
+  if (reporter === undefined || binding.scope !== "engineeringWorkspaceFile") return undefined;
   const identity = engineeringEditorStateBinding(binding);
-  if (identity === undefined) return;
-  void reporter
-    .open({
-      rootBindingId: identity.rootBindingId,
-      relativePath: state.path,
-      editorInstanceId: identity.editorInstanceId,
-      dirty: state.content !== state.persistedContent,
-      bufferContent: state.content
-    })
-    .then(() => undefined);
+  if (identity === undefined) return undefined;
+  return reporter.open({
+    rootBindingId: identity.rootBindingId,
+    relativePath: state.path,
+    editorInstanceId: identity.editorInstanceId,
+    dirty: state.content !== state.persistedContent,
+    bufferContent: state.content
+  });
 }
 
 function engineeringEditorStateBinding(

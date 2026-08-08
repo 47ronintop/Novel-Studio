@@ -4,6 +4,7 @@ import {
   createAgentRunToolCatalogSnapshot,
   createAgentRunToolCatalogSnapshotV2,
   createApprovalRuleSetProjection,
+  LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
   computeAgentRunToolCatalogRevision,
   computeAgentRunToolCatalogRevisionV2,
   createAgentContextSnapshot,
@@ -224,6 +225,15 @@ import {
   revokeAgentRunApprovalAuthorization,
   revokeAgentRunProposalAuthorization
 } from "./agent-write-authorization.js";
+import type { EngineeringApprovalBindingFactsV2 } from "./engineering-file-approval-v2.js";
+import {
+  checksumEngineeringFileMutationToolPayloadV2,
+  engineeringToolCallPayloadConflictV2,
+  isEngineeringFileMutationToolNameV2,
+  type EngineeringApprovalProofInputV2,
+  type EngineeringFileMutationSessionV2,
+  type EngineeringPreparedFileMutationProposalV2
+} from "./engineering-file-mutation-session-v2.js";
 import {
   decideContextShareApproval as applyContextShareApprovalDecision,
   parseAwaitingContextShareApproval,
@@ -903,6 +913,12 @@ export interface AgentRunChangeSetApprovalV2ApprovalContext {
     readonly catalogRevision: string;
   };
   readonly capabilityBoundary: AgentRunCapabilityBoundary;
+  /**
+   * Present only for a Main-prepared Engineering V2 proposal. These facts originate from the
+   * validated raw-byte request/absence proof and replace the generic JS-string manifest inference
+   * when the trusted coordinator creates Approval Binding 2.0.
+   */
+  readonly engineeringApprovalFacts?: EngineeringApprovalBindingFactsV2;
   /** Exact immutable preview binding; repeated so the surface need not trust renderer state. */
   readonly preview: {
     readonly changeSetId: string;
@@ -981,6 +997,8 @@ export interface CreateAgentRunSessionOptions {
   ) => Result<string, UnifiedError>;
   /** Phase B: file lifecycle operation session. When absent, lifecycle tools return UNAVAILABLE. */
   readonly fileOperationSession?: AgentFileOperationSessionPort;
+  /** Main-only Engineering V2 proposal/apply path; never backed by the legacy creative journal. */
+  readonly engineeringFileMutationV2?: EngineeringFileMutationSessionV2;
   /** Formal writing-domain chapter proposal session. It prepares without touching project files. */
   readonly chapterAgentToolSession?: ChapterAgentToolSession;
   /** Structured Story Bible proposals, prepared through the shared candidate validator. */
@@ -1065,6 +1083,8 @@ interface RunRuntime {
   /** Exact Main-observed boundary at run creation; changes are terminal even when locally derived facts agree. */
   observedCapabilityBoundary?: AgentRunCapabilityBoundary;
   readonly seenToolCallIds: Set<string>;
+  /** Canonical Engineering payload bindings reconstructed from Main-owned run events. */
+  readonly engineeringToolCallPayloadChecksums: Map<string, string>;
   controller: AbortController;
   generation: number;
   driving: boolean;
@@ -1946,6 +1966,18 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     readonly writingTaskIntent?: WritingTaskIntent | null;
     readonly contextSources: readonly AgentContextSourceInput[];
   }): MaterializedAgentGuidanceV3 {
+    const engineeringOperations = input.toolDescriptors.flatMap((descriptor) =>
+      descriptor.effect === "propose" && descriptor.writeOperation !== undefined
+        ? [descriptor.writeOperation]
+        : []
+    );
+    const engineeringApprovalRuleSet =
+      input.profile.profileId === "engineering" && engineeringOperations.length > 0
+        ? createApprovalRuleSetProjection(
+            engineeringOperations,
+            LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION
+          )
+        : undefined;
     const runtimeFacts = createProviderVisibleAgentRuntimeFacts({
       profile: input.profile,
       toolDescriptors: input.toolDescriptors,
@@ -1956,6 +1988,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       ...(input.writePolicyAcknowledged === true
         ? { executionWritePolicyAcknowledged: true as const }
         : {}),
+      ...(engineeringApprovalRuleSet === undefined
+        ? {}
+        : { approvalRuleSet: engineeringApprovalRuleSet }),
       limitedRunPreapprovalQualified: false,
       activeResourceKind: activeResourceKindFor(input.profile, input.contextSources)
     });
@@ -2167,6 +2202,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         readonly schemaVersion?: "1.0" | "2.0";
         readonly catalogRevision: string;
         readonly descriptors: readonly AgentToolDescriptor[];
+        readonly approvalRuleSetVersion?: string;
       }
     | undefined {
     const catalog = toolCatalogs.get(snapshot.runId);
@@ -2175,7 +2211,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         facadeVersion: catalog.facadeVersion,
         schemaVersion: catalog.schemaVersion,
         catalogRevision: catalog.catalogRevision,
-        descriptors: catalog.descriptors
+        descriptors: catalog.descriptors,
+        ...(catalog.schemaVersion === "2.0"
+          ? { approvalRuleSetVersion: catalog.approvalRuleSetVersion }
+          : {})
       };
     }
     if (snapshot.toolFacadeVersion !== "v1") return undefined;
@@ -2207,6 +2246,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       readonly schemaVersion?: "1.0" | "2.0";
       readonly catalogRevision: string;
       readonly descriptors: readonly AgentToolDescriptor[];
+      readonly approvalRuleSetVersion?: string;
     };
     readonly historyMessages?: readonly AgentModelMessage[];
     readonly artifactPointers?: readonly {
@@ -3474,6 +3514,17 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         events.flatMap((event) =>
           typeof event.detail?.["toolCallId"] === "string" ? [event.detail["toolCallId"]] : []
         )
+      ),
+      engineeringToolCallPayloadChecksums: new Map(
+        events.flatMap((event) => {
+          const toolCallId = event.detail?.["toolCallId"];
+          const checksum = event.detail?.["engineeringCanonicalPayloadChecksum"];
+          return typeof toolCallId === "string" &&
+            typeof checksum === "string" &&
+            /^[a-f0-9]{64}$/u.test(checksum)
+            ? ([[toolCallId, checksum]] as const)
+            : [];
+        })
       ),
       controller: new AbortController(),
       generation: 1,
@@ -5212,6 +5263,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     const approvedReplay =
       approvedPending !== undefined && approvedPending.binding.toolCallId === call.toolCallId;
     const contextShareReplay = approvedContextShare?.toolCallId === call.toolCallId;
+    const seenBeforeDispatch =
+      !approvedReplay && !contextShareReplay && runtime.seenToolCallIds.has(call.toolCallId);
+    let engineeringCanonicalPayloadChecksum: string | undefined;
+    let engineeringIdempotentReplay = false;
     if (!approvedReplay && !contextShareReplay) {
       if (runtime.toolCalls >= snapshot.limits.maxToolCalls) {
         await recordEvent(runId, {
@@ -5223,18 +5278,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         return "terminal";
       }
       runtime.toolCalls += 1;
-      if (runtime.seenToolCallIds.has(call.toolCallId)) {
-        return (await toolFailure(
-          runtime,
-          runId,
-          call,
-          "AGENT_TOOL_CALL_DUPLICATE",
-          "Duplicate tool call ID."
-        ))
-          ? "terminal"
-          : "continue";
-      }
-      runtime.seenToolCallIds.add(call.toolCallId);
+      if (!seenBeforeDispatch) runtime.seenToolCallIds.add(call.toolCallId);
     }
 
     const descriptor = resolveToolDescriptor(snapshot, call.name);
@@ -5245,6 +5289,32 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         call,
         "AGENT_TOOL_NOT_ALLOWED",
         "Tool is not available in this run."
+      ))
+        ? "terminal"
+        : "continue";
+    }
+    const engineeringToolName =
+      snapshot.scope.kind === "workspace" &&
+      snapshot.scope.workspaceKind === "engineeringWorkspace" &&
+      isEngineeringFileMutationToolNameV2(descriptor.name)
+        ? descriptor.name
+        : undefined;
+    const engineeringMutationInvocation = engineeringToolName !== undefined;
+    const priorEngineeringPayloadChecksum = runtime.engineeringToolCallPayloadChecksums.get(
+      call.toolCallId
+    );
+    if (seenBeforeDispatch && !engineeringMutationInvocation) {
+      const duplicateError =
+        priorEngineeringPayloadChecksum === undefined
+          ? applicationError("AGENT_TOOL_CALL_DUPLICATE", "Duplicate tool call ID.")
+          : engineeringToolCallPayloadConflictV2();
+      return (await toolFailure(
+        runtime,
+        runId,
+        call,
+        duplicateError.code,
+        duplicateError.message,
+        duplicateError
       ))
         ? "terminal"
         : "continue";
@@ -5277,6 +5347,43 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       ))
         ? "terminal"
         : "continue";
+    }
+    if (engineeringMutationInvocation) {
+      const checksum = checksumEngineeringFileMutationToolPayloadV2({
+        toolName: engineeringToolName as NonNullable<typeof engineeringToolName>,
+        arguments: parsedArguments.value
+      });
+      if (!checksum.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          checksum.error.code,
+          checksum.error.message,
+          checksum.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      engineeringCanonicalPayloadChecksum = checksum.value;
+      if (seenBeforeDispatch) {
+        if (priorEngineeringPayloadChecksum !== checksum.value) {
+          const conflict = engineeringToolCallPayloadConflictV2();
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            conflict.code,
+            conflict.message,
+            conflict
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        engineeringIdempotentReplay = true;
+      } else {
+        runtime.engineeringToolCallPayloadChecksums.set(call.toolCallId, checksum.value);
+      }
     }
 
     if (toolRequiresApproval(descriptor) && !approvedReplay) {
@@ -6114,6 +6221,233 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           toolCallId: call.toolCallId,
           toolName: descriptor.name,
           summary: `Prepared reviewed chapter ${prepared.value.operation} Change Set revision ${proposed.value.revision}; target files are unchanged.`
+        }
+      });
+      return "staged";
+    }
+
+    // ── Engineering Batch 7: opaque-ref/raw-byte proposal path ───────────────
+    if (engineeringToolName !== undefined) {
+      const engineeringSession = options.engineeringFileMutationV2;
+      const catalog = toolCatalogs.get(runId);
+      const boundary = runtime.capabilityBoundary;
+      if (
+        engineeringSession === undefined ||
+        options.changeSetSession === undefined ||
+        catalog?.schemaVersion !== "2.0" ||
+        boundary === undefined ||
+        engineeringCanonicalPayloadChecksum === undefined
+      ) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE",
+          "The qualified Engineering V2 proposal and approval boundary is unavailable."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+
+      if (engineeringIdempotentReplay && runtime.changeSet !== undefined) {
+        runtime.messages.push({
+          role: "tool",
+          toolCallId: call.toolCallId,
+          content: JSON.stringify({
+            ok: true,
+            changeSetId: runtime.changeSet.changeSetId,
+            revision: runtime.changeSet.revision,
+            checksum: runtime.changeSet.checksum,
+            status: "awaiting_approval",
+            idempotentReplay: true
+          })
+        });
+        await recordEvent(runId, {
+          runId,
+          status: "staging_changes",
+          type: "tool_completed",
+          detail: {
+            toolCallId: call.toolCallId,
+            toolName: descriptor.name,
+            engineeringCanonicalPayloadChecksum,
+            idempotentReplay: true,
+            summary: `Reused Change Set revision ${runtime.changeSet.revision}; target files are unchanged.`
+          }
+        });
+        return "staged";
+      }
+
+      const contextSnapshotId =
+        runtime.contextSnapshot?.contextSnapshotId ??
+        options.createContextSnapshotId?.(runId) ??
+        `context_${runId}`;
+      if (runtime.contextSnapshot === undefined) {
+        runtime.contextSnapshot = createAgentContextSnapshot({
+          contextSnapshotId,
+          runId,
+          ...contextSnapshotIdentity(snapshot),
+          createdAt: new Date().toISOString(),
+          sources: snapshotSourcesFor(runtime),
+          ...(promptArtifactBinding(runtime) ?? {})
+        });
+        if (options.repository.writeContextSnapshot !== undefined) {
+          const persisted = await options.repository.writeContextSnapshot(
+            asJsonObject(runtime.contextSnapshot)
+          );
+          if (!persisted.ok) throw persisted.error;
+        }
+      }
+      await recordEvent(runId, {
+        runId,
+        status: "staging_changes",
+        type: "tool_started",
+        snapshotPatch: { contextSnapshotId },
+        detail: {
+          toolCallId: call.toolCallId,
+          toolName: descriptor.name,
+          engineeringCanonicalPayloadChecksum
+        }
+      });
+
+      const prepared = await engineeringSession.prepare({
+        runId,
+        projectId: snapshot.projectId,
+        toolCallId: call.toolCallId,
+        toolName: engineeringToolName,
+        arguments: dispatchArguments,
+        canonicalPayloadChecksum: engineeringCanonicalPayloadChecksum,
+        writePolicy: snapshot.writePolicy,
+        boundary: {
+          workspaceBindingId: agentContextScopeKey(snapshot.scope),
+          providerSemanticVersionSetChecksum: boundary.providerSemanticVersionSetChecksum,
+          policyRevision: boundary.policyRevision,
+          capabilityRevision: catalog.catalogRevision,
+          approvalRuleSetVersion: catalog.approvalRuleSetVersion,
+          approvalRuleSetChecksum: catalog.approvalRuleSetChecksum
+        }
+      });
+      if (!prepared.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          prepared.error.code,
+          prepared.error.message,
+          prepared.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const preparedValidation = validatePreparedEngineeringProposal(
+        prepared.value,
+        call.toolCallId,
+        engineeringToolName,
+        engineeringCanonicalPayloadChecksum,
+        dispatchArguments
+      );
+      if (!preparedValidation.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          preparedValidation.error.code,
+          preparedValidation.error.message,
+          preparedValidation.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+
+      const commonProposal = {
+        runId,
+        projectId: snapshot.projectId,
+        checkpointId:
+          runtime.currentCheckpointId ?? `checkpoint_${runId}_r${snapshot.runRevision + 1}`,
+        contextSnapshotId,
+        writePolicy: snapshot.writePolicy
+      };
+      const proposed =
+        prepared.value.changeSetMutation.kind === "replace_file"
+          ? await proposeWorkspaceFileMutation(options.changeSetSession, {
+              kind: "replace_file",
+              file: {
+                ...commonProposal,
+                path: prepared.value.changeSetMutation.path,
+                range: prepared.value.changeSetMutation.range,
+                baseHash: prepared.value.changeSetMutation.baseHash,
+                replacement: prepared.value.changeSetMutation.replacement
+              }
+            })
+          : await proposeWorkspaceFileMutation(options.changeSetSession, {
+              kind: "create_file",
+              operation: {
+                ...commonProposal,
+                toolCallId: call.toolCallId,
+                operation: prepared.value.changeSetMutation.operation
+              }
+            });
+      if (!proposed.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          proposed.error.code,
+          proposed.error.message,
+          proposed.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      if (!isChangeSetV2(proposed.value)) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          "ENGINEERING_CHANGE_SET_V2_REQUIRED",
+          "Engineering mutation requires a strict Change Set 2.0."
+        ))
+          ? "terminal"
+          : "continue";
+      }
+      const bound = await engineeringSession.bindChangeSet({
+        prepared: prepared.value,
+        changeSet: proposed.value
+      });
+      if (!bound.ok) {
+        return (await toolFailure(
+          runtime,
+          runId,
+          call,
+          bound.error.code,
+          bound.error.message,
+          bound.error
+        ))
+          ? "terminal"
+          : "continue";
+      }
+
+      runtime.consecutiveToolFailures = 0;
+      runtime.changeSet = proposed.value;
+      runtime.messages.push({
+        role: "tool",
+        toolCallId: call.toolCallId,
+        content: JSON.stringify({
+          ok: true,
+          changeSetId: proposed.value.changeSetId,
+          revision: proposed.value.revision,
+          checksum: proposed.value.checksum,
+          status: "awaiting_approval"
+        })
+      });
+      await recordEvent(runId, {
+        runId,
+        status: "staging_changes",
+        type: "tool_completed",
+        detail: {
+          toolCallId: call.toolCallId,
+          toolName: descriptor.name,
+          engineeringCanonicalPayloadChecksum,
+          summary: `Prepared reviewed Engineering Change Set revision ${proposed.value.revision}; target files are unchanged.`
         }
       });
       return "staged";
@@ -7331,8 +7665,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           providerName: providerNameForDescriptorInput(descriptor)
         }))
       );
+      const newRunApprovalRuleSetVersion = approvalRuleSetVersionForScope(commandScope);
       const newRunCatalogRevision = useCatalogV2
-        ? computeCatalogV2RevisionForDescriptors(newRunProviderDescriptors)
+        ? computeCatalogV2RevisionForDescriptors(
+            newRunProviderDescriptors,
+            newRunApprovalRuleSetVersion
+          )
         : computeAgentRunToolCatalogRevision(newRunToolFacadeVersion, newRunProviderDescriptors);
       let initialGuidanceV3: MaterializedAgentGuidanceV3 | undefined;
       try {
@@ -7578,7 +7916,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           facadeVersion: newRunToolFacadeVersion,
           schemaVersion: useCatalogV2 ? "2.0" : "1.0",
           catalogRevision: newRunCatalogRevision,
-          descriptors: newRunProviderDescriptors
+          descriptors: newRunProviderDescriptors,
+          ...(newRunApprovalRuleSetVersion === undefined
+            ? {}
+            : { approvalRuleSetVersion: newRunApprovalRuleSetVersion })
         },
         calculatedAt: new Date().toISOString()
       });
@@ -7724,7 +8065,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ? createAgentRunToolCatalogSnapshotV2({
             runId: result.value.runId,
             descriptors: newRunProviderDescriptors,
-            createdAt: result.value.startedAt
+            createdAt: result.value.startedAt,
+            ...(newRunApprovalRuleSetVersion === undefined
+              ? {}
+              : { approvalRuleSetVersion: newRunApprovalRuleSetVersion })
           })
         : createAgentRunToolCatalogSnapshot({
             runId: result.value.runId,
@@ -7776,6 +8120,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : { promptCacheArtifact }),
         seenToolCallIds: new Set(),
+        engineeringToolCallPayloadChecksums: new Map(),
         controller: new AbortController(),
         generation: 1,
         driving: false,
@@ -8850,8 +9195,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           providerName: providerNameForDescriptorInput(descriptor)
         }))
       );
+      const executionApprovalRuleSetVersion = approvalRuleSetVersionForScope(snapshot.scope);
       const executionCatalogRevision = useExecutionCatalogV2
-        ? computeCatalogV2RevisionForDescriptors(executionProviderDescriptors)
+        ? computeCatalogV2RevisionForDescriptors(
+            executionProviderDescriptors,
+            executionApprovalRuleSetVersion
+          )
         : computeAgentRunToolCatalogRevision(newRunToolFacadeVersion, executionProviderDescriptors);
       let executionConversationContext: readonly AgentModelMessage[] = [];
       let executionConversationReserved = false;
@@ -9208,7 +9557,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           facadeVersion: newRunToolFacadeVersion,
           schemaVersion: useExecutionCatalogV2 ? "2.0" : "1.0",
           catalogRevision: executionCatalogRevision,
-          descriptors: executionProviderDescriptors
+          descriptors: executionProviderDescriptors,
+          ...(executionApprovalRuleSetVersion === undefined
+            ? {}
+            : { approvalRuleSetVersion: executionApprovalRuleSetVersion })
         },
         calculatedAt: new Date().toISOString()
       });
@@ -9320,7 +9672,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         ? createAgentRunToolCatalogSnapshotV2({
             runId: executionStarted.value.runId,
             descriptors: executionProviderDescriptors,
-            createdAt: executionStarted.value.startedAt
+            createdAt: executionStarted.value.startedAt,
+            ...(executionApprovalRuleSetVersion === undefined
+              ? {}
+              : { approvalRuleSetVersion: executionApprovalRuleSetVersion })
           })
         : createAgentRunToolCatalogSnapshot({
             runId: executionStarted.value.runId,
@@ -9373,6 +9728,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ? {}
           : { promptCacheArtifact: executionPromptCacheArtifact }),
         seenToolCallIds: new Set(),
+        engineeringToolCallPayloadChecksums: new Map(),
         controller: new AbortController(),
         generation: 1,
         driving: false,
@@ -10012,6 +10368,12 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           return failure("CHANGE_SET_NOT_FOUND", "The pending Change Set does not exist.");
         }
         const changeSet = runtime.changeSet;
+        const engineeringV2ChangeSet =
+          snapshot.scope.kind === "workspace" &&
+          snapshot.scope.workspaceKind === "engineeringWorkspace" &&
+          isChangeSetV2(changeSet)
+            ? changeSet
+            : undefined;
         if (
           snapshot.status !== "awaiting_write_approval" ||
           changeSet.changeSetId !== command.changeSetId ||
@@ -10183,7 +10545,21 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
             revised
           );
         }
-        if (command.decision === "apply_selected" && options.versionGroupExecutor === undefined) {
+        if (
+          command.decision === "apply_selected" &&
+          engineeringV2ChangeSet !== undefined &&
+          options.engineeringFileMutationV2 === undefined
+        ) {
+          return failure(
+            "ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE",
+            "The approved Engineering Change Set cannot be applied without its V2 Journal runtime."
+          );
+        }
+        if (
+          command.decision === "apply_selected" &&
+          engineeringV2ChangeSet === undefined &&
+          options.versionGroupExecutor === undefined
+        ) {
           return failure(
             "AGENT_VERSION_GROUP_UNAVAILABLE",
             "The approved Change Set cannot be applied without the Version Group service."
@@ -10199,7 +10575,10 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                 catalog: (() => {
                   const catalog = toolCatalogs.get(command.runId);
                   return catalog?.schemaVersion === "2.0" ? catalog : undefined;
-                })()
+                })(),
+                ...(options.engineeringFileMutationV2 === undefined
+                  ? {}
+                  : { engineeringFileMutationV2: options.engineeringFileMutationV2 })
               })
             : undefined;
         if (v2ApprovalContext !== undefined && !v2ApprovalContext.ok) {
@@ -10303,7 +10682,13 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
                 }
               }
             : {}),
-          detail: asJsonObject(resolvedApproval as unknown as JsonObject)
+          // Engineering authorization and reservation identities are Main-only.  Run events are
+          // returned by the ordinary read-run IPC, so persist only the display-safe decision
+          // projection for this profile rather than the shared ledger object used by apply.
+          detail:
+            engineeringV2ChangeSet === undefined
+              ? asJsonObject(resolvedApproval as unknown as JsonObject)
+              : engineeringApprovalResolvedEventDetail(resolvedApproval)
         });
         if (!approvalResolved.ok) return approvalResolved;
 
@@ -10342,7 +10727,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           );
         }
 
-        if (options.versionGroupExecutor === undefined)
+        if (engineeringV2ChangeSet === undefined && options.versionGroupExecutor === undefined)
           throw new Error("Version Group availability changed during Change Set approval.");
         const writeStarted = await recordEvent(command.runId, {
           runId: command.runId,
@@ -10355,10 +10740,27 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           }
         });
         if (!writeStarted.ok) return writeStarted;
-        const applied = await applyVersionGroupWithAuthorization(options.versionGroupExecutor, {
-          changeSet,
-          approval: resolvedApproval
-        });
+        const applied =
+          engineeringV2ChangeSet !== undefined
+            ? resolvedApproval.schemaVersion !== "2.0" ||
+              options.engineeringFileMutationV2 === undefined
+              ? err(
+                  applicationError(
+                    "ENGINEERING_FILE_MUTATION_V2_APPROVAL_REQUIRED",
+                    "Engineering mutation requires the shared Approval Binding and Authorization Ledger 2.0."
+                  )
+                )
+              : await options.engineeringFileMutationV2.apply({
+                  changeSet: engineeringV2ChangeSet,
+                  approval: resolvedApproval
+                })
+            : await applyVersionGroupWithAuthorization(
+                options.versionGroupExecutor as AgentVersionGroupExecutor,
+                {
+                  changeSet,
+                  approval: resolvedApproval
+                }
+              );
         if (!applied.ok) {
           await recordEvent(command.runId, {
             runId: command.runId,
@@ -10810,6 +11212,7 @@ async function prepareV2ApprovalContext(input: {
   readonly changeSet: ChangeSetV2;
   readonly scope: AgentContextScope;
   readonly catalog: AgentRunToolCatalogSnapshotV2 | undefined;
+  readonly engineeringFileMutationV2?: EngineeringFileMutationSessionV2;
 }): Promise<Result<AgentRunChangeSetApprovalV2ApprovalContext, UnifiedError>> {
   const { changeSet, runtime, catalog } = input;
   const boundary = runtime.capabilityBoundary;
@@ -10832,7 +11235,7 @@ async function prepareV2ApprovalContext(input: {
     );
   }
 
-  const manifests = approvalProofManifests(changeSet);
+  let manifests = approvalProofManifests(changeSet);
   const selectionChecksum = approvalProofSelectionChecksum(changeSet);
   if (selectionChecksum === undefined) {
     return err(
@@ -10843,8 +11246,43 @@ async function prepareV2ApprovalContext(input: {
     );
   }
 
+  let engineeringProofInput: EngineeringApprovalProofInputV2 | undefined;
+  if (input.scope.kind === "workspace" && input.scope.workspaceKind === "engineeringWorkspace") {
+    if (input.engineeringFileMutationV2 === undefined) {
+      return err(
+        applicationError(
+          "ENGINEERING_FILE_MUTATION_V2_APPROVAL_UNAVAILABLE",
+          "The Main Engineering raw-byte approval input is unavailable; this Change Set remains pending."
+        )
+      );
+    }
+    const preparedInput = await input.engineeringFileMutationV2.prepareApprovalProofInput({
+      changeSet,
+      boundary,
+      workspaceBindingId: agentContextScopeKey(input.scope),
+      approvalRuleSet: {
+        version: catalog.approvalRuleSetVersion,
+        checksum: catalog.approvalRuleSetChecksum,
+        catalogRevision: catalog.catalogRevision
+      }
+    });
+    if (!preparedInput.ok) return preparedInput;
+    const validatedInput = validateEngineeringApprovalProofInput(
+      preparedInput.value,
+      changeSet,
+      selectionChecksum
+    );
+    if (!validatedInput.ok) return validatedInput;
+    engineeringProofInput = validatedInput.value;
+    manifests = Object.freeze({
+      baseManifestChecksum: engineeringProofInput.baseManifestChecksum,
+      candidateManifestChecksum: engineeringProofInput.candidateManifestChecksum
+    });
+  }
+
   let proofRef: ApprovalDecisionProofRefV1;
   let operation: ProviderVisibleWriteOperation;
+  let decisionProof: MainOnlyApprovalDecisionProofV1 | undefined;
   if (matchesPendingStoryBibleApproval(runtime, changeSet)) {
     const pending = runtime.pendingStoryBibleApproval;
     // The Story Bible finalizer persisted this exact ref after binding it to this exact revision.
@@ -10881,9 +11319,11 @@ async function prepareV2ApprovalContext(input: {
       boundary,
       catalog,
       selectionChecksum,
-      manifests
+      manifests,
+      ...(engineeringProofInput === undefined ? {} : { engineeringProofInput })
     });
     if (!proof.ok) return proof;
+    decisionProof = proof.value;
     const persisted = await input.changeSetSession.persistApprovalDecisionProof({
       changeSetId: changeSet.changeSetId,
       revision: changeSet.revision,
@@ -10902,6 +11342,40 @@ async function prepareV2ApprovalContext(input: {
     operation = proof.value.operation;
   }
 
+  let engineeringApprovalFacts: EngineeringApprovalBindingFactsV2 | undefined;
+  if (input.scope.kind === "workspace" && input.scope.workspaceKind === "engineeringWorkspace") {
+    if (input.engineeringFileMutationV2 === undefined || decisionProof === undefined) {
+      return err(
+        applicationError(
+          "ENGINEERING_FILE_MUTATION_V2_APPROVAL_UNAVAILABLE",
+          "The Main Engineering raw-byte approval facts are unavailable; this Change Set remains pending."
+        )
+      );
+    }
+    if (engineeringProofInput === undefined) {
+      return err(
+        applicationError(
+          "ENGINEERING_FILE_MUTATION_V2_APPROVAL_UNAVAILABLE",
+          "The Main Engineering raw-byte approval input is unavailable; this Change Set remains pending."
+        )
+      );
+    }
+    const preparedFacts = await input.engineeringFileMutationV2.finalizeApprovalFacts({
+      changeSet,
+      proof: decisionProof,
+      proofInput: engineeringProofInput,
+      boundary,
+      workspaceBindingId: agentContextScopeKey(input.scope),
+      approvalRuleSet: {
+        version: catalog.approvalRuleSetVersion,
+        checksum: catalog.approvalRuleSetChecksum,
+        catalogRevision: catalog.catalogRevision
+      }
+    });
+    if (!preparedFacts.ok) return preparedFacts;
+    engineeringApprovalFacts = preparedFacts.value;
+  }
+
   return ok(
     Object.freeze({
       proofRef: Object.freeze({ ...proofRef }),
@@ -10914,6 +11388,7 @@ async function prepareV2ApprovalContext(input: {
         catalogRevision: catalog.catalogRevision
       }),
       capabilityBoundary: Object.freeze({ ...boundary }),
+      ...(engineeringApprovalFacts === undefined ? {} : { engineeringApprovalFacts }),
       preview: Object.freeze({
         changeSetId: changeSet.changeSetId,
         revision: changeSet.revision,
@@ -10938,8 +11413,10 @@ function createV2AgentRunApprovalProof(input: {
     readonly baseManifestChecksum: string;
     readonly candidateManifestChecksum: string;
   };
+  readonly engineeringProofInput?: EngineeringApprovalProofInputV2;
 }): Result<MainOnlyApprovalDecisionProofV1, UnifiedError> {
-  const operation = v2ApprovalOperation(input.changeSet);
+  const operation =
+    input.engineeringProofInput?.operationKind ?? v2ApprovalOperation(input.changeSet);
   if (operation === undefined) {
     return err(
       applicationError(
@@ -10948,12 +11425,18 @@ function createV2AgentRunApprovalProof(input: {
       )
     );
   }
-  const evidence = v2ApprovalEvidence(input.changeSet, operation);
+  const evidence =
+    input.engineeringProofInput?.evidence ?? v2ApprovalEvidence(input.changeSet, operation);
   const binding = {
     workspaceBindingId: agentContextScopeKey(input.scope),
-    ...(input.boundary.canonicalRootIdentityChecksum === "not_applicable"
+    ...((input.engineeringProofInput?.rootBindingId ??
+      input.boundary.canonicalRootIdentityChecksum) === "not_applicable"
       ? {}
-      : { rootBindingId: input.boundary.canonicalRootIdentityChecksum }),
+      : {
+          rootBindingId:
+            input.engineeringProofInput?.rootBindingId ??
+            input.boundary.canonicalRootIdentityChecksum
+        }),
     runId: input.changeSet.runId,
     changeSetId: input.changeSet.changeSetId,
     changeSetRevision: input.changeSet.revision,
@@ -10961,16 +11444,18 @@ function createV2AgentRunApprovalProof(input: {
     consistencyGroupChecksum: input.selectionChecksum,
     // This includes the lifecycle preparation ref/checksum as immutable proposal data but never
     // treats it as the authorization proof.
-    proposalPayloadChecksum: capabilityBoundaryChecksum({
-      changeSetId: input.changeSet.changeSetId,
-      revision: input.changeSet.revision,
-      checksum: input.changeSet.checksum,
-      displayBindingChecksum: input.changeSet.displayBindingChecksum,
-      providerSemanticVersionSetChecksum: input.changeSet.providerSemanticVersionSetChecksum,
-      domainOperation: input.changeSet.domainOperation ?? null,
-      files: input.changeSet.files,
-      operations: input.changeSet.operations ?? []
-    }),
+    proposalPayloadChecksum:
+      input.engineeringProofInput?.proposalPayloadChecksum ??
+      capabilityBoundaryChecksum({
+        changeSetId: input.changeSet.changeSetId,
+        revision: input.changeSet.revision,
+        checksum: input.changeSet.checksum,
+        displayBindingChecksum: input.changeSet.displayBindingChecksum,
+        providerSemanticVersionSetChecksum: input.changeSet.providerSemanticVersionSetChecksum,
+        domainOperation: input.changeSet.domainOperation ?? null,
+        files: input.changeSet.files,
+        operations: input.changeSet.operations ?? []
+      }),
     baseManifestChecksum: input.manifests.baseManifestChecksum,
     candidateManifestChecksum: input.manifests.candidateManifestChecksum,
     executionWritePolicy: input.changeSet.writePolicy ?? "write_before_confirmation",
@@ -10998,6 +11483,69 @@ function createV2AgentRunApprovalProof(input: {
       )
     );
   }
+}
+
+function validateEngineeringApprovalProofInput(
+  value: EngineeringApprovalProofInputV2,
+  changeSet: ChangeSetV2,
+  expectedSelectionChecksum: string
+): Result<EngineeringApprovalProofInputV2, UnifiedError> {
+  const expectedOperation = v2ApprovalOperation(changeSet);
+  const validEvidence = (() => {
+    try {
+      createMainOnlyApprovalDecisionProofV1({
+        proofId: "engineering_approval_input_validation",
+        approvalRuleSetVersion: LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+        approvalRuleSetChecksum: createApprovalRuleSetProjection(
+          [value.operationKind],
+          LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION
+        ).checksum,
+        operation: value.operationKind,
+        binding: {
+          workspaceBindingId: "engineering_approval_input_validation",
+          rootBindingId: value.rootBindingId,
+          runId: changeSet.runId,
+          changeSetId: changeSet.changeSetId,
+          changeSetRevision: changeSet.revision,
+          changeSetChecksum: changeSet.checksum,
+          consistencyGroupChecksum: value.selectionChecksum,
+          proposalPayloadChecksum: value.proposalPayloadChecksum,
+          baseManifestChecksum: value.baseManifestChecksum,
+          candidateManifestChecksum: value.candidateManifestChecksum,
+          executionWritePolicy: changeSet.writePolicy ?? "write_before_confirmation",
+          policyRevision: "engineering_approval_input_validation",
+          capabilityRevision: "engineering_approval_input_validation"
+        },
+        evidence: value.evidence
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  if (
+    value.schemaVersion !== "2.0" ||
+    value.operationKind !== expectedOperation ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value.rootBindingId) ||
+    value.selectionChecksum !== expectedSelectionChecksum ||
+    !isChecksum(value.proposalPayloadChecksum) ||
+    !isChecksum(value.baseManifestChecksum) ||
+    !isChecksum(value.candidateManifestChecksum) ||
+    !validEvidence
+  ) {
+    return err(
+      applicationError(
+        "ENGINEERING_FILE_MUTATION_V2_APPROVAL_INPUT_INVALID",
+        "The durable Engineering raw-byte proposal cannot be bound to this Change Set approval proof."
+      )
+    );
+  }
+  return ok(
+    Object.freeze({
+      ...value,
+      evidence: Object.freeze({ ...value.evidence })
+    })
+  );
 }
 
 function approvalEffectRuleFor(
@@ -12331,6 +12879,62 @@ async function proposeWorkspaceFileMutation(
     : session.proposeOperation(input.operation);
 }
 
+function validatePreparedEngineeringProposal(
+  value: EngineeringPreparedFileMutationProposalV2,
+  toolCallId: string,
+  toolName: "propose_file_write" | "propose_file_create",
+  canonicalPayloadChecksum: string,
+  argumentsValue: JsonObject
+): Result<void, UnifiedError> {
+  const expectedOperation = toolName === "propose_file_write" ? "replace_file" : "create_file";
+  const validEnvelope =
+    value.schemaVersion === "2.0" &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value.proposalId) &&
+    value.toolCallId === toolCallId &&
+    value.canonicalPayloadChecksum === canonicalPayloadChecksum &&
+    value.operationKind === expectedOperation &&
+    typeof value.relativeIdentity === "string" &&
+    value.relativeIdentity.length > 0;
+  if (!validEnvelope) return err(engineeringPreparedProposalInvalid());
+
+  if (toolName === "propose_file_write") {
+    const range = argumentsValue["range"];
+    const mutation = value.changeSetMutation;
+    if (
+      mutation.kind !== "replace_file" ||
+      mutation.path !== value.relativeIdentity ||
+      mutation.replacement !== argumentsValue["replacement"] ||
+      !isJsonObject(range) ||
+      mutation.range.unit !== "character" ||
+      mutation.range.start !== range["start"] ||
+      mutation.range.end !== range["end"] ||
+      !isChecksum(mutation.baseHash)
+    ) {
+      return err(engineeringPreparedProposalInvalid());
+    }
+    return ok(undefined);
+  }
+
+  const mutation = value.changeSetMutation;
+  if (
+    mutation.kind !== "create_file" ||
+    mutation.operation.kind !== "create_file" ||
+    mutation.operation.relativePath !== value.relativeIdentity ||
+    mutation.operation.toolCallIdempotencyKey !== toolCallId ||
+    mutation.operation.content !== argumentsValue["candidate"]
+  ) {
+    return err(engineeringPreparedProposalInvalid());
+  }
+  return ok(undefined);
+}
+
+function engineeringPreparedProposalInvalid(): UnifiedError {
+  return applicationError(
+    "ENGINEERING_FILE_MUTATION_V2_PREPARATION_INVALID",
+    "The Main Engineering preparation result does not match the exact tool payload."
+  );
+}
+
 /** Task B.3 — routes a file lifecycle tool call to the matching AgentFileOperationSessionPort method. */
 function buildFileOperationProposal(
   session: AgentFileOperationSessionPort,
@@ -12555,6 +13159,25 @@ function parseContextSnapshot(
       return undefined;
     }
   }
+}
+
+function engineeringApprovalResolvedEventDetail(
+  value: ChangeSetApproval | ChangeSetApprovalV2 | ChangeSetV2Rejection
+): JsonObject {
+  const source = value as unknown as Record<string, unknown>;
+  return asJsonObject(
+    Object.freeze({
+      ...(source["schemaVersion"] === "2.0" ? { schemaVersion: "2.0" } : {}),
+      ...(typeof source["decision"] === "string" ? { decision: source["decision"] } : {}),
+      ...(typeof source["displayBindingChecksum"] === "string"
+        ? { displayBindingChecksum: source["displayBindingChecksum"] }
+        : {}),
+      ...(typeof source["resolvedAt"] === "string" ? { resolvedAt: source["resolvedAt"] } : {}),
+      ...(typeof source["approvalSource"] === "string"
+        ? { approvalSource: source["approvalSource"] }
+        : {})
+    })
+  );
 }
 
 function asJsonObject(value: object): JsonObject {
@@ -13206,7 +13829,8 @@ function nextPromptCacheIdentityChecksum(
 }
 
 function computeCatalogV2RevisionForDescriptors(
-  descriptors: readonly AgentToolDescriptor[]
+  descriptors: readonly AgentToolDescriptor[],
+  approvalRuleSetVersion?: string
 ): string {
   const operations: ProviderVisibleWriteOperation[] = [];
   for (const descriptor of descriptors) {
@@ -13219,13 +13843,19 @@ function computeCatalogV2RevisionForDescriptors(
   const projection =
     operations.length === 0
       ? { version: "not_applicable", checksum: "not_applicable", rules: [] as const }
-      : createApprovalRuleSetProjection(operations);
+      : createApprovalRuleSetProjection(operations, approvalRuleSetVersion);
   return computeAgentRunToolCatalogRevisionV2({
     descriptors,
     approvalRuleSetVersion: projection.version,
     approvalRuleSetChecksum: projection.checksum,
     approvalRules: projection.rules
   });
+}
+
+function approvalRuleSetVersionForScope(scope: AgentContextScope): string | undefined {
+  return scope.kind === "workspace" && scope.workspaceKind === "engineeringWorkspace"
+    ? LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION
+    : undefined;
 }
 
 /**

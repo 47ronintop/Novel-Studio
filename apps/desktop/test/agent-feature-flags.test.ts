@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   ENGINEERING_FILE_NATIVE_ADAPTER_ID,
   ENGINEERING_FILE_QUALIFICATION_VERSION,
@@ -12,6 +12,45 @@ import {
   createProductionAgentFeatureFlags
 } from "../../../apps/desktop/src/main/agent-feature-flags.js";
 import { createEngineeringFileAccessQualificationService } from "../../../apps/desktop/src/main/engineering-file-access-qualification.js";
+
+vi.mock(
+  "../../../apps/desktop/src/main/engineering-file-access-qualification.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../apps/desktop/src/main/engineering-file-access-qualification.js")
+      >();
+    const isFeatureFlagTestQualification = (
+      value: unknown
+    ): value is EngineeringFileQualificationAttestationV1 & {
+      readonly featureFlagTestMainOwned: true;
+    } =>
+      value !== null &&
+      typeof value === "object" &&
+      (value as { readonly featureFlagTestMainOwned?: unknown }).featureFlagTestMainOwned === true;
+
+    return {
+      ...actual,
+      hasMainOwnedEngineeringFileQualification(value, capability, observedAt) {
+        if (isFeatureFlagTestQualification(value)) {
+          return (
+            Date.parse(observedAt) < Date.parse(value.expiresAt ?? "") &&
+            value.capabilities[capability] === "available"
+          );
+        }
+        return actual.hasMainOwnedEngineeringFileQualification(value, capability, observedAt);
+      },
+      mainOwnedEngineeringFileQualificationRevision(value, observedAt) {
+        if (isFeatureFlagTestQualification(value)) {
+          return Date.parse(observedAt) < Date.parse(value.expiresAt ?? "")
+            ? value.attestationChecksum
+            : "unavailable";
+        }
+        return actual.mainOwnedEngineeringFileQualificationRevision(value, observedAt);
+      }
+    };
+  }
+);
 
 describe("AgentFeatureFlags", () => {
   test("default flags are all false", () => {
@@ -172,6 +211,56 @@ describe("AgentFeatureFlags", () => {
       `test-revision:engineering-native:${qualification.attestationChecksum}`
     );
   });
+
+  test("requires Main-owned recovery qualification for Engineering replace and create", () => {
+    const flags = createAgentFeatureFlags(
+      requestedEngineeringReplaceCreateFlags(),
+      mainOwnedEngineeringQualificationForFeatureFlags({
+        root: "available",
+        access: "available",
+        mutation: "available",
+        recovery: "unavailable"
+      })
+    );
+
+    expect(flags).toMatchObject({
+      engineeringHardenedAccessV1: true,
+      engineeringReplaceV2: false,
+      engineeringCreateV2: false
+    });
+  });
+
+  test("enables Engineering replace and create only with recovery qualification and binds revision to its attestation", () => {
+    const qualification = mainOwnedEngineeringQualificationForFeatureFlags({
+      root: "available",
+      access: "available",
+      mutation: "available",
+      recovery: "available"
+    });
+    const flags = createAgentFeatureFlags(requestedEngineeringReplaceCreateFlags(), qualification);
+    const driftedQualification = mainOwnedEngineeringQualificationForFeatureFlags(
+      {
+        root: "available",
+        access: "available",
+        mutation: "available",
+        recovery: "available"
+      },
+      "d".repeat(64)
+    );
+    const driftedFlags = createAgentFeatureFlags(
+      requestedEngineeringReplaceCreateFlags(),
+      driftedQualification
+    );
+
+    expect(flags).toMatchObject({ engineeringReplaceV2: true, engineeringCreateV2: true });
+    expect(flags.revision).toBe(
+      `test-revision:engineering-native:${qualification.attestationChecksum}`
+    );
+    expect(driftedFlags.revision).toBe(
+      `test-revision:engineering-native:${driftedQualification.attestationChecksum}`
+    );
+    expect(driftedFlags.revision).not.toBe(flags.revision);
+  });
 });
 
 function allEngineeringFlags() {
@@ -186,7 +275,36 @@ function allEngineeringFlags() {
   };
 }
 
-function syntheticAvailableAttestation(): EngineeringFileQualificationAttestationV1 {
+function requestedEngineeringReplaceCreateFlags() {
+  return {
+    agentGuidanceV3: true,
+    approvalBindingV2: true,
+    engineeringHardenedAccessV1: true,
+    engineeringReplaceV2: true,
+    engineeringCreateV2: true,
+    revision: "test-revision"
+  };
+}
+
+function mainOwnedEngineeringQualificationForFeatureFlags(
+  capabilities: EngineeringFileQualificationAttestationV1["capabilities"],
+  artifactSha256 = "a".repeat(64)
+): EngineeringFileQualificationAttestationV1 & { readonly featureFlagTestMainOwned: true } {
+  return {
+    ...syntheticAvailableAttestation(capabilities, artifactSha256),
+    featureFlagTestMainOwned: true
+  };
+}
+
+function syntheticAvailableAttestation(
+  capabilities: EngineeringFileQualificationAttestationV1["capabilities"] = {
+    root: "available",
+    access: "available",
+    mutation: "available",
+    recovery: "available"
+  },
+  artifactSha256 = "a".repeat(64)
+): EngineeringFileQualificationAttestationV1 {
   const unsigned = {
     schemaVersion: ENGINEERING_FILE_QUALIFICATION_VERSION,
     authority: "desktop_main_engineering_file_access_qualification" as const,
@@ -196,13 +314,8 @@ function syntheticAvailableAttestation(): EngineeringFileQualificationAttestatio
     status: "available" as const,
     productionQualified: true,
     candidateArtifactPresent: true,
-    capabilities: {
-      root: "available" as const,
-      access: "available" as const,
-      mutation: "available" as const,
-      recovery: "available" as const
-    },
-    artifactSha256: "a".repeat(64),
+    capabilities,
+    artifactSha256,
     artifactManifestSha256: "b".repeat(64),
     probeReportChecksum: "c".repeat(64),
     expiresAt: "2099-02-01T00:00:00.000Z",

@@ -16,6 +16,7 @@ export const APPLICATION_IPC_CHANNELS = [
   "application:workspace:refresh-engineering-tree",
   "application:workspace:read-text-file",
   "application:workspace:save-text-file",
+  "application:workspace:complete-engineering-mutation-sync",
   "application:workspace:create-project-conventions",
   "application:workspace:update-context-policy",
   "application:creative-project-files:refresh",
@@ -148,6 +149,7 @@ export type ApplicationIpcChannel = (typeof APPLICATION_IPC_CHANNELS)[number];
 export const APPLICATION_IPC_EVENT_CHANNELS = [
   "application:ai:chapter-suggestion-push-event",
   "application:agent-run:event",
+  "application:engineering-mutation-sync-request",
   "application:story-analysis:completion",
   "application:menu:native-command"
 ] as const;

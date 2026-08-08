@@ -2,6 +2,9 @@ import { describe, expect, test } from "vitest";
 
 import {
   ENGINEERING_FILE_CONTRACT_VERSION,
+  ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS,
+  ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS,
+  ENGINEERING_FILE_BATCH_7_PROBE_CONTRACT_VERSION,
   ENGINEERING_FILE_NATIVE_ADAPTER_ID,
   ENGINEERING_FILE_NEGATIVE_CONTROLS,
   ENGINEERING_FILE_POSITIVE_PROTECTIONS,
@@ -12,9 +15,11 @@ import {
   engineeringFileProbeReportChecksum,
   engineeringFileQualificationAttestationChecksum,
   validateEngineeringFileProbeReport,
+  validateEngineeringFileProbeReportV2,
   validateEngineeringFileQualificationAttestation,
   type EngineeringFileMutationReceiptV1,
   type EngineeringFileProbeReportV1,
+  type EngineeringFileProbeReportV2,
   type EngineeringFileQualificationAttestationV1,
   type EngineeringRawByteBlobV1,
   type EngineeringRecoveryRootBindingV1,
@@ -109,6 +114,39 @@ describe("Engineering hardened file contracts", () => {
         "2026-08-02T00:30:00.000Z"
       )
     ).toEqual({ valid: false, failureReasons: ["probe_contract_mismatch"] });
+  });
+
+  test("requires a distinct Batch 7 report with installed mutation and recovery evidence", () => {
+    const report = batch7ProbeReport();
+    expect(validateEngineeringFileProbeReportV2(report, "2026-08-02T00:30:00.000Z")).toEqual({
+      valid: true,
+      failureReasons: []
+    });
+    expect(Object.keys(report.mutationRecoveryEvidence.positiveProtections)).toEqual(
+      ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS
+    );
+    expect(Object.keys(report.mutationRecoveryEvidence.negativeControls)).toEqual(
+      ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS
+    );
+    expect(
+      validateEngineeringFileProbeReportV2(
+        checkedBatch7ProbeReport({
+          ...report,
+          mutationRecoveryEvidence: {
+            ...report.mutationRecoveryEvidence,
+            negativeControls: {
+              ...report.mutationRecoveryEvidence.negativeControls,
+              staleBase: "canary_blocked"
+            }
+          }
+        }),
+        "2026-08-02T00:30:00.000Z"
+      )
+    ).toEqual({ valid: false, failureReasons: ["negative_control_failed"] });
+    expect(validateEngineeringFileProbeReport(report, "2026-08-02T00:30:00.000Z")).toEqual({
+      valid: false,
+      failureReasons: ["probe_contract_mismatch"]
+    });
   });
 
   test("rejects future, expired, non-canonical, and overlong probe evidence", () => {
@@ -281,6 +319,41 @@ function checkedProbeReport(value: Record<string, unknown>): EngineeringFileProb
       unsigned as Omit<EngineeringFileProbeReportV1, "reportChecksum">
     )
   } as EngineeringFileProbeReportV1;
+}
+
+function batch7ProbeReport(): EngineeringFileProbeReportV2 {
+  return checkedBatch7ProbeReport({
+    ...probeReport(),
+    schemaVersion: ENGINEERING_FILE_BATCH_7_PROBE_CONTRACT_VERSION,
+    batch: "7",
+    mutationRecoveryEvidence: {
+      positiveProtections: {
+        replace: "passed",
+        create: "passed",
+        receiptBinding: "passed",
+        walPreparation: "passed",
+        recoveryScan: "passed"
+      },
+      negativeControls: {
+        rawByteManifestMismatch: "canary_exposed",
+        staleBase: "canary_exposed",
+        createRace: "canary_exposed",
+        faultRecoveryRequired: "canary_exposed"
+      }
+    }
+  });
+}
+
+function checkedBatch7ProbeReport(value: Record<string, unknown>): EngineeringFileProbeReportV2 {
+  const unsigned = Object.fromEntries(
+    Object.entries(value).filter(([key]) => key !== "reportChecksum")
+  );
+  return {
+    ...unsigned,
+    reportChecksum: engineeringFileProbeReportChecksum(
+      unsigned as Omit<EngineeringFileProbeReportV2, "reportChecksum">
+    )
+  } as EngineeringFileProbeReportV2;
 }
 
 function availableAttestation(report: EngineeringFileProbeReportV1) {

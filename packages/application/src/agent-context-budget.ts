@@ -38,6 +38,8 @@ export interface AgentBudgetToolCatalogInput {
   readonly schemaVersion?: "1.0" | "2.0";
   readonly catalogRevision: string;
   readonly descriptors: readonly AgentToolDescriptor[];
+  /** Frozen immutable rule-set instance used by Catalog 2.0; omitted for the default registry. */
+  readonly approvalRuleSetVersion?: string;
 }
 
 export interface AgentBudgetArtifactPointer {
@@ -427,7 +429,7 @@ function computeBudgetCatalogRevision(input: AgentBudgetToolCatalogInput): strin
   const projection =
     operations.length === 0
       ? { version: "not_applicable", checksum: "not_applicable", rules: [] as const }
-      : createApprovalRuleSetProjection(operations);
+      : createApprovalRuleSetProjection(operations, input.approvalRuleSetVersion);
   return computeAgentRunToolCatalogRevisionV2({
     descriptors: input.descriptors,
     approvalRuleSetVersion: projection.version,

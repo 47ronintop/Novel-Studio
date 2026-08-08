@@ -464,7 +464,11 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
       mutations.push(
         coreTool(engineering ? "propose_file_write" : "edit_text", "file_tool", "propose", {
           ...(engineering
-            ? {}
+            ? {
+                description:
+                  "基于应用签发的文件引用提案有界 UTF-8 文本替换；Main 会重新读取并绑定原始字节、BOM 与换行。",
+                inputSchema: engineeringFileReplaceSchema()
+              }
             : {
                 description: "基于 file: 稳定引用、新鲜内容哈希和有界范围提案修改普通创作文本。"
               }),
@@ -477,7 +481,11 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
       mutations.push(
         coreTool(engineering ? "propose_file_create" : "create_resource", "file_tool", "propose", {
           ...(engineering
-            ? {}
+            ? {
+                description:
+                  "基于应用签发的父目录引用提案 create-only UTF-8 文本文件；名称必须是单个规范路径段。",
+                inputSchema: engineeringFileCreateSchema()
+              }
             : {
                 description: "只提案创建当前 creative_general policy 允许的 UTF-8 普通文本文件。"
               }),
@@ -491,6 +499,10 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
       ["delete_file", "propose_file_delete"],
       ["create_directory", "propose_directory_create"]
     ] as const) {
+      // Batch 8 operations stay structurally absent from the Engineering catalog even if a
+      // malformed or prematurely widened capability snapshot contains them.  They may only be
+      // introduced together with their independent native/recovery/UI qualification in Batch 8.
+      if (engineering) continue;
       if (workspaceOperations.has(operation)) {
         mutations.push(
           coreTool(name, "file_tool", "propose", {
@@ -1301,6 +1313,53 @@ function proposalSchema(targetKey: "chapterId" | "path"): JsonObject {
       },
       replacement: { type: "string", maxLength: 1_000_000 }
     }
+  };
+}
+
+function engineeringFileReplaceSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["fileRef", "range", "replacement"],
+    properties: {
+      fileRef: engineeringMutationRefSchema("file"),
+      range: {
+        type: "object",
+        additionalProperties: false,
+        required: ["unit", "start", "end"],
+        properties: {
+          unit: { const: "character" },
+          start: { type: "integer", minimum: 0, maximum: 1_000_000 },
+          end: { type: "integer", minimum: 0, maximum: 1_000_000 }
+        }
+      },
+      replacement: { type: "string", maxLength: 1_000_000 }
+    }
+  };
+}
+
+function engineeringFileCreateSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["parentRef", "name", "candidate"],
+    properties: {
+      parentRef: engineeringMutationRefSchema("directory"),
+      name: {
+        type: "string",
+        minLength: 1,
+        maxLength: 255,
+        pattern: '^(?!\\.{1,2}$)(?!.*[ .]$)[^\\\\/:*?"<>|\\u0000-\\u001F]+$'
+      },
+      candidate: { type: "string", maxLength: 1_000_000 }
+    }
+  };
+}
+
+function engineeringMutationRefSchema(kind: "file" | "directory"): JsonObject {
+  return {
+    type: "string",
+    pattern: `^engineering_${kind}_ref:[A-Za-z0-9_-]{22,128}$`
   };
 }
 

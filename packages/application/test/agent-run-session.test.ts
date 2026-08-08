@@ -2,6 +2,9 @@ import { describe, expect, test, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { createUnifiedError } from "@novel-studio/shared";
 import {
+  approvalDecisionProofChecksum,
+  checksumChangeSetSelection,
+  checksumChangeSetText,
   computeAgentToolDescriptorDigest,
   createAgentContextSnapshot,
   createChangeSetRevisionV2,
@@ -9616,6 +9619,265 @@ describe("AgentRunSession v2 tool facade", () => {
     expect(prepared).toHaveLength(1);
   });
 
+  test("binds Engineering approval proof and preview to the durable raw-byte proposal before finalizing facts", async () => {
+    const runId = "run_engineering_v2_raw_approval";
+    const fileRef = `engineering_file_ref:${"a".repeat(64)}`;
+    const rawRootBindingId = "engineering_root_binding_01";
+    const rawBaseManifestChecksum = "6".repeat(64);
+    const rawCandidateManifestChecksum = "7".repeat(64);
+    const rawProposalPayloadChecksum = "8".repeat(64);
+    let providerSemanticVersionSetChecksum = "";
+    let changeSet = await engineeringV2DiagnosticChangeSet(runId);
+    const order: string[] = [];
+    const proofWrites: Record<string, unknown>[] = [];
+    const approvalContexts: Record<string, unknown>[] = [];
+    const applied: Record<string, unknown>[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      scope: {
+        kind: "workspace",
+        workspaceKind: "engineeringWorkspace",
+        workspaceId: "project-01"
+      },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: engineeringV2Capabilities(["replace_file"]),
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("engineering-replace-01", "propose_file_write", {
+            fileRef,
+            range: { unit: "character", start: 0, end: "before".length },
+            replacement: "after"
+          });
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      changeSetSession: {
+        bindRunProviderSemanticVersionSet(_runId: string, checksum: string) {
+          providerSemanticVersionSetChecksum = checksum;
+          return { ok: true as const, value: undefined };
+        },
+        async proposeWorkspaceFileMutation() {
+          changeSet = await engineeringV2DiagnosticChangeSet(
+            runId,
+            providerSemanticVersionSetChecksum
+          );
+          return { ok: true as const, value: changeSet };
+        },
+        async persistApprovalDecisionProof(input: Record<string, unknown>) {
+          order.push("persist-proof");
+          proofWrites.push(input);
+          const proof = input["proof"] as Parameters<typeof approvalDecisionProofChecksum>[0];
+          return {
+            ok: true as const,
+            value: {
+              proofId: proof.proofId,
+              proofChecksum: approvalDecisionProofChecksum(proof)
+            }
+          };
+        },
+        async decideV2() {
+          return { ok: true as const, value: v2Approval(changeSet, "apply_selected") };
+        },
+        async rejectV2() {
+          throw new Error("apply must not reject the Engineering Change Set");
+        }
+      },
+      engineeringFileMutationV2: {
+        async prepare(input: Record<string, unknown>) {
+          return {
+            ok: true as const,
+            value: {
+              schemaVersion: "2.0",
+              proposalId: "engineering_proposal_01",
+              toolCallId: input["toolCallId"],
+              canonicalPayloadChecksum: input["canonicalPayloadChecksum"],
+              operationKind: "replace_file",
+              relativeIdentity: "src/file.ts",
+              changeSetMutation: {
+                kind: "replace_file",
+                path: "src/file.ts",
+                range: { unit: "character", start: 0, end: "before".length },
+                baseHash: checksumChangeSetText("before"),
+                replacement: "after"
+              }
+            }
+          };
+        },
+        async bindChangeSet() {
+          return { ok: true as const, value: undefined };
+        },
+        async prepareApprovalProofInput(input: Record<string, unknown>) {
+          order.push("prepare-proof-input");
+          const currentChangeSet = input["changeSet"] as typeof changeSet;
+          return {
+            ok: true as const,
+            value: {
+              schemaVersion: "2.0",
+              operationKind: "replace_file",
+              rootBindingId: rawRootBindingId,
+              selectionChecksum: checksumChangeSetSelection(currentChangeSet, []),
+              proposalPayloadChecksum: rawProposalPayloadChecksum,
+              baseManifestChecksum: rawBaseManifestChecksum,
+              candidateManifestChecksum: rawCandidateManifestChecksum,
+              evidence: {
+                pathClass: "ordinary",
+                targetFreshness: "clean_stable",
+                createOnly: "not_applicable",
+                referenceImpact: "not_applicable",
+                limits: "within",
+                stateBoundary: "ordinary"
+              }
+            }
+          };
+        },
+        async finalizeApprovalFacts(input: Record<string, unknown>) {
+          order.push("finalize-facts");
+          const proof = input["proof"] as Parameters<typeof approvalDecisionProofChecksum>[0];
+          const proofInput = input["proofInput"] as Record<string, unknown>;
+          const currentChangeSet = input["changeSet"] as typeof changeSet;
+          const boundary = input["boundary"] as Record<string, string>;
+          const workspaceBindingId = String(input["workspaceBindingId"]);
+          const selectedOperationIds = ["src/file.ts"];
+          expect(proof.binding).toMatchObject({
+            rootBindingId: rawRootBindingId,
+            proposalPayloadChecksum: rawProposalPayloadChecksum,
+            baseManifestChecksum: rawBaseManifestChecksum,
+            candidateManifestChecksum: rawCandidateManifestChecksum
+          });
+          expect(proofInput).toMatchObject({
+            rootBindingId: rawRootBindingId,
+            proposalPayloadChecksum: rawProposalPayloadChecksum
+          });
+          return {
+            ok: true as const,
+            value: {
+              schemaVersion: "2.0",
+              workspaceBindingId,
+              rootBindingId: rawRootBindingId,
+              operationKind: "replace_file",
+              relativeIdentity: "src/file.ts",
+              selectedOperationIds,
+              selectionChecksum: checksumChangeSetSelection(currentChangeSet, []),
+              operationOrderChecksum: checksumChangeSetText(selectedOperationIds.join("\n")),
+              sourceRef: fileRef,
+              targetRef: fileRef,
+              beforeKind: "present",
+              baseChecksum: currentChangeSet.files[0]?.baseChecksum ?? "",
+              candidateChecksum: currentChangeSet.files[0]?.candidateChecksum ?? "",
+              baseManifestChecksum: rawBaseManifestChecksum,
+              candidateManifestChecksum: rawCandidateManifestChecksum,
+              encoding: "utf-8",
+              bom: "absent",
+              eol: "none",
+              approvalRuleSetVersion: proof.approvalRuleSetVersion,
+              approvalRuleSetChecksum: proof.approvalRuleSetChecksum,
+              proof,
+              proposalPayloadChecksum: rawProposalPayloadChecksum,
+              executionWritePolicy: "write_before_confirmation",
+              policyRevision: boundary["policyRevision"],
+              capabilityRevision: proof.binding.capabilityRevision,
+              providerSemanticVersionSetChecksum:
+                currentChangeSet.providerSemanticVersionSetChecksum
+            }
+          };
+        },
+        async apply(input: Record<string, unknown>) {
+          applied.push(input);
+          return { ok: true as const, value: { versionGroupId: "engineering_vg_01" } };
+        }
+      },
+      changeSetApprovalV2: {
+        async prepare(input: Record<string, unknown>) {
+          order.push("trusted-bridge");
+          approvalContexts.push(input["approvalContext"] as Record<string, unknown>);
+          return {
+            ok: true as const,
+            value: {
+              changeSet,
+              decision: "apply_selected",
+              displayBindingChecksum: changeSet.displayBindingChecksum,
+              binding: { mainOnly: true },
+              authorizationId: "engineering_auth_01",
+              reservationTransactionId: "engineering_tx_01",
+              trustedConfirmationQualified: true,
+              resolvedAt: "2026-08-08T00:00:00.000Z"
+            }
+          };
+        }
+      }
+    });
+
+    const started = await session.startAgentRun({
+      ...startCommand(),
+      contextMode: "general_file",
+      userRequest: "Replace the reviewed file range."
+    });
+    if (started["ok"] !== true) throw new Error(JSON.stringify(started));
+    expect(started).toMatchObject({ ok: true });
+    const pending = await awaitPendingChangeSet(session, runId);
+    await expect(
+      session.decideChangeSet(changeSetCommand(runId, pending, changeSet, "apply_selected"))
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(order).toEqual([
+      "prepare-proof-input",
+      "persist-proof",
+      "finalize-facts",
+      "trusted-bridge"
+    ]);
+    expect(proofWrites[0]).toMatchObject({
+      proof: {
+        operation: "replace_file",
+        decision: "human_confirmation",
+        binding: {
+          rootBindingId: rawRootBindingId,
+          proposalPayloadChecksum: rawProposalPayloadChecksum,
+          baseManifestChecksum: rawBaseManifestChecksum,
+          candidateManifestChecksum: rawCandidateManifestChecksum
+        }
+      }
+    });
+    expect(approvalContexts[0]).toMatchObject({
+      preview: {
+        baseManifestChecksum: rawBaseManifestChecksum,
+        candidateManifestChecksum: rawCandidateManifestChecksum
+      },
+      engineeringApprovalFacts: {
+        proposalPayloadChecksum: rawProposalPayloadChecksum,
+        rootBindingId: rawRootBindingId
+      }
+    });
+    expect(applied).toHaveLength(1);
+
+    const readBack = (await session.readAgentRun(runId)) as
+      | {
+          readonly ok: true;
+          readonly value: {
+            readonly events: readonly {
+              readonly type: string;
+              readonly detail?: Record<string, unknown>;
+            }[];
+          };
+        }
+      | { readonly ok: false; readonly error: unknown };
+    expect(readBack).toMatchObject({ ok: true });
+    if (!readBack.ok) throw new Error("expected the Engineering run to be readable");
+    const approvalEvent = readBack.value.events.find((event) => event.type === "approval_resolved");
+    expect(approvalEvent?.detail).toMatchObject({
+      schemaVersion: "2.0",
+      decision: "apply_selected",
+      displayBindingChecksum: changeSet.displayBindingChecksum
+    });
+    expect(approvalEvent?.detail).not.toHaveProperty("binding");
+    expect(approvalEvent?.detail).not.toHaveProperty("authorizationId");
+    expect(approvalEvent?.detail).not.toHaveProperty("reservationTransactionId");
+    expect(JSON.stringify(approvalEvent?.detail)).not.toContain(rawRootBindingId);
+  });
+
   test("rejects a v2 Change Set without a binding and clears its pending receipt state", async () => {
     const runId = "run_v2_reject";
     let providerSemanticVersionSetChecksum = "";
@@ -10392,6 +10654,23 @@ function creativeV2Capabilities(): AgentToolCapabilitySnapshot {
   };
 }
 
+function engineeringV2Capabilities(
+  workspaceFileOperations: NonNullable<AgentToolCapabilitySnapshot["workspaceFileOperations"]>
+): AgentToolCapabilitySnapshot {
+  return {
+    workspaceKind: "engineeringWorkspace",
+    searchEnabled: true,
+    fileLifecycleEnabled: false,
+    workspaceFileOperations,
+    controlledExecutionEnabled: false,
+    gitReadEnabled: false,
+    networkReadEnabled: false,
+    pluginToolsEnabled: false,
+    mcpToolsEnabled: false,
+    featureFlagRevision: "engineering-v2-test"
+  };
+}
+
 function networkReadResult() {
   return {
     kind: "untrusted_remote_data" as const,
@@ -10429,6 +10708,34 @@ async function v2DiagnosticChangeSet(
       }
     },
     { createHunkId: () => `hunk_v2_${runId}` }
+  );
+}
+
+async function engineeringV2DiagnosticChangeSet(
+  runId: string,
+  providerSemanticVersionSetChecksum = "a".repeat(64)
+) {
+  const baseContent = "before";
+  return createChangeSetRevisionV2(
+    {
+      changeSetId: `engineering_changes_v2_${runId}`,
+      runId,
+      projectId: "project-01",
+      checkpointId: `engineering_checkpoint_v2_${runId}`,
+      contextSnapshotId: `engineering_context_v2_${runId}`,
+      writePolicy: "write_before_confirmation",
+      createdAt: "2026-08-08T00:00:00.000Z",
+      providerSemanticVersionSetChecksum,
+      proposal: {
+        relativePath: "src/file.ts",
+        assetType: "text",
+        baseContent,
+        baseChecksum: checksumChangeSetText(baseContent),
+        range: { unit: "character", start: 0, end: baseContent.length },
+        replacement: "after"
+      }
+    },
+    { createHunkId: () => `engineering_hunk_v2_${runId}` }
   );
 }
 

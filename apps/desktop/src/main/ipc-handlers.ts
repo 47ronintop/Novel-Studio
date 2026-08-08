@@ -140,6 +140,7 @@ import {
   MAX_WRITING_EDITOR_BUFFER_BYTES,
   type WritingEditorStateRegistry
 } from "./writing-editor-state-registry.js";
+import type { EngineeringMutationRendererSyncCoordinatorV2 } from "./engineering-mutation-renderer-sync-v2.js";
 
 export type ApplicationIpcHandlers = {
   readonly [Channel in ApplicationIpcChannel]: (...args: readonly unknown[]) => Promise<unknown>;
@@ -170,6 +171,8 @@ export interface ApplicationIpcHandlerOptions {
   readonly engineeringEditorStateRegistry?: EngineeringEditorStateRegistry;
   /** The sole native root binding allowed to accept engineering editor state reports. */
   readonly getActiveEngineeringEditorRootBindingId?: () => string | undefined;
+  /** Main-owned acknowledgement coordinator for committed Engineering V2 mutations. */
+  readonly engineeringMutationRendererSync?: EngineeringMutationRendererSyncCoordinatorV2;
   readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
   readonly agentMcpSettingsSession?: McpSettingsSession;
   readonly agentTaskCatalogPort?: {
@@ -198,6 +201,19 @@ export interface AgentWriteSaveCoordinator {
   beginSave(
     relativePath: string
   ): { readonly ok: false } | { readonly ok: true; readonly release: () => void };
+  /**
+   * Stops every renderer-originated engineering save for one Main-owned root and waits for any
+   * already-started save on that root to finish. The root binding is never supplied by Renderer.
+   */
+  pauseAndDrainEngineeringRoot(rootBindingId: string): Promise<{ readonly release: () => void }>;
+  /**
+   * Starts a renderer-originated engineering save only while its Main-owned root is unpaused.
+   * The relative identity is intentionally scoped beneath the opaque root binding.
+   */
+  beginEngineeringSave(
+    rootBindingId: string,
+    relativeIdentity: string
+  ): { readonly ok: false } | { readonly ok: true; readonly release: () => void };
 }
 
 interface PrepareAgentSendPreviewCommand {
@@ -222,6 +238,13 @@ interface SavePathState {
   readonly drainWaiters: Set<() => void>;
 }
 
+interface EngineeringRootSaveState {
+  pauseCount: number;
+  activeSaveCount: number;
+  readonly activeSaveCountByRelativeIdentity: Map<string, number>;
+  readonly drainWaiters: Set<() => void>;
+}
+
 interface DirectorySelection {
   readonly path: string;
   readonly purpose: "creative-open" | "creative-create-parent" | "engineering-open";
@@ -231,6 +254,7 @@ interface DirectorySelection {
 
 export function createAgentWriteSaveCoordinator(): AgentWriteSaveCoordinator {
   const stateByPath = new Map<string, SavePathState>();
+  const engineeringStateByRootBindingId = new Map<string, EngineeringRootSaveState>();
   const getState = (relativePath: string): SavePathState => {
     const current = stateByPath.get(relativePath);
     if (current !== undefined) return current;
@@ -240,6 +264,18 @@ export function createAgentWriteSaveCoordinator(): AgentWriteSaveCoordinator {
       drainWaiters: new Set()
     };
     stateByPath.set(relativePath, created);
+    return created;
+  };
+  const getEngineeringState = (rootBindingId: string): EngineeringRootSaveState => {
+    const current = engineeringStateByRootBindingId.get(rootBindingId);
+    if (current !== undefined) return current;
+    const created: EngineeringRootSaveState = {
+      pauseCount: 0,
+      activeSaveCount: 0,
+      activeSaveCountByRelativeIdentity: new Map(),
+      drainWaiters: new Set()
+    };
+    engineeringStateByRootBindingId.set(rootBindingId, created);
     return created;
   };
 
@@ -285,6 +321,58 @@ export function createAgentWriteSaveCoordinator(): AgentWriteSaveCoordinator {
             state.drainWaiters.clear();
             for (const resolve of waiters) resolve();
             if (state.pauseCount === 0) stateByPath.delete(relativePath);
+          }
+        }
+      };
+    },
+    async pauseAndDrainEngineeringRoot(rootBindingId) {
+      const state = getEngineeringState(rootBindingId);
+      state.pauseCount += 1;
+      if (state.activeSaveCount > 0) {
+        await new Promise<void>((resolve) => state.drainWaiters.add(resolve));
+      }
+      let released = false;
+      return {
+        release() {
+          if (released) return;
+          released = true;
+          state.pauseCount = Math.max(0, state.pauseCount - 1);
+          if (state.pauseCount === 0 && state.activeSaveCount === 0) {
+            engineeringStateByRootBindingId.delete(rootBindingId);
+          }
+        }
+      };
+    },
+    beginEngineeringSave(rootBindingId, relativeIdentity) {
+      const state = getEngineeringState(rootBindingId);
+      if (state.pauseCount > 0) return { ok: false };
+      state.activeSaveCount += 1;
+      state.activeSaveCountByRelativeIdentity.set(
+        relativeIdentity,
+        (state.activeSaveCountByRelativeIdentity.get(relativeIdentity) ?? 0) + 1
+      );
+      let released = false;
+      return {
+        ok: true,
+        release() {
+          if (released) return;
+          released = true;
+          state.activeSaveCount -= 1;
+          const remainingForRelativeIdentity =
+            (state.activeSaveCountByRelativeIdentity.get(relativeIdentity) ?? 1) - 1;
+          if (remainingForRelativeIdentity === 0) {
+            state.activeSaveCountByRelativeIdentity.delete(relativeIdentity);
+          } else {
+            state.activeSaveCountByRelativeIdentity.set(
+              relativeIdentity,
+              remainingForRelativeIdentity
+            );
+          }
+          if (state.activeSaveCount === 0) {
+            const waiters = [...state.drainWaiters];
+            state.drainWaiters.clear();
+            for (const resolve of waiters) resolve();
+            if (state.pauseCount === 0) engineeringStateByRootBindingId.delete(rootBindingId);
           }
         }
       };
@@ -613,8 +701,18 @@ export function createApplicationIpcHandlers(
       const request = toEngineeringTextFileSaveRequest(input);
       return request === undefined
         ? Promise.resolve(invalidWorkspaceRequest())
-        : application.saveEngineeringTextFile(request);
+        : saveEngineeringTextFileWithCoordinator(
+            application,
+            options.agentWriteSaveCoordinator,
+            options.getActiveEngineeringEditorRootBindingId,
+            request
+          );
     },
+    "application:workspace:complete-engineering-mutation-sync": (input: unknown) =>
+      Promise.resolve(
+        options.engineeringMutationRendererSync?.complete(input) ??
+          engineeringMutationRendererSyncUnavailable()
+      ),
     "application:workspace:create-project-conventions": async () => {
       const manager = options.agentRuntimeManager;
       const active = manager?.active();
@@ -3147,6 +3245,84 @@ function chapterSavePausedForAgentWrite<T>(): Result<T, UnifiedError> {
       recoverability: "user-action",
       suggestedAction: "Wait for the Agent transaction to finish, then save again.",
       traceId: "desktop-ipc-handlers"
+    })
+  );
+}
+
+async function saveEngineeringTextFileWithCoordinator(
+  application: DesktopApplication,
+  coordinator: AgentWriteSaveCoordinator | undefined,
+  getActiveRootBindingId: (() => string | undefined) | undefined,
+  request: { readonly path: string; readonly content: string; readonly expectedChecksum: string }
+): Promise<unknown> {
+  const readActiveRootBindingId = getActiveRootBindingId;
+  if (coordinator === undefined || readActiveRootBindingId === undefined) {
+    return engineeringSaveCoordinatorUnavailable();
+  }
+  const rootBindingId = readActiveRootBindingId();
+  if (rootBindingId === undefined) {
+    return engineeringSaveCoordinatorUnavailable();
+  }
+  const permit = coordinator.beginEngineeringSave(rootBindingId, request.path);
+  if (!permit.ok) return engineeringSavePausedForAgentWrite();
+  try {
+    // The active root may change while Main is handling an IPC turn. Re-read the Main-owned
+    // authority immediately before dispatch so a save never follows a stale renderer view.
+    if (readActiveRootBindingId() !== rootBindingId) return engineeringSaveRootBindingChanged();
+    return await application.saveEngineeringTextFile(request);
+  } finally {
+    permit.release();
+  }
+}
+
+function engineeringSaveCoordinatorUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "ENGINEERING_SAVE_COORDINATOR_UNAVAILABLE",
+      category: "StorageError",
+      message: "Engineering saving is unavailable until its active workspace root is verified.",
+      recoverability: "retryable",
+      suggestedAction: "Reopen the engineering workspace and try saving again.",
+      traceId: "desktop-engineering-save-ipc"
+    })
+  );
+}
+
+function engineeringSavePausedForAgentWrite<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "ENGINEERING_SAVE_PAUSED_FOR_AGENT_WRITE",
+      category: "UserError",
+      message: "Engineering saving is temporarily paused while Agent changes are applied.",
+      recoverability: "user-action",
+      suggestedAction: "Wait for the Agent transaction to finish, then save again.",
+      traceId: "desktop-engineering-save-ipc"
+    })
+  );
+}
+
+function engineeringSaveRootBindingChanged<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "ENGINEERING_SAVE_ROOT_BINDING_CHANGED",
+      category: "StorageError",
+      message: "The active engineering workspace changed before the save could start.",
+      recoverability: "retryable",
+      suggestedAction: "Reload the file from the active workspace and save again.",
+      traceId: "desktop-engineering-save-ipc"
+    })
+  );
+}
+
+function engineeringMutationRendererSyncUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "ENGINEERING_MUTATION_RENDERER_SYNC_UNAVAILABLE",
+      category: "StorageError",
+      message: "Engineering mutation synchronization is unavailable.",
+      recoverability: "user-action",
+      suggestedAction: "Keep Engineering mutation disabled until Main synchronization is ready.",
+      traceId: "desktop-engineering-mutation-sync-ipc"
     })
   );
 }

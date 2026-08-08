@@ -136,6 +136,8 @@ export interface CreateAgentPermissionSessionOptions {
   /** Injectable Tool Registry lister; defaults to the real registry. Tests use it to prove drift. */
   readonly listTools?: AgentToolLister;
   readonly catalogSchemaVersion?: "1.0" | "2.0";
+  /** Immutable registered rule-set version selected by Main for this workspace profile. */
+  readonly approvalRuleSetVersion?: string;
   readonly limitedRunPreapprovalQualified?: boolean;
 }
 
@@ -206,6 +208,9 @@ export function createAgentPermissionSession(
       return ok(
         generatePermissionSummaryV2({
           ...common,
+          ...(options.approvalRuleSetVersion === undefined
+            ? {}
+            : { approvalRuleSetVersion: options.approvalRuleSetVersion }),
           ...(input.frozenToolDescriptors === undefined
             ? {}
             : { frozenToolDescriptors: input.frozenToolDescriptors }),

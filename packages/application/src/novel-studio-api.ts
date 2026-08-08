@@ -351,6 +351,12 @@ export interface NovelStudioApi {
       readonly content: string;
       readonly expectedChecksum: string;
     }): Promise<Result<EngineeringTextFileSaveResult, UnifiedError>>;
+    onEngineeringMutationSync(
+      listener: (request: EngineeringMutationRendererSyncRequestV2) => void
+    ): () => void;
+    completeEngineeringMutationSync(
+      completion: EngineeringMutationRendererSyncCompletionV2
+    ): Promise<Result<void, UnifiedError>>;
     createProjectConventions(): Promise<Result<ProjectConventionsCreateResult, UnifiedError>>;
     updateContextPolicy(update: WorkspaceContextPolicyUpdate): Promise<Result<void, UnifiedError>>;
   };
@@ -727,6 +733,20 @@ export interface EngineeringEditorStateAcknowledgement {
   readonly editorInstanceId: string;
   /** Renderer revision durably accepted by Main; include it in the next report acknowledgement. */
   readonly rendererRevision: number;
+}
+
+/** Provider-safe Main-to-Renderer refresh request emitted only after a committed B7 mutation. */
+export interface EngineeringMutationRendererSyncRequestV2 {
+  readonly schemaVersion: "2.0";
+  readonly requestId: string;
+  readonly operationKind: "replace_file" | "create_file";
+  readonly relativePaths: readonly string[];
+}
+
+export interface EngineeringMutationRendererSyncCompletionV2 {
+  readonly schemaVersion: "2.0";
+  readonly requestId: string;
+  readonly status: "synchronized" | "failed";
 }
 
 export interface AiWritingSuggestionStreamOptions {

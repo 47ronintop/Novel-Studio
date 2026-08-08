@@ -95,6 +95,7 @@ import {
   type AgentUsageSession,
   type AgentVersionGroupExecutor,
   type AgentRunChangeSetApprovalV2Port,
+  type EngineeringFileMutationSessionV2,
   type StoryBibleAsset,
   type StoryBibleRestoreAuthorization,
   type StoryBibleReferenceDependencyApplyGuard,
@@ -124,6 +125,11 @@ import {
   type ChapterLifecyclePreparationProofBridge
 } from "./chapter-lifecycle-preparation.js";
 import { DEFAULT_AGENT_FEATURE_FLAGS, type AgentFeatureFlags } from "./agent-feature-flags.js";
+import type { EngineeringMutationRuntimeV2 } from "./engineering-mutation-runtime-v2.js";
+import {
+  createEngineeringMutationRefRegistryV2,
+  type EngineeringMutationRefRegistryV2
+} from "./engineering-mutation-ref-registry-v2.js";
 import type { WorkspaceContextSourcePreference } from "./workspace-context-policy-store.js";
 import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
 import type {
@@ -151,9 +157,11 @@ import {
   computeAgentRunToolCatalogRevisionV2,
   computeAgentRunToolCatalogRevision,
   createCanonicalRoundManifestV2,
+  checksumChangeSetText,
   parseCanonicalRoundManifestV2,
   createProviderSemanticVersionSetV1,
   createApprovalRuleSetProjection,
+  LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
   createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
   deactivateCapabilityState,
@@ -322,6 +330,8 @@ export interface DesktopAgentRunSessionOptions {
    * cannot disappear behind independent in-memory caches.
    */
   readonly authorizationLedger?: ApprovalAuthorizationLedger;
+  /** Shared proof repository used by Change Set binding and Engineering V2 finalization. */
+  readonly approvalDecisionProofRepository?: ApprovalDecisionProofFileRepository;
   /** Only a qualified Main confirmation surface may supply this in production. */
   readonly changeSetApprovalV2?: AgentRunChangeSetApprovalV2Port;
   /**
@@ -342,6 +352,15 @@ export interface DesktopAgentRunSessionOptions {
    * pathname repository.
    */
   readonly engineeringWorkspaceAccessSession?: EngineeringWorkspaceAccessSession;
+  /** Main-only B7 proposal/apply session bound to this exact qualified native root. */
+  readonly engineeringFileMutationV2?: EngineeringFileMutationSessionV2;
+  /** Fully composed recovery/lease/save/editor/transaction/sync runtime for B7. */
+  readonly engineeringMutationRuntimeV2?: EngineeringMutationRuntimeV2;
+  /** Same Main-only registry used by B6 read/list/search projections and the B7 proposal session. */
+  readonly engineeringMutationRefRegistryV2?: EngineeringMutationRefRegistryV2;
+  readonly engineeringMutationRefCapabilityRevision?: string;
+  /** Revokes Main-only B7 refs/qualification subscriptions when this runtime is replaced. */
+  readonly disposeEngineeringMutationV2?: () => void;
   /** Only inject a network executor that has already passed the Main security qualification. */
   readonly networkToolExecutor?: AgentNetworkToolExecutor;
   /** Main-owned egress policy frozen into this workspace runtime. */
@@ -421,6 +440,8 @@ export interface DesktopAgentRuntimeServices {
   readonly revokeApprovalCapabilities: () => void;
   /** Root identity drift makes every engineering capability unavailable for this runtime. */
   readonly revokeEngineeringAccessCapabilities: () => void;
+  /** Recovery/sync drift removes Engineering mutation while preserving qualified read access. */
+  readonly revokeEngineeringMutationCapabilities: () => void;
 }
 
 interface DesktopPackedContextCache {
@@ -628,7 +649,9 @@ function resolveWorkspaceProjectContextProfile(
  * runtime. This is deliberately structural: engineering never constructs a pathname reader.
  */
 function createEngineeringProjectReadsAdapter(
-  session: EngineeringWorkspaceAccessSession | undefined
+  session: EngineeringWorkspaceAccessSession | undefined,
+  refRegistry?: EngineeringMutationRefRegistryV2,
+  refCapabilityRevision?: string
 ): AgentProjectReadRepository {
   if (session === undefined) {
     return {
@@ -646,12 +669,28 @@ function createEngineeringProjectReadsAdapter(
   return {
     async readText(relativePath: string) {
       const read = await session.readTextFile({ relativeIdentity: relativePath });
+      const fileRef =
+        read.ok && refRegistry !== undefined && refCapabilityRevision !== undefined
+          ? refRegistry.issue({
+              kind: "file",
+              rootBindingId: session.binding.rootBindingId,
+              pathPolicyRevision: session.binding.pathPolicyRevision,
+              relativeIdentity: read.value.relativeIdentity,
+              sourceNativeRefChecksum: read.value.refChecksum,
+              issuedCapabilityRevision: refCapabilityRevision
+            })?.opaqueRef
+          : undefined;
+      if (read.ok && fileRef === undefined) {
+        return err(runtimeError("ENGINEERING_MUTATION_REF_UNAVAILABLE"));
+      }
       return read.ok
         ? ok({
             relativePath: read.value.relativeIdentity,
             content: read.value.content,
-            checksum: read.value.sha256,
-            byteLength: read.value.byteLength
+            // Change Set text validation is intentionally separate from the raw-byte manifest.
+            checksum: checksumChangeSetText(read.value.content),
+            byteLength: read.value.byteLength,
+            ...(fileRef === undefined ? {} : { engineeringFileRef: fileRef })
           })
         : read;
     },
@@ -659,22 +698,53 @@ function createEngineeringProjectReadsAdapter(
       const listed = await session.listDirectory(
         relativeDirectory.length === 0 ? undefined : { relativeIdentity: relativeDirectory }
       );
-      return listed.ok
-        ? ok(
-            listed.value.entries.map((entry) => ({
-              name: entry.name,
-              relativePath: entry.relativeIdentity,
-              kind: entry.kind
-            }))
-          )
-        : listed;
+      if (!listed.ok) return listed;
+      if (refRegistry === undefined || refCapabilityRevision === undefined) {
+        return err(runtimeError("ENGINEERING_MUTATION_REF_UNAVAILABLE"));
+      }
+      const parentRef = refRegistry.issue({
+        kind: "directory",
+        rootBindingId: session.binding.rootBindingId,
+        pathPolicyRevision: session.binding.pathPolicyRevision,
+        relativeIdentity: relativeDirectory,
+        sourceNativeRefChecksum: checksumText(
+          `directory:${session.binding.rootBindingId}:${session.binding.pathPolicyRevision}:${relativeDirectory}`
+        ),
+        issuedCapabilityRevision: refCapabilityRevision
+      })?.opaqueRef;
+      if (parentRef === undefined) return err(runtimeError("ENGINEERING_MUTATION_REF_UNAVAILABLE"));
+
+      const entries = [];
+      for (const entry of listed.value.entries) {
+        const issuedRef = refRegistry.issue({
+          kind: entry.kind === "directory" ? "directory" : "file",
+          rootBindingId: session.binding.rootBindingId,
+          pathPolicyRevision: session.binding.pathPolicyRevision,
+          relativeIdentity: entry.relativeIdentity,
+          sourceNativeRefChecksum: entry.refChecksum,
+          issuedCapabilityRevision: refCapabilityRevision
+        })?.opaqueRef;
+        if (issuedRef === undefined) {
+          return err(runtimeError("ENGINEERING_MUTATION_REF_UNAVAILABLE"));
+        }
+        entries.push({
+          name: entry.name,
+          relativePath: entry.relativeIdentity,
+          kind: entry.kind,
+          parentRef,
+          ...(entry.kind === "directory" ? { directoryRef: issuedRef } : { fileRef: issuedRef })
+        });
+      }
+      return ok(Object.assign(entries, { parentRef }));
     }
   } as unknown as AgentProjectReadRepository;
 }
 
 /** Routes the existing search tool facade through B6 search/read snapshots only. */
 function createEngineeringProjectSearchAdapter(
-  session: EngineeringWorkspaceAccessSession | undefined
+  session: EngineeringWorkspaceAccessSession | undefined,
+  refRegistry?: EngineeringMutationRefRegistryV2,
+  refCapabilityRevision?: string
 ) {
   return {
     async searchText(input: {
@@ -710,9 +780,23 @@ function createEngineeringProjectSearchAdapter(
         if (start === undefined) continue;
         const end = Math.min(snapshot.value.content.length, start + input.query.length);
         const snippet = engineeringSearchSnippet(snapshot.value.content, start, end);
+        const fileRef =
+          refRegistry === undefined || refCapabilityRevision === undefined
+            ? undefined
+            : refRegistry.issue({
+                kind: "file",
+                rootBindingId: session.binding.rootBindingId,
+                pathPolicyRevision: session.binding.pathPolicyRevision,
+                relativeIdentity: snapshot.value.relativeIdentity,
+                sourceNativeRefChecksum: snapshot.value.refChecksum,
+                issuedCapabilityRevision: refCapabilityRevision
+              })?.opaqueRef;
+        if (fileRef === undefined) {
+          return err(runtimeError("ENGINEERING_MUTATION_REF_UNAVAILABLE"));
+        }
         items.push({
           relativePath: match.relativeIdentity,
-          stableRef: match.relativeIdentity,
+          stableRef: fileRef,
           range: { unit: "utf16_offset", start, end },
           snippet,
           sourceChecksum: snapshot.value.sha256,
@@ -727,11 +811,27 @@ function createEngineeringProjectSearchAdapter(
         items: Object.freeze(items),
         totalHits: searched.value.matches.length,
         truncated: searched.value.truncated || items.length < searched.value.matches.length,
-        indexVersion: `${session.binding.rootBindingId}:${session.binding.pathPolicyRevision}`
+        indexVersion: `engineering-index:${checksumText(
+          `${session.binding.rootBindingId}:${session.binding.pathPolicyRevision}:${refCapabilityRevision}`
+        )}`
       });
     },
     async findReferences(input: { readonly stableRef: string; readonly signal?: AbortSignal }) {
-      const baseName = input.stableRef.split("/").at(-1) ?? input.stableRef;
+      const resolved =
+        session === undefined || refRegistry === undefined || refCapabilityRevision === undefined
+          ? undefined
+          : refRegistry.resolveCurrentBoundary({
+              opaqueRef: input.stableRef,
+              expectedKind: "file",
+              expectedRootBindingId: session.binding.rootBindingId,
+              expectedPathPolicyRevision: session.binding.pathPolicyRevision,
+              expectedCapabilityRevision: refCapabilityRevision
+            });
+      if (resolved === undefined) {
+        return err(runtimeError("ENGINEERING_MUTATION_REF_STALE"));
+      }
+      const relativeIdentity = resolved.relativeIdentity;
+      const baseName = relativeIdentity.split("/").at(-1) ?? relativeIdentity;
       return this.searchText({
         query: baseName,
         maxResults: 200,
@@ -834,11 +934,23 @@ function engineeringSearchSnippet(content: string, start: number, end: number): 
 export function requestedCapabilitySnapshot(
   options: DesktopAgentRunSessionOptions
 ): AgentToolCapabilitySnapshot {
+  const flags = options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS;
   const explicit = options.capabilitySnapshot;
   const engineeringAccessEnabled =
     options.workspaceKind !== "engineeringWorkspace" ||
-    ((options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS).engineeringHardenedAccessV1 &&
-      options.engineeringWorkspaceAccessSession !== undefined);
+    (flags.engineeringHardenedAccessV1 && options.engineeringWorkspaceAccessSession !== undefined);
+  const engineeringMutationEnabled =
+    options.workspaceKind === "engineeringWorkspace" &&
+    engineeringAccessEnabled &&
+    options.engineeringFileMutationV2 !== undefined &&
+    options.engineeringMutationRuntimeV2 !== undefined;
+  const engineeringWorkspaceFileOperations: readonly ProviderVisibleWorkspaceFileOperation[] =
+    engineeringMutationEnabled
+      ? ([
+          ...(flags.engineeringReplaceV2 ? (["replace_file"] as const) : []),
+          ...(flags.engineeringCreateV2 ? (["create_file"] as const) : [])
+        ] satisfies readonly ProviderVisibleWorkspaceFileOperation[])
+      : [];
   if (explicit !== undefined) {
     if (explicit.workspaceKind !== options.workspaceKind) {
       throw new Error(
@@ -849,16 +961,18 @@ export function requestedCapabilitySnapshot(
       ...explicit,
       searchEnabled: explicit.searchEnabled && engineeringAccessEnabled,
       ...(options.workspaceKind === "engineeringWorkspace"
-        ? { workspaceFileOperations: [] as const }
+        ? {
+            workspaceFileOperations: (explicit.workspaceFileOperations ?? []).filter((operation) =>
+              engineeringWorkspaceFileOperations.includes(operation)
+            )
+          }
         : {}),
-      // Batch 0 has no qualified engineering native host. A test/pre-qualified legacy snapshot
-      // cannot turn the old lifecycle umbrella back into engineering authority.
+      // The legacy lifecycle umbrella never becomes Engineering authority.
       fileLifecycleEnabled:
         options.workspaceKind === "engineeringWorkspace" ? false : explicit.fileLifecycleEnabled
     });
   }
 
-  const flags = options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS;
   const writingOperations: readonly ProviderVisibleWritingOperation[] = flags.writingDomainCrudV2
     ? [
         "chapter_replace",
@@ -881,7 +995,7 @@ export function requestedCapabilitySnapshot(
           ...(flags.creativeFileMoveV2 ? (["move_file"] as const) : []),
           ...(flags.creativeFileDeleteV2 ? (["delete_file"] as const) : [])
         ]
-      : [];
+      : engineeringWorkspaceFileOperations;
   return freezeAgentToolCapabilitySnapshot({
     workspaceKind: options.workspaceKind,
     searchEnabled:
@@ -928,6 +1042,8 @@ export function buildRuntimeCapabilitySnapshot(input: {
   readonly chapterLifecyclePreparation?: ChapterLifecyclePreparationPort;
   readonly lifecycleOperations?: AgentWriteLifecycleOperationPort;
   readonly trustedCreativeMutations?: AgentWriteTrustedCreativeMutationPort;
+  readonly engineeringFileMutationV2?: EngineeringFileMutationSessionV2;
+  readonly engineeringMutationRuntimeV2?: EngineeringMutationRuntimeV2;
   readonly hasVersionGroupExecutor: boolean;
   readonly hasTrustedApprovalV2: boolean;
   readonly externalToolExecutor?: AgentExternalToolExecutor;
@@ -935,9 +1051,14 @@ export function buildRuntimeCapabilitySnapshot(input: {
 }): AgentToolCapabilitySnapshot {
   const descriptors = input.externalToolDescriptors ?? [];
   const hasMcpDescriptor = descriptors.some((descriptor) => descriptor.id?.startsWith("mcp:"));
-  const canCommitMutation =
+  const canCommitCreativeMutation =
     input.hasVersionGroupExecutor &&
     (!input.featureFlags.agentGuidanceV3 || input.hasTrustedApprovalV2);
+  const canCommitEngineeringMutation =
+    input.requested.workspaceKind === "engineeringWorkspace" &&
+    input.hasTrustedApprovalV2 &&
+    input.engineeringFileMutationV2 !== undefined &&
+    input.engineeringMutationRuntimeV2 !== undefined;
   const hasReplaceBackend =
     input.lifecycleOperations !== undefined || input.trustedCreativeMutations !== undefined;
   const hasLifecycleBackend =
@@ -945,7 +1066,7 @@ export function buildRuntimeCapabilitySnapshot(input: {
   const writingOperations = (input.requested.writingOperations ?? []).filter((operation) => {
     if (
       input.requested.workspaceKind !== "creativeProject" ||
-      !canCommitMutation ||
+      !canCommitCreativeMutation ||
       !operationFeatureEnabled(operation, input.requested.workspaceKind, input.featureFlags)
     ) {
       return false;
@@ -983,12 +1104,14 @@ export function buildRuntimeCapabilitySnapshot(input: {
   }) satisfies readonly ProviderVisibleWritingOperation[];
   const workspaceFileOperations = (input.requested.workspaceFileOperations ?? []).filter(
     (operation) => {
+      const engineering = input.requested.workspaceKind === "engineeringWorkspace";
       if (
-        !canCommitMutation ||
+        !(engineering ? canCommitEngineeringMutation : canCommitCreativeMutation) ||
         !operationFeatureEnabled(operation, input.requested.workspaceKind, input.featureFlags)
       ) {
         return false;
       }
+      if (engineering) return operation === "replace_file" || operation === "create_file";
       if (operation === "replace_file") return hasReplaceBackend;
       return input.fileOperationSession !== undefined && hasLifecycleBackend;
     }
@@ -1109,7 +1232,8 @@ function buildRuntimeProviderNameMapping(
 }
 
 function computeCatalogV2RevisionForDescriptors(
-  descriptors: readonly AgentToolDescriptor[]
+  descriptors: readonly AgentToolDescriptor[],
+  approvalRuleSetVersion?: string
 ): string {
   const operations: ProviderVisibleWriteOperation[] = [];
   for (const descriptor of descriptors) {
@@ -1122,7 +1246,7 @@ function computeCatalogV2RevisionForDescriptors(
   const projection =
     operations.length === 0
       ? { version: "not_applicable", checksum: "not_applicable", rules: [] as const }
-      : createApprovalRuleSetProjection(operations);
+      : createApprovalRuleSetProjection(operations, approvalRuleSetVersion);
   return computeAgentRunToolCatalogRevisionV2({
     descriptors,
     approvalRuleSetVersion: projection.version,
@@ -1167,9 +1291,24 @@ function createDesktopAgentRuntimeServices(
     options.workspaceKind === "engineeringWorkspace"
       ? options.engineeringWorkspaceAccessSession
       : undefined;
+  const engineeringRefRegistry =
+    engineeringAccessSession === undefined
+      ? undefined
+      : (options.engineeringMutationRefRegistryV2 ?? createEngineeringMutationRefRegistryV2());
+  const engineeringRefCapabilityRevision =
+    engineeringAccessSession === undefined
+      ? undefined
+      : (options.engineeringMutationRefCapabilityRevision ??
+        `engineering-access:${checksumText(
+          `${engineeringAccessSession.binding.rootBindingId}:${engineeringAccessSession.binding.pathPolicyRevision}:${resolvedFeatureFlags.revision}`
+        )}`);
   const projectReads =
     options.workspaceKind === "engineeringWorkspace"
-      ? createEngineeringProjectReadsAdapter(engineeringAccessSession)
+      ? createEngineeringProjectReadsAdapter(
+          engineeringAccessSession,
+          engineeringRefRegistry,
+          engineeringRefCapabilityRevision
+        )
       : new AgentProjectReadRepository({
           projectRoot: options.contentRoot,
           traceId: "desktop-agent-project-read"
@@ -1306,7 +1445,11 @@ function createDesktopAgentRuntimeServices(
   const baseSearchToolExecutor = requestedCapabilities.searchEnabled
     ? options.workspaceKind === "engineeringWorkspace"
       ? createAgentSearchToolSession({
-          searchRepository: createEngineeringProjectSearchAdapter(engineeringAccessSession)
+          searchRepository: createEngineeringProjectSearchAdapter(
+            engineeringAccessSession,
+            engineeringRefRegistry,
+            engineeringRefCapabilityRevision
+          )
         })
       : (options.searchToolExecutor ??
         createAgentSearchToolSession({
@@ -1351,10 +1494,12 @@ function createDesktopAgentRuntimeServices(
     approvalBindingIssuer,
     ...(options.readEditorState === undefined ? {} : { readEditorState: options.readEditorState })
   });
-  const approvalDecisionProofRepository = new ApprovalDecisionProofFileRepository({
-    projectRoot: options.stateRoot,
-    traceId: "desktop-agent-approval-decision-proof-repository"
-  });
+  const approvalDecisionProofRepository =
+    options.approvalDecisionProofRepository ??
+    new ApprovalDecisionProofFileRepository({
+      projectRoot: options.stateRoot,
+      traceId: "desktop-agent-approval-decision-proof-repository"
+    });
   const proofRepositoryBound = changeSetSession.bindApprovalDecisionProofRepository(
     approvalDecisionProofRepository
   );
@@ -1458,12 +1603,14 @@ function createDesktopAgentRuntimeServices(
           requireV2Authorization: resolvedFeatureFlags.agentGuidanceV3
         });
   const writeMutationTrust: AgentWriteMutationTrust =
-    versionGroupServices === undefined
-      ? "unavailable"
-      : options.workspaceKind === "engineeringWorkspace"
-        ? requestedCapabilities.fileLifecycleEnabled && options.lifecycleOperations !== undefined
-          ? "hardened_native"
-          : "unavailable"
+    options.workspaceKind === "engineeringWorkspace"
+      ? options.engineeringFileMutationV2 !== undefined &&
+        options.engineeringMutationRuntimeV2 !== undefined &&
+        (requestedCapabilities.workspaceFileOperations?.length ?? 0) > 0
+        ? "hardened_native"
+        : "unavailable"
+      : versionGroupServices === undefined
+        ? "unavailable"
         : options.lifecycleOperations !== undefined
           ? "hardened_native"
           : trustedCreativeMutations !== undefined
@@ -1486,6 +1633,12 @@ function createDesktopAgentRuntimeServices(
       ? {}
       : { lifecycleOperations: options.lifecycleOperations }),
     ...(trustedCreativeMutations === undefined ? {} : { trustedCreativeMutations }),
+    ...(options.engineeringFileMutationV2 === undefined
+      ? {}
+      : { engineeringFileMutationV2: options.engineeringFileMutationV2 }),
+    ...(options.engineeringMutationRuntimeV2 === undefined
+      ? {}
+      : { engineeringMutationRuntimeV2: options.engineeringMutationRuntimeV2 }),
     hasVersionGroupExecutor: versionGroupServices !== undefined,
     hasTrustedApprovalV2:
       resolvedFeatureFlags.approvalBindingV2 && options.changeSetApprovalV2 !== undefined,
@@ -1846,6 +1999,9 @@ function createDesktopAgentRuntimeServices(
     },
     writeMutationTrust,
     catalogSchemaVersion: resolvedFeatureFlags.agentGuidanceV3 === true ? "2.0" : "1.0",
+    ...(options.workspaceKind === "engineeringWorkspace"
+      ? { approvalRuleSetVersion: LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION }
+      : {}),
     limitedRunPreapprovalQualified: false,
     defaultCapabilitySnapshot: capabilitySnapshot,
     ...(options.externalToolDescriptors === undefined
@@ -1934,6 +2090,14 @@ function createDesktopAgentRuntimeServices(
     );
     options.releasePromptCacheScope?.();
   };
+  const revokeEngineeringMutationCapabilities = (): void => {
+    if (options.workspaceKind !== "engineeringWorkspace") return;
+    effectiveCapabilityState = revokeApprovalMutationCapabilities(
+      effectiveCapabilityState,
+      options.now?.() ?? new Date().toISOString()
+    );
+    options.releasePromptCacheScope?.();
+  };
   const providerNameMapping = buildRuntimeProviderNameMapping(
     capabilitySnapshot,
     options.externalToolDescriptors
@@ -1958,6 +2122,9 @@ function createDesktopAgentRuntimeServices(
     ...(options.changeSetApprovalV2 === undefined
       ? {}
       : { changeSetApprovalV2: options.changeSetApprovalV2 }),
+    ...(options.engineeringFileMutationV2 === undefined
+      ? {}
+      : { engineeringFileMutationV2: options.engineeringFileMutationV2 }),
     ...(searchToolExecutor === undefined ? {} : { searchToolExecutor }),
     ...(creativeProjectFiles === undefined
       ? {}
@@ -2339,18 +2506,21 @@ function createDesktopAgentRuntimeServices(
     revokeSettingsCapabilities,
     revokeApprovalCapabilities,
     revokeEngineeringAccessCapabilities,
+    revokeEngineeringMutationCapabilities,
     ...(options.releasePromptCacheScope === undefined
       ? {}
       : { releasePromptCacheResources: options.releasePromptCacheScope }),
     ...(options.disposeExternalTools === undefined &&
     options.releasePromptCacheScope === undefined &&
-    engineeringAccessSession === undefined
+    engineeringAccessSession === undefined &&
+    options.disposeEngineeringMutationV2 === undefined
       ? {}
       : {
           dispose: () => {
             packedContextCache.clear();
             options.releasePromptCacheScope?.();
             options.disposeExternalTools?.();
+            options.disposeEngineeringMutationV2?.();
             closeEngineeringAccessSessionOnce(engineeringAccessSession);
           }
         })
@@ -3788,6 +3958,18 @@ async function materializeDesktopSendPreview(input: {
     effectiveCapabilityState: input.effectiveCapabilityState,
     executionWritePolicy: facts.value.writePolicy,
     ...(facts.value.writePolicyAcknowledged ? { executionWritePolicyAcknowledged: true } : {}),
+    ...(profile.profileId === "engineering"
+      ? {
+          approvalRuleSet: createApprovalRuleSetProjection(
+            providerDescriptors.flatMap((descriptor) =>
+              descriptor.effect === "propose" && descriptor.writeOperation !== undefined
+                ? [descriptor.writeOperation]
+                : []
+            ),
+            LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION
+          )
+        }
+      : {}),
     limitedRunPreapprovalQualified: false,
     activeResourceKind: desktopActiveResourceKind(profile.profileId, activeSources)
   });
@@ -3818,7 +4000,10 @@ async function materializeDesktopSendPreview(input: {
     writingGenerationGuidanceVersion,
     providerSemanticVersionSet
   });
-  const catalogRevision = computeCatalogV2RevisionForDescriptors(providerDescriptors);
+  const catalogRevision = computeCatalogV2RevisionForDescriptors(
+    providerDescriptors,
+    profile.profileId === "engineering" ? LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION : undefined
+  );
   const conversation =
     defaults.value.defaults.conversationSummary === "allow"
       ? await input.conversationSession.loadContext({
@@ -4190,7 +4375,12 @@ function createDesktopAgentContextSession(input: {
       });
       const catalogRevision =
         input.catalogSchemaVersion === "2.0"
-          ? computeCatalogV2RevisionForDescriptors(toolDescriptors)
+          ? computeCatalogV2RevisionForDescriptors(
+              toolDescriptors,
+              profile.profileId === "engineering"
+                ? LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION
+                : undefined
+            )
           : computeAgentRunToolCatalogRevision("v2", toolDescriptors);
       const conversation = await input.loadConversationContext(conversationId);
       if (!conversation.ok) return err(conversation.error);
@@ -7024,7 +7214,14 @@ export function createDesktopReadToolExecutor(
         return listed.ok
           ? ok({
               summary: `已列出 ${relativeDirectory || "项目根目录"} 的 ${listed.value.length} 个条目`,
-              data: asJsonObject({ entries: listed.value })
+              data: asJsonObject({
+                entries: listed.value,
+                ...(() => {
+                  const parentRef = (listed.value as unknown as { readonly parentRef?: unknown })
+                    .parentRef;
+                  return typeof parentRef === "string" ? { parentRef } : {};
+                })()
+              })
             })
           : listed;
       }
@@ -7193,12 +7390,23 @@ export function createDesktopReadToolExecutor(
             : read;
         }
         const read = await projectReads.readText(relativePath);
+        const engineeringFileRef = read.ok
+          ? (read.value as typeof read.value & { readonly engineeringFileRef?: unknown })
+              .engineeringFileRef
+          : undefined;
         return read.ok
           ? ok({
               summary: `已读取 ${relativePath}`,
-              data: { content: read.value.content, checksum: read.value.checksum },
+              data: {
+                content: read.value.content,
+                checksum: read.value.checksum,
+                ...(typeof engineeringFileRef === "string" ? { fileRef: engineeringFileRef } : {})
+              },
               source: {
-                refId: `file:${relativePath}`,
+                refId:
+                  typeof engineeringFileRef === "string"
+                    ? engineeringFileRef
+                    : `file:${relativePath}`,
                 sourceKind: "disk_file",
                 relativePath,
                 content: read.value.content,

@@ -27,6 +27,7 @@ import {
   type PlainFileEditorScope
 } from "./plain-file-editor-bridge.js";
 import type { ProjectWorkflowBridge } from "./project-workflow-bridge.js";
+import type { EngineeringWorkspaceBridge } from "./engineering-workspace-bridge.js";
 import {
   guardDirtyPlainFile,
   guardDirtyPlainFileEditors,
@@ -37,6 +38,7 @@ export interface WorkspaceFileEditorRuntimeOptions {
   readonly api: NovelStudioApi | undefined;
   /** Main-issued opaque identity for engineering editor liveness reports. */
   readonly engineeringEditorState?: EngineeringEditorStateBinding;
+  readonly engineeringWorkspaceBridge?: Pick<EngineeringWorkspaceBridge, "refreshEngineeringTree">;
   readonly agentRunBridge?: Pick<AgentRunBridge, "subscribeProjectFilesChanged"> | undefined;
   readonly activeCreativeProjectId: string | undefined;
   readonly activeCreativeWorkspaceId: string | undefined;
@@ -157,6 +159,7 @@ export function useWorkspaceFileEditorRuntime(
   const creativeProjectFilesBridgeRef = useRef<CreativeProjectFilesBridge | undefined>(undefined);
   const creativeProjectFilesSyncRef = useRef(0);
   const creativeProjectFilesRefreshRef = useRef<Promise<void>>(Promise.resolve());
+  const engineeringMutationSyncRef = useRef(0);
   const decorateFileEditorRef = useRef<
     (
       bridge: PlainFileEditorBridge,
@@ -404,6 +407,72 @@ export function useWorkspaceFileEditorRuntime(
     creativeProjectFilesBridge,
     updateVisibleFileEditor
   ]);
+
+  useEffect(() => {
+    const engineeringWorkspaceBridge = options.engineeringWorkspaceBridge;
+    if (api === undefined || engineeringWorkspaceBridge === undefined) return;
+
+    let active = true;
+    const unsubscribe = api.workspace.onEngineeringMutationSync((request) => {
+      const sync = ++engineeringMutationSyncRef.current;
+      const editor = plainFileBridge?.getProps();
+      const affected =
+        editor !== undefined && request.relativePaths.some((path) => path === editor.path);
+
+      void (async () => {
+        let status: "synchronized" | "failed" = "failed";
+        try {
+          const refreshed = await engineeringWorkspaceBridge.refreshEngineeringTree();
+          if (
+            refreshed.status !== "ready" ||
+            !active ||
+            sync !== engineeringMutationSyncRef.current
+          ) {
+            return;
+          }
+          if (!affected) {
+            status = "synchronized";
+            return;
+          }
+          if (
+            plainFileBridge === undefined ||
+            editor === undefined ||
+            plainFileBridge.getProps()?.path !== editor.path ||
+            plainFileBridge.isDirty()
+          ) {
+            return;
+          }
+
+          const reloaded = await plainFileBridge.openFile(editor.path);
+          if (
+            !active ||
+            sync !== engineeringMutationSyncRef.current ||
+            plainFileBridge.getProps()?.path !== editor.path ||
+            plainFileBridge.isDirty() ||
+            reloaded.path !== editor.path
+          ) {
+            return;
+          }
+          updateVisibleFileEditor(plainFileBridge, reloaded);
+          status = "synchronized";
+        } catch {
+          status = "failed";
+        } finally {
+          void api.workspace
+            .completeEngineeringMutationSync({
+              schemaVersion: "2.0",
+              requestId: request.requestId,
+              status
+            })
+            .catch(() => undefined);
+        }
+      })();
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [api, options.engineeringWorkspaceBridge, plainFileBridge, updateVisibleFileEditor]);
 
   const activeCreativeFileRef = useMemo<Extract<
     ContextDraftRef,

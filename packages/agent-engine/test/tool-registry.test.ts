@@ -963,9 +963,10 @@ describe("Agent tool registry", () => {
     });
     const engineeringNames = engineering.map((tool) => tool.name);
     expect(engineeringNames).toEqual(
+      expect.arrayContaining(["propose_file_write", "propose_file_create"])
+    );
+    expect(engineeringNames).not.toEqual(
       expect.arrayContaining([
-        "propose_file_write",
-        "propose_file_create",
         "propose_file_move",
         "propose_file_delete",
         "propose_directory_create"
@@ -976,7 +977,7 @@ describe("Agent tool registry", () => {
     expect(engineeringNames).not.toContain("manage_path");
     expect(
       engineering.filter((tool) => tool.effect === "propose").map((tool) => tool.writeOperation)
-    ).toEqual(["replace_file", "create_file", "move_file", "delete_file", "create_directory"]);
+    ).toEqual(["replace_file", "create_file"]);
   });
 
   test("qualifies the four chapter lifecycle tools independently with strict schemas", () => {
@@ -1205,5 +1206,110 @@ describe("Agent tool registry", () => {
         .listAgentTools({ ...baseInput, catalogSchemaVersion: "1.0" })
         .map((tool) => tool.name)
     ).not.toContain("list_chapters");
+  });
+
+  test("publishes only B7 engineering replace/create with opaque app-owned refs", () => {
+    const catalog = engineExports.listAgentTools({
+      facadeVersion: "v2",
+      catalogSchemaVersion: "2.0",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: true,
+        fileLifecycleEnabled: true,
+        writingOperations: [],
+        // A compromised caller may try to smuggle Batch 8 operations into the snapshot. The
+        // Engineering catalog itself remains a second, fail-closed boundary for Batch 7.
+        workspaceFileOperations: [
+          "replace_file",
+          "create_file",
+          "move_file",
+          "delete_file",
+          "create_directory"
+        ],
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "engineering-b7-contract"
+      }
+    });
+    const proposalNames = catalog
+      .filter((tool) => tool.effect === "propose")
+      .map((tool) => tool.name);
+    expect(proposalNames).toEqual(["propose_file_write", "propose_file_create"]);
+    expect(proposalNames).not.toEqual(
+      expect.arrayContaining([
+        "propose_file_move",
+        "propose_file_delete",
+        "propose_directory_create"
+      ])
+    );
+
+    const replace = catalog.find((tool) => tool.name === "propose_file_write");
+    const create = catalog.find((tool) => tool.name === "propose_file_create");
+    if (replace === undefined || create === undefined) {
+      throw new Error("Expected B7 engineering proposal descriptors.");
+    }
+    const valid = (descriptor: typeof replace, arguments_: Record<string, unknown>): boolean =>
+      engineExports.validateAgentToolArguments({
+        descriptor,
+        arguments: arguments_ as JsonObject,
+        argumentsText: JSON.stringify(arguments_)
+      }).ok;
+    const fileRef = `engineering_file_ref:${"a".repeat(32)}`;
+    const parentRef = `engineering_directory_ref:${"b".repeat(32)}`;
+
+    expect(
+      valid(replace, {
+        fileRef,
+        range: { unit: "character", start: 0, end: 3 },
+        replacement: "new"
+      })
+    ).toBe(true);
+    expect(
+      valid(replace, {
+        fileRef,
+        baseHash: "c".repeat(64),
+        range: { unit: "character", start: 0, end: 3 },
+        replacement: "new"
+      })
+    ).toBe(false);
+    expect(
+      valid(replace, {
+        path: "src/main.ts",
+        range: { unit: "character", start: 0, end: 3 },
+        replacement: "new"
+      })
+    ).toBe(false);
+    expect(valid(create, { parentRef, name: "new.ts", candidate: "export {};\n" })).toBe(true);
+    for (const forbidden of [
+      "absolutePath",
+      "root",
+      "cwd",
+      "glob",
+      "recursive",
+      "force",
+      "overwrite",
+      "token",
+      "journal",
+      "quarantine",
+      "shell",
+      "git"
+    ]) {
+      expect(
+        valid(create, {
+          parentRef,
+          name: "new.ts",
+          candidate: "export {};\n",
+          [forbidden]: true
+        })
+      ).toBe(false);
+    }
+    expect(valid(create, { parentRef, name: "../new.ts", candidate: "x" })).toBe(false);
+    expect(valid(create, { parentRef, name: "nested/new.ts", candidate: "x" })).toBe(false);
   });
 });

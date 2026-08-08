@@ -3,9 +3,13 @@ import { describe, expect, test, vi } from "vitest";
 import { ok } from "@novel-studio/shared";
 
 import * as ipcExports from "../src/main/ipc-handlers.js";
+import {
+  createAgentWriteSaveCoordinator,
+  createApplicationIpcHandlers
+} from "../src/main/ipc-handlers.js";
 
-describe("Agent write chapter-save coordination", () => {
-  test("waits for an active save, rejects saves while paused, and allows saving after resume", async () => {
+describe("AgentWriteSaveCoordinator", () => {
+  test("waits for an active chapter save, rejects saves while paused, and allows saving after resume", async () => {
     const createCoordinator = (ipcExports as unknown as Record<string, unknown>)[
       "createAgentWriteSaveCoordinator"
     ];
@@ -67,7 +71,118 @@ describe("Agent write chapter-save coordination", () => {
     await expect(handlers["application:chapter:save"]?.()).resolves.toMatchObject({ ok: true });
     expect(saveActiveChapter).toHaveBeenCalledTimes(2);
   });
+
+  test("preserves the existing path-list pause semantics for writing and creative saves", async () => {
+    const coordinator = createAgentWriteSaveCoordinator();
+    const active = coordinator.beginSave("chapters/chapter-01.md");
+    expect(active.ok).toBe(true);
+    if (!active.ok) throw new Error("expected the initial save permit");
+
+    let drained = false;
+    const pause = coordinator.pauseAutosave(["chapters/chapter-01.md"]);
+    void pause.then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    expect(coordinator.beginSave("chapters/chapter-02.md").ok).toBe(true);
+
+    active.release();
+    await pause;
+    expect(coordinator.beginSave("chapters/chapter-01.md").ok).toBe(false);
+    await coordinator.resumeAutosave(["chapters/chapter-01.md"]);
+    expect(coordinator.beginSave("chapters/chapter-01.md").ok).toBe(true);
+  });
+
+  test("pauses and drains an entire engineering root while keeping other roots independent", async () => {
+    const coordinator = createAgentWriteSaveCoordinator();
+    const active = coordinator.beginEngineeringSave("root-a", "src/main.ts");
+    expect(active.ok).toBe(true);
+    if (!active.ok) throw new Error("expected the initial engineering save permit");
+
+    let drained = false;
+    const paused = coordinator.pauseAndDrainEngineeringRoot("root-a");
+    void paused.then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    expect(coordinator.beginEngineeringSave("root-b", "src/main.ts").ok).toBe(true);
+
+    active.release();
+    const rootPause = await paused;
+    expect(coordinator.beginEngineeringSave("root-a", "README.md").ok).toBe(false);
+    expect(coordinator.beginEngineeringSave("root-b", "README.md").ok).toBe(true);
+
+    rootPause.release();
+    expect(coordinator.beginEngineeringSave("root-a", "README.md").ok).toBe(true);
+  });
 });
+
+describe("engineering workspace save IPC", () => {
+  test("uses the Main-owned active root binding and rejects a paused root before application save", async () => {
+    const coordinator = createAgentWriteSaveCoordinator();
+    const rootPause = await coordinator.pauseAndDrainEngineeringRoot("root-a");
+    const saveEngineeringTextFile = async () => ok({ kind: "saved" as const });
+    const handlers = createApplicationIpcHandlers({ saveEngineeringTextFile } as never, {
+      agentWriteSaveCoordinator: coordinator,
+      getActiveEngineeringEditorRootBindingId: () => "root-a"
+    }) as unknown as Record<string, (input: unknown) => Promise<unknown>>;
+
+    await expect(
+      handlers["application:workspace:save-text-file"](saveRequest())
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_SAVE_PAUSED_FOR_AGENT_WRITE" }
+    });
+    rootPause.release();
+
+    await expect(handlers["application:workspace:save-text-file"](saveRequest())).resolves.toEqual(
+      ok({ kind: "saved" })
+    );
+  });
+
+  test("fails closed when Main has no authoritative root or it changes before dispatch", async () => {
+    let saveCalls = 0;
+    const application = {
+      saveEngineeringTextFile: async () => {
+        saveCalls += 1;
+        return ok({ kind: "saved" as const });
+      }
+    };
+    const coordinator = createAgentWriteSaveCoordinator();
+    const unavailable = createApplicationIpcHandlers(application as never, {
+      agentWriteSaveCoordinator: coordinator
+    }) as unknown as Record<string, (input: unknown) => Promise<unknown>>;
+    await expect(
+      unavailable["application:workspace:save-text-file"](saveRequest())
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_SAVE_COORDINATOR_UNAVAILABLE" }
+    });
+
+    let rootReads = 0;
+    const changed = createApplicationIpcHandlers(application as never, {
+      agentWriteSaveCoordinator: coordinator,
+      getActiveEngineeringEditorRootBindingId: () => (rootReads++ === 0 ? "root-a" : "root-b")
+    }) as unknown as Record<string, (input: unknown) => Promise<unknown>>;
+    await expect(
+      changed["application:workspace:save-text-file"](saveRequest())
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_SAVE_ROOT_BINDING_CHANGED" }
+    });
+    expect(saveCalls).toBe(0);
+  });
+});
+
+function saveRequest() {
+  return {
+    path: "src/main.ts",
+    content: "export {};",
+    expectedChecksum: "sha256:old"
+  };
+}
 
 function savedSnapshot(chapterId: string) {
   return ok({

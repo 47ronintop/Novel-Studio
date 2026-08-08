@@ -286,6 +286,9 @@ export type {
 } from "./engineering-path-policy.js";
 export {
   ENGINEERING_FILE_CONTRACT_VERSION,
+  ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS,
+  ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS,
+  ENGINEERING_FILE_BATCH_7_PROBE_CONTRACT_VERSION,
   ENGINEERING_FILE_NATIVE_ADAPTER_ID,
   ENGINEERING_FILE_NEGATIVE_CONTROLS,
   ENGINEERING_FILE_POSITIVE_PROTECTIONS,
@@ -297,11 +300,14 @@ export {
   engineeringFileProbeReportChecksum,
   engineeringFileQualificationAttestationChecksum,
   validateEngineeringFileProbeReport,
+  validateEngineeringFileProbeReportV2,
   validateEngineeringFileQualificationAttestation
 } from "./engineering-file-contracts.js";
 export type {
   EngineeringFileMutationReceiptV1,
+  EngineeringFileMutationRecoveryProbeEvidenceV1,
   EngineeringFileProbeReportV1,
+  EngineeringFileProbeReportV2,
   EngineeringFileProbeValidationResult,
   EngineeringFileQualificationAttestationV1,
   EngineeringFileQualificationCapability,

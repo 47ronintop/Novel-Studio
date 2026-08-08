@@ -3,7 +3,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, test } from "vitest";
 
-import type { CreativeProjectFileTreeSnapshot, NovelStudioApi } from "@novel-studio/application";
+import type {
+  CreativeProjectFileTreeSnapshot,
+  EngineeringMutationRendererSyncRequestV2,
+  NovelStudioApi
+} from "@novel-studio/application";
 import { ok } from "@novel-studio/shared";
 
 import {
@@ -403,6 +407,191 @@ describe("useWorkspaceFileEditorRuntime", () => {
     expect(runtime?.creativeProjectFiles?.activeFilePath).toBe("notes/draft.md");
     expect(runtime?.fileEditor).toMatchObject({ content: "Latest\n", dirty: false });
   });
+
+  test("refreshes the Engineering tree and reloads only a clean matching editor", async () => {
+    let diskContent = "Before\n";
+    let listener: ((request: EngineeringMutationRendererSyncRequestV2) => void) | undefined;
+    const completions: unknown[] = [];
+    const api = {
+      workspace: {
+        onEngineeringMutationSync(
+          next: (request: EngineeringMutationRendererSyncRequestV2) => void
+        ) {
+          listener = next;
+          return () => {
+            if (listener === next) listener = undefined;
+          };
+        },
+        async completeEngineeringMutationSync(completion: unknown) {
+          completions.push(completion);
+          return ok(undefined);
+        },
+        async readTextFile(path: string) {
+          return ok({ path, content: diskContent, checksum: `sha256:${diskContent}` });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const refreshEngineeringTree = async () => ({ status: "ready" as const });
+    let runtime: WorkspaceFileEditorRuntime | undefined;
+
+    function Harness() {
+      runtime = useWorkspaceFileEditorRuntime({
+        api,
+        engineeringWorkspaceBridge: { refreshEngineeringTree },
+        activeCreativeProjectId: undefined,
+        activeCreativeWorkspaceId: undefined,
+        creativeExpandedPathIds: [],
+        creativeWorkspaceActive: false,
+        chapterBridge: undefined,
+        projectWorkflowBridge: undefined,
+        persistUserPreferences: () => undefined,
+        setChapterEditor: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<Harness />);
+      await flushMicrotasks();
+    });
+
+    const editorBridge = runtime?.plainFileBridge;
+    if (editorBridge === undefined || listener === undefined) {
+      throw new Error("Expected an Engineering file editor and sync listener");
+    }
+    await act(async () => {
+      runtime?.setEngineeringFileEditor(await editorBridge.openFile("notes/scene.md"));
+    });
+
+    diskContent = "After mutation\n";
+    await act(async () => {
+      listener?.(engineeringMutationSyncRequest());
+      await flushMicrotasks();
+    });
+
+    expect(runtime?.fileEditor).toMatchObject({
+      path: "notes/scene.md",
+      content: "After mutation\n",
+      dirty: false
+    });
+    expect(completions).toEqual([
+      {
+        schemaVersion: "2.0",
+        requestId: engineeringMutationSyncRequest().requestId,
+        status: "synchronized"
+      }
+    ]);
+
+    await act(async () => {
+      listener?.(engineeringMutationSyncRequest(["notes/unrelated.md"]));
+      await flushMicrotasks();
+    });
+
+    expect(runtime?.fileEditor).toMatchObject({ content: "After mutation\n", dirty: false });
+    expect(completions.at(-1)).toMatchObject({ status: "synchronized" });
+  });
+
+  test("fails an Engineering synchronization when the relevant editor is dirty, stale, or cannot reload", async () => {
+    let failRead = false;
+    let listener: ((request: EngineeringMutationRendererSyncRequestV2) => void) | undefined;
+    const completions: unknown[] = [];
+    const api = {
+      workspace: {
+        onEngineeringMutationSync(
+          next: (request: EngineeringMutationRendererSyncRequestV2) => void
+        ) {
+          listener = next;
+          return () => {
+            if (listener === next) listener = undefined;
+          };
+        },
+        async completeEngineeringMutationSync(completion: unknown) {
+          completions.push(completion);
+          return ok(undefined);
+        },
+        async readTextFile(path: string) {
+          return failRead
+            ? { ok: false as const, error: { message: "read failed" } }
+            : ok({ path, content: "Before\n", checksum: "sha256:before" });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    let runtime: WorkspaceFileEditorRuntime | undefined;
+
+    function Harness() {
+      runtime = useWorkspaceFileEditorRuntime({
+        api,
+        engineeringWorkspaceBridge: {
+          async refreshEngineeringTree() {
+            return { status: "ready" };
+          }
+        },
+        activeCreativeProjectId: undefined,
+        activeCreativeWorkspaceId: undefined,
+        creativeExpandedPathIds: [],
+        creativeWorkspaceActive: false,
+        chapterBridge: undefined,
+        projectWorkflowBridge: undefined,
+        persistUserPreferences: () => undefined,
+        setChapterEditor: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<Harness />);
+      await flushMicrotasks();
+    });
+
+    const editorBridge = runtime?.plainFileBridge;
+    if (editorBridge === undefined || listener === undefined) {
+      throw new Error("Expected an Engineering file editor and sync listener");
+    }
+    await act(async () => {
+      runtime?.setEngineeringFileEditor(await editorBridge.openFile("notes/scene.md"));
+    });
+    act(() => {
+      runtime?.fileEditor?.onContentChange?.("Local draft\n");
+    });
+
+    await act(async () => {
+      listener?.(engineeringMutationSyncRequest());
+      await flushMicrotasks();
+    });
+    expect(completions.at(-1)).toMatchObject({ status: "failed" });
+
+    act(() => {
+      runtime?.fileEditor?.onReloadFromDisk?.();
+      editorBridge.discard();
+      runtime?.setEngineeringFileEditor(editorBridge.getProps());
+    });
+    failRead = true;
+    await act(async () => {
+      listener?.(engineeringMutationSyncRequest());
+      await flushMicrotasks();
+    });
+    expect(completions.at(-1)).toMatchObject({ status: "failed" });
+
+    failRead = false;
+    await act(async () => {
+      runtime?.setEngineeringFileEditor(await editorBridge.openFile("notes/scene.md"));
+    });
+    act(() => {
+      listener?.(engineeringMutationSyncRequest());
+      editorBridge.clear();
+      runtime?.clearFileEditor();
+    });
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    expect(completions.at(-1)).toMatchObject({ status: "failed" });
+  });
 });
 
 async function flushMicrotasks(count = 6): Promise<void> {
@@ -416,6 +605,17 @@ function projectFilesChangedEvent(
     projectId: "workspace-01",
     reason: "agent-change-set-apply",
     versionGroupId: "vg-01",
+    relativePaths
+  };
+}
+
+function engineeringMutationSyncRequest(
+  relativePaths: readonly string[] = ["notes/scene.md"]
+): EngineeringMutationRendererSyncRequestV2 {
+  return {
+    schemaVersion: "2.0",
+    requestId: `engineering_sync_${"a".repeat(48)}`,
+    operationKind: "replace_file",
     relativePaths
   };
 }

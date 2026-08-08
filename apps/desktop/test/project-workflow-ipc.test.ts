@@ -46,6 +46,11 @@ describe("Task 5 explicit workspace IPC", () => {
       content: "updated",
       expectedChecksum: "sha256:old"
     });
+    await api.workspace.completeEngineeringMutationSync({
+      schemaVersion: "2.0",
+      requestId: `engineering_sync_${"a".repeat(48)}`,
+      status: "synchronized"
+    });
 
     expect(calls.map(({ channel }) => channel)).toEqual([
       "application:project:get-active-workspace",
@@ -61,8 +66,51 @@ describe("Task 5 explicit workspace IPC", () => {
       "application:workspace:open-engineering-workspace",
       "application:workspace:refresh-engineering-tree",
       "application:workspace:read-text-file",
-      "application:workspace:save-text-file"
+      "application:workspace:save-text-file",
+      "application:workspace:complete-engineering-mutation-sync"
     ]);
+  });
+
+  test("forwards only valid Engineering mutation synchronization requests", () => {
+    let listener: ((payload: unknown) => void) | undefined;
+    let subscribedChannel: string | undefined;
+    let removed = false;
+    const api = createNovelStudioApi({
+      async invoke() {
+        return ok(undefined);
+      },
+      on(channel, next) {
+        subscribedChannel = channel;
+        listener = next;
+        return () => {
+          removed = true;
+        };
+      }
+    });
+    const received: unknown[] = [];
+    const unsubscribe = api.workspace.onEngineeringMutationSync((request) =>
+      received.push(request)
+    );
+
+    listener?.({ schemaVersion: "2.0", requestId: "invalid", operationKind: "replace_file" });
+    listener?.({
+      schemaVersion: "2.0",
+      requestId: `engineering_sync_${"a".repeat(48)}`,
+      operationKind: "replace_file",
+      relativePaths: ["notes/scene.md"]
+    });
+    unsubscribe();
+
+    expect(received).toEqual([
+      {
+        schemaVersion: "2.0",
+        requestId: `engineering_sync_${"a".repeat(48)}`,
+        operationKind: "replace_file",
+        relativePaths: ["notes/scene.md"]
+      }
+    ]);
+    expect(removed).toBe(true);
+    expect(subscribedChannel).toBe("application:engineering-mutation-sync-request");
   });
 
   test("keeps canonical directory paths in main-only selection tokens", async () => {

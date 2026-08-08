@@ -76,6 +76,8 @@ export type {
   EngineeringEditorStateAcknowledgement,
   EngineeringEditorStateReport,
   EngineeringEditorStateReportResult,
+  EngineeringMutationRendererSyncCompletionV2,
+  EngineeringMutationRendererSyncRequestV2,
   WritingEditorStateAcknowledgement,
   WritingEditorStateReport,
   WritingEditorStateReportResult,
@@ -842,6 +844,41 @@ export {
   mintMainOwnedCapability,
   revokeApprovalBindingV2Authorization
 } from "./agent-write-authorization.js";
+export {
+  ENGINEERING_FILE_APPROVAL_V2_SCHEMA_VERSION,
+  buildEngineeringApprovalBindingV2,
+  projectEngineeringApprovalApplyV2ForExternal,
+  validateEngineeringApprovalApplyV2,
+  validateEngineeringApprovalBindingV2
+} from "./engineering-file-approval-v2.js";
+export type {
+  BuildEngineeringApprovalBindingV2Input,
+  EngineeringApprovalBeforeKindV2,
+  EngineeringApprovalBindingFactsV2,
+  EngineeringApprovalBindingSeedV2,
+  EngineeringApprovalExternalProjectionV2,
+  EngineeringApprovalLedgerRecordV2,
+  EngineeringApprovalLedgerV2Port,
+  EngineeringFileApprovalOperationKindV2,
+  ValidateEngineeringApprovalApplyV2Input,
+  ValidateEngineeringApprovalBindingV2Input,
+  ValidatedEngineeringApprovalApplyV2
+} from "./engineering-file-approval-v2.js";
+export {
+  ENGINEERING_FILE_MUTATION_SESSION_V2_SCHEMA_VERSION,
+  checksumEngineeringFileMutationToolPayloadV2,
+  engineeringToolCallPayloadConflictV2,
+  isEngineeringFileMutationToolNameV2
+} from "./engineering-file-mutation-session-v2.js";
+export type {
+  EngineeringApprovalProofInputV2,
+  EngineeringFileMutationOperationKindV2,
+  EngineeringFileMutationProposalBoundaryV2,
+  EngineeringFileMutationSessionV2,
+  EngineeringFileMutationToolNameV2,
+  EngineeringPreparedChangeSetMutationV2,
+  EngineeringPreparedFileMutationProposalV2
+} from "./engineering-file-mutation-session-v2.js";
 export { createVersionGroupSession } from "./version-group-session.js";
 export type {
   AgentRunDraftInitialization,

@@ -61,6 +61,8 @@ import type {
   CreateCreativeProjectRequest,
   EngineeringTextFileSaveResult,
   EngineeringTextFileSnapshot,
+  EngineeringMutationRendererSyncCompletionV2,
+  EngineeringMutationRendererSyncRequestV2,
   EngineeringWorkspaceSnapshot,
   CreateAgentConversationCommand,
   DeleteAgentConversationCommand,
@@ -307,6 +309,20 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:workspace:save-text-file",
           input
+        ),
+      onEngineeringMutationSync: (
+        listener: (request: EngineeringMutationRendererSyncRequestV2) => void
+      ) => {
+        if (ipc.on === undefined) return () => undefined;
+        return ipc.on("application:engineering-mutation-sync-request", (payload) => {
+          if (isEngineeringMutationRendererSyncRequest(payload)) listener(payload);
+        });
+      },
+      completeEngineeringMutationSync: (completion: EngineeringMutationRendererSyncCompletionV2) =>
+        invokeTyped<Result<void, UnifiedError>>(
+          ipc,
+          "application:workspace:complete-engineering-mutation-sync",
+          completion
         ),
       createProjectConventions: () =>
         invokeTyped<Result<ProjectConventionsCreateResult, UnifiedError>>(
@@ -1056,6 +1072,21 @@ function isStoryAnalysisCompletionEvent(value: unknown): value is StoryAnalysisC
       event["workflowStatus"] === "applied" ||
       event["workflowStatus"] === "failed") &&
     typeof event["storyBibleChanged"] === "boolean"
+  );
+}
+
+function isEngineeringMutationRendererSyncRequest(
+  value: unknown
+): value is EngineeringMutationRendererSyncRequestV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const request = value as Record<string, unknown>;
+  return (
+    request["schemaVersion"] === "2.0" &&
+    typeof request["requestId"] === "string" &&
+    /^engineering_sync_[a-f0-9]{48}$/u.test(request["requestId"]) &&
+    (request["operationKind"] === "replace_file" || request["operationKind"] === "create_file") &&
+    Array.isArray(request["relativePaths"]) &&
+    request["relativePaths"].every((path) => typeof path === "string")
   );
 }
 

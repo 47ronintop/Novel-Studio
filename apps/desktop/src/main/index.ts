@@ -32,8 +32,14 @@ import {
 import { createCreativeFileOperationQualificationService } from "./creative-file-operation-qualification.js";
 import { createMainOwnedCreativeFileOperationCandidateInspector } from "./creative-file-operation-fresh-probe.js";
 import { createMainOwnedEngineeringFileAccessFreshProbe } from "./engineering-file-access-fresh-probe.js";
-import { createEngineeringFileAccessQualificationService } from "./engineering-file-access-qualification.js";
+import {
+  createEngineeringFileAccessQualificationService,
+  hasMainOwnedEngineeringFileQualification
+} from "./engineering-file-access-qualification.js";
+import { createEngineeringFileAccessAddonLoader } from "./engineering-file-access-adapter.js";
 import { createEngineeringWorkspaceAccessRuntime } from "./engineering-workspace-access-runtime.js";
+import { createEngineeringMutationRendererSyncCoordinatorV2 } from "./engineering-mutation-renderer-sync-v2.js";
+import { createDesktopEngineeringMutationProductionCompositionV2 } from "./engineering-mutation-production-composition-v2.js";
 import {
   MainApprovalConfirmationCoordinator,
   registerTrustedApprovalIpc
@@ -86,7 +92,13 @@ import {
 } from "@novel-studio/application";
 import {
   ApprovalAuthorizationLedger,
-  CreativeProjectFileRepository
+  ApprovalDecisionProofFileRepository,
+  CreativeProjectFileRepository,
+  RecoveryRepository,
+  canonicalizeEngineeringMutationV2Json,
+  engineeringSideEffectSubjectChecksumV2,
+  type EngineeringFileMutationRequestV2,
+  type EngineeringWriteTransactionPreparedV2
 } from "@novel-studio/repository";
 import type {
   AgentRunChangeSetApprovalV2Port,
@@ -104,6 +116,7 @@ import type { LlmModelProfile, LlmProviderId } from "@novel-studio/llm-adapter";
 import {
   STANDALONE_AGENT_CONTEXT_SCOPE,
   agentContextScopeKey,
+  approvalBindingV2Checksum,
   computeAgentToolDescriptorDigest,
   MAX_EXTERNAL_TOOL_DESCRIPTORS,
   NO_AGENT_PROMPT_CACHE_CAPABILITY,
@@ -262,6 +275,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     // artifact set after validating its manifest, signatures, and immutable publisher policy.
     productionProbe: createMainOwnedEngineeringFileAccessFreshProbe()
   });
+  const engineeringFileAccessAddonLoader = createEngineeringFileAccessAddonLoader();
   let creativeQualificationExpiresAt: number | undefined;
   let creativeQualificationExpiryTimer: NodeJS.Timeout | undefined;
   const modelSecretStore = createEncryptedFileModelSecretStore({
@@ -277,6 +291,12 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const agentWriteSaveCoordinator = createAgentWriteSaveCoordinator();
   const writingEditorStateRegistry = createWritingEditorStateRegistry();
   const engineeringEditorStateRegistry = createEngineeringEditorStateRegistry();
+  const engineeringMutationRendererSync = createEngineeringMutationRendererSyncCoordinatorV2({
+    resolveTarget: () => {
+      const window = activeMainWindow;
+      return window === undefined || window.isDestroyed() ? undefined : window.webContents;
+    }
+  });
   const engineeringRootBindingIdByRuntime = new WeakMap<DesktopAgentRuntime, string>();
   let activeEngineeringEditorRootBindingId: string | undefined;
   const workspaceContextPolicyStore = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
@@ -372,6 +392,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         projectRoot: binding.stateRoot,
         traceId: "desktop-agent-authorization-ledger"
       });
+      const approvalDecisionProofRepository = new ApprovalDecisionProofFileRepository({
+        projectRoot: binding.stateRoot,
+        traceId: "desktop-agent-approval-decision-proof-repository"
+      });
       let changeSetApprovalV2: AgentRunChangeSetApprovalV2Port | undefined;
       let nextApprovalCoordinator: MainApprovalConfirmationCoordinator | undefined;
       if (hasCurrentMainOwnedApprovalSurfaceQualification(approvalSurfaceQualification)) {
@@ -463,6 +487,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           ? undefined
           : await createEngineeringWorkspaceAccessRuntime({
               qualificationService: engineeringFileAccessQualification,
+              addonLoader: engineeringFileAccessAddonLoader,
               pathPolicy: defaultEngineeringPathPolicy,
               onRootChanged: ({ rootBindingId }) => revokeEngineeringRootBinding(rootBindingId),
               onQualificationRevoked: ({ rootBindingId }) =>
@@ -488,6 +513,104 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         binding.kind === "engineeringWorkspace"
           ? await engineeringFileAccessQualification.readAttestation()
           : undefined;
+      const engineeringMutationRootBinding = (() => {
+        if (engineeringWorkspaceAccessSession === undefined) return undefined;
+        try {
+          return engineeringWorkspaceAccessSession.getMainOnlyRootHandleBindingV2?.();
+        } catch {
+          return undefined;
+        }
+      })();
+      const engineeringMutationRefCapabilityRevision =
+        engineeringMutationRootBinding === undefined || engineeringQualification === undefined
+          ? undefined
+          : `engineering-ref:${createHash("sha256")
+              .update(
+                `${engineeringMutationRootBinding.contentRootBindingId}:${engineeringMutationRootBinding.pathPolicyRevision}:${engineeringQualification.attestationChecksum}`,
+                "utf8"
+              )
+              .digest("hex")}`;
+      const legacyEngineeringRecovery = new RecoveryRepository({
+        projectRoot: binding.stateRoot,
+        traceId: "desktop-engineering-legacy-recovery-scan"
+      });
+      const authenticateEngineeringNativeBoundary = (input: {
+        readonly rootBinding: {
+          readonly contentRootBindingId: string;
+          readonly rootId: string | bigint;
+        };
+      }): Result<void, UnifiedError> => {
+        let current;
+        try {
+          current = engineeringWorkspaceAccessSession?.getMainOnlyRootHandleBindingV2?.();
+        } catch {
+          current = undefined;
+        }
+        return current !== undefined &&
+          current.contentRootBindingId === input.rootBinding.contentRootBindingId &&
+          current.rootId === input.rootBinding.rootId &&
+          hasMainOwnedEngineeringFileQualification(engineeringQualification, "mutation") &&
+          hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery")
+          ? ok(undefined)
+          : err(engineeringMutationAuthorityError("ENGINEERING_MUTATION_NATIVE_EVIDENCE_REJECTED"));
+      };
+      const engineeringMutationComposition =
+        binding.kind === "engineeringWorkspace" &&
+        engineeringWorkspaceAccessSession !== undefined &&
+        engineeringMutationRefCapabilityRevision !== undefined &&
+        changeSetApprovalV2 !== undefined
+          ? await createDesktopEngineeringMutationProductionCompositionV2({
+              projectId: binding.workspaceId,
+              workspaceBindingId: binding.workspaceId,
+              stateRoot: binding.stateRoot,
+              workspaceAccessSession: engineeringWorkspaceAccessSession,
+              pathPolicy: defaultEngineeringPathPolicy,
+              refCapabilityRevision: engineeringMutationRefCapabilityRevision,
+              qualificationService: engineeringFileAccessQualification,
+              authorizationLedger,
+              trustedApprovalQualified: () =>
+                hasCurrentMainOwnedApprovalSurfaceQualification(approvalSurfaceQualification),
+              readApprovalDecisionProof: (runId, proofId) =>
+                approvalDecisionProofRepository.readApprovalDecisionProof(runId, proofId),
+              authenticateNativeEvidence: authenticateEngineeringNativeBoundary,
+              authenticateNativeProposalEvidence: authenticateEngineeringNativeBoundary,
+              recovery: {
+                verifyPreparedAuthorization: (prepared, expectedState) =>
+                  verifyEngineeringPreparedAuthorization(
+                    authorizationLedger,
+                    prepared,
+                    expectedState
+                  ),
+                scanLegacyRecovery: async () => {
+                  const [records, journals] = await Promise.all([
+                    legacyEngineeringRecovery.listRecoveryRecords(),
+                    legacyEngineeringRecovery.listAgentTransactionJournals()
+                  ]);
+                  if (!records.ok) return records;
+                  if (!journals.ok) return journals;
+                  return ok({
+                    status:
+                      records.value.length === 0 && journals.value.length === 0
+                        ? ("clean" as const)
+                        : ("pending" as const)
+                  });
+                }
+              },
+              validateStagingReservation: validateEngineeringStagingReservation,
+              saveAuthority: agentWriteSaveCoordinator,
+              editorStateRegistry: engineeringEditorStateRegistry,
+              rendererSynchronizer: engineeringMutationRendererSync,
+              onMutationUnavailable: () => {
+                const runtime = engineeringRuntimeForRootBinding.current;
+                runtime?.revokeEngineeringMutationCapabilities?.();
+                const refreshTimer = setTimeout(() => {
+                  void agentRuntimeManager.refreshCurrentWorkspace().catch(() => undefined);
+                }, 0);
+                refreshTimer.unref();
+              },
+              addonLoader: engineeringFileAccessAddonLoader
+            })
+          : undefined;
       const featureFlags = createProductionAgentFeatureFlags(
         {
           agentGuidanceV3: true,
@@ -497,6 +620,11 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           // Main-owned operation qualification below.
           phaseB_fileLifecycleEnabled: false,
           engineeringHardenedAccessV1: engineeringWorkspaceAccessSession !== undefined,
+          engineeringReplaceV2: engineeringMutationComposition !== undefined,
+          engineeringCreateV2: engineeringMutationComposition !== undefined,
+          engineeringMoveV2: false,
+          engineeringDeleteV2: false,
+          engineeringDirectoryCreateV1: false,
           ...(binding.kind === "creativeProject"
             ? {
                 creativeTrustedReplaceV2: changeSetApprovalV2 !== undefined,
@@ -509,7 +637,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           writingDomainCrudV2: changeSetApprovalV2 !== undefined,
           phaseD_networkReadEnabled: networkRuntime.executor !== undefined,
           phaseE_remoteMcpEnabled: mcpRuntime.executor !== undefined,
-          revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:workspace-context-${workspaceContextPolicy.policyRevision}`
+          revision: `desktop-main:${networkRuntime.policyRevision}:${mcpRuntime.settingsRevision}:workspace-context-${workspaceContextPolicy.policyRevision}:engineering-recovery-${engineeringMutationComposition?.recoveryRuntime.capabilityRevision ?? "unavailable"}`
         },
         approvalSurfaceQualification,
         engineeringQualification,
@@ -524,6 +652,16 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         ...(engineeringWorkspaceAccessSession === undefined
           ? {}
           : { engineeringWorkspaceAccessSession }),
+        ...(engineeringMutationComposition === undefined
+          ? {}
+          : {
+              engineeringFileMutationV2: engineeringMutationComposition.session,
+              engineeringMutationRuntimeV2: engineeringMutationComposition.runtime,
+              engineeringMutationRefRegistryV2: engineeringMutationComposition.refRegistry,
+              engineeringMutationRefCapabilityRevision:
+                engineeringMutationComposition.refCapabilityRevision,
+              disposeEngineeringMutationV2: engineeringMutationComposition.dispose
+            }),
         workspaceTrust: workspaceContextPolicy.workspaceTrust,
         projectConventionsEnabled: workspaceContextPolicy.projectConventionsEnabled,
         contextSourcePreferences: workspaceContextPolicy.sourcePreferences,
@@ -536,6 +674,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         userDataRoot,
         featureFlags,
         authorizationLedger,
+        approvalDecisionProofRepository,
         ...(changeSetApprovalV2 === undefined ? {} : { changeSetApprovalV2 }),
         ...(networkRuntime.executor === undefined
           ? {}
@@ -713,6 +852,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       return created.value;
     },
     onActiveRuntimeChanged: (active) => {
+      engineeringMutationRendererSync.dispose();
       const nextEngineeringEditorRootBindingId =
         active?.scope === "workspace" && active.binding.kind === "engineeringWorkspace"
           ? engineeringRootBindingIdByRuntime.get(active.runtime)
@@ -868,6 +1008,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     },
     engineeringEditorStateRegistry,
     getActiveEngineeringEditorRootBindingId: () => activeEngineeringEditorRootBindingId,
+    engineeringMutationRendererSync,
     agentNetworkSettingsSession,
     agentMcpSettingsSession,
     onAgentSettingsChanged: async () => {
@@ -896,6 +1037,73 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...args: readonly unknown[]) => handler(...args));
   }
+}
+
+async function verifyEngineeringPreparedAuthorization(
+  ledger: ApprovalAuthorizationLedger,
+  prepared: EngineeringWriteTransactionPreparedV2,
+  expectedState: "reserved" | "consumed"
+): Promise<Result<void, UnifiedError>> {
+  const queried = await ledger.query(
+    prepared.authorization.authorizationId,
+    prepared.transactionId
+  );
+  if (!queried.ok) return queried;
+  const record = queried.value;
+  let bindingChecksum: string;
+  let sideEffectSubjectChecksum: string;
+  try {
+    bindingChecksum = approvalBindingV2Checksum(record.binding);
+    sideEffectSubjectChecksum = engineeringSideEffectSubjectChecksumV2({
+      transactionId: prepared.transactionId,
+      contentRootBindingId: prepared.contentRootBindingId,
+      providerSemanticVersionSetChecksum: prepared.providerSemanticVersionSetChecksum,
+      operations: prepared.operations
+    });
+  } catch {
+    return err(
+      engineeringMutationAuthorityError("ENGINEERING_MUTATION_AUTHORIZATION_BINDING_INVALID")
+    );
+  }
+  return record.state === expectedState &&
+    record.reservedTransactionId === prepared.transactionId &&
+    record.providerSemanticVersionSetChecksum === prepared.providerSemanticVersionSetChecksum &&
+    record.binding.bindingId === prepared.authorization.approvalBindingId &&
+    record.binding.rootBindingId === prepared.contentRootBindingId &&
+    record.binding.changeSetId === prepared.authorization.changeSetId &&
+    record.binding.changeSetRevision === prepared.authorization.changeSetRevision &&
+    record.binding.changeSetChecksum === prepared.authorization.changeSetChecksum &&
+    bindingChecksum === prepared.authorization.approvalBindingChecksum &&
+    sideEffectSubjectChecksum === prepared.authorization.sideEffectSubjectChecksum
+    ? ok(undefined)
+    : err(engineeringMutationAuthorityError("ENGINEERING_MUTATION_AUTHORIZATION_BINDING_STALE"));
+}
+
+async function validateEngineeringStagingReservation(input: {
+  readonly prepared: EngineeringWriteTransactionPreparedV2;
+  readonly operation: EngineeringFileMutationRequestV2;
+}): Promise<Result<void, UnifiedError>> {
+  const stagingIds = input.prepared.operations.map((operation) => operation.stagingObjectId);
+  const matchingOperations = input.prepared.operations.filter(
+    (operation) =>
+      operation.operationId === input.operation.operationId &&
+      canonicalizeEngineeringMutationV2Json(operation) ===
+        canonicalizeEngineeringMutationV2Json(input.operation)
+  );
+  return new Set(stagingIds).size === stagingIds.length && matchingOperations.length === 1
+    ? ok(undefined)
+    : err(engineeringMutationAuthorityError("ENGINEERING_MUTATION_STAGING_RESERVATION_STALE"));
+}
+
+function engineeringMutationAuthorityError(code: string): UnifiedError {
+  return createUnifiedError({
+    code,
+    category: "StorageError",
+    message: "Engineering mutation authority is unavailable or stale.",
+    recoverability: "user-action",
+    suggestedAction: "Keep Engineering mutation disabled and reopen the qualified workspace.",
+    traceId: "desktop-engineering-mutation-authority-v2"
+  });
 }
 
 function readPositiveInteger(value: string | undefined): number | undefined {
