@@ -79,6 +79,18 @@ jobs:
             Write-Output "::error title=Native addon build failed::$escaped"
             exit $exitCode
           }
+      - name: Verify the addon carries its MSVC runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $addon = (Resolve-Path "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node").Path
+          $command = 'call "{0}" -no_logo -host_arch=x64 -arch=x64 >nul && dumpbin.exe /nologo /dependents "{1}"' -f $env:ENGINEERING_FILE_ACCESS_VSDEVCMD, $addon
+          $dependencies = cmd.exe /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { throw "Unable to inspect native addon dependencies" }
+          $dynamicCrt = $dependencies | Select-String -Pattern '(?i)\b(?:MSVCP\d*|VCRUNTIME\d*(?:_\d*)?|api-ms-win-crt-[^\s]+)\.dll\b'
+          if ($dynamicCrt) {
+            throw "Native addon must carry its MSVC runtime instead of requiring a runner-installed redistributable: $($dynamicCrt.Line -join ', ')"
+          }
       - name: Record unsigned development probe result
         run: node scripts/probe-engineering-file-access-package.mjs
       - name: Record addon SHA-256

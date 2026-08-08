@@ -79,6 +79,20 @@ describe("Main-owned engineering file access qualification", () => {
     );
   });
 
+  test("builds a self-contained MSVC runtime and rejects dynamic CRT dependencies in CI", async () => {
+    const [buildDefinition, workflow] = await Promise.all([
+      readFile(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.buildDefinition, "utf8"),
+      readFile(".github/workflows/engineering-file-access-native.yml", "utf8")
+    ]);
+
+    expect(buildDefinition).toContain(
+      'MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"'
+    );
+    expect(workflow).toContain("dumpbin.exe /nologo /dependents");
+    expect(workflow).toContain("MSVCP\\d*|VCRUNTIME\\d*");
+    expect(workflow).toContain("api-ms-win-crt-");
+  });
+
   test.each([
     ["missing", false, "host_missing"],
     ["partial", true, "host_partial"],

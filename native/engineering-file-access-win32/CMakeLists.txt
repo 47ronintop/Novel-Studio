@@ -18,6 +18,10 @@ if(NOT NODE_LIBRARY)
 endif()
 
 add_library(engineering_file_access MODULE src/engineering_file_access.cc)
+set_property(
+  TARGET engineering_file_access
+  PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
 target_include_directories(engineering_file_access PRIVATE "${NODE_API_INCLUDE_DIR}")
 target_link_libraries(engineering_file_access PRIVATE "${NODE_LIBRARY}" normaliz bcrypt)
 target_compile_definitions(engineering_file_access PRIVATE NAPI_VERSION=8 NODE_GYP_MODULE_NAME=engineering_file_access)
