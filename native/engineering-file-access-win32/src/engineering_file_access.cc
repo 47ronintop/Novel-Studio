@@ -2720,8 +2720,8 @@ bool makeV2TargetSnapshotValue(napi_env env, uint64_t rootId, const std::string&
     }
     return finishV2Value(value, output);
   }
-  napi_value raw;
-  napi_value buffer;
+  napi_value raw = nullptr;
+  napi_value buffer = nullptr;
   if (napi_create_object(env, &raw) != napi_ok ||
       napi_create_buffer_copy(env, bytes->size(), bytes->empty() ? nullptr : bytes->data(), nullptr, &buffer) != napi_ok ||
       !setV2Number(env, raw, "byteLength", manifest->byteLength) ||
@@ -3820,8 +3820,8 @@ napi_value inspectEngineeringFileMutationTargetV2(napi_env env, napi_callback_in
       const bool matchesBefore =
           request.operationKind == "create_file" &&
           request.before.absenceProof.parentDirectoryIdentity == v2ParentDirectoryIdentity(parentIdentity);
-      napi_value nullValue;
-      napi_value output;
+      napi_value nullValue = nullptr;
+      napi_value output = nullptr;
       if (napi_get_null(env, &nullValue) != napi_ok ||
           !makeV2MutationOperationStateValue(
               env, matchesBefore ? "before" : "neither", requestChecksum, nullValue, &output)) {
@@ -3846,8 +3846,8 @@ napi_value inspectEngineeringFileMutationTargetV2(napi_env env, napi_callback_in
     if (result == AccessError::kOk) result = verifyRootStillCurrent(rootId);
     if (result == AccessError::kChanged || result == AccessError::kNotFound ||
         result == AccessError::kPrecondition) {
-      napi_value nullValue;
-      napi_value output;
+      napi_value nullValue = nullptr;
+      napi_value output = nullptr;
       if (napi_get_null(env, &nullValue) != napi_ok ||
           !makeV2MutationOperationStateValue(env, "unknown", requestChecksum, nullValue, &output)) {
         throwAccessError(env, AccessError::kIo);
@@ -3864,8 +3864,8 @@ napi_value inspectEngineeringFileMutationTargetV2(napi_env env, napi_callback_in
     const bool matchesAfter = observedBytes == candidateBytes &&
         sameV2CandidateAfter(request.candidate.manifest, observed);
     if (matchesBefore) {
-      napi_value nullValue;
-      napi_value output;
+      napi_value nullValue = nullptr;
+      napi_value output = nullptr;
       if (napi_get_null(env, &nullValue) != napi_ok ||
           !makeV2MutationOperationStateValue(env, "before", requestChecksum, nullValue, &output)) {
         throwAccessError(env, AccessError::kIo);
@@ -3874,8 +3874,8 @@ napi_value inspectEngineeringFileMutationTargetV2(napi_env env, napi_callback_in
       return output;
     }
     if (matchesAfter) {
-      napi_value receipt;
-      napi_value output;
+      napi_value receipt = nullptr;
+      napi_value output = nullptr;
       if (!createV2MutationReceipt(env, request, requestChecksum, observed, &receipt) ||
           !makeV2MutationOperationStateValue(env, "after", requestChecksum, receipt, &output)) {
         throwAccessError(env, AccessError::kIo);
@@ -3883,8 +3883,8 @@ napi_value inspectEngineeringFileMutationTargetV2(napi_env env, napi_callback_in
       }
       return output;
     }
-    napi_value nullValue;
-    napi_value output;
+    napi_value nullValue = nullptr;
+    napi_value output = nullptr;
     if (napi_get_null(env, &nullValue) != napi_ok ||
         !makeV2MutationOperationStateValue(env, "neither", requestChecksum, nullValue, &output)) {
       throwAccessError(env, AccessError::kIo);
