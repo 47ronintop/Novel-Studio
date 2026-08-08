@@ -189,6 +189,17 @@ bool wideToUtf8(const std::wstring& input, std::string* output) {
                              output->data(), required, nullptr, nullptr) == required;
 }
 
+bool normalizeNfcBounded(const std::wstring& input, size_t maxUnits, std::wstring* output) {
+  if (input.size() > maxUnits || maxUnits >= static_cast<size_t>((std::numeric_limits<int>::max)())) return false;
+  std::vector<wchar_t> buffer(maxUnits + 1, L'\0');
+  const int normalizedLength = NormalizeString(
+      NormalizationC, input.data(), static_cast<int>(input.size()), buffer.data(),
+      static_cast<int>(buffer.size()));
+  if (normalizedLength <= 0 || normalizedLength > static_cast<int>(maxUnits)) return false;
+  output->assign(buffer.data(), static_cast<size_t>(normalizedLength));
+  return true;
+}
+
 bool sha256Hex(const std::string& input, std::string* output) {
   BCRYPT_ALG_HANDLE algorithm = nullptr;
   BCRYPT_HASH_HANDLE hash = nullptr;
@@ -245,10 +256,8 @@ bool canonicalRootPathChecksum(HANDLE handle, std::string* output) {
       handle, buffer.data(), static_cast<DWORD>(buffer.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
   if (written == 0 || written >= static_cast<DWORD>(buffer.size())) return false;
   const std::wstring value(buffer.data(), written);
-  const int normalizedLength = NormalizeString(NormalizationC, value.data(), static_cast<int>(value.size()), nullptr, 0);
-  if (normalizedLength <= 0 || normalizedLength > static_cast<int>(kMaxRootUtf16Units)) return false;
-  std::wstring normalized(static_cast<size_t>(normalizedLength), L'\0');
-  if (NormalizeString(NormalizationC, value.data(), static_cast<int>(value.size()), normalized.data(), normalizedLength) != normalizedLength) return false;
+  std::wstring normalized;
+  if (!normalizeNfcBounded(value, kMaxRootUtf16Units, &normalized)) return false;
   std::string utf8;
   return wideToUtf8(normalized, &utf8) && sha256Hex(utf8, output);
 }
@@ -337,11 +346,8 @@ bool isCanonicalLeafName(const std::wstring& name) {
       isReservedDeviceName(name)) return false;
   std::string utf8;
   if (!wideToUtf8(name, &utf8) || utf8.empty() || utf8.size() > 255) return false;
-  const int normalizedLength = NormalizeString(NormalizationC, name.data(), static_cast<int>(name.size()), nullptr, 0);
-  if (normalizedLength <= 0 || normalizedLength != static_cast<int>(name.size())) return false;
-  std::wstring normalized(static_cast<size_t>(normalizedLength), L'\0');
-  if (NormalizeString(NormalizationC, name.data(), static_cast<int>(name.size()), normalized.data(), normalizedLength) != normalizedLength ||
-      normalized != name) return false;
+  std::wstring normalized;
+  if (!normalizeNfcBounded(name, 255, &normalized) || normalized != name) return false;
   for (wchar_t c : name) {
     const unsigned value = static_cast<unsigned>(c);
     if ((value <= 0x1f) || (value >= 0x7f && value <= 0x9f) || (value >= 0xd800 && value <= 0xdfff) ||
