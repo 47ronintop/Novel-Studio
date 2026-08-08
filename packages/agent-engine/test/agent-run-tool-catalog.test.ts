@@ -184,7 +184,7 @@ describe("Agent run tool catalog snapshots", () => {
           searchEnabled: false,
           fileLifecycleEnabled: false,
           writingOperations: [],
-          workspaceFileOperations: ["replace_file", "create_file", "delete_file"],
+          workspaceFileOperations: ["replace_file", "create_file"],
           controlledExecutionEnabled: false,
           gitReadEnabled: false,
           networkReadEnabled: false,
@@ -201,7 +201,7 @@ describe("Agent run tool catalog snapshots", () => {
       .map((descriptor) => descriptor["writeOperation"]);
     const approvalRules = catalog["approvalRules"] as readonly Record<string, unknown>[];
 
-    expect(mutationOperations).toEqual(["replace_file", "create_file", "delete_file"]);
+    expect(mutationOperations).toEqual(["replace_file", "create_file"]);
     expect(approvalRules.map((rule) => rule["operation"])).toEqual(mutationOperations);
     for (const operation of mutationOperations) {
       expect(approvalRules.filter((rule) => rule["operation"] === operation)).toHaveLength(1);

@@ -1,13 +1,15 @@
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type { AgentModelRoundInput } from "@novel-studio/application";
 import {
   AgentRunFileRepository,
-  type CreativeProjectFileTreeSnapshot
+  type CreativeProjectFileTreeSnapshot,
+  type EngineeringWorkspaceAccessSession
 } from "@novel-studio/repository";
-import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
+import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -289,6 +291,7 @@ describe("desktop workspace project context runtime", () => {
       projectId: "workspace-conventions-stale",
       ...roots,
       workspaceTrust: "trusted",
+      engineeringWorkspaceAccessSession: testingEngineeringAccessSession(roots.contentRoot),
       projectConventionsEnabled: true,
       createRunId: () => "run-conventions-stale",
       modelDriver: {
@@ -376,6 +379,7 @@ describe("desktop workspace project context runtime", () => {
       projectId: "workspace-conventions-stale",
       ...roots,
       workspaceTrust: "trusted",
+      engineeringWorkspaceAccessSession: testingEngineeringAccessSession(roots.contentRoot),
       projectConventionsEnabled: true,
       modelDriver: finishingDriver([])
     });
@@ -395,6 +399,7 @@ describe("desktop workspace project context runtime", () => {
       workspaceKind: "engineeringWorkspace",
       projectId: "workspace-outline-stale",
       ...roots,
+      engineeringWorkspaceAccessSession: testingEngineeringAccessSession(roots.contentRoot),
       createRunId: () => "run-outline-stale",
       modelDriver: {
         async *streamRound() {
@@ -626,6 +631,9 @@ async function firstRound(input: {
   const session = createDesktopAgentRunSession({
     ...input,
     workspaceTrust: "trusted",
+    ...(input.workspaceKind === "engineeringWorkspace"
+      ? { engineeringWorkspaceAccessSession: testingEngineeringAccessSession(input.contentRoot) }
+      : {}),
     projectConventionsEnabled: true,
     createRunId: () => `run-${input.projectId}`,
     modelDriver: finishingDriver(inputs)
@@ -757,6 +765,116 @@ function creativeTree(workspaceId: string): CreativeProjectFileTreeSnapshot {
     truncationReasons: [],
     dependencyManifestChecksum: "d".repeat(64)
   };
+}
+
+function testingEngineeringAccessSession(contentRoot: string): EngineeringWorkspaceAccessSession {
+  const binding = {
+    rootBindingId: "workspace-project-context-test-root",
+    pathPolicyRevision: "workspace-project-context-test-policy"
+  };
+  return {
+    binding,
+    async listDirectory() {
+      return ok({ entries: [] });
+    },
+    async readTextFile(input) {
+      const relativeIdentity =
+        typeof input === "object" && input !== null && !Array.isArray(input)
+          ? (input as Record<string, unknown>)["relativeIdentity"]
+          : undefined;
+      const absolutePath =
+        typeof relativeIdentity === "string"
+          ? testingEngineeringPath(contentRoot, relativeIdentity)
+          : undefined;
+      if (absolutePath === undefined) return err(testingEngineeringAccessError("VALIDATION_ERROR"));
+      try {
+        const bytes = await readFile(absolutePath);
+        const sha256 = createHash("sha256").update(bytes).digest("hex");
+        return ok({
+          relativeIdentity,
+          content: bytes.toString("utf8"),
+          byteLength: bytes.byteLength,
+          sha256,
+          encoding: "utf-8" as const,
+          bom: "none" as const,
+          binding,
+          refChecksum: createHash("sha256")
+            .update(relativeIdentity, "utf8")
+            .update("\0")
+            .update(sha256, "utf8")
+            .digest("hex")
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return err(testingEngineeringAccessError("AGENT_PROJECT_FILE_NOT_FOUND"));
+        }
+        return err(testingEngineeringAccessError("ENGINEERING_WORKSPACE_ACCESS_UNAVAILABLE"));
+      }
+    },
+    async searchText() {
+      return ok({ matches: [], truncated: false });
+    },
+    async buildIndex() {
+      const files: {
+        relativeIdentity: string;
+        byteLength: number;
+        binding: typeof binding;
+        refChecksum: string;
+      }[] = [];
+      const visit = async (directory: string, prefix = ""): Promise<void> => {
+        for (const entry of await readdir(directory, { withFileTypes: true })) {
+          const relativeIdentity = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
+          const absolutePath = join(directory, entry.name);
+          if (entry.isDirectory()) await visit(absolutePath, relativeIdentity);
+          else if (entry.isFile()) {
+            const content = await readFile(absolutePath);
+            files.push({
+              relativeIdentity,
+              byteLength: content.byteLength,
+              binding,
+              refChecksum: createHash("sha256")
+                .update(relativeIdentity, "utf8")
+                .update("\0")
+                .update(content)
+                .digest("hex")
+            });
+          }
+        }
+      };
+      await visit(contentRoot);
+      files.sort((left, right) => left.relativeIdentity.localeCompare(right.relativeIdentity));
+      return ok({ files, truncated: false });
+    },
+    async close() {
+      return ok({ closed: true });
+    }
+  };
+}
+
+function testingEngineeringPath(contentRoot: string, relativeIdentity: string): string | undefined {
+  if (
+    relativeIdentity.length === 0 ||
+    relativeIdentity.includes("\\") ||
+    relativeIdentity
+      .split("/")
+      .some((segment) => segment.length === 0 || segment === "." || segment === "..")
+  ) {
+    return undefined;
+  }
+  const absolutePath = resolve(contentRoot, ...relativeIdentity.split("/"));
+  const fromRoot = relative(contentRoot, absolutePath);
+  return fromRoot.startsWith("..") || isAbsolute(fromRoot) ? undefined : absolutePath;
+}
+
+function testingEngineeringAccessError(code: string): UnifiedError {
+  return createUnifiedError({
+    code,
+    category: "StorageError",
+    message: "The testing engineering access session rejected the request.",
+    recoverability: "user-action",
+    suggestedAction: "Use a canonical in-root file identity.",
+    traceId: "workspace-project-context-test"
+  });
 }
 
 async function createRoots(label: string): Promise<{
