@@ -1,12 +1,21 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+  LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+  approvalDecisionProofChecksum,
   checksumChangeSetSelection,
   checksumChangeSetText,
+  createApprovalBindingV2,
+  createMainOnlyApprovalDecisionProofV1,
   createChangeSetRevisionV2,
   type ChangeSetV2
 } from "@novel-studio/agent-engine";
-import type { AgentRunChangeSetApprovalV2ApprovalContext } from "@novel-studio/application";
+import {
+  buildEngineeringApprovalBindingV2,
+  type AgentRunChangeSetApprovalV2ApprovalContext,
+  type EngineeringApprovalBindingFactsV2
+} from "@novel-studio/application";
 import { ApprovalAuthorizationLedger } from "@novel-studio/repository";
 import { ok } from "@novel-studio/shared";
 
@@ -196,6 +205,132 @@ describe("Trusted Change Set Approval v2", () => {
       error: { code: "CHANGE_SET_TRUSTED_APPROVAL_RECOVERY_BINDING_REQUIRED" }
     });
   });
+
+  test("uses Main-validated raw-byte Engineering facts instead of inferring manifests from JS text", async () => {
+    const changeSet = await engineeringChangeSetV2();
+    const selectionChecksum = checksumChangeSetSelection(changeSet, []);
+    const baseManifestChecksum = "6".repeat(64);
+    const candidateManifestChecksum = "7".repeat(64);
+    const proposalPayloadChecksum = "8".repeat(64);
+    const proof = createMainOnlyApprovalDecisionProofV1({
+      proofId: "engineering_proof_01",
+      approvalRuleSetVersion: LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+      approvalRuleSetChecksum: LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+      operation: "replace_file",
+      binding: {
+        workspaceBindingId: "workspace_01",
+        rootBindingId: "engineering_root_01",
+        runId: changeSet.runId,
+        changeSetId: changeSet.changeSetId,
+        changeSetRevision: changeSet.revision,
+        changeSetChecksum: changeSet.checksum,
+        consistencyGroupChecksum: selectionChecksum,
+        proposalPayloadChecksum,
+        baseManifestChecksum,
+        candidateManifestChecksum,
+        executionWritePolicy: "write_before_confirmation",
+        policyRevision: "engineering_policy_01",
+        capabilityRevision: "engineering_gate_01"
+      },
+      evidence: {
+        pathClass: "ordinary",
+        targetFreshness: "clean_stable",
+        createOnly: "not_applicable",
+        referenceImpact: "not_applicable",
+        limits: "within",
+        stateBoundary: "ordinary"
+      }
+    });
+    const facts: EngineeringApprovalBindingFactsV2 = {
+      schemaVersion: "2.0",
+      workspaceBindingId: "workspace_01",
+      rootBindingId: "engineering_root_01",
+      operationKind: "replace_file",
+      relativeIdentity: "src/file.ts",
+      selectedOperationIds: ["src/file.ts"],
+      selectionChecksum,
+      operationOrderChecksum: checksumChangeSetText("src/file.ts"),
+      sourceRef: `engineering_file_ref:${"a".repeat(32)}`,
+      targetRef: `engineering_file_ref:${"a".repeat(32)}`,
+      beforeKind: "present",
+      baseChecksum: changeSet.files[0]?.baseChecksum ?? "",
+      candidateChecksum: changeSet.files[0]?.candidateChecksum ?? "",
+      baseManifestChecksum,
+      candidateManifestChecksum,
+      encoding: "utf-8",
+      bom: "absent",
+      eol: "lf",
+      approvalRuleSetVersion: LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+      approvalRuleSetChecksum: LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+      proof,
+      proposalPayloadChecksum,
+      executionWritePolicy: "write_before_confirmation",
+      policyRevision: "engineering_policy_01",
+      capabilityRevision: "engineering_gate_01",
+      providerSemanticVersionSetChecksum: checksum
+    };
+    const context: AgentRunChangeSetApprovalV2ApprovalContext = {
+      proofRef: { proofId: proof.proofId, proofChecksum: approvalDecisionProofChecksum(proof) },
+      workspaceBindingId: facts.workspaceBindingId,
+      operation: "replace_file",
+      approvalBindingOperationKind: "replace_file",
+      approvalRuleSet: {
+        version: facts.approvalRuleSetVersion,
+        checksum: facts.approvalRuleSetChecksum,
+        catalogRevision: "catalog_01"
+      },
+      capabilityBoundary: {
+        canonicalRootIdentityChecksum: "9".repeat(64),
+        effectiveCapabilityStateChecksum: checksum,
+        sharingDefaultsRevision: checksum,
+        sharingGrantRevision: checksum,
+        policyRevision: facts.policyRevision,
+        providerToolProjectionChecksum: checksum,
+        providerSemanticVersionSetChecksum: checksum
+      },
+      engineeringApprovalFacts: facts,
+      preview: {
+        changeSetId: changeSet.changeSetId,
+        revision: changeSet.revision,
+        checksum: changeSet.checksum,
+        displayBindingChecksum: changeSet.displayBindingChecksum,
+        providerSemanticVersionSetChecksum: checksum,
+        selectionChecksum,
+        baseManifestChecksum,
+        candidateManifestChecksum
+      }
+    };
+    const seed = buildEngineeringApprovalBindingV2({
+      schemaVersion: "2.0",
+      changeSet,
+      facts,
+      issuedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:05:00.000Z"
+    });
+    if (!seed.ok) throw new Error(`${seed.error.code}: ${seed.error.message}`);
+    expect(() => createApprovalBindingV2(seed.value)).not.toThrow();
+
+    const built = buildTrustedApprovalPreparation({
+      changeSet,
+      context,
+      workspaceLabel: "Engineering workspace",
+      issuedAt: "2099-01-01T00:00:00.000Z"
+    });
+    if (!built.ok) throw new Error(`${built.error.code}: ${built.error.message}`);
+    expect(built).toMatchObject({
+      ok: true,
+      value: {
+        binding: {
+          rootBindingId: facts.rootBindingId,
+          baseManifestChecksum,
+          candidateManifestChecksum,
+          policyRevision: facts.policyRevision,
+          capabilityRevision: facts.capabilityRevision,
+          approvalSource: "human_confirmation"
+        }
+      }
+    });
+  });
 });
 
 function approvedHarness(
@@ -289,6 +424,31 @@ async function changeSetV2(): Promise<ChangeSetV2> {
       }
     },
     { createHunkId: () => "hunk_01" }
+  );
+}
+
+async function engineeringChangeSetV2(): Promise<ChangeSetV2> {
+  const base = "const before = true;\n";
+  return createChangeSetRevisionV2(
+    {
+      changeSetId: "engineering_changes_01",
+      runId: "run_01",
+      projectId: "project_01",
+      checkpointId: "checkpoint_01",
+      contextSnapshotId: "context_01",
+      writePolicy: "write_before_confirmation",
+      createdAt: "2099-01-01T00:00:00.000Z",
+      providerSemanticVersionSetChecksum: checksum,
+      proposal: {
+        relativePath: "src/file.ts",
+        assetType: "text",
+        baseContent: base,
+        baseChecksum: checksumChangeSetText(base),
+        range: { unit: "character", start: 0, end: base.length },
+        replacement: "const after = true;\n"
+      }
+    },
+    { createHunkId: () => "engineering_hunk_01" }
   );
 }
 

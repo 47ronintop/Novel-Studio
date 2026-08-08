@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 import {
+  approvalDecisionProofChecksum,
   checksumChangeSetSelection,
   checksumChangeSetText,
   createApprovalBindingV2,
@@ -16,6 +17,7 @@ import type {
   AgentRunChangeSetApprovalV2Port,
   AgentRunChangeSetApprovalV2ApprovalContext
 } from "@novel-studio/application";
+import { buildEngineeringApprovalBindingV2 } from "@novel-studio/application";
 import type { ApprovalAuthorizationLedger } from "@novel-studio/repository";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
@@ -151,6 +153,20 @@ export function buildTrustedApprovalPreparation(input: {
   const { changeSet, context } = input;
   const selectedOperationIds = selectedIds(changeSet);
   const expectedSelectionChecksum = selectedSelectionChecksum(changeSet);
+  const engineeringFacts = context.engineeringApprovalFacts;
+  const engineeringFactsMatch =
+    engineeringFacts === undefined ||
+    (engineeringFacts.workspaceBindingId === context.workspaceBindingId &&
+      engineeringFacts.operationKind === context.operation &&
+      engineeringFacts.approvalRuleSetVersion === context.approvalRuleSet.version &&
+      engineeringFacts.approvalRuleSetChecksum === context.approvalRuleSet.checksum &&
+      engineeringFacts.proof.proofId === context.proofRef.proofId &&
+      approvalDecisionProofChecksum(engineeringFacts.proof) === context.proofRef.proofChecksum &&
+      engineeringFacts.selectionChecksum === context.preview.selectionChecksum &&
+      engineeringFacts.baseManifestChecksum === context.preview.baseManifestChecksum &&
+      engineeringFacts.candidateManifestChecksum === context.preview.candidateManifestChecksum &&
+      engineeringFacts.providerSemanticVersionSetChecksum ===
+        context.preview.providerSemanticVersionSetChecksum);
   if (
     selectedOperationIds.length === 0 ||
     context.preview.changeSetId !== changeSet.changeSetId ||
@@ -163,6 +179,7 @@ export function buildTrustedApprovalPreparation(input: {
       changeSet.providerSemanticVersionSetChecksum ||
     expectedSelectionChecksum === undefined ||
     context.preview.selectionChecksum !== expectedSelectionChecksum ||
+    !engineeringFactsMatch ||
     !operationMatchesBindingKind(context.operation, context.approvalBindingOperationKind) ||
     changeSet.files.some((file) => file.selected && !file.validation.valid)
   ) {
@@ -199,42 +216,54 @@ export function buildTrustedApprovalPreparation(input: {
 
   let binding: ReturnType<typeof createApprovalBindingV2>;
   try {
-    binding = createApprovalBindingV2({
-      workspaceBindingId: context.workspaceBindingId,
-      rootBindingId: context.capabilityBoundary.canonicalRootIdentityChecksum,
-      runId: changeSet.runId,
-      changeSetId: changeSet.changeSetId,
-      changeSetRevision: changeSet.revision,
-      changeSetChecksum: changeSet.checksum,
-      providerSemanticVersionSetChecksum: changeSet.providerSemanticVersionSetChecksum,
-      operationKind,
-      selectionChecksum,
-      selectedOperationIds,
-      operationOrderChecksum,
-      sourceRef,
-      targetRef,
-      baseChecksum:
-        selectedFiles.length === 1
-          ? (selectedFiles[0]?.baseChecksum ?? context.preview.baseManifestChecksum)
-          : context.preview.baseManifestChecksum,
-      candidateChecksum:
-        selectedFiles.length === 1
-          ? (selectedFiles[0]?.candidateChecksum ?? context.preview.candidateManifestChecksum)
-          : context.preview.candidateManifestChecksum,
-      baseManifestChecksum: context.preview.baseManifestChecksum,
-      candidateManifestChecksum: context.preview.candidateManifestChecksum,
-      ...fileBinding,
-      approvalRuleSetVersion: context.approvalRuleSet.version,
-      approvalRuleSetChecksum: context.approvalRuleSet.checksum,
-      proofId: context.proofRef.proofId,
-      proofChecksum: context.proofRef.proofChecksum,
-      executionWritePolicy: changeSet.writePolicy ?? "write_before_confirmation",
-      policyRevision: context.capabilityBoundary.policyRevision,
-      capabilityRevision: context.approvalRuleSet.catalogRevision,
-      approvalSource: "human_confirmation",
-      issuedAt: input.issuedAt,
-      expiresAt
-    });
+    if (context.engineeringApprovalFacts !== undefined) {
+      const seed = buildEngineeringApprovalBindingV2({
+        schemaVersion: "2.0",
+        changeSet,
+        facts: context.engineeringApprovalFacts,
+        issuedAt: input.issuedAt,
+        expiresAt
+      });
+      if (!seed.ok) return seed;
+      binding = createApprovalBindingV2(seed.value);
+    } else {
+      binding = createApprovalBindingV2({
+        workspaceBindingId: context.workspaceBindingId,
+        rootBindingId: context.capabilityBoundary.canonicalRootIdentityChecksum,
+        runId: changeSet.runId,
+        changeSetId: changeSet.changeSetId,
+        changeSetRevision: changeSet.revision,
+        changeSetChecksum: changeSet.checksum,
+        providerSemanticVersionSetChecksum: changeSet.providerSemanticVersionSetChecksum,
+        operationKind,
+        selectionChecksum,
+        selectedOperationIds,
+        operationOrderChecksum,
+        sourceRef,
+        targetRef,
+        baseChecksum:
+          selectedFiles.length === 1
+            ? (selectedFiles[0]?.baseChecksum ?? context.preview.baseManifestChecksum)
+            : context.preview.baseManifestChecksum,
+        candidateChecksum:
+          selectedFiles.length === 1
+            ? (selectedFiles[0]?.candidateChecksum ?? context.preview.candidateManifestChecksum)
+            : context.preview.candidateManifestChecksum,
+        baseManifestChecksum: context.preview.baseManifestChecksum,
+        candidateManifestChecksum: context.preview.candidateManifestChecksum,
+        ...fileBinding,
+        approvalRuleSetVersion: context.approvalRuleSet.version,
+        approvalRuleSetChecksum: context.approvalRuleSet.checksum,
+        proofId: context.proofRef.proofId,
+        proofChecksum: context.proofRef.proofChecksum,
+        executionWritePolicy: changeSet.writePolicy ?? "write_before_confirmation",
+        policyRevision: context.capabilityBoundary.policyRevision,
+        capabilityRevision: context.approvalRuleSet.catalogRevision,
+        approvalSource: "human_confirmation",
+        issuedAt: input.issuedAt,
+        expiresAt
+      });
+    }
   } catch {
     return failure(
       "CHANGE_SET_TRUSTED_APPROVAL_BINDING_INVALID",
