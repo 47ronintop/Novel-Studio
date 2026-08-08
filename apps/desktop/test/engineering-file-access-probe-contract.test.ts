@@ -75,6 +75,23 @@ describe("engineering file access development probe contract", () => {
     }
   });
 
+  test("uses the SDK-compatible native create-only hard-link ABI for state durability", async () => {
+    const nativeSource = await readFile(
+      "native/engineering-file-access-win32/src/engineering_file_access.cc",
+      "utf8"
+    );
+
+    expect(nativeSource).toContain("constexpr ULONG kFileLinkInformation = 11;");
+    expect(nativeSource).toContain("using NtSetInformationFileFn");
+    expect(nativeSource).toContain(
+      'GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile")'
+    );
+    expect(nativeSource).toContain("link->replaceIfExists = FALSE;");
+    expect(nativeSource).toContain("link->rootDirectory = parent;");
+    expect(nativeSource).toContain("kFileLinkInformation");
+    expect(nativeSource).not.toContain("SetFileInformationByHandle(existing, FileLinkInfo");
+  });
+
   test("requires Main to provide absolute installed inputs and a distinct output path", () => {
     const request = createEngineeringFileAccessPackageProbeRequest({
       artifactPath: "C:\\Program Files\\Novel Studio\\engineering_file_access.node",

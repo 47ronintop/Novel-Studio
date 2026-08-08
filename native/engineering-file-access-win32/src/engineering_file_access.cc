@@ -48,6 +48,10 @@ constexpr ULONG kFileNonDirectoryFile = 0x00000040;
 constexpr ULONG kFileOpenReparsePoint = 0x00200000;
 constexpr NTSTATUS kStatusObjectNameNotFound = static_cast<NTSTATUS>(0xC0000034L);
 constexpr NTSTATUS kStatusObjectNameCollision = static_cast<NTSTATUS>(0xC0000035L);
+// FILE_LINK_INFO / FileLinkInfo are not exposed by every supported Windows SDK.  The native
+// FileLinkInformation ABI is stable and is invoked through ntdll below to keep this addon
+// buildable against the SDK supplied by the Windows CI image.
+constexpr ULONG kFileLinkInformation = 11;
 constexpr size_t kMaxOpaqueIdentifierUtf8Bytes = 128;
 constexpr size_t kMaxStagingIdUtf8Bytes = 96;
 
@@ -68,10 +72,18 @@ struct NativeFileBothDirectoryInformation {
   WCHAR fileName[1];
 };
 
+struct NativeFileLinkInformation {
+  BOOLEAN replaceIfExists;
+  HANDLE rootDirectory;
+  ULONG fileNameLength;
+  WCHAR fileName[1];
+};
+
 using NtCreateFileFn = NTSTATUS(NTAPI *)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
                                           PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
 using NtQueryDirectoryFileFn = NTSTATUS(NTAPI *)(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK,
                                                   PVOID, ULONG, ULONG, BOOLEAN, PUNICODE_STRING, BOOLEAN);
+using NtSetInformationFileFn = NTSTATUS(NTAPI *)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, ULONG);
 
 struct RootSession {
   HANDLE handle;
@@ -310,7 +322,7 @@ void closeRoots() {
   }
   g_roots.clear();
   {
-    std::scoped_lock lock(g_stateRootsMutex);
+    std::scoped_lock stateLock(g_stateRootsMutex);
     for (const auto& [id, session] : g_stateFiles) {
       (void)id;
       if (session.handle != INVALID_HANDLE_VALUE) CloseHandle(session.handle);
@@ -590,6 +602,13 @@ AccessError verifyRegularFile(HANDLE handle, uint64_t* size) {
     return AccessError::kUnsafeObject;
   *size = static_cast<uint64_t>(standard.EndOfFile.QuadPart);
   return *size > kMaxFileBytes ? AccessError::kTooLarge : AccessError::kOk;
+}
+
+NtSetInformationFileFn ntSetInformationFile() {
+#pragma warning(suppress : 4191)
+  static const auto fn = reinterpret_cast<NtSetInformationFileFn>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile"));
+  return fn;
 }
 
 // State files use a temporary-file hard link for create-only installation.  A link count above
@@ -3329,15 +3348,20 @@ napi_value readEngineeringStateDirectoryNoFollow(napi_env env, napi_callback_inf
 
 AccessError stateLinkFile(HANDLE existing, HANDLE parent, const std::wstring& leaf) {
   const size_t byteLength = leaf.size() * sizeof(wchar_t);
-  std::vector<unsigned char> storage(offsetof(FILE_LINK_INFO, FileName) + byteLength, 0);
-  auto* link = reinterpret_cast<FILE_LINK_INFO*>(storage.data());
-  link->ReplaceIfExists = FALSE;
-  link->RootDirectory = parent;
-  link->FileNameLength = static_cast<DWORD>(byteLength);
-  std::memcpy(link->FileName, leaf.data(), byteLength);
-  return SetFileInformationByHandle(existing, FileLinkInfo, link, static_cast<DWORD>(storage.size()))
-      ? AccessError::kOk
-      : AccessError::kAlreadyExists;
+  const auto setInformation = ntSetInformationFile();
+  if (setInformation == nullptr) return AccessError::kUnavailable;
+  std::vector<unsigned char> storage(offsetof(NativeFileLinkInformation, fileName) + byteLength, 0);
+  auto* link = reinterpret_cast<NativeFileLinkInformation*>(storage.data());
+  link->replaceIfExists = FALSE;
+  link->rootDirectory = parent;
+  link->fileNameLength = static_cast<ULONG>(byteLength);
+  std::memcpy(link->fileName, leaf.data(), byteLength);
+  IO_STATUS_BLOCK statusBlock{};
+  const NTSTATUS status = setInformation(existing, &statusBlock, link, static_cast<ULONG>(storage.size()),
+                                         kFileLinkInformation);
+  return isSuccess(status) ? AccessError::kOk
+       : status == kStatusObjectNameCollision ? AccessError::kAlreadyExists
+       : AccessError::kIo;
 }
 
 napi_value linkEngineeringStateFileNoFollow(napi_env env, napi_callback_info info) {
