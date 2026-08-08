@@ -8,9 +8,11 @@ import { promisify } from "node:util";
 import {
   engineeringFileQualificationAttestationChecksum,
   validateEngineeringFileProbeReport,
+  validateEngineeringFileProbeReportV2,
   createUnavailableEngineeringFileQualificationAttestation,
   validateEngineeringFileQualificationAttestation,
   type EngineeringFileProbeReportV1,
+  type EngineeringFileProbeReportV2,
   type EngineeringFileQualificationAttestationV1,
   type EngineeringFileQualificationCapability,
   type EngineeringFileQualificationFailureReason
@@ -85,7 +87,9 @@ export interface EngineeringFileAccessProductionProbe {
     readonly checkedAt: string;
     readonly publisherPolicyChecksum: string;
     readonly protectionEvidence: EngineeringFileAccessProtectionEvidence;
-  }): Promise<EngineeringFileProbeReportV1>;
+    /** Present only for a signed Batch 7 manifest; omission keeps B6 read-only. */
+    readonly mutationRecoveryEvidence?: EngineeringFileAccessBatch7MutationRecoveryEvidence;
+  }): Promise<EngineeringFileProbeReportV1 | EngineeringFileProbeReportV2>;
 }
 
 export interface EngineeringFileAccessProtectionEvidence {
@@ -108,6 +112,18 @@ export interface EngineeringFileAccessProtectionEvidence {
       | "receiptBindingDisabled"
       | "durabilityDisabled"
       | "recoveryRootBindingDisabled",
+      "canary_exposed"
+    >
+  >;
+}
+
+export interface EngineeringFileAccessBatch7MutationRecoveryEvidence {
+  readonly positiveProtections: Readonly<
+    Record<"replace" | "create" | "receiptBinding" | "walPreparation" | "recoveryScan", "passed">
+  >;
+  readonly negativeControls: Readonly<
+    Record<
+      "rawByteManifestMismatch" | "staleBase" | "createRace" | "faultRecoveryRequired",
       "canary_exposed"
     >
   >;
@@ -289,11 +305,17 @@ async function observeAttestation(input: {
   if (production.status === "unavailable") {
     return unavailable(input, true, ["candidate_unqualified", ...production.failureReasons]);
   }
-  return createBatch6AvailableAttestation({
-    target: input.target,
-    checkedAt: input.checkedAt,
-    report: production.report
-  });
+  return production.batch === "7"
+    ? createBatch7AvailableAttestation({
+        target: input.target,
+        checkedAt: input.checkedAt,
+        report: production.report
+      })
+    : createBatch6AvailableAttestation({
+        target: input.target,
+        checkedAt: input.checkedAt,
+        report: production.report
+      });
 }
 
 /**
@@ -324,15 +346,25 @@ async function verifyProductionEvidence(
   const artifactSha256 = sha256(artifact);
   const manifestSha256 = sha256(manifestBytes);
   const signatureSha256 = sha256(signature);
-  if (!isBatch6ProductionManifest(manifest, artifactSha256)) {
+  const batch = isBatch6ProductionManifest(manifest, artifactSha256)
+    ? "6"
+    : isBatch7ProductionManifest(manifest, artifactSha256)
+      ? "7"
+      : undefined;
+  if (batch === undefined) {
     return productionUnavailable(["digest_mismatch"]);
   }
   const protectionEvidence = signedBatch6ProbeEvidence(manifest);
   if (protectionEvidence === undefined) return productionUnavailable(["probe_contract_mismatch"]);
+  const mutationRecoveryEvidence =
+    batch === "7" ? signedBatch7MutationRecoveryEvidence(manifest) : undefined;
+  if (batch === "7" && mutationRecoveryEvidence === undefined) {
+    return productionUnavailable(["probe_contract_mismatch"]);
+  }
 
   const signaturesTrusted = await verifyInstalledSignatures(paths);
   if (!signaturesTrusted) return productionUnavailable(["signature_mismatch"]);
-  let report: EngineeringFileProbeReportV1;
+  let report: EngineeringFileProbeReportV1 | EngineeringFileProbeReportV2;
   try {
     report = await productionProbe.probe({
       artifactPath: paths.artifact,
@@ -340,12 +372,16 @@ async function verifyProductionEvidence(
       signaturePath: paths.signature,
       checkedAt,
       publisherPolicyChecksum: ENGINEERING_FILE_ACCESS_PUBLISHER_POLICY_CHECKSUM,
-      protectionEvidence
+      protectionEvidence,
+      ...(mutationRecoveryEvidence === undefined ? {} : { mutationRecoveryEvidence })
     });
   } catch {
     return productionUnavailable(["probe_error"]);
   }
-  const reportValidation = validateEngineeringFileProbeReport(report, checkedAt);
+  const reportValidation =
+    batch === "7"
+      ? validateEngineeringFileProbeReportV2(report, checkedAt)
+      : validateEngineeringFileProbeReport(report, checkedAt);
   const reasons = new Set<EngineeringFileQualificationFailureReason>(
     reportValidation.failureReasons
   );
@@ -357,11 +393,29 @@ async function verifyProductionEvidence(
   if (report.publisherPolicyChecksum !== ENGINEERING_FILE_ACCESS_PUBLISHER_POLICY_CHECKSUM) {
     reasons.add("signature_mismatch");
   }
+  if (
+    batch === "7" &&
+    (!isBatch7ProbeReport(report) ||
+      mutationRecoveryEvidence === undefined ||
+      !sameBatch7MutationRecoveryEvidence(
+        report.mutationRecoveryEvidence,
+        mutationRecoveryEvidence
+      ))
+  ) {
+    reasons.add("probe_contract_mismatch");
+  }
   if (reasons.size > 0) return productionUnavailable([...reasons]);
-  return Object.freeze({
-    status: "available" as const,
-    report
-  });
+  return batch === "7"
+    ? Object.freeze({
+        status: "available" as const,
+        batch: "7" as const,
+        report: report as EngineeringFileProbeReportV2
+      })
+    : Object.freeze({
+        status: "available" as const,
+        batch: "6" as const,
+        report: report as EngineeringFileProbeReportV1
+      });
 }
 
 async function verifyInstalledSignatures(paths: ProductionEvidencePaths): Promise<boolean> {
@@ -389,13 +443,19 @@ function isProbeReportForInstalledArtifacts(
   artifactSha256: string,
   manifestSha256: string,
   signatureSha256: string
-): value is EngineeringFileProbeReportV1 {
+): value is EngineeringFileProbeReportV1 | EngineeringFileProbeReportV2 {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const report = value as Record<string, unknown>;
   return (
     report["artifactSha256"] === artifactSha256 &&
     report["artifactManifestSha256"] === manifestSha256 &&
     report["artifactManifestSignatureSha256"] === signatureSha256
+  );
+}
+
+function isBatch7ProbeReport(value: unknown): value is EngineeringFileProbeReportV2 {
+  return (
+    value !== null && typeof value === "object" && (value as { batch?: unknown }).batch === "7"
   );
 }
 
@@ -423,12 +483,44 @@ function isBatch6ProductionManifest(value: unknown, artifactSha256: string): boo
   );
 }
 
+function isBatch7ProductionManifest(value: unknown, artifactSha256: string): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const manifest = value as Record<string, unknown>;
+  const eligibility = manifest["eligibility"];
+  const signing = manifest["signing"];
+  const qualification = manifest["qualification"];
+  const artifact = manifest["artifact"];
+  return (
+    manifest["adapterId"] === ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.adapterId &&
+    manifest["target"] === ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.supportedTarget &&
+    isRecord(artifact) &&
+    artifact["sha256"] === artifactSha256 &&
+    isRecord(signing) &&
+    signing["authenticode"] === "trusted_publisher" &&
+    signing["detachedCms"] === "trusted_publisher" &&
+    signing["developmentUnsigned"] === undefined &&
+    isBatch7Eligibility(eligibility) &&
+    isBatch7Qualification(qualification) &&
+    manifest["publisherPolicyChecksum"] === ENGINEERING_FILE_ACCESS_PUBLISHER_POLICY_CHECKSUM
+  );
+}
+
 function isBatch6Eligibility(value: unknown): boolean {
   if (!isRecord(value) || value["batch"] !== "6") return false;
   return (
     BATCH_6_READ_ONLY_CAPABILITIES.every((capability) => value[capability] === "available") &&
     value["mutation"] === "unavailable" &&
     value["recovery"] === "unavailable"
+  );
+}
+
+function isBatch7Eligibility(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value["batch"] === "7" &&
+    BATCH_6_READ_ONLY_CAPABILITIES.every((capability) => value[capability] === "available") &&
+    value["mutation"] === "available" &&
+    value["recovery"] === "available"
   );
 }
 
@@ -443,6 +535,22 @@ function isBatch6Qualification(value: unknown): boolean {
     Array.isArray(unavailable) &&
     sameStrings(unavailable, ["mutation", "recovery"]) &&
     isSignedBatch6ProbeEvidence(probeEvidence)
+  );
+}
+
+function isBatch7Qualification(value: unknown): boolean {
+  if (!isRecord(value) || value["productionQualified"] !== true) return false;
+  return (
+    Array.isArray(value["eligibleCapabilities"]) &&
+    sameStrings(value["eligibleCapabilities"], [
+      ...BATCH_6_READ_ONLY_CAPABILITIES,
+      "mutation",
+      "recovery"
+    ]) &&
+    Array.isArray(value["unavailableCapabilities"]) &&
+    sameStrings(value["unavailableCapabilities"], []) &&
+    isSignedBatch6ProbeEvidence(value["probeEvidence"]) &&
+    isSignedBatch7MutationRecoveryEvidence(value["mutationRecoveryEvidence"])
   );
 }
 
@@ -486,6 +594,42 @@ function signedBatch6ProbeEvidence(
     : undefined;
 }
 
+function isSignedBatch7MutationRecoveryEvidence(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactStatusMap(
+      value["positiveProtections"],
+      ["replace", "create", "receiptBinding", "walPreparation", "recoveryScan"],
+      "passed"
+    ) &&
+    hasExactStatusMap(
+      value["negativeControls"],
+      ["rawByteManifestMismatch", "staleBase", "createRace", "faultRecoveryRequired"],
+      "canary_exposed"
+    )
+  );
+}
+
+function signedBatch7MutationRecoveryEvidence(
+  manifest: unknown
+): EngineeringFileAccessBatch7MutationRecoveryEvidence | undefined {
+  if (!isRecord(manifest) || !isRecord(manifest["qualification"])) return undefined;
+  const evidence = manifest["qualification"]["mutationRecoveryEvidence"];
+  return isSignedBatch7MutationRecoveryEvidence(evidence)
+    ? (evidence as EngineeringFileAccessBatch7MutationRecoveryEvidence)
+    : undefined;
+}
+
+function sameBatch7MutationRecoveryEvidence(
+  actual: EngineeringFileAccessBatch7MutationRecoveryEvidence,
+  expected: EngineeringFileAccessBatch7MutationRecoveryEvidence
+): boolean {
+  return (
+    JSON.stringify(actual.positiveProtections) === JSON.stringify(expected.positiveProtections) &&
+    JSON.stringify(actual.negativeControls) === JSON.stringify(expected.negativeControls)
+  );
+}
+
 function createBatch6AvailableAttestation(input: {
   readonly target: string;
   readonly checkedAt: string;
@@ -505,6 +649,39 @@ function createBatch6AvailableAttestation(input: {
       access: "available" as const,
       mutation: "unavailable" as const,
       recovery: "unavailable" as const
+    },
+    artifactSha256: input.report.artifactSha256,
+    artifactManifestSha256: input.report.artifactManifestSha256,
+    probeReportChecksum: input.report.reportChecksum,
+    expiresAt: input.report.expiresAt,
+    failureReasons: [] as const,
+    checkedAt: input.checkedAt
+  };
+  return deepFreeze({
+    ...unsigned,
+    attestationChecksum: engineeringFileQualificationAttestationChecksum(unsigned)
+  });
+}
+
+function createBatch7AvailableAttestation(input: {
+  readonly target: string;
+  readonly checkedAt: string;
+  readonly report: EngineeringFileProbeReportV2;
+}): EngineeringFileQualificationAttestationV1 {
+  const unsigned = {
+    schemaVersion: "1.0" as const,
+    authority: "desktop_main_engineering_file_access_qualification" as const,
+    adapterId: ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.adapterId,
+    target: input.target,
+    packageKind: "production" as const,
+    status: "available" as const,
+    productionQualified: true,
+    candidateArtifactPresent: true,
+    capabilities: {
+      root: "available" as const,
+      access: "available" as const,
+      mutation: "available" as const,
+      recovery: "available" as const
     },
     artifactSha256: input.report.artifactSha256,
     artifactManifestSha256: input.report.artifactManifestSha256,
@@ -563,7 +740,16 @@ interface ProductionEvidencePaths {
 }
 
 type ProductionEvidenceResult =
-  | { readonly status: "available"; readonly report: EngineeringFileProbeReportV1 }
+  | {
+      readonly status: "available";
+      readonly batch: "6";
+      readonly report: EngineeringFileProbeReportV1;
+    }
+  | {
+      readonly status: "available";
+      readonly batch: "7";
+      readonly report: EngineeringFileProbeReportV2;
+    }
   | {
       readonly status: "unavailable";
       readonly failureReasons: readonly EngineeringFileQualificationFailureReason[];
@@ -627,7 +813,7 @@ function sha256(value: Buffer): string {
 }
 
 const unavailableProductionProbe: EngineeringFileAccessProductionProbe = Object.freeze({
-  async probe(): Promise<EngineeringFileProbeReportV1> {
+  async probe(): Promise<EngineeringFileProbeReportV1 | EngineeringFileProbeReportV2> {
     // The release pipeline must inject the fixed Main-owned packaged probe. A static report in the
     // package is deliberately not a substitute: it is stale after one hour and is not authority.
     throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_UNAVAILABLE");

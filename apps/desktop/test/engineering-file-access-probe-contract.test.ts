@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -8,6 +9,9 @@ import { describe, expect, test } from "vitest";
 // @ts-expect-error The probe is executable JavaScript and intentionally has no desktop type surface.
 import {
   createEngineeringFileAccessPackageProbeRequest,
+  mutationV2ProbeAvailabilityFor,
+  probeEngineeringStateDurabilityAbi,
+  probeMutationV2Abi,
   probeReadOnlyAbi,
   readOnlyAvailabilityFor
 } from "../../../scripts/probe-engineering-file-access-package.mjs";
@@ -17,6 +21,60 @@ const fixturePath = fileURLToPath(
 );
 
 describe("engineering file access development probe contract", () => {
+  test("uses the same newline-delimited metadata checksum bytes in native, probe, and Main", async () => {
+    const canonical = "engineering_file_metadata_v2\nattributes=128";
+    const [nativeSource, probeSource, sessionSource] = await Promise.all([
+      readFile("native/engineering-file-access-win32/src/engineering_file_access.cc", "utf8"),
+      readFile("scripts/probe-engineering-file-access-package.mjs", "utf8"),
+      readFile("apps/desktop/src/main/engineering-file-mutation-session-v2.ts", "utf8")
+    ]);
+
+    expect(createHash("sha256").update(Buffer.from(canonical, "utf8")).digest("hex")).toBe(
+      "b0d65be91fea83453ae872b80df36ba2dea9b4410245a3680dbcde665dcf21e9"
+    );
+    expect(nativeSource).toContain('"engineering_file_metadata_v2\\nattributes="');
+    expect(nativeSource).not.toContain('"engineering_file_metadata_v2\\\\nattributes="');
+    expect(probeSource).toContain("engineering_file_metadata_v2\\nattributes=${attributes}");
+    expect(sessionSource).toContain('"engineering_file_metadata_v2\\nattributes=128"');
+  });
+
+  test("keeps B7 replace handoff handle-bound, create-only, and recovery-visible", async () => {
+    const nativeSource = await readFile(
+      "native/engineering-file-access-win32/src/engineering_file_access.cc",
+      "utf8"
+    );
+
+    expect(nativeSource).toContain("FILE_READ_DATA | FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE");
+    expect(nativeSource).toContain('return stagingLeafName("before-" + stagingId);');
+    expect(
+      nativeSource.match(
+        /renameOpenedFileCreateOnly\(targetHandle\.get\(\), parentHandle\.get\(\), recoveryLeaf\)/gu
+      )?.length
+    ).toBe(2);
+    expect(
+      nativeSource.match(
+        /renameOpenedFileCreateOnly\(stageHandle\.get\(\), parentHandle\.get\(\), leafName\)/gu
+      )?.length
+    ).toBeGreaterThanOrEqual(4);
+    expect(nativeSource).not.toContain(
+      "renameOpenedFile(stageHandle.get(), parentHandle.get(), leafName, true)"
+    );
+    expect(
+      nativeSource.match(
+        /deleteRecoveryBeforeFile\(targetHandle\.get\(\), recoveryLeaf,[\s\S]{0,240}targetHandle\.close\(\)[\s\S]{0,240}FlushFileBuffers\(parentHandle\.get\(\)\)/gu
+      )?.length
+    ).toBe(2);
+    for (const faultPath of [
+      "replace_handle_bound_target_swap_no_overwrite",
+      "replace_create_only_handoff_collision_recovery",
+      "replace_after_original_handoff_recovery",
+      "replace_before_candidate_handoff_recovery",
+      "replace_after_candidate_handoff_recovery"
+    ]) {
+      expect(nativeSource).toContain(faultPath);
+    }
+  });
+
   test("requires Main to provide absolute installed inputs and a distinct output path", () => {
     const request = createEngineeringFileAccessPackageProbeRequest({
       artifactPath: "C:\\Program Files\\Novel Studio\\engineering_file_access.node",
@@ -127,11 +185,354 @@ describe("engineering file access development probe contract", () => {
       })
     ).toThrow("must not partially advertise B6 read-only capabilities");
   });
+
+  test("requires a B7 mutation probe declaration to retain B6 product fail-closed eligibility", () => {
+    const sourceIdentitySha256 = "a".repeat(64);
+    const toolchainIdentitySha256 = "b".repeat(64);
+    const manifest = {
+      sourceIdentity: { sha256: sourceIdentitySha256 },
+      toolchain: { sha256: toolchainIdentitySha256 },
+      buildIdentity: { sha256: "c".repeat(64) },
+      developmentMutationV2Probe: {
+        schemaVersion: "1.0",
+        batch: "7",
+        sourceIdentitySha256,
+        toolchainIdentitySha256,
+        primitives: {
+          rawByteBlobs: "available",
+          absenceProof: "available",
+          absenceProofV2: "available",
+          objectMutationAbi: "available",
+          targetInspection: "available",
+          operationStateReconciliation: "available",
+          handleRelativeRevalidation: "available",
+          finalRenameNamespaceRevalidation: "available",
+          hardLinkPolicy: "reject_multiple_links",
+          copyOnReplace: "not_enabled",
+          fixedCreateMetadata: "available",
+          receiptDurability: "available",
+          stagingWalRecoveryScan: "available",
+          faultProbe: "available",
+          stateDurability: "available"
+        },
+        productCapability: "unavailable"
+      }
+    };
+    expect(mutationV2ProbeAvailabilityFor(manifest)).toBe("available");
+    expect(() =>
+      mutationV2ProbeAvailabilityFor({
+        ...manifest,
+        developmentMutationV2Probe: {
+          ...manifest.developmentMutationV2Probe,
+          primitives: {
+            ...manifest.developmentMutationV2Probe.primitives,
+            stateDurability: "unavailable"
+          }
+        }
+      })
+    ).toThrow("incomplete or unsafe");
+    expect(() =>
+      mutationV2ProbeAvailabilityFor({
+        ...manifest,
+        developmentMutationV2Probe: {
+          ...manifest.developmentMutationV2Probe,
+          productCapability: "available"
+        }
+      })
+    ).toThrow("incomplete or unsafe");
+  });
+
+  test("exercises B7 raw-byte replace/create, rejection canaries, and recovery scan on the same fixture addon", async () => {
+    const adapter = hardenedReadOnlyFixtureAdapter(
+      normalizeProbeFixture(await readFile(fixturePath, "utf8"))
+    );
+    await expect(probeMutationV2Abi(adapter)).resolves.toMatchObject({
+      status: "passed",
+      rawByteCandidateBefore: "passed",
+      absenceProof: "passed",
+      absenceProofV2: "passed",
+      objectMutationAbi: "passed",
+      targetInspection: "passed",
+      operationStateReconciliation: "passed",
+      handleRelativeRevalidation: "passed",
+      finalRenameNamespaceRevalidation: "passed",
+      handleBoundReplaceHandoff: "passed",
+      hardLinkRejection: "passed",
+      receiptDurability: "passed",
+      recoveryBeforeCleanup: "passed",
+      negativeCanaries: {
+        rawByteManifestMismatch: "canary_exposed",
+        walBindingMismatch: "canary_exposed",
+        hardLinkLeaf: "canary_exposed",
+        staleAbsenceProof: "canary_exposed",
+        v2RawByteManifestMismatch: "canary_exposed",
+        v2StaleAbsenceProof: "canary_exposed",
+        replaceFinalRenameNamespaceRevalidation: "canary_exposed",
+        targetSwapFinalWindowNoOverwrite: "canary_exposed",
+        createOnlyHandoffCollisionRecoveryRequired: "canary_exposed"
+      },
+      faultProbe: {
+        nativeExport: "passed",
+        orphanStagingRecoveryRequired: "canary_exposed",
+        replaceFinalRenameNamespaceRevalidation: "canary_exposed",
+        afterOriginalHandoffRecoveryRequired: "canary_exposed",
+        beforeCandidateHandoffRecoveryRequired: "canary_exposed",
+        afterCandidateHandoffRecoveryRequired: "canary_exposed"
+      }
+    });
+  });
+
+  test("exercises Main-only app-state no-follow durability without adding a Provider operation", async () => {
+    await expect(
+      probeEngineeringStateDurabilityAbi(stateDurabilityFixtureAdapter())
+    ).resolves.toMatchObject({
+      status: "passed",
+      noFollowDirectory: "passed",
+      exclusiveWriteAndFlush: "passed",
+      createOnlyHardLinkInstall: "passed",
+      atomicReplaceRename: "passed",
+      noFollowReadAndList: "passed",
+      unlinkAndDirectoryFlush: "passed"
+    });
+  });
 });
+
+function stateDurabilityFixtureAdapter() {
+  const files = new Map<string, Buffer>();
+  const handles = new Map<bigint, { path: string; bytes: Buffer }>();
+  let nextHandle = 1n;
+  return {
+    openEngineeringStateRoot: () => 1n,
+    closeEngineeringStateRoot: () => true,
+    ensureEngineeringStateDirectoryNoFollow: () => undefined,
+    flushEngineeringStateDirectory: () => undefined,
+    openEngineeringStateExclusiveNoFollow: (_rootId: bigint, path: string) => {
+      if (files.has(path)) throw new Error("exists");
+      const handle = nextHandle++;
+      handles.set(handle, { path, bytes: Buffer.alloc(0) });
+      return handle;
+    },
+    writeEngineeringStateFile: (handle: bigint, bytes: Uint8Array) => {
+      const current = handles.get(handle);
+      if (!current) throw new Error("closed");
+      current.bytes = Buffer.from(bytes);
+    },
+    syncEngineeringStateFile: (handle: bigint) => {
+      if (!handles.has(handle)) throw new Error("closed");
+    },
+    closeEngineeringStateFile: (handle: bigint) => {
+      const current = handles.get(handle);
+      if (!current) throw new Error("closed");
+      files.set(current.path, current.bytes);
+      handles.delete(handle);
+    },
+    readEngineeringStateFileNoFollow: (_rootId: bigint, path: string) => {
+      const current = files.get(path);
+      if (!current) throw new Error("missing");
+      return Buffer.from(current);
+    },
+    readEngineeringStateDirectoryNoFollow: (_rootId: bigint, directory: string) =>
+      [...files.keys()]
+        .filter((path) => path.startsWith(`${directory}/`))
+        .map((path) => ({ name: path.slice(directory.length + 1), kind: "file" })),
+    linkEngineeringStateFileNoFollow: (_rootId: bigint, existing: string, target: string) => {
+      const current = files.get(existing);
+      if (!current || files.has(target)) throw new Error("link failed");
+      files.set(target, Buffer.from(current));
+    },
+    renameReplaceEngineeringStateFileNoFollow: (
+      _rootId: bigint,
+      oldPath: string,
+      newPath: string
+    ) => {
+      const current = files.get(oldPath);
+      if (!current) throw new Error("missing");
+      files.set(newPath, current);
+      files.delete(oldPath);
+    },
+    unlinkEngineeringStateFileNoFollow: (_rootId: bigint, path: string) => {
+      if (!files.delete(path)) throw new Error("missing");
+    }
+  };
+}
 
 function hardenedReadOnlyFixtureAdapter(expectedFixture: string) {
   let workspaceRoot: string | undefined;
   const expectedBytes = Buffer.from(expectedFixture, "utf8");
+  let nextProofId = 1n;
+  let nextWalBindingId = 1n;
+  let recoveryRequired = false;
+  const absenceProofs = new Map<bigint, { parent: string; leaf: string }>();
+  const walBindings = new Map<
+    bigint,
+    { transactionId: string; operationId: string; stagingId: string; checksum: string }
+  >();
+  const identity = {
+    volumeIdentity: "d0c0b0a0",
+    fileIdentity: "0000000000000001"
+  };
+  const rawManifest = (bytes: Buffer) => ({
+    byteLength: BigInt(bytes.byteLength),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    encoding: "utf8",
+    bom: "none",
+    eol: "lf"
+  });
+  const sameManifest = (bytes: Buffer, manifest: ReturnType<typeof rawManifest>) =>
+    manifest.byteLength === BigInt(bytes.byteLength) &&
+    manifest.sha256 === createHash("sha256").update(bytes).digest("hex") &&
+    manifest.encoding === "utf8" &&
+    manifest.bom === "none" &&
+    manifest.eol === "lf";
+  const readWorkspaceFile = (relativePath: string) => {
+    if (!workspaceRoot) throw new Error("fixture root is closed");
+    return readFileSync(join(workspaceRoot, relativePath));
+  };
+  const walFor = (
+    rootId: bigint,
+    transactionId: string,
+    operationId: string,
+    stagingId: string,
+    walBindingId: bigint
+  ) => {
+    const binding = walBindings.get(walBindingId);
+    if (
+      rootId !== 1n ||
+      !binding ||
+      binding.transactionId !== transactionId ||
+      binding.operationId !== operationId ||
+      binding.stagingId !== stagingId
+    ) {
+      throw new Error("fixture WAL binding mismatch");
+    }
+    return binding;
+  };
+  type V2Manifest = {
+    readonly schemaVersion: "2.0";
+    readonly identity: {
+      readonly kind: "observed_file" | "target";
+      readonly rootBindingId: string;
+      readonly relativeIdentity: string;
+      readonly fileIdentity: string | null;
+    };
+    readonly sha256: string;
+    readonly byteLength: number;
+    readonly encoding: "utf-8";
+    readonly bom: "none" | "utf-8";
+    readonly eol: "none" | "lf" | "crlf" | "mixed";
+    readonly metadataChecksum: string;
+  };
+  type V2Request = {
+    readonly schemaVersion: "2.0";
+    readonly operationKind: "replace_file" | "create_file";
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly operationId: string;
+    readonly providerSemanticVersionSetChecksum: string;
+    readonly relativeIdentity: string;
+    readonly before:
+      | Readonly<{
+          readonly schemaVersion: "2.0";
+          readonly kind: "present";
+          readonly manifest: V2Manifest;
+        }>
+      | Readonly<{
+          readonly schemaVersion: "2.0";
+          readonly kind: "absent";
+          readonly absenceProof: Record<string, unknown>;
+        }>;
+    readonly candidate: Readonly<{ readonly schemaVersion: "2.0"; readonly manifest: V2Manifest }>;
+    readonly stagingObjectId: string;
+  };
+  const v2FileIdentity = "win32-file-d0c0b0a0-0000000000000001";
+  const v2ParentDirectoryIdentity = "win32-directory-d0c0b0a0-0000000000000001";
+  const stableV2 = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(stableV2).join(",")}]`;
+    if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return `{${Object.keys(record)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${stableV2(record[key])}`)
+        .join(",")}}`;
+    }
+    return JSON.stringify(value);
+  };
+  const v2Hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+  const v2MetadataChecksum = () => v2Hash("engineering_file_metadata_v2\nattributes=128");
+  const v2ByteFields = (bytes: Buffer) => {
+    const hasBom =
+      bytes.byteLength >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+    let sawLf = false;
+    let sawCrLf = false;
+    let sawBareCr = false;
+    for (let index = 0; index < bytes.byteLength; index += 1) {
+      if (bytes[index] === 0x0d) {
+        if (index + 1 < bytes.byteLength && bytes[index + 1] === 0x0a) {
+          sawCrLf = true;
+          index += 1;
+        } else {
+          sawBareCr = true;
+        }
+      } else if (bytes[index] === 0x0a) {
+        sawLf = true;
+      }
+    }
+    return {
+      sha256: v2Hash(bytes),
+      byteLength: bytes.byteLength,
+      encoding: "utf-8" as const,
+      bom: hasBom ? ("utf-8" as const) : ("none" as const),
+      eol:
+        !sawLf && !sawCrLf && !sawBareCr
+          ? ("none" as const)
+          : sawCrLf && !sawLf && !sawBareCr
+            ? ("crlf" as const)
+            : sawLf && !sawCrLf && !sawBareCr
+              ? ("lf" as const)
+              : ("mixed" as const)
+    };
+  };
+  const sameV2ByteFields = (bytes: Buffer, manifest: V2Manifest) => {
+    const actual = v2ByteFields(bytes);
+    return (
+      actual.sha256 === manifest.sha256 &&
+      actual.byteLength === manifest.byteLength &&
+      actual.encoding === manifest.encoding &&
+      actual.bom === manifest.bom &&
+      actual.eol === manifest.eol
+    );
+  };
+  const v2ReceiptFor = (request: V2Request, candidate: Buffer) => {
+    const candidateManifest = request.candidate.manifest;
+    const after: V2Manifest = {
+      schemaVersion: "2.0",
+      identity: {
+        kind: "observed_file",
+        rootBindingId: request.contentRootBindingId,
+        relativeIdentity: request.relativeIdentity,
+        fileIdentity: v2FileIdentity
+      },
+      ...v2ByteFields(candidate),
+      metadataChecksum: candidateManifest.metadataChecksum
+    };
+    const unsigned = {
+      schemaVersion: "2.0",
+      kind: "engineering_mutation_receipt",
+      transactionId: request.transactionId,
+      operationId: request.operationId,
+      operationKind: request.operationKind,
+      contentRootBindingId: request.contentRootBindingId,
+      providerSemanticVersionSetChecksum: request.providerSemanticVersionSetChecksum,
+      relativeIdentity: request.relativeIdentity,
+      requestChecksum: v2Hash(stableV2(request)),
+      observedBefore: request.before,
+      observedAfter: after,
+      stagingObjectId: request.stagingObjectId,
+      recoveryObjectId: null,
+      durability: "data_and_directory_flushed"
+    };
+    return { ...unsigned, nativeReceiptChecksum: v2Hash(stableV2(unsigned)) };
+  };
   const adapter = {
     paths: [] as string[],
     openWorkspaceRoot(root: string) {
@@ -148,11 +549,14 @@ function hardenedReadOnlyFixtureAdapter(expectedFixture: string) {
     },
     readFile(rootId: bigint, relativePath: string) {
       adapter.paths.push(relativePath);
-      if (rootId !== 1n || !workspaceRoot || relativePath !== "docs/ordinary-utf8.txt") {
+      if (
+        rootId !== 1n ||
+        !workspaceRoot ||
+        (relativePath !== "docs/ordinary-utf8.txt" && relativePath !== "docs/created-utf8.txt")
+      ) {
         throw new Error("rejected by fixture root-relative reader");
       }
       const bytes = readFileSync(join(workspaceRoot, relativePath));
-      expect(bytes.toString("utf8")).toBe(expectedFixture);
       return bytes;
     },
     listDirectory(rootId: bigint, relativePath: string) {
@@ -197,6 +601,350 @@ function hardenedReadOnlyFixtureAdapter(expectedFixture: string) {
       if (rootId !== 1n) throw new Error("rejected by fixture root closer");
       workspaceRoot = undefined;
       return true;
+    },
+    mutationV2ProbeInfo() {
+      return {
+        schemaVersion: "engineering_file_mutation_probe_v1",
+        batch: "7",
+        status: "available",
+        replace: "development_probe_only",
+        create: "development_probe_only",
+        rawByteBlobs: "available",
+        absenceProof: "available",
+        absenceProofV2: "available",
+        objectMutationAbi: "available",
+        targetInspection: "available",
+        operationStateReconciliation: "available",
+        handleRelativeRevalidation: "available",
+        finalRenameNamespaceRevalidation: "available",
+        handleBoundReplaceHandoff: "available",
+        hardLinkPolicy: "reject_multiple_links",
+        copyOnReplace: "not_enabled",
+        fixedCreateMetadata: "available",
+        receiptDurability: "available",
+        stagingWalRecoveryScan: "available",
+        stateDurability: "available",
+        productCapability: "unavailable"
+      };
+    },
+    mutationV2FaultProbe() {
+      return {
+        status: "available",
+        safety: "invalid_inputs_only_no_protection_switches",
+        faultPaths: [
+          "raw_byte_manifest_mismatch",
+          "stale_absence_proof",
+          "wal_binding_mismatch",
+          "post_stage_recovery_scan",
+          "replace_final_rename_namespace_revalidation",
+          "replace_handle_bound_target_swap_no_overwrite",
+          "replace_create_only_handoff_collision_recovery",
+          "replace_after_original_handoff_recovery",
+          "replace_before_candidate_handoff_recovery",
+          "replace_after_candidate_handoff_recovery"
+        ]
+      };
+    },
+    inspectEngineeringFileSnapshotV2(rootId: bigint, relativePath: string) {
+      if (rootId !== 1n || !workspaceRoot) throw new Error("fixture V2 target inspection rejected");
+      const target = join(workspaceRoot, relativePath);
+      const parentDirectoryIdentity = v2ParentDirectoryIdentity;
+      if (!existsSync(target)) {
+        return {
+          schemaVersion: "2.0",
+          kind: "engineering_file_mutation_target_snapshot",
+          rootId,
+          relativeIdentity: relativePath,
+          parentDirectoryIdentity,
+          state: "absent",
+          bytes: null,
+          manifest: null
+        };
+      }
+      const bytes = readFileSync(target);
+      return {
+        schemaVersion: "2.0",
+        kind: "engineering_file_mutation_target_snapshot",
+        rootId,
+        relativeIdentity: relativePath,
+        parentDirectoryIdentity,
+        state: "present",
+        bytes,
+        manifest: {
+          ...v2ByteFields(bytes),
+          fileIdentity: v2FileIdentity,
+          metadataChecksum: v2MetadataChecksum()
+        }
+      };
+    },
+    inspectEngineeringFileMutationTargetV2(
+      rootId: bigint,
+      requestValue: Record<string, unknown>,
+      before: Buffer | null,
+      candidate: Buffer
+    ) {
+      const request = requestValue as unknown as V2Request;
+      if (rootId !== 1n || !workspaceRoot || request.schemaVersion !== "2.0") {
+        throw new Error("fixture V2 recovery inspection rejected");
+      }
+      const candidateManifest = request.candidate?.manifest;
+      if (!candidateManifest || !sameV2ByteFields(candidate, candidateManifest)) {
+        throw new Error("fixture V2 recovery candidate rejected");
+      }
+      const stateFor = (state: "before" | "after" | "neither" | "unknown") => ({
+        schemaVersion: "2.0",
+        kind: "engineering_mutation_operation_state",
+        state,
+        requestChecksum: v2Hash(stableV2(request)),
+        receipt: state === "after" ? v2ReceiptFor(request, candidate) : null
+      });
+      const target = join(workspaceRoot, request.relativeIdentity);
+      if (!existsSync(target)) {
+        return request.operationKind === "create_file" &&
+          request.before.kind === "absent" &&
+          request.before.absenceProof.parentDirectoryIdentity === v2ParentDirectoryIdentity
+          ? stateFor("before")
+          : stateFor("neither");
+      }
+      const observed = readFileSync(target);
+      if (
+        request.operationKind === "replace_file" &&
+        request.before.kind === "present" &&
+        before !== null &&
+        observed.equals(before) &&
+        sameV2ByteFields(before, request.before.manifest) &&
+        request.before.manifest.metadataChecksum === v2MetadataChecksum()
+      ) {
+        return stateFor("before");
+      }
+      if (
+        observed.equals(candidate) &&
+        sameV2ByteFields(observed, candidateManifest) &&
+        candidateManifest.metadataChecksum === v2MetadataChecksum()
+      ) {
+        return stateFor("after");
+      }
+      return stateFor("neither");
+    },
+    observeCreateAbsenceV2(
+      rootId: bigint,
+      rootBindingId: string,
+      relativePath: string,
+      observedAt: string
+    ) {
+      if (rootId !== 1n || !workspaceRoot || existsSync(join(workspaceRoot, relativePath))) {
+        throw new Error("fixture V2 absence proof rejected");
+      }
+      const unsigned = {
+        schemaVersion: "2.0",
+        kind: "absence_proof",
+        rootBindingId,
+        relativeIdentity: relativePath,
+        parentDirectoryIdentity: v2ParentDirectoryIdentity,
+        observedAt
+      };
+      return { ...unsigned, absenceProofChecksum: v2Hash(stableV2(unsigned)) };
+    },
+    applyEngineeringFileMutationV2(
+      rootId: bigint,
+      requestValue: Record<string, unknown>,
+      before: Buffer | null,
+      candidate: Buffer
+    ) {
+      const request = requestValue as unknown as V2Request;
+      if (rootId !== 1n || !workspaceRoot || request.schemaVersion !== "2.0") {
+        throw new Error("fixture V2 mutation request rejected");
+      }
+      const target = join(workspaceRoot, request.relativeIdentity);
+      const candidateManifest = request.candidate?.manifest;
+      if (
+        !candidateManifest ||
+        !sameV2ByteFields(candidate, candidateManifest) ||
+        candidateManifest.metadataChecksum !== v2MetadataChecksum()
+      ) {
+        throw new Error("fixture V2 candidate precondition rejected");
+      }
+      if (request.operationKind === "replace_file") {
+        if (
+          before === null ||
+          request.before.kind !== "present" ||
+          !existsSync(target) ||
+          !readFileSync(target).equals(before) ||
+          !sameV2ByteFields(before, request.before.manifest) ||
+          request.before.manifest.metadataChecksum !== v2MetadataChecksum()
+        ) {
+          throw new Error("fixture V2 replace precondition rejected");
+        }
+      } else if (
+        request.operationKind !== "create_file" ||
+        before !== null ||
+        request.before.kind !== "absent" ||
+        existsSync(target)
+      ) {
+        throw new Error("fixture V2 create precondition rejected");
+      }
+      writeFileSync(target, candidate);
+      const after: V2Manifest = {
+        schemaVersion: "2.0",
+        identity: {
+          kind: "observed_file",
+          rootBindingId: request.contentRootBindingId,
+          relativeIdentity: request.relativeIdentity,
+          fileIdentity: v2FileIdentity
+        },
+        ...v2ByteFields(candidate),
+        metadataChecksum: candidateManifest.metadataChecksum
+      };
+      const unsigned = {
+        schemaVersion: "2.0",
+        kind: "engineering_mutation_receipt",
+        transactionId: request.transactionId,
+        operationId: request.operationId,
+        operationKind: request.operationKind,
+        contentRootBindingId: request.contentRootBindingId,
+        providerSemanticVersionSetChecksum: request.providerSemanticVersionSetChecksum,
+        relativeIdentity: request.relativeIdentity,
+        requestChecksum: v2Hash(stableV2(request)),
+        observedBefore: request.before,
+        observedAfter: after,
+        stagingObjectId: request.stagingObjectId,
+        recoveryObjectId: null,
+        durability: "data_and_directory_flushed"
+      };
+      return { ...unsigned, nativeReceiptChecksum: v2Hash(stableV2(unsigned)) };
+    },
+    prepareMutationWalV2(
+      rootId: bigint,
+      transactionId: string,
+      operationId: string,
+      stagingId: string,
+      version: string
+    ) {
+      if (rootId !== 1n || version !== "2.0") throw new Error("fixture WAL precondition failed");
+      const walBindingId = nextWalBindingId++;
+      const checksum = createHash("sha256")
+        .update(`${rootId}\n${transactionId}\n${operationId}\n${stagingId}`)
+        .digest("hex");
+      walBindings.set(walBindingId, { transactionId, operationId, stagingId, checksum });
+      return {
+        walBindingId,
+        bindingChecksum: checksum,
+        protocol: "v2_preallocated_binding",
+        durabilityRequirement: "caller_must_durable_flush_before_apply"
+      };
+    },
+    observeCreateAbsence(rootId: bigint, parent: string, leaf: string) {
+      if (rootId !== 1n || !workspaceRoot || existsSync(join(workspaceRoot, parent, leaf))) {
+        throw new Error("fixture absence proof rejected");
+      }
+      const proofId = nextProofId++;
+      absenceProofs.set(proofId, { parent, leaf });
+      return { proofId, state: "absent", parentIdentity: identity };
+    },
+    replaceFileV2(
+      rootId: bigint,
+      relativePath: string,
+      transactionId: string,
+      operationId: string,
+      stagingId: string,
+      walBindingId: bigint,
+      before: Buffer,
+      beforeManifest: ReturnType<typeof rawManifest>,
+      candidate: Buffer,
+      candidateManifest: ReturnType<typeof rawManifest>
+    ) {
+      const binding = walFor(rootId, transactionId, operationId, stagingId, walBindingId);
+      const actual = readWorkspaceFile(relativePath);
+      if (
+        !sameManifest(before, beforeManifest) ||
+        !sameManifest(candidate, candidateManifest) ||
+        !actual.equals(before) ||
+        statSync(join(workspaceRoot ?? "", relativePath)).nlink !== 1
+      ) {
+        throw new Error("fixture replace precondition rejected");
+      }
+      writeFileSync(join(workspaceRoot ?? "", relativePath), candidate);
+      walBindings.delete(walBindingId);
+      return {
+        schemaVersion: "engineering_file_mutation_receipt_v1",
+        operation: "replace",
+        rootId,
+        transactionId,
+        operationId,
+        walBindingChecksum: binding.checksum,
+        before: rawManifest(before),
+        after: rawManifest(candidate),
+        beforeIdentity: identity,
+        afterIdentity: identity,
+        rootIdentity: identity,
+        durability: "data_and_directory_flushed",
+        metadataPolicy: "qualified_basic_metadata",
+        writeStrategy: "same_directory_staging_rename",
+        hardLinkPolicy: "reject_multiple_links"
+      };
+    },
+    createFileV2(
+      rootId: bigint,
+      parent: string,
+      leaf: string,
+      proofId: bigint,
+      transactionId: string,
+      operationId: string,
+      stagingId: string,
+      walBindingId: bigint,
+      candidate: Buffer,
+      candidateManifest: ReturnType<typeof rawManifest>
+    ) {
+      const binding = walFor(rootId, transactionId, operationId, stagingId, walBindingId);
+      const proof = absenceProofs.get(proofId);
+      const target = join(workspaceRoot ?? "", parent, leaf);
+      if (
+        !proof ||
+        proof.parent !== parent ||
+        proof.leaf !== leaf ||
+        !sameManifest(candidate, candidateManifest) ||
+        existsSync(target)
+      ) {
+        recoveryRequired = recoveryRequired || existsSync(target);
+        throw new Error("fixture create precondition rejected");
+      }
+      absenceProofs.delete(proofId);
+      writeFileSync(target, candidate);
+      walBindings.delete(walBindingId);
+      return {
+        schemaVersion: "engineering_file_mutation_receipt_v1",
+        operation: "create",
+        rootId,
+        transactionId,
+        operationId,
+        walBindingChecksum: binding.checksum,
+        before: null,
+        after: rawManifest(candidate),
+        beforeIdentity: null,
+        afterIdentity: identity,
+        rootIdentity: identity,
+        durability: "data_and_directory_flushed",
+        metadataPolicy: "fixed_windows_metadata",
+        writeStrategy: "same_directory_staging_rename",
+        hardLinkPolicy: "reject_multiple_links"
+      };
+    },
+    scanMutationRecovery(rootId: bigint) {
+      if (rootId !== 1n || !workspaceRoot) throw new Error("fixture recovery root rejected");
+      const stagingCount = [
+        ".novel-studio-stage-probe-orphan",
+        ".novel-studio-stage-probe-after-original-handoff",
+        ".novel-studio-stage-probe-before-candidate-handoff",
+        ".novel-studio-stage-probe-after-candidate-handoff"
+      ].filter((name) => existsSync(join(workspaceRoot, "docs", name))).length;
+      return {
+        state: recoveryRequired || stagingCount !== 0 ? "recovery_required" : "clear",
+        pendingStagingCount: BigInt(stagingCount),
+        inProcessPendingWalCount: 0n,
+        scanTruncated: false,
+        scanScope: "native_staging_and_in_process_wal_only",
+        durableWalRequirement: "external_durable_wal_scan_required"
+      };
     }
   };
   return adapter;

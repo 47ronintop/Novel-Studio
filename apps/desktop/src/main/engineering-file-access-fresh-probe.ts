@@ -6,12 +6,16 @@ import { isAbsolute, join } from "node:path";
 
 import {
   ENGINEERING_FILE_NATIVE_ADAPTER_ID,
+  ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS,
+  ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS,
+  ENGINEERING_FILE_BATCH_7_PROBE_CONTRACT_VERSION,
   ENGINEERING_FILE_NEGATIVE_CONTROLS,
   ENGINEERING_FILE_POSITIVE_PROTECTIONS,
   ENGINEERING_FILE_PROBE_CONTRACT_VERSION,
   ENGINEERING_FILE_PROBE_MAX_LIFETIME_MS,
   engineeringFileProbeReportChecksum,
-  type EngineeringFileProbeReportV1
+  type EngineeringFileProbeReportV1,
+  type EngineeringFileProbeReportV2
 } from "@novel-studio/agent-engine";
 
 const loadInstalledAddon = createRequire(import.meta.url);
@@ -34,12 +38,29 @@ export interface EngineeringFileProtectionEvidence {
   >;
 }
 
+export interface EngineeringFileBatch7MutationRecoveryEvidence {
+  readonly positiveProtections: Readonly<
+    Record<
+      (typeof ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS)[number],
+      "passed"
+    >
+  >;
+  readonly negativeControls: Readonly<
+    Record<
+      (typeof ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS)[number],
+      "canary_exposed"
+    >
+  >;
+}
+
 export interface EngineeringFileAccessFreshProbe {
   /**
    * Main composition supplies only the exact installed artifact set it has already authenticated.
    * This observation has no capability-granting authority.
    */
-  probe(input: EngineeringFileAccessFreshProbeInput): Promise<EngineeringFileProbeReportV1>;
+  probe(
+    input: EngineeringFileAccessFreshProbeInput
+  ): Promise<EngineeringFileProbeReportV1 | EngineeringFileProbeReportV2>;
 }
 
 export interface EngineeringFileAccessFreshProbeInput {
@@ -49,6 +70,7 @@ export interface EngineeringFileAccessFreshProbeInput {
   readonly checkedAt: string;
   readonly publisherPolicyChecksum: string;
   readonly protectionEvidence: EngineeringFileProtectionEvidence;
+  readonly mutationRecoveryEvidence?: EngineeringFileBatch7MutationRecoveryEvidence;
 }
 
 interface EngineeringFileAccessAddon {
@@ -59,6 +81,9 @@ interface EngineeringFileAccessAddon {
   readonly listDirectory?: (rootId: bigint, relativePath: string) => unknown;
   readonly buildIndex?: (rootId: bigint) => unknown;
   readonly searchText?: (rootId: bigint, query: string) => unknown;
+  readonly mutationV2ProbeInfo?: () => unknown;
+  readonly scanMutationRecovery?: (rootId: bigint) => unknown;
+  readonly mutationV2FaultProbe?: () => unknown;
 }
 
 /**
@@ -73,7 +98,7 @@ export function createMainOwnedEngineeringFileAccessFreshProbe(options?: {
   return Object.freeze({
     async probe(
       input: EngineeringFileAccessFreshProbeInput
-    ): Promise<EngineeringFileProbeReportV1> {
+    ): Promise<EngineeringFileProbeReportV1 | EngineeringFileProbeReportV2> {
       assertProbeInput(input);
       const [artifact, manifestBytes, signature] = await Promise.all([
         readRegularFile(input.artifactPath, "artifactPath"),
@@ -89,13 +114,17 @@ export function createMainOwnedEngineeringFileAccessFreshProbe(options?: {
         manifest.adapterId !== ENGINEERING_FILE_NATIVE_ADAPTER_ID ||
         manifest.target !== "win32-x64" ||
         manifest.artifactSha256 !== artifactSha256 ||
-        manifest.publisherPolicyChecksum !== input.publisherPolicyChecksum
+        manifest.publisherPolicyChecksum !== input.publisherPolicyChecksum ||
+        (manifest.batch !== "6" && manifest.batch !== "7")
       ) {
         throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_DIGEST_MISMATCH");
       }
+      if (manifest.batch === "7" && input.mutationRecoveryEvidence === undefined) {
+        throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_MISSING_BATCH_7_EVIDENCE");
+      }
 
       const addon = loadAddon(input.artifactPath) as EngineeringFileAccessAddon;
-      await probeInstalledAddon(addon);
+      await probeInstalledAddon(addon, manifest.batch);
       await assertArtifactSetUnchanged(input, {
         artifactSha256,
         artifactManifestSha256,
@@ -106,8 +135,7 @@ export function createMainOwnedEngineeringFileAccessFreshProbe(options?: {
       const expiresAt = new Date(
         Date.parse(generatedAt) + ENGINEERING_FILE_PROBE_MAX_LIFETIME_MS
       ).toISOString();
-      const unsigned = {
-        schemaVersion: ENGINEERING_FILE_PROBE_CONTRACT_VERSION,
+      const common = {
         adapterId: ENGINEERING_FILE_NATIVE_ADAPTER_ID,
         target: "win32-x64" as const,
         packageKind: "production" as const,
@@ -124,6 +152,25 @@ export function createMainOwnedEngineeringFileAccessFreshProbe(options?: {
         positiveProtections: Object.freeze({ ...input.protectionEvidence.positiveProtections }),
         negativeControls: Object.freeze({ ...input.protectionEvidence.negativeControls })
       };
+      const unsigned =
+        manifest.batch === "7" && input.mutationRecoveryEvidence !== undefined
+          ? {
+              ...common,
+              schemaVersion: ENGINEERING_FILE_BATCH_7_PROBE_CONTRACT_VERSION,
+              batch: "7" as const,
+              mutationRecoveryEvidence: Object.freeze({
+                positiveProtections: Object.freeze({
+                  ...input.mutationRecoveryEvidence.positiveProtections
+                }),
+                negativeControls: Object.freeze({
+                  ...input.mutationRecoveryEvidence.negativeControls
+                })
+              })
+            }
+          : {
+              ...common,
+              schemaVersion: ENGINEERING_FILE_PROBE_CONTRACT_VERSION
+            };
       return Object.freeze({
         ...unsigned,
         reportChecksum: engineeringFileProbeReportChecksum(unsigned)
@@ -161,6 +208,21 @@ function assertProbeInput(input: EngineeringFileAccessFreshProbeInput): void {
   ) {
     throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_INVALID_PROTECTION_EVIDENCE");
   }
+  if (
+    input.mutationRecoveryEvidence !== undefined &&
+    (!hasExactMap(
+      input.mutationRecoveryEvidence.positiveProtections,
+      ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS,
+      "passed"
+    ) ||
+      !hasExactMap(
+        input.mutationRecoveryEvidence.negativeControls,
+        ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS,
+        "canary_exposed"
+      ))
+  ) {
+    throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_INVALID_BATCH_7_EVIDENCE");
+  }
 }
 
 async function readRegularFile(path: string, label: string): Promise<Buffer> {
@@ -196,6 +258,7 @@ function parseManifest(bytes: Buffer): {
   readonly target: unknown;
   readonly artifactSha256: unknown;
   readonly publisherPolicyChecksum: unknown;
+  readonly batch: unknown;
 } {
   let value: unknown;
   try {
@@ -215,12 +278,21 @@ function parseManifest(bytes: Buffer): {
       artifact !== null && typeof artifact === "object" && !Array.isArray(artifact)
         ? (artifact as Record<string, unknown>)["sha256"]
         : undefined,
-    publisherPolicyChecksum: manifest["publisherPolicyChecksum"]
+    publisherPolicyChecksum: manifest["publisherPolicyChecksum"],
+    batch:
+      manifest["eligibility"] !== null &&
+      typeof manifest["eligibility"] === "object" &&
+      !Array.isArray(manifest["eligibility"])
+        ? (manifest["eligibility"] as Record<string, unknown>)["batch"]
+        : undefined
   };
 }
 
-async function probeInstalledAddon(addon: EngineeringFileAccessAddon): Promise<void> {
-  assertAddon(addon);
+async function probeInstalledAddon(
+  addon: EngineeringFileAccessAddon,
+  batch: "6" | "7"
+): Promise<void> {
+  assertAddon(addon, batch);
   const fixtureParent = await mkdtemp(join(tmpdir(), "engineering-file-access-fresh-probe-"));
   const fixtureRoot = join(fixtureParent, "workspace");
   let rootId: bigint | undefined;
@@ -248,6 +320,7 @@ async function probeInstalledAddon(addon: EngineeringFileAccessAddon): Promise<v
     assertListedFixture(addon.listDirectory(rootId, "docs"), byteLength);
     assertIndexedFixture(addon.buildIndex(rootId), byteLength);
     assertSearchedFixture(addon.searchText(rootId, searchNeedle), bytes);
+    if (batch === "7") assertBatch7InstalledProbeSurface(addon, rootId);
     for (const path of traversalCanaries) {
       await assertReadRejected(addon.readFile, rootId, path);
     }
@@ -258,8 +331,21 @@ async function probeInstalledAddon(addon: EngineeringFileAccessAddon): Promise<v
 }
 
 function assertAddon(
-  addon: EngineeringFileAccessAddon
-): asserts addon is Required<EngineeringFileAccessAddon> {
+  addon: EngineeringFileAccessAddon,
+  batch: "6" | "7"
+): asserts addon is Required<
+  Pick<
+    EngineeringFileAccessAddon,
+    | "adapterInfo"
+    | "openWorkspaceRoot"
+    | "closeWorkspaceRoot"
+    | "readFile"
+    | "listDirectory"
+    | "buildIndex"
+    | "searchText"
+  > &
+    EngineeringFileAccessAddon
+> {
   if (
     !addon ||
     typeof addon.adapterInfo !== "function" ||
@@ -277,12 +363,39 @@ function assertAddon(
     info === null ||
     typeof info !== "object" ||
     (info as Record<string, unknown>)["target"] !== "win32-x64" ||
-    (info as Record<string, unknown>)["batch"] !== "6" ||
+    (info as Record<string, unknown>)["batch"] !== batch ||
     (info as Record<string, unknown>)["accessEligible"] !== "available" ||
-    (info as Record<string, unknown>)["mutation"] !== "unavailable" ||
-    (info as Record<string, unknown>)["recovery"] !== "unavailable"
+    (info as Record<string, unknown>)["mutation"] !==
+      (batch === "7" ? "available" : "unavailable") ||
+    (info as Record<string, unknown>)["recovery"] !== (batch === "7" ? "available" : "unavailable")
   ) {
     throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_INVALID_ADDON");
+  }
+}
+
+function assertBatch7InstalledProbeSurface(
+  addon: EngineeringFileAccessAddon,
+  rootId: bigint
+): void {
+  if (
+    typeof addon.mutationV2ProbeInfo !== "function" ||
+    typeof addon.scanMutationRecovery !== "function" ||
+    typeof addon.mutationV2FaultProbe !== "function"
+  ) {
+    throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_BATCH_7_SURFACE_UNAVAILABLE");
+  }
+  const info = addon.mutationV2ProbeInfo();
+  const recovery = addon.scanMutationRecovery(rootId);
+  const fault = addon.mutationV2FaultProbe();
+  if (
+    !isRecord(info) ||
+    info["status"] !== "available" ||
+    !isRecord(recovery) ||
+    recovery["state"] !== "clear" ||
+    !isRecord(fault) ||
+    fault["status"] !== "available"
+  ) {
+    throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_BATCH_7_SURFACE_INVALID");
   }
 }
 
@@ -375,6 +488,10 @@ function hasExactMap(
     Object.keys(value).length === keys.length &&
     keys.every((key) => (value as Record<string, unknown>)[key] === expected)
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isCanonicalUtcTimestamp(value: string): boolean {

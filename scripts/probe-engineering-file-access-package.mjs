@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -32,6 +32,23 @@ const controls = [
   "recoveryRootBindingDisabled"
 ];
 const readOnlyCapabilities = ["root", "access", "read", "index"];
+const mutationV2Primitives = [
+  "rawByteBlobs",
+  "absenceProof",
+  "absenceProofV2",
+  "objectMutationAbi",
+  "targetInspection",
+  "operationStateReconciliation",
+  "handleRelativeRevalidation",
+  "finalRenameNamespaceRevalidation",
+  "hardLinkPolicy",
+  "copyOnReplace",
+  "fixedCreateMetadata",
+  "receiptDurability",
+  "stagingWalRecoveryScan",
+  "faultProbe",
+  "stateDurability"
+];
 const ordinaryRelativePath = "docs/ordinary-utf8.txt";
 const ordinaryUtf8Text =
   "B6 ordinary UTF-8 fixture: 你好, café, 😀\nneedle: deterministic-search\n";
@@ -64,6 +81,8 @@ const traversalPaths = [
  * @property {string | null} artifactManifestSignatureSha256
  * @property {"available" | "unavailable"} readOnlyAvailability
  * @property {object} developmentProbe
+ * @property {object | undefined} mutationV2Probe
+ * @property {object | undefined} stateDurabilityProbe
  * @property {object | undefined} protectionEvidence
  * @property {object} report
  */
@@ -78,7 +97,9 @@ async function main() {
       productionQualified: false,
       reason: result.report.reason,
       packageKind: result.packageKind,
-      readOnlyAvailability: result.readOnlyAvailability
+      readOnlyAvailability: result.readOnlyAvailability,
+      mutationV2Probe: result.mutationV2Probe?.status ?? "not_run",
+      stateDurabilityProbe: result.stateDurabilityProbe?.status ?? "not_run"
     })
   );
 }
@@ -125,21 +146,37 @@ export async function runEngineeringFileAccessPackageProbe(input) {
   const addon = require(request.artifactPath);
   const readOnlyAvailability = readOnlyAvailabilityFor(manifest);
   assertAdapterInfo(addon.adapterInfo?.(), readOnlyAvailability);
+  const mutationV2Availability = mutationV2ProbeAvailabilityFor(manifest);
 
   if (request.packageKind === "development") {
-    assertUnsignedDevelopmentArtifact(manifest, signaturePresent, readOnlyAvailability);
+    assertUnsignedDevelopmentArtifact(
+      manifest,
+      signaturePresent,
+      readOnlyAvailability,
+      mutationV2Availability
+    );
     const developmentProbe =
       readOnlyAvailability === "available"
         ? await probeReadOnlyAbi(addon)
         : { status: "unavailable", reason: "manifest_read_only_capabilities_unavailable" };
+    const mutationV2Probe =
+      mutationV2Availability === "available"
+        ? await probeMutationV2Abi(addon)
+        : { status: "unavailable", reason: "manifest_mutation_v2_probe_unavailable" };
+    const stateDurabilityProbe = await probeEngineeringStateDurabilityAbi(addon);
     const report = {
-      schemaVersion: "development-1.1",
+      schemaVersion: "development-1.2",
       adapterId: manifest.adapterId,
       target: manifest.target,
       packageKind: "development",
       productionQualified: false,
       capabilities: developmentCapabilities(readOnlyAvailability),
       developmentProbe,
+      mutationV2Probe,
+      stateDurabilityProbe,
+      sourceIdentitySha256: manifest.sourceIdentity?.sha256,
+      toolchainIdentitySha256: manifest.toolchain?.sha256,
+      buildIdentitySha256: manifest.buildIdentity?.sha256,
       reason: "unsigned_development_artifact",
       artifactSha256: addonSha,
       artifactManifestSha256: manifestSha,
@@ -154,6 +191,8 @@ export async function runEngineeringFileAccessPackageProbe(input) {
       artifactManifestSignatureSha256: signatureSha,
       readOnlyAvailability,
       developmentProbe,
+      mutationV2Probe,
+      stateDurabilityProbe,
       protectionEvidence: undefined,
       report
     });
@@ -205,6 +244,8 @@ export async function runEngineeringFileAccessPackageProbe(input) {
     artifactManifestSignatureSha256: signatureSha,
     readOnlyAvailability,
     developmentProbe,
+    mutationV2Probe: undefined,
+    stateDurabilityProbe: undefined,
     protectionEvidence: evidence,
     report
   });
@@ -297,6 +338,40 @@ export function readOnlyAvailabilityFor(manifest) {
   if (values.every((value) => value === "available")) return "available";
   if (values.every((value) => value === "unavailable")) return "unavailable";
   throw new Error("native manifest must not partially advertise B6 read-only capabilities");
+}
+
+export function mutationV2ProbeAvailabilityFor(manifest) {
+  const declaration = manifest?.developmentMutationV2Probe;
+  if (declaration === undefined) return "unavailable";
+  if (!declaration || typeof declaration !== "object" || Array.isArray(declaration)) {
+    throw new Error("native manifest Batch 7 mutation probe declaration must be an object");
+  }
+  if (declaration.schemaVersion !== "1.0" || declaration.batch !== "7") {
+    throw new Error(
+      "native manifest Batch 7 mutation probe declaration has an unsupported version"
+    );
+  }
+  if (
+    declaration.productCapability !== "unavailable" ||
+    !/^[a-f0-9]{64}$/u.test(declaration.sourceIdentitySha256 ?? "") ||
+    !/^[a-f0-9]{64}$/u.test(declaration.toolchainIdentitySha256 ?? "") ||
+    !hasExactMap(declaration.primitives, mutationV2Primitives, "available", {
+      hardLinkPolicy: "reject_multiple_links",
+      copyOnReplace: "not_enabled"
+    })
+  ) {
+    throw new Error("native manifest Batch 7 mutation probe declaration is incomplete or unsafe");
+  }
+  if (
+    manifest.sourceIdentity?.sha256 !== declaration.sourceIdentitySha256 ||
+    manifest.toolchain?.sha256 !== declaration.toolchainIdentitySha256 ||
+    !/^[a-f0-9]{64}$/u.test(manifest.buildIdentity?.sha256 ?? "")
+  ) {
+    throw new Error(
+      "native manifest Batch 7 source or toolchain identity does not match the build identity"
+    );
+  }
+  return "available";
 }
 
 export async function probeReadOnlyAbi(addon) {
@@ -400,6 +475,559 @@ export async function probeReadOnlyAbi(addon) {
   }
 }
 
+/**
+ * Exercises the Main-only app-state durability ABI. This intentionally uses a separate temporary
+ * state root and never makes that root available to the workspace or Provider probe surface.
+ */
+export async function probeEngineeringStateDurabilityAbi(addon) {
+  for (const name of [
+    "openEngineeringStateRoot",
+    "closeEngineeringStateRoot",
+    "ensureEngineeringStateDirectoryNoFollow",
+    "flushEngineeringStateDirectory",
+    "openEngineeringStateExclusiveNoFollow",
+    "writeEngineeringStateFile",
+    "syncEngineeringStateFile",
+    "closeEngineeringStateFile",
+    "readEngineeringStateFileNoFollow",
+    "readEngineeringStateDirectoryNoFollow",
+    "linkEngineeringStateFileNoFollow",
+    "renameReplaceEngineeringStateFileNoFollow",
+    "unlinkEngineeringStateFileNoFollow"
+  ]) {
+    if (typeof addon?.[name] !== "function") {
+      throw new Error(`Engineering state durability ABI must expose ${name}`);
+    }
+  }
+  const stateRoot = await mkdtemp(join(tmpdir(), "engineering-state-durability-probe-"));
+  let stateRootId;
+  try {
+    stateRootId = addon.openEngineeringStateRoot(stateRoot);
+    if (typeof stateRootId !== "bigint")
+      throw new Error("state root did not return an opaque bigint handle");
+    const directory = "engineering-v2/state";
+    const temporary = `${directory}/record.tmp`;
+    const created = `${directory}/record.created`;
+    const target = `${directory}/record.json`;
+    const first = Buffer.from("durable-first\n", "utf8");
+    const second = Buffer.from("durable-second\n", "utf8");
+
+    addon.ensureEngineeringStateDirectoryNoFollow(stateRootId, directory);
+    addon.flushEngineeringStateDirectory(stateRootId, directory);
+    const firstFile = addon.openEngineeringStateExclusiveNoFollow(stateRootId, temporary);
+    addon.writeEngineeringStateFile(firstFile, first);
+    addon.syncEngineeringStateFile(firstFile);
+    addon.closeEngineeringStateFile(firstFile);
+    addon.linkEngineeringStateFileNoFollow(stateRootId, temporary, created);
+    addon.unlinkEngineeringStateFileNoFollow(stateRootId, temporary);
+    addon.flushEngineeringStateDirectory(stateRootId, directory);
+    assertExactNativeBytes(
+      addon.readEngineeringStateFileNoFollow(stateRootId, created),
+      first,
+      "state create-only install"
+    );
+
+    const replacement = addon.openEngineeringStateExclusiveNoFollow(stateRootId, temporary);
+    addon.writeEngineeringStateFile(replacement, second);
+    addon.syncEngineeringStateFile(replacement);
+    addon.closeEngineeringStateFile(replacement);
+    addon.renameReplaceEngineeringStateFileNoFollow(stateRootId, temporary, target);
+    addon.flushEngineeringStateDirectory(stateRootId, directory);
+    assertExactNativeBytes(
+      addon.readEngineeringStateFileNoFollow(stateRootId, target),
+      second,
+      "state replace install"
+    );
+    const entries = addon.readEngineeringStateDirectoryNoFollow(stateRootId, directory);
+    if (
+      !Array.isArray(entries) ||
+      !entries.some((entry) => entry?.name === "record.created" && entry.kind === "file") ||
+      !entries.some((entry) => entry?.name === "record.json" && entry.kind === "file")
+    ) {
+      throw new Error("state durability directory listing did not return installed regular files");
+    }
+    addon.unlinkEngineeringStateFileNoFollow(stateRootId, created);
+    addon.unlinkEngineeringStateFileNoFollow(stateRootId, target);
+    addon.flushEngineeringStateDirectory(stateRootId, directory);
+    return {
+      status: "passed",
+      noFollowDirectory: "passed",
+      exclusiveWriteAndFlush: "passed",
+      createOnlyHardLinkInstall: "passed",
+      atomicReplaceRename: "passed",
+      noFollowReadAndList: "passed",
+      unlinkAndDirectoryFlush: "passed"
+    };
+  } finally {
+    if (typeof stateRootId === "bigint")
+      await Promise.resolve(addon.closeEngineeringStateRoot(stateRootId));
+    await rm(stateRoot, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+/**
+ * Runs the B7 native primitive probe on the same loaded addon and root-handle session as B6.
+ * It is diagnostic evidence for CI only: an unsigned development manifest continues to advertise
+ * product mutation and recovery as unavailable until Main accepts signed qualification evidence.
+ */
+export async function probeMutationV2Abi(addon) {
+  for (const name of [
+    "mutationV2ProbeInfo",
+    "inspectEngineeringFileSnapshotV2",
+    "inspectEngineeringFileMutationTargetV2",
+    "observeCreateAbsenceV2",
+    "applyEngineeringFileMutationV2",
+    "prepareMutationWalV2",
+    "observeCreateAbsence",
+    "replaceFileV2",
+    "createFileV2",
+    "scanMutationRecovery",
+    "mutationV2FaultProbe"
+  ]) {
+    if (typeof addon?.[name] !== "function") {
+      throw new Error(`available Batch 7 native probe must expose ${name}`);
+    }
+  }
+  assertMutationV2ProbeInfo(addon.mutationV2ProbeInfo());
+  assertMutationV2FaultProbe(addon.mutationV2FaultProbe());
+
+  const fixtureParent = await mkdtemp(join(tmpdir(), "engineering-file-mutation-v2-probe-"));
+  const workspace = join(fixtureParent, "workspace");
+  const docs = join(workspace, "docs");
+  const hardLinkPath = join(docs, "hard-link.txt");
+  const stalePath = join(docs, "stale-create.txt");
+  const stagedFaultPath = join(docs, ".novel-studio-stage-probe-orphan");
+  const handoffFaultPaths = [
+    join(docs, ".novel-studio-stage-probe-after-original-handoff"),
+    join(docs, ".novel-studio-stage-probe-before-candidate-handoff"),
+    join(docs, ".novel-studio-stage-probe-after-candidate-handoff")
+  ];
+  let openedRoot;
+  try {
+    await mkdir(docs, { recursive: true });
+    const before = Buffer.from("B7 before bytes: \u4f60\u597d, caf\u00e9, \ud83d\ude00\n", "utf8");
+    const candidate = Buffer.from(
+      "B7 candidate bytes: \u4f60\u597d, caf\u00e9, \ud83d\ude00\n",
+      "utf8"
+    );
+    const created = Buffer.from(
+      "B7 created bytes: \u4f60\u597d, caf\u00e9, \ud83d\ude00\n",
+      "utf8"
+    );
+    await writeFile(join(workspace, ordinaryRelativePath), before, { flush: true });
+    openedRoot = addon.openWorkspaceRoot(workspace);
+    if (!openedRoot || typeof openedRoot.rootId !== "bigint") {
+      throw new Error("Batch 7 native probe could not obtain the existing B6 root-handle session");
+    }
+    const rootId = openedRoot.rootId;
+    const initialRecovery = addon.scanMutationRecovery(rootId);
+    assertRecoveryScan(initialRecovery, "clear");
+
+    const replaceWal = addon.prepareMutationWalV2(
+      rootId,
+      "tx-replace-v2",
+      "op-replace-v2",
+      "stage-replace-v2",
+      "2.0"
+    );
+    assertWalBinding(replaceWal);
+    const replaceReceipt = addon.replaceFileV2(
+      rootId,
+      ordinaryRelativePath,
+      "tx-replace-v2",
+      "op-replace-v2",
+      "stage-replace-v2",
+      replaceWal.walBindingId,
+      before,
+      rawByteManifest(before),
+      candidate,
+      rawByteManifest(candidate)
+    );
+    assertMutationReceipt(replaceReceipt, {
+      operation: "replace",
+      transactionId: "tx-replace-v2",
+      operationId: "op-replace-v2",
+      before,
+      after: candidate,
+      metadataPolicy: "qualified_basic_metadata"
+    });
+    assertExactNativeBytes(addon.readFile(rootId, ordinaryRelativePath), candidate, "replace");
+    assertRecoveryScan(addon.scanMutationRecovery(rootId), "clear");
+
+    const absence = addon.observeCreateAbsence(rootId, "docs", "created-utf8.txt");
+    if (!absence || absence.state !== "absent" || typeof absence.proofId !== "bigint") {
+      throw new Error("Batch 7 create did not issue a native in-memory absence proof");
+    }
+    const createWal = addon.prepareMutationWalV2(
+      rootId,
+      "tx-create-v2",
+      "op-create-v2",
+      "stage-create-v2",
+      "2.0"
+    );
+    const createReceipt = addon.createFileV2(
+      rootId,
+      "docs",
+      "created-utf8.txt",
+      absence.proofId,
+      "tx-create-v2",
+      "op-create-v2",
+      "stage-create-v2",
+      createWal.walBindingId,
+      created,
+      rawByteManifest(created)
+    );
+    assertMutationReceipt(createReceipt, {
+      operation: "create",
+      transactionId: "tx-create-v2",
+      operationId: "op-create-v2",
+      before: null,
+      after: created,
+      metadataPolicy: "fixed_windows_metadata"
+    });
+    assertExactNativeBytes(addon.readFile(rootId, "docs/created-utf8.txt"), created, "create");
+
+    const objectRootBindingId = "root:probe-v2";
+    const objectRelativePath = "docs/object-mutation-v2.txt";
+    const objectCreateRelativePath = "docs/object-created-v2.txt";
+    const objectStaleRelativePath = "docs/object-stale-v2.txt";
+    const objectBefore = Buffer.from("B7 V2 before bytes: 你好\r\n", "utf8");
+    const objectCandidate = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from("B7 V2 candidate\u0000bytes: café\r\n", "utf8")
+    ]);
+    const objectCreated = Buffer.from("B7 V2 created bytes: 😀\n", "utf8");
+    await writeFile(join(workspace, objectRelativePath), objectBefore, { flush: true });
+    const objectSnapshot = addon.inspectEngineeringFileSnapshotV2(rootId, objectRelativePath);
+    const objectBeforeManifest = assertV2PresentTargetSnapshot(
+      objectSnapshot,
+      rootId,
+      objectRootBindingId,
+      objectRelativePath,
+      objectBefore
+    );
+    const objectCandidateManifest = createV2TargetManifest(
+      objectRootBindingId,
+      objectRelativePath,
+      objectCandidate,
+      objectBeforeManifest.metadataChecksum
+    );
+    const objectReplaceRequest = createV2ReplaceRequest({
+      rootBindingId: objectRootBindingId,
+      relativeIdentity: objectRelativePath,
+      transactionId: "tx:object-v2",
+      operationId: "op/object-v2",
+      stagingObjectId: "stage:object-v2",
+      beforeManifest: objectBeforeManifest,
+      candidateManifest: objectCandidateManifest
+    });
+    assertV2MutationOperationState(
+      addon.inspectEngineeringFileMutationTargetV2(
+        rootId,
+        objectReplaceRequest,
+        objectBefore,
+        objectCandidate
+      ),
+      objectReplaceRequest,
+      "before",
+      objectCandidateManifest
+    );
+    await expectMutationFailure(
+      () =>
+        addon.applyEngineeringFileMutationV2(
+          rootId,
+          {
+            ...objectReplaceRequest,
+            candidate: {
+              ...objectReplaceRequest.candidate,
+              manifest: { ...objectCandidateManifest, sha256: "0".repeat(64) }
+            }
+          },
+          objectBefore,
+          objectCandidate
+        ),
+      "V2 raw-byte manifest mismatch"
+    );
+    const objectReplaceReceipt = addon.applyEngineeringFileMutationV2(
+      rootId,
+      objectReplaceRequest,
+      objectBefore,
+      objectCandidate
+    );
+    assertV2MutationReceipt(objectReplaceReceipt, objectReplaceRequest, objectCandidateManifest);
+    assertExactNativeBytes(
+      await readFile(join(workspace, objectRelativePath)),
+      objectCandidate,
+      "V2 replace"
+    );
+    assertRecoveryScan(addon.scanMutationRecovery(rootId), "clear");
+    assertV2MutationOperationState(
+      addon.inspectEngineeringFileMutationTargetV2(
+        rootId,
+        objectReplaceRequest,
+        objectBefore,
+        objectCandidate
+      ),
+      objectReplaceRequest,
+      "after",
+      objectCandidateManifest
+    );
+
+    const objectAbsentSnapshot = addon.inspectEngineeringFileSnapshotV2(
+      rootId,
+      objectCreateRelativePath
+    );
+    assertV2AbsentTargetSnapshot(objectAbsentSnapshot, rootId, objectCreateRelativePath);
+    const objectAbsenceProof = addon.observeCreateAbsenceV2(
+      rootId,
+      objectRootBindingId,
+      objectCreateRelativePath,
+      "2030-01-02T03:04:05.000Z"
+    );
+    assertV2AbsenceProof(objectAbsenceProof, objectRootBindingId, objectCreateRelativePath);
+    const objectCreateRequest = createV2CreateRequest({
+      rootBindingId: objectRootBindingId,
+      relativeIdentity: objectCreateRelativePath,
+      transactionId: "tx:create-v2",
+      operationId: "op/create-v2",
+      stagingObjectId: "stage:create-v2",
+      absenceProof: objectAbsenceProof,
+      candidateManifest: createV2TargetManifest(
+        objectRootBindingId,
+        objectCreateRelativePath,
+        objectCreated,
+        metadataChecksumForAttributes(128)
+      )
+    });
+    assertV2MutationOperationState(
+      addon.inspectEngineeringFileMutationTargetV2(
+        rootId,
+        objectCreateRequest,
+        null,
+        objectCreated
+      ),
+      objectCreateRequest,
+      "before",
+      objectCreateRequest.candidate.manifest
+    );
+    const objectCreateReceipt = addon.applyEngineeringFileMutationV2(
+      rootId,
+      objectCreateRequest,
+      null,
+      objectCreated
+    );
+    assertV2MutationReceipt(
+      objectCreateReceipt,
+      objectCreateRequest,
+      objectCreateRequest.candidate.manifest
+    );
+    assertExactNativeBytes(
+      await readFile(join(workspace, objectCreateRelativePath)),
+      objectCreated,
+      "V2 create"
+    );
+    assertV2MutationOperationState(
+      addon.inspectEngineeringFileMutationTargetV2(
+        rootId,
+        objectCreateRequest,
+        null,
+        objectCreated
+      ),
+      objectCreateRequest,
+      "after",
+      objectCreateRequest.candidate.manifest
+    );
+
+    const staleV2Proof = addon.observeCreateAbsenceV2(
+      rootId,
+      objectRootBindingId,
+      objectStaleRelativePath,
+      "2030-01-02T03:04:06.000Z"
+    );
+    await writeFile(join(workspace, objectStaleRelativePath), "external V2 create race\n", {
+      encoding: "utf8",
+      flush: true
+    });
+    const staleV2Request = createV2CreateRequest({
+      rootBindingId: objectRootBindingId,
+      relativeIdentity: objectStaleRelativePath,
+      transactionId: "tx:stale-v2",
+      operationId: "op/stale-v2",
+      stagingObjectId: "stage:stale-v2",
+      absenceProof: staleV2Proof,
+      candidateManifest: createV2TargetManifest(
+        objectRootBindingId,
+        objectStaleRelativePath,
+        objectCreated,
+        metadataChecksumForAttributes(128)
+      )
+    });
+    assertV2MutationOperationState(
+      addon.inspectEngineeringFileMutationTargetV2(rootId, staleV2Request, null, objectCreated),
+      staleV2Request,
+      "neither",
+      staleV2Request.candidate.manifest
+    );
+    await expectMutationFailure(
+      () => addon.applyEngineeringFileMutationV2(rootId, staleV2Request, null, objectCreated),
+      "V2 stale absence proof"
+    );
+
+    const mismatchWal = addon.prepareMutationWalV2(
+      rootId,
+      "tx-mismatch-v2",
+      "op-mismatch-v2",
+      "stage-mismatch-v2",
+      "2.0"
+    );
+    const candidateManifest = rawByteManifest(candidate);
+    await expectMutationFailure(
+      () =>
+        addon.replaceFileV2(
+          rootId,
+          ordinaryRelativePath,
+          "tx-mismatch-v2",
+          "op-mismatch-v2",
+          "stage-mismatch-v2",
+          mismatchWal.walBindingId,
+          candidate,
+          rawByteManifest(candidate),
+          candidate,
+          { ...candidateManifest, sha256: "0".repeat(64) }
+        ),
+      "raw-byte manifest mismatch"
+    );
+
+    const walMismatch = addon.prepareMutationWalV2(
+      rootId,
+      "tx-bound-v2",
+      "op-bound-v2",
+      "stage-bound-v2",
+      "2.0"
+    );
+    await expectMutationFailure(
+      () =>
+        addon.replaceFileV2(
+          rootId,
+          ordinaryRelativePath,
+          "tx-other-v2",
+          "op-bound-v2",
+          "stage-bound-v2",
+          walMismatch.walBindingId,
+          candidate,
+          rawByteManifest(candidate),
+          candidate,
+          rawByteManifest(candidate)
+        ),
+      "WAL binding mismatch"
+    );
+
+    await link(join(workspace, ordinaryRelativePath), hardLinkPath);
+    const hardLinkBefore = await readFile(hardLinkPath);
+    const hardLinkWal = addon.prepareMutationWalV2(
+      rootId,
+      "tx-hard-link-v2",
+      "op-hard-link-v2",
+      "stage-hard-link-v2",
+      "2.0"
+    );
+    await expectMutationFailure(
+      () =>
+        addon.replaceFileV2(
+          rootId,
+          "docs/hard-link.txt",
+          "tx-hard-link-v2",
+          "op-hard-link-v2",
+          "stage-hard-link-v2",
+          hardLinkWal.walBindingId,
+          hardLinkBefore,
+          rawByteManifest(hardLinkBefore),
+          candidate,
+          rawByteManifest(candidate)
+        ),
+      "multiple hard-link leaf"
+    );
+
+    const staleAbsence = addon.observeCreateAbsence(rootId, "docs", "stale-create.txt");
+    const staleWal = addon.prepareMutationWalV2(
+      rootId,
+      "tx-stale-v2",
+      "op-stale-v2",
+      "stage-stale-v2",
+      "2.0"
+    );
+    await writeFile(stalePath, "external destination race\n", { encoding: "utf8", flush: true });
+    await expectMutationFailure(
+      () =>
+        addon.createFileV2(
+          rootId,
+          "docs",
+          "stale-create.txt",
+          staleAbsence.proofId,
+          "tx-stale-v2",
+          "op-stale-v2",
+          "stage-stale-v2",
+          staleWal.walBindingId,
+          created,
+          rawByteManifest(created)
+        ),
+      "stale absence proof"
+    );
+
+    await Promise.all([
+      writeFile(stagedFaultPath, candidate, { flush: true }),
+      ...handoffFaultPaths.map((path) => writeFile(path, candidate, { flush: true }))
+    ]);
+    const recovery = addon.scanMutationRecovery(rootId);
+    assertRecoveryScan(recovery, "recovery_required");
+    if (recovery.pendingStagingCount < BigInt(handoffFaultPaths.length + 1)) {
+      throw new Error("Batch 7 handoff fault stages were not all visible to native recovery");
+    }
+    return {
+      status: "passed",
+      rawByteCandidateBefore: "passed",
+      absenceProof: "passed",
+      absenceProofV2: "passed",
+      objectMutationAbi: "passed",
+      targetInspection: "passed",
+      operationStateReconciliation: "passed",
+      handleRelativeRevalidation: "passed",
+      finalRenameNamespaceRevalidation: "passed",
+      handleBoundReplaceHandoff: "passed",
+      hardLinkRejection: "passed",
+      copyOnReplaceSafety: "passed",
+      fixedCreateMetadata: "passed",
+      receiptDurability: "passed",
+      stagingWalRecoveryScan: "passed",
+      recoveryBeforeCleanup: "passed",
+      negativeCanaries: {
+        rawByteManifestMismatch: "canary_exposed",
+        walBindingMismatch: "canary_exposed",
+        hardLinkLeaf: "canary_exposed",
+        staleAbsenceProof: "canary_exposed",
+        v2RawByteManifestMismatch: "canary_exposed",
+        v2StaleAbsenceProof: "canary_exposed",
+        replaceFinalRenameNamespaceRevalidation: "canary_exposed",
+        targetSwapFinalWindowNoOverwrite: "canary_exposed",
+        createOnlyHandoffCollisionRecoveryRequired: "canary_exposed"
+      },
+      faultProbe: {
+        nativeExport: "passed",
+        orphanStagingRecoveryRequired: "canary_exposed",
+        replaceFinalRenameNamespaceRevalidation: "canary_exposed",
+        afterOriginalHandoffRecoveryRequired: "canary_exposed",
+        beforeCandidateHandoffRecoveryRequired: "canary_exposed",
+        afterCandidateHandoffRecoveryRequired: "canary_exposed"
+      }
+    };
+  } finally {
+    if (openedRoot && typeof addon.closeWorkspaceRoot === "function") {
+      await Promise.resolve(addon.closeWorkspaceRoot(openedRoot.rootId));
+    }
+    await rm(fixtureParent, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
 async function expectReadFailure(addon, rootId, path) {
   try {
     const result = addon.readFile(rootId, path);
@@ -408,6 +1036,466 @@ async function expectReadFailure(addon, rootId, path) {
     return;
   }
   throw new Error(`B6 readFile unexpectedly accepted adversarial path: ${JSON.stringify(path)}`);
+}
+
+async function expectMutationFailure(run, label) {
+  try {
+    await Promise.resolve(run());
+  } catch {
+    return;
+  }
+  throw new Error(`Batch 7 native mutation unexpectedly accepted ${label}`);
+}
+
+function rawV2ByteFields(bytes) {
+  const value = Buffer.from(bytes);
+  const hasUtf8Bom =
+    value.byteLength >= 3 && value[0] === 0xef && value[1] === 0xbb && value[2] === 0xbf;
+  let sawLf = false;
+  let sawCrLf = false;
+  let sawBareCr = false;
+  for (let index = 0; index < value.byteLength; index += 1) {
+    if (value[index] === 0x0d) {
+      if (index + 1 < value.byteLength && value[index + 1] === 0x0a) {
+        sawCrLf = true;
+        index += 1;
+      } else {
+        sawBareCr = true;
+      }
+    } else if (value[index] === 0x0a) {
+      sawLf = true;
+    }
+  }
+  const eol =
+    !sawLf && !sawCrLf && !sawBareCr
+      ? "none"
+      : sawCrLf && !sawLf && !sawBareCr
+        ? "crlf"
+        : sawLf && !sawCrLf && !sawBareCr
+          ? "lf"
+          : "mixed";
+  return {
+    sha256: createHash("sha256").update(value).digest("hex"),
+    byteLength: value.byteLength,
+    encoding: "utf-8",
+    bom: hasUtf8Bom ? "utf-8" : "none",
+    eol
+  };
+}
+
+function metadataChecksumForAttributes(attributes) {
+  return sha256(`engineering_file_metadata_v2\nattributes=${attributes}`);
+}
+
+function createV2TargetManifest(rootBindingId, relativeIdentity, bytes, metadataChecksum) {
+  return {
+    schemaVersion: "2.0",
+    identity: {
+      kind: "target",
+      rootBindingId,
+      relativeIdentity,
+      fileIdentity: null
+    },
+    ...rawV2ByteFields(bytes),
+    metadataChecksum
+  };
+}
+
+function createV2BlobReference(rootBindingId, manifest) {
+  return {
+    schemaVersion: "2.0",
+    contentRootBindingId: rootBindingId,
+    blobId: `blob_${manifest.sha256}`,
+    storage: "main_owned_immutable_blob",
+    sha256: manifest.sha256,
+    byteLength: manifest.byteLength,
+    encoding: manifest.encoding,
+    bom: manifest.bom,
+    eol: manifest.eol
+  };
+}
+
+function assertV2PresentTargetSnapshot(
+  snapshot,
+  rootId,
+  rootBindingId,
+  relativeIdentity,
+  expectedBytes
+) {
+  const expected = rawV2ByteFields(expectedBytes);
+  if (
+    !snapshot ||
+    snapshot.schemaVersion !== "2.0" ||
+    snapshot.kind !== "engineering_file_mutation_target_snapshot" ||
+    snapshot.rootId !== rootId ||
+    snapshot.relativeIdentity !== relativeIdentity ||
+    snapshot.state !== "present" ||
+    !Buffer.isBuffer(snapshot.bytes) ||
+    !snapshot.bytes.equals(expectedBytes) ||
+    !isStableV2Id(snapshot.parentDirectoryIdentity) ||
+    !snapshot.manifest ||
+    !isStableV2Id(snapshot.manifest.fileIdentity) ||
+    snapshot.manifest.sha256 !== expected.sha256 ||
+    snapshot.manifest.byteLength !== expected.byteLength ||
+    snapshot.manifest.encoding !== expected.encoding ||
+    snapshot.manifest.bom !== expected.bom ||
+    snapshot.manifest.eol !== expected.eol ||
+    !/^[a-f0-9]{64}$/u.test(snapshot.manifest.metadataChecksum ?? "")
+  ) {
+    throw new Error("Batch 7 V2 target inspection did not return a fresh raw-byte snapshot");
+  }
+  return {
+    schemaVersion: "2.0",
+    identity: {
+      kind: "observed_file",
+      rootBindingId,
+      relativeIdentity,
+      fileIdentity: snapshot.manifest.fileIdentity
+    },
+    ...expected,
+    metadataChecksum: snapshot.manifest.metadataChecksum
+  };
+}
+
+function assertV2AbsentTargetSnapshot(snapshot, rootId, relativeIdentity) {
+  if (
+    !snapshot ||
+    snapshot.schemaVersion !== "2.0" ||
+    snapshot.kind !== "engineering_file_mutation_target_snapshot" ||
+    snapshot.rootId !== rootId ||
+    snapshot.relativeIdentity !== relativeIdentity ||
+    snapshot.state !== "absent" ||
+    snapshot.bytes !== null ||
+    snapshot.manifest !== null ||
+    !isStableV2Id(snapshot.parentDirectoryIdentity)
+  ) {
+    throw new Error("Batch 7 V2 target inspection did not prove target absence");
+  }
+}
+
+function assertV2AbsenceProof(proof, rootBindingId, relativeIdentity) {
+  if (
+    !proof ||
+    Object.keys(proof).sort().join(",") !==
+      "absenceProofChecksum,kind,observedAt,parentDirectoryIdentity,relativeIdentity,rootBindingId,schemaVersion" ||
+    proof.schemaVersion !== "2.0" ||
+    proof.kind !== "absence_proof" ||
+    proof.rootBindingId !== rootBindingId ||
+    proof.relativeIdentity !== relativeIdentity ||
+    !isStableV2Id(proof.parentDirectoryIdentity) ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(proof.observedAt ?? "") ||
+    !/^[a-f0-9]{64}$/u.test(proof.absenceProofChecksum ?? "")
+  ) {
+    throw new Error("Batch 7 V2 absence observation did not return a repository-compatible proof");
+  }
+  const { absenceProofChecksum, ...unsigned } = proof;
+  if (absenceProofChecksum !== sha256(stable(unsigned))) {
+    throw new Error("Batch 7 V2 absence proof checksum was not bound to its observation");
+  }
+}
+
+function createV2ReplaceRequest({
+  rootBindingId,
+  relativeIdentity,
+  transactionId,
+  operationId,
+  stagingObjectId,
+  beforeManifest,
+  candidateManifest
+}) {
+  return {
+    schemaVersion: "2.0",
+    operationKind: "replace_file",
+    contentRootBindingId: rootBindingId,
+    transactionId,
+    operationId,
+    providerSemanticVersionSetChecksum: "a".repeat(64),
+    relativeIdentity,
+    before: {
+      schemaVersion: "2.0",
+      kind: "present",
+      manifest: beforeManifest,
+      blob: createV2BlobReference(rootBindingId, beforeManifest)
+    },
+    candidate: {
+      schemaVersion: "2.0",
+      manifest: candidateManifest,
+      blob: createV2BlobReference(rootBindingId, candidateManifest)
+    },
+    stagingObjectId
+  };
+}
+
+function createV2CreateRequest({
+  rootBindingId,
+  relativeIdentity,
+  transactionId,
+  operationId,
+  stagingObjectId,
+  absenceProof,
+  candidateManifest
+}) {
+  return {
+    schemaVersion: "2.0",
+    operationKind: "create_file",
+    contentRootBindingId: rootBindingId,
+    transactionId,
+    operationId,
+    providerSemanticVersionSetChecksum: "a".repeat(64),
+    relativeIdentity,
+    before: {
+      schemaVersion: "2.0",
+      kind: "absent",
+      absenceProof
+    },
+    candidate: {
+      schemaVersion: "2.0",
+      manifest: candidateManifest,
+      blob: createV2BlobReference(rootBindingId, candidateManifest)
+    },
+    stagingObjectId
+  };
+}
+
+function assertV2MutationReceipt(receipt, request, candidateManifest) {
+  const expectedKeys = [
+    "contentRootBindingId",
+    "durability",
+    "kind",
+    "nativeReceiptChecksum",
+    "observedAfter",
+    "observedBefore",
+    "operationId",
+    "operationKind",
+    "providerSemanticVersionSetChecksum",
+    "recoveryObjectId",
+    "relativeIdentity",
+    "requestChecksum",
+    "schemaVersion",
+    "stagingObjectId",
+    "transactionId"
+  ];
+  if (
+    !receipt ||
+    Object.keys(receipt).sort().join(",") !== expectedKeys.join(",") ||
+    receipt.schemaVersion !== "2.0" ||
+    receipt.kind !== "engineering_mutation_receipt" ||
+    receipt.transactionId !== request.transactionId ||
+    receipt.operationId !== request.operationId ||
+    receipt.operationKind !== request.operationKind ||
+    receipt.contentRootBindingId !== request.contentRootBindingId ||
+    receipt.providerSemanticVersionSetChecksum !== request.providerSemanticVersionSetChecksum ||
+    receipt.relativeIdentity !== request.relativeIdentity ||
+    receipt.stagingObjectId !== request.stagingObjectId ||
+    receipt.recoveryObjectId !== null ||
+    receipt.durability !== "data_and_directory_flushed" ||
+    receipt.requestChecksum !== sha256(stable(request)) ||
+    stable(receipt.observedBefore) !== stable(request.before)
+  ) {
+    throw new Error("Batch 7 V2 receipt did not bind the exact prepared request");
+  }
+  const after = receipt.observedAfter;
+  if (
+    !after ||
+    after.schemaVersion !== "2.0" ||
+    after.identity?.kind !== "observed_file" ||
+    after.identity.rootBindingId !== request.contentRootBindingId ||
+    after.identity.relativeIdentity !== request.relativeIdentity ||
+    !isStableV2Id(after.identity.fileIdentity) ||
+    after.sha256 !== candidateManifest.sha256 ||
+    after.byteLength !== candidateManifest.byteLength ||
+    after.encoding !== "utf-8" ||
+    after.bom !== candidateManifest.bom ||
+    after.eol !== candidateManifest.eol ||
+    after.metadataChecksum !== candidateManifest.metadataChecksum ||
+    !/^[a-f0-9]{64}$/u.test(receipt.nativeReceiptChecksum ?? "")
+  ) {
+    throw new Error("Batch 7 V2 receipt did not prove the observed post-write state");
+  }
+  const { nativeReceiptChecksum, ...unsigned } = receipt;
+  if (nativeReceiptChecksum !== sha256(stable(unsigned))) {
+    throw new Error("Batch 7 V2 receipt checksum was not canonically bound");
+  }
+}
+
+function assertV2MutationOperationState(state, request, expectedState, candidateManifest) {
+  const expectedKeys = ["kind", "receipt", "requestChecksum", "schemaVersion", "state"];
+  if (
+    !state ||
+    Object.keys(state).sort().join(",") !== expectedKeys.join(",") ||
+    state.schemaVersion !== "2.0" ||
+    state.kind !== "engineering_mutation_operation_state" ||
+    state.state !== expectedState ||
+    state.requestChecksum !== sha256(stable(request))
+  ) {
+    throw new Error("Batch 7 V2 recovery inspection did not return an exact operation state");
+  }
+  if (expectedState === "after") {
+    assertV2MutationReceipt(state.receipt, request, candidateManifest);
+  } else if (state.receipt !== null) {
+    throw new Error("Batch 7 V2 non-after recovery state unexpectedly included a receipt");
+  }
+}
+
+function isStableV2Id(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value);
+}
+
+function rawByteManifest(bytes) {
+  const value = Buffer.from(bytes);
+  const hasUtf8Bom =
+    value.byteLength >= 3 && value[0] === 0xef && value[1] === 0xbb && value[2] === 0xbf;
+  let sawLf = false;
+  let sawCrLf = false;
+  let sawBareCr = false;
+  for (let index = 0; index < value.byteLength; index += 1) {
+    if (value[index] === 0x0d) {
+      if (index + 1 < value.byteLength && value[index + 1] === 0x0a) {
+        sawCrLf = true;
+        index += 1;
+      } else {
+        sawBareCr = true;
+      }
+    } else if (value[index] === 0x0a) {
+      sawLf = true;
+    }
+  }
+  const eol =
+    !sawLf && !sawCrLf && !sawBareCr
+      ? "none"
+      : sawCrLf && !sawLf && !sawBareCr
+        ? "crlf"
+        : sawLf && !sawCrLf && !sawBareCr
+          ? "lf"
+          : "mixed";
+  return {
+    byteLength: BigInt(value.byteLength),
+    sha256: createHash("sha256").update(value).digest("hex"),
+    encoding: "utf8",
+    bom: hasUtf8Bom ? "utf8" : "none",
+    eol
+  };
+}
+
+function assertExactNativeBytes(value, expected, operation) {
+  if (!Buffer.isBuffer(value) || !value.equals(expected)) {
+    throw new Error(`Batch 7 ${operation} did not preserve the exact raw candidate bytes`);
+  }
+}
+
+function assertWalBinding(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    typeof value.walBindingId !== "bigint" ||
+    !/^[a-f0-9]{64}$/u.test(value.bindingChecksum ?? "") ||
+    value.protocol !== "v2_preallocated_binding" ||
+    value.durabilityRequirement !== "caller_must_durable_flush_before_apply"
+  ) {
+    throw new Error("Batch 7 native mutation did not bind the preallocated WAL identity");
+  }
+}
+
+function assertMutationReceipt(receipt, expected) {
+  if (
+    !receipt ||
+    typeof receipt !== "object" ||
+    receipt.schemaVersion !== "engineering_file_mutation_receipt_v1" ||
+    receipt.operation !== expected.operation ||
+    receipt.transactionId !== expected.transactionId ||
+    receipt.operationId !== expected.operationId ||
+    receipt.durability !== "data_and_directory_flushed" ||
+    receipt.writeStrategy !== "same_directory_staging_rename" ||
+    receipt.hardLinkPolicy !== "reject_multiple_links" ||
+    receipt.metadataPolicy !== expected.metadataPolicy ||
+    !/^[a-f0-9]{64}$/u.test(receipt.walBindingChecksum ?? "") ||
+    !receipt.after ||
+    receipt.after.sha256 !== rawByteManifest(expected.after).sha256
+  ) {
+    throw new Error("Batch 7 native mutation receipt was not bound to the observed durable write");
+  }
+  if (expected.before === null) {
+    if (receipt.before !== null || receipt.beforeIdentity !== null) {
+      throw new Error("Batch 7 create receipt unexpectedly claimed an existing before image");
+    }
+  } else if (
+    !receipt.before ||
+    receipt.before.sha256 !== rawByteManifest(expected.before).sha256 ||
+    !receipt.beforeIdentity
+  ) {
+    throw new Error("Batch 7 replace receipt did not bind the exact before image");
+  }
+}
+
+function assertRecoveryScan(value, expectedState) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    value.state !== expectedState ||
+    typeof value.pendingStagingCount !== "bigint" ||
+    typeof value.inProcessPendingWalCount !== "bigint" ||
+    typeof value.scanTruncated !== "boolean" ||
+    value.scanScope !== "native_staging_and_in_process_wal_only" ||
+    value.durableWalRequirement !== "external_durable_wal_scan_required"
+  ) {
+    throw new Error("Batch 7 native recovery scan did not fail closed with its limited authority");
+  }
+}
+
+function assertMutationV2ProbeInfo(value) {
+  const expected = {
+    schemaVersion: "engineering_file_mutation_probe_v1",
+    batch: "7",
+    status: "available",
+    replace: "development_probe_only",
+    create: "development_probe_only",
+    rawByteBlobs: "available",
+    absenceProof: "available",
+    absenceProofV2: "available",
+    objectMutationAbi: "available",
+    targetInspection: "available",
+    operationStateReconciliation: "available",
+    handleRelativeRevalidation: "available",
+    finalRenameNamespaceRevalidation: "available",
+    handleBoundReplaceHandoff: "available",
+    hardLinkPolicy: "reject_multiple_links",
+    copyOnReplace: "not_enabled",
+    fixedCreateMetadata: "available",
+    receiptDurability: "available",
+    stagingWalRecoveryScan: "available",
+    stateDurability: "available",
+    productCapability: "unavailable"
+  };
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    if (value?.[key] !== expectedValue) {
+      throw new Error(`Batch 7 native probe info did not preserve ${key}`);
+    }
+  }
+}
+
+function assertMutationV2FaultProbe(value) {
+  const expectedPaths = [
+    "raw_byte_manifest_mismatch",
+    "stale_absence_proof",
+    "wal_binding_mismatch",
+    "post_stage_recovery_scan",
+    "replace_final_rename_namespace_revalidation",
+    "replace_handle_bound_target_swap_no_overwrite",
+    "replace_create_only_handoff_collision_recovery",
+    "replace_after_original_handoff_recovery",
+    "replace_before_candidate_handoff_recovery",
+    "replace_after_candidate_handoff_recovery"
+  ];
+  if (
+    !value ||
+    value.status !== "available" ||
+    value.safety !== "invalid_inputs_only_no_protection_switches" ||
+    !Array.isArray(value.faultPaths) ||
+    value.faultPaths.length !== expectedPaths.length ||
+    !expectedPaths.every((path, index) => value.faultPaths[index] === path)
+  ) {
+    throw new Error("Batch 7 native fault probe did not remain test-input-only");
+  }
 }
 
 function developmentCapabilities(readOnlyAvailability) {
@@ -425,12 +1513,13 @@ function assertAdapterInfo(info, readOnlyAvailability) {
   if (
     !info ||
     info.target !== "win32-x64" ||
-    info.batch !== "6" ||
     info.accessEligible !== readOnlyAvailability ||
-    info.mutation !== "unavailable" ||
-    info.recovery !== "unavailable"
+    !(
+      (info.batch === "6" && info.mutation === "unavailable" && info.recovery === "unavailable") ||
+      (info.batch === "7" && info.mutation === "available" && info.recovery === "available")
+    )
   ) {
-    throw new Error("native addon does not preserve the Batch 6 capability boundary");
+    throw new Error("native addon does not preserve a supported B6/B7 capability declaration");
   }
   for (const capability of ["root", "read", "index"]) {
     const property = `${capability}Eligible`;
@@ -438,19 +1527,31 @@ function assertAdapterInfo(info, readOnlyAvailability) {
       throw new Error(`native addon ${property} does not match its manifest eligibility`);
     }
   }
+  if (
+    ("mutationV2Probe" in info && info.mutationV2Probe !== "available") ||
+    ("recoveryScanProbe" in info && info.recoveryScanProbe !== "available") ||
+    ("stateDurabilityProbe" in info && info.stateDurabilityProbe !== "available")
+  ) {
+    throw new Error("native addon does not preserve the Batch 7 development probe boundary");
+  }
 }
 
-function hasExactMap(value, keys, expected) {
+function hasExactMap(value, keys, expected, overrides = {}) {
   return (
     value &&
     typeof value === "object" &&
     !Array.isArray(value) &&
     Object.keys(value).length === keys.length &&
-    keys.every((key) => value[key] === expected)
+    keys.every((key) => value[key] === (key in overrides ? overrides[key] : expected))
   );
 }
 
-function assertUnsignedDevelopmentArtifact(manifest, signaturePresent, readOnlyAvailability) {
+function assertUnsignedDevelopmentArtifact(
+  manifest,
+  signaturePresent,
+  readOnlyAvailability,
+  mutationV2Availability
+) {
   if (
     signaturePresent ||
     manifest.signing?.authenticode !== "required-for-production" ||
@@ -460,9 +1561,12 @@ function assertUnsignedDevelopmentArtifact(manifest, signaturePresent, readOnlyA
     manifest.eligibility?.batch !== "6" ||
     manifest.eligibility?.mutation !== "unavailable" ||
     manifest.eligibility?.recovery !== "unavailable" ||
+    mutationV2Availability !== "available" ||
     (readOnlyAvailability !== "available" && readOnlyAvailability !== "unavailable")
   ) {
-    throw new Error("development probe requires an unsigned Batch 6-only artifact");
+    throw new Error(
+      "development probe requires an unsigned B6 access / B7 primitive-only artifact"
+    );
   }
 }
 

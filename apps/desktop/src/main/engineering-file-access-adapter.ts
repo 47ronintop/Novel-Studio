@@ -1,5 +1,11 @@
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
+
+import type {
+  EngineeringStateDirectoryEntryV2,
+  EngineeringStateDurabilityPortV2,
+  EngineeringStateFileHandleV2
+} from "@novel-studio/repository";
 
 import { ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT } from "./engineering-file-access-qualification.js";
 
@@ -17,14 +23,26 @@ export type EngineeringWorkspaceAccessOperation =
 export type EngineeringFileAccessAddonUnavailableReason =
   "native_module_load_failed" | "native_module_invalid";
 
-export interface EngineeringFileAccessAddonMetadata {
+interface EngineeringFileAccessAddonMetadataBase {
   readonly adapterId: "novel_studio_engineering_file_access";
   readonly target: "win32-x64";
-  readonly batch: "6";
   readonly accessEligible: "available" | "unavailable";
-  readonly mutation: "unavailable";
-  readonly recovery: "unavailable";
 }
+
+export type EngineeringFileAccessAddonMetadata =
+  | (EngineeringFileAccessAddonMetadataBase & {
+      readonly batch: "6";
+      readonly mutation: "unavailable";
+      readonly recovery: "unavailable";
+    })
+  | (EngineeringFileAccessAddonMetadataBase & {
+      readonly batch: "7";
+      readonly mutation: "available";
+      readonly recovery: "available";
+      readonly mutationV2Probe: "available";
+      readonly recoveryScanProbe: "available";
+      readonly stateDurabilityProbe: "available";
+    });
 
 export interface EngineeringFileAccessAddon {
   readonly adapterInfo: () => unknown;
@@ -34,6 +52,48 @@ export interface EngineeringFileAccessAddon {
   readonly readFile: (rootId: bigint, relativePath: string) => unknown;
   readonly searchText: (rootId: bigint, query: string) => unknown;
   readonly buildIndex: (rootId: bigint) => unknown;
+}
+
+interface EngineeringStateDurabilityAddon extends EngineeringFileAccessAddon {
+  readonly openEngineeringStateRoot: (stateRoot: string) => unknown;
+  readonly closeEngineeringStateRoot: (stateRootId: bigint) => unknown;
+  readonly ensureEngineeringStateDirectoryNoFollow: (
+    stateRootId: bigint,
+    relativePath: string
+  ) => unknown;
+  readonly flushEngineeringStateDirectory: (stateRootId: bigint, relativePath: string) => unknown;
+  readonly openEngineeringStateExclusiveNoFollow: (
+    stateRootId: bigint,
+    relativePath: string
+  ) => unknown;
+  readonly writeEngineeringStateFile: (fileId: bigint, bytes: Uint8Array) => unknown;
+  readonly syncEngineeringStateFile: (fileId: bigint) => unknown;
+  readonly closeEngineeringStateFile: (fileId: bigint) => unknown;
+  readonly readEngineeringStateFileNoFollow: (stateRootId: bigint, relativePath: string) => unknown;
+  readonly readEngineeringStateDirectoryNoFollow: (
+    stateRootId: bigint,
+    relativePath: string
+  ) => unknown;
+  readonly linkEngineeringStateFileNoFollow: (
+    stateRootId: bigint,
+    existingRelativePath: string,
+    newRelativePath: string
+  ) => unknown;
+  readonly renameReplaceEngineeringStateFileNoFollow: (
+    stateRootId: bigint,
+    oldRelativePath: string,
+    newRelativePath: string
+  ) => unknown;
+  readonly unlinkEngineeringStateFileNoFollow: (
+    stateRootId: bigint,
+    relativePath: string
+  ) => unknown;
+}
+
+/** Main-owned lifetime handle for the native state-root descriptor. */
+export interface EngineeringStateDurabilityPortV2Handle extends EngineeringStateDurabilityPortV2 {
+  /** Releases the native state-root descriptor. Safe to call repeatedly, including after a throw. */
+  dispose(): void;
 }
 
 export type EngineeringFileAccessAddonLoadResult =
@@ -131,6 +191,144 @@ export function createEngineeringWorkspaceAccessPort(options: {
   });
 }
 
+/**
+ * Main-only adapter for app-state persistence. It is intentionally not part of the workspace
+ * access port and receives only paths proven lexically beneath Main's selected state root.
+ * Returning undefined leaves Repository's durability seam unqualified and therefore fail-closed.
+ */
+export function createEngineeringStateDurabilityPortV2(options: {
+  readonly stateRoot: string;
+  readonly addonLoader: EngineeringFileAccessAddonLoader;
+}): EngineeringStateDurabilityPortV2Handle | undefined {
+  if (!isAbsolute(options.stateRoot)) return undefined;
+  const loaded = options.addonLoader.load();
+  if (loaded.status !== "loaded" || !isEngineeringStateDurabilityAddon(loaded.addon))
+    return undefined;
+  const addon = loaded.addon;
+
+  let stateRootId: bigint;
+  try {
+    const opened = addon.openEngineeringStateRoot(options.stateRoot);
+    if (typeof opened !== "bigint") return undefined;
+    stateRootId = opened;
+  } catch {
+    return undefined;
+  }
+
+  const toRelative = (path: string, allowRoot: boolean): string => {
+    if (!isAbsolute(path)) throw new Error("Engineering state path must be absolute.");
+    const candidate = relative(options.stateRoot, path).replaceAll("\\", "/");
+    if (candidate === "") {
+      if (allowRoot) return candidate;
+      throw new Error("Engineering state file path cannot be the state root.");
+    }
+    if (isAbsolute(candidate) || candidate === ".." || candidate.startsWith("../")) {
+      throw new Error("Engineering state path escapes the Main-owned state root.");
+    }
+    return candidate;
+  };
+  const call = async (operation: () => unknown): Promise<void> => {
+    try {
+      await Promise.resolve(operation());
+    } catch (cause) {
+      throw normalizeEngineeringStateNativeError(cause);
+    }
+  };
+
+  let disposed = false;
+  const dispose = (): void => {
+    if (disposed) return;
+    // Mark this descriptor unavailable before crossing the native boundary so a throwing close
+    // cannot cause a second close attempt during later Main shutdown cleanup.
+    disposed = true;
+    addon.closeEngineeringStateRoot(stateRootId);
+  };
+
+  const durability: EngineeringStateDurabilityPortV2Handle = {
+    qualification: "qualified" as const,
+    ensureDirectoryNoFollow: (path) =>
+      call(() =>
+        addon.ensureEngineeringStateDirectoryNoFollow(stateRootId, toRelative(path, true))
+      ),
+    flushDirectory: (path) =>
+      call(() => addon.flushEngineeringStateDirectory(stateRootId, toRelative(path, true))),
+    openExclusiveNoFollow: async (path): Promise<EngineeringStateFileHandleV2> => {
+      let fileId: unknown;
+      try {
+        fileId = await Promise.resolve(
+          addon.openEngineeringStateExclusiveNoFollow(stateRootId, toRelative(path, false))
+        );
+      } catch (cause) {
+        throw normalizeEngineeringStateNativeError(cause);
+      }
+      if (typeof fileId !== "bigint") throw new Error("Engineering state file handle is invalid.");
+      let closed = false;
+      return Object.freeze({
+        writeFile: async (bytes: Uint8Array) => {
+          if (closed) throw new Error("Engineering state file handle is closed.");
+          await call(() => addon.writeEngineeringStateFile(fileId, bytes));
+        },
+        sync: async () => {
+          if (closed) throw new Error("Engineering state file handle is closed.");
+          await call(() => addon.syncEngineeringStateFile(fileId));
+        },
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          await call(() => addon.closeEngineeringStateFile(fileId));
+        }
+      });
+    },
+    readFileNoFollow: async (path) => {
+      let bytes: unknown;
+      try {
+        bytes = await Promise.resolve(
+          addon.readEngineeringStateFileNoFollow(stateRootId, toRelative(path, false))
+        );
+      } catch (cause) {
+        throw normalizeEngineeringStateNativeError(cause);
+      }
+      if (!(bytes instanceof Uint8Array))
+        throw new Error("Engineering state read result is invalid.");
+      return new Uint8Array(bytes);
+    },
+    readDirectoryNoFollow: async (path): Promise<readonly EngineeringStateDirectoryEntryV2[]> => {
+      let entries: unknown;
+      try {
+        entries = await Promise.resolve(
+          addon.readEngineeringStateDirectoryNoFollow(stateRootId, toRelative(path, true))
+        );
+      } catch (cause) {
+        throw normalizeEngineeringStateNativeError(cause);
+      }
+      if (!Array.isArray(entries) || !entries.every(isEngineeringStateDirectoryEntry)) {
+        throw new Error("Engineering state directory result is invalid.");
+      }
+      return Object.freeze(entries.map((entry) => Object.freeze({ ...entry })));
+    },
+    linkNoFollow: (existingPath, newPath) =>
+      call(() =>
+        addon.linkEngineeringStateFileNoFollow(
+          stateRootId,
+          toRelative(existingPath, false),
+          toRelative(newPath, false)
+        )
+      ),
+    renameReplaceNoFollow: (oldPath, newPath) =>
+      call(() =>
+        addon.renameReplaceEngineeringStateFileNoFollow(
+          stateRootId,
+          toRelative(oldPath, false),
+          toRelative(newPath, false)
+        )
+      ),
+    unlinkNoFollow: (path) =>
+      call(() => addon.unlinkEngineeringStateFileNoFollow(stateRootId, toRelative(path, false))),
+    dispose
+  };
+  return Object.freeze(durability);
+}
+
 export function isEngineeringWorkspaceAccessOperation(
   value: string
 ): value is EngineeringWorkspaceAccessOperation {
@@ -175,7 +373,7 @@ function portUnavailable(
 
 function isEngineeringFileAccessAddon(value: unknown): value is EngineeringFileAccessAddon {
   if (value === null || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
+  const record = value as unknown as Record<string, unknown>;
   return [
     "adapterInfo",
     "openWorkspaceRoot",
@@ -187,21 +385,89 @@ function isEngineeringFileAccessAddon(value: unknown): value is EngineeringFileA
   ].every((name) => typeof record[name] === "function");
 }
 
+function isEngineeringStateDurabilityAddon(
+  value: unknown
+): value is EngineeringStateDurabilityAddon {
+  if (!isEngineeringFileAccessAddon(value)) return false;
+  const record = value as unknown as Record<string, unknown>;
+  return [
+    "openEngineeringStateRoot",
+    "closeEngineeringStateRoot",
+    "ensureEngineeringStateDirectoryNoFollow",
+    "flushEngineeringStateDirectory",
+    "openEngineeringStateExclusiveNoFollow",
+    "writeEngineeringStateFile",
+    "syncEngineeringStateFile",
+    "closeEngineeringStateFile",
+    "readEngineeringStateFileNoFollow",
+    "readEngineeringStateDirectoryNoFollow",
+    "linkEngineeringStateFileNoFollow",
+    "renameReplaceEngineeringStateFileNoFollow",
+    "unlinkEngineeringStateFileNoFollow"
+  ].every((name) => typeof record[name] === "function");
+}
+
+function isEngineeringStateDirectoryEntry(
+  value: unknown
+): value is EngineeringStateDirectoryEntryV2 {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 2 &&
+    typeof record["name"] === "string" &&
+    (record["kind"] === "file" ||
+      record["kind"] === "directory" ||
+      record["kind"] === "symlink" ||
+      record["kind"] === "other")
+  );
+}
+
+function normalizeEngineeringStateNativeError(cause: unknown): unknown {
+  if (cause === null || typeof cause !== "object" || !("code" in cause)) return cause;
+  const code = (cause as { readonly code?: unknown }).code;
+  if (code === "ENGINEERING_ACCESS_NOT_FOUND") {
+    return Object.assign(new Error("Engineering state object is missing."), { code: "ENOENT" });
+  }
+  if (code === "ENGINEERING_MUTATION_TARGET_ALREADY_EXISTS") {
+    return Object.assign(new Error("Engineering state object already exists."), { code: "EEXIST" });
+  }
+  return cause;
+}
+
 function isEngineeringFileAccessAddonMetadata(
   value: unknown
 ): value is EngineeringFileAccessAddonMetadata {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  const expectedKeys = ["accessEligible", "adapterId", "batch", "mutation", "recovery", "target"];
+  const expectedKeys =
+    record["batch"] === "7"
+      ? [
+          "accessEligible",
+          "adapterId",
+          "batch",
+          "mutation",
+          "mutationV2Probe",
+          "recovery",
+          "recoveryScanProbe",
+          "stateDurabilityProbe",
+          "target"
+        ]
+      : ["accessEligible", "adapterId", "batch", "mutation", "recovery", "target"];
   const keys = Object.keys(record).sort();
   return (
     keys.length === expectedKeys.length &&
     keys.every((key, index) => key === expectedKeys[index]) &&
     record["adapterId"] === "novel_studio_engineering_file_access" &&
     record["target"] === "win32-x64" &&
-    record["batch"] === "6" &&
     (record["accessEligible"] === "available" || record["accessEligible"] === "unavailable") &&
-    record["mutation"] === "unavailable" &&
-    record["recovery"] === "unavailable"
+    ((record["batch"] === "6" &&
+      record["mutation"] === "unavailable" &&
+      record["recovery"] === "unavailable") ||
+      (record["batch"] === "7" &&
+        record["mutation"] === "available" &&
+        record["recovery"] === "available" &&
+        record["mutationV2Probe"] === "available" &&
+        record["recoveryScanProbe"] === "available" &&
+        record["stateDurabilityProbe"] === "available"))
   );
 }

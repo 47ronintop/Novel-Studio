@@ -93,6 +93,23 @@ describe("Main-owned engineering file access qualification", () => {
     expect(workflow).toContain("api-ms-win-crt-");
   });
 
+  test("requires signed Batch 7 mutation/recovery evidence and schedules the installed-package E2E", async () => {
+    const [signScript, packageCheck, packagedConfig] = await Promise.all([
+      readFile(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.signScript, "utf8"),
+      readFile("scripts/package-check.mjs", "utf8"),
+      readFile("playwright.packaged.config.ts", "utf8")
+    ]);
+
+    for (const source of [signScript, packageCheck]) {
+      expect(source).toContain('batch: "7"');
+      expect(source).toContain('mutation: "available"');
+      expect(source).toContain('recovery: "available"');
+      expect(source).toContain("mutationRecoveryEvidence");
+      expect(source).toContain("faultRecoveryRequired");
+    }
+    expect(packagedConfig).toContain("engineering-file-access-package.e2e.ts");
+  });
+
   test.each([
     ["missing", false, "host_missing"],
     ["partial", true, "host_partial"],

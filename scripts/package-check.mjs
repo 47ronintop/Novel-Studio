@@ -367,18 +367,18 @@ async function checkSignedEngineeringFileAccessCandidate([addonPath, manifestPat
       readFile(signaturePath)
     ]);
   } catch {
-    failures.push("Engineering native candidate must contain a readable signed B6 manifest.");
+    failures.push("Engineering native candidate must contain a readable signed Batch 7 manifest.");
     return;
   }
 
-  if (signature.byteLength === 0 || !isSignedBatch6Manifest(manifest, sha256(addon))) {
+  if (signature.byteLength === 0 || !isSignedBatch7Manifest(manifest, sha256(addon))) {
     failures.push(
-      "Engineering native candidate must use the signed B6 manifest with complete positive/negative probe evidence."
+      "Engineering native candidate must use the signed Batch 7 manifest with complete installed mutation/recovery evidence."
     );
   }
 }
 
-function isSignedBatch6Manifest(value, addonSha256) {
+function isSignedBatch7Manifest(value, addonSha256) {
   if (!isRecord(value)) return false;
   const artifact = value.artifact;
   const signing = value.signing;
@@ -396,18 +396,25 @@ function isSignedBatch6Manifest(value, addonSha256) {
     signing.detachedCms === "trusted_publisher" &&
     signing.developmentUnsigned === undefined &&
     hasExactValues(eligibility, {
-      batch: "6",
+      batch: "7",
       root: "available",
       access: "available",
       read: "available",
       index: "available",
-      mutation: "unavailable",
-      recovery: "unavailable"
+      mutation: "available",
+      recovery: "available"
     }) &&
     isRecord(qualification) &&
     qualification.productionQualified === true &&
-    hasExactArray(qualification.eligibleCapabilities, ["root", "access", "read", "index"]) &&
-    hasExactArray(qualification.unavailableCapabilities, ["mutation", "recovery"]) &&
+    hasExactArray(qualification.eligibleCapabilities, [
+      "root",
+      "access",
+      "read",
+      "index",
+      "mutation",
+      "recovery"
+    ]) &&
+    hasExactArray(qualification.unavailableCapabilities, []) &&
     isRecord(qualification.probeEvidence) &&
     hasExactValues(qualification.probeEvidence.positiveProtections, {
       rootRelativeTraversal: "passed",
@@ -424,6 +431,20 @@ function isSignedBatch6Manifest(value, addonSha256) {
       receiptBindingDisabled: "canary_exposed",
       durabilityDisabled: "canary_exposed",
       recoveryRootBindingDisabled: "canary_exposed"
+    }) &&
+    isRecord(qualification.mutationRecoveryEvidence) &&
+    hasExactValues(qualification.mutationRecoveryEvidence.positiveProtections, {
+      replace: "passed",
+      create: "passed",
+      receiptBinding: "passed",
+      walPreparation: "passed",
+      recoveryScan: "passed"
+    }) &&
+    hasExactValues(qualification.mutationRecoveryEvidence.negativeControls, {
+      rawByteManifestMismatch: "canary_exposed",
+      staleBase: "canary_exposed",
+      createRace: "canary_exposed",
+      faultRecoveryRequired: "canary_exposed"
     })
   );
 }

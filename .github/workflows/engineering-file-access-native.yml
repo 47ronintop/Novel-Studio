@@ -11,6 +11,7 @@ on:
       - "apps/desktop/electron-builder.config.cjs"
       - "apps/desktop/src/main/engineering-file-access-qualification.ts"
       - "apps/desktop/test/engineering-file-access-package.e2e.ts"
+      - "apps/desktop/test/engineering-file-access-probe-contract.test.ts"
       - "scripts/build-engineering-file-access-win32.mjs"
       - "scripts/package-check.mjs"
       - "scripts/sign-engineering-file-access-win32.mjs"
@@ -91,8 +92,97 @@ jobs:
           if ($dynamicCrt) {
             throw "Native addon must carry its MSVC runtime instead of requiring a runner-installed redistributable: $($dynamicCrt.Line -join ', ')"
           }
-      - name: Record unsigned development probe result
+      - name: Verify canonical source and toolchain identity in the same manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifestPath = "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json"
+          $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+          foreach ($path in @(
+            "native/engineering-file-access-win32/CMakeLists.txt",
+            "native/engineering-file-access-win32/src/engineering_file_access.cc"
+          )) {
+            $declared = @($manifest.sourceIdentity.files | Where-Object { $_.path -eq $path })
+            if ($declared.Count -ne 1) { throw "Manifest must declare exactly one source identity for $path" }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+            if ($declared[0].sha256 -ne $actual) { throw "Manifest source identity mismatch for $path" }
+          }
+          if (
+            $manifest.sourceIdentity.sha256 -notmatch "^[a-f0-9]{64}$" -or
+            $manifest.toolchain.sha256 -notmatch "^[a-f0-9]{64}$" -or
+            $manifest.buildIdentity.sha256 -notmatch "^[a-f0-9]{64}$" -or
+            $manifest.developmentMutationV2Probe.sourceIdentitySha256 -ne $manifest.sourceIdentity.sha256 -or
+            $manifest.developmentMutationV2Probe.toolchainIdentitySha256 -ne $manifest.toolchain.sha256 -or
+            $manifest.developmentMutationV2Probe.productCapability -ne "unavailable" -or
+            $manifest.developmentMutationV2Probe.primitives.stateDurability -ne "available" -or
+            $manifest.eligibility.batch -ne "6" -or
+            $manifest.eligibility.mutation -ne "unavailable" -or
+            $manifest.eligibility.recovery -ne "unavailable"
+          ) { throw "Manifest does not preserve the single-chain B6 product / B7 development identity boundary" }
+      - name: Record unsigned development positive, negative, and fault probe result
         run: node scripts/probe-engineering-file-access-package.mjs
+      - name: Verify B7 probe evidence is complete and diagnostic only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $report = Get-Content -Raw -LiteralPath native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.probe.json | ConvertFrom-Json
+          $mutation = $report.mutationV2Probe
+          $state = $report.stateDurabilityProbe
+          if ($report.productionQualified -ne $false -or $report.reason -ne "unsigned_development_artifact" -or $mutation.status -ne "passed" -or $state.status -ne "passed") {
+            throw "Native development probe must remain diagnostic and unsigned"
+          }
+          foreach ($name in @(
+            "noFollowDirectory",
+            "exclusiveWriteAndFlush",
+            "createOnlyHardLinkInstall",
+            "atomicReplaceRename",
+            "noFollowReadAndList",
+            "unlinkAndDirectoryFlush"
+          )) {
+            if ($state.$name -ne "passed") { throw "Missing state durability probe: $name" }
+          }
+          foreach ($name in @(
+            "rawByteCandidateBefore",
+            "absenceProof",
+            "absenceProofV2",
+            "objectMutationAbi",
+            "targetInspection",
+            "operationStateReconciliation",
+            "handleRelativeRevalidation",
+            "finalRenameNamespaceRevalidation",
+            "handleBoundReplaceHandoff",
+            "hardLinkRejection",
+            "copyOnReplaceSafety",
+            "fixedCreateMetadata",
+            "receiptDurability",
+            "stagingWalRecoveryScan",
+            "recoveryBeforeCleanup"
+          )) {
+            if ($mutation.$name -ne "passed") { throw "Missing positive mutation probe: $name" }
+          }
+          foreach ($name in @(
+            "rawByteManifestMismatch",
+            "walBindingMismatch",
+            "hardLinkLeaf",
+            "staleAbsenceProof",
+            "v2RawByteManifestMismatch",
+            "v2StaleAbsenceProof",
+            "replaceFinalRenameNamespaceRevalidation",
+            "targetSwapFinalWindowNoOverwrite",
+            "createOnlyHandoffCollisionRecoveryRequired"
+          )) {
+            if ($mutation.negativeCanaries.$name -ne "canary_exposed") { throw "Missing negative mutation canary: $name" }
+          }
+          if (
+            $mutation.faultProbe.nativeExport -ne "passed" -or
+            $mutation.faultProbe.orphanStagingRecoveryRequired -ne "canary_exposed" -or
+            $mutation.faultProbe.replaceFinalRenameNamespaceRevalidation -ne "canary_exposed" -or
+            $mutation.faultProbe.afterOriginalHandoffRecoveryRequired -ne "canary_exposed" -or
+            $mutation.faultProbe.beforeCandidateHandoffRecoveryRequired -ne "canary_exposed" -or
+            $mutation.faultProbe.afterCandidateHandoffRecoveryRequired -ne "canary_exposed"
+          ) {
+            throw "Missing native fault-probe evidence"
+          }
       - name: Record addon SHA-256
         shell: pwsh
         run: |

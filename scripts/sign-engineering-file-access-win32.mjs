@@ -36,9 +36,9 @@ try {
 } catch {
   throw new Error("Production signing requires readable native positive/negative probe evidence");
 }
-if (!hasProductionProbeEvidence(probeEvidence)) {
+if (!hasBatch7ProductionProbeEvidence(probeEvidence)) {
   throw new Error(
-    "Production signing requires every native protection and disabled-protection canary"
+    "Batch 7 production signing requires every native and mutation/recovery protection canary"
   );
 }
 const signtool = (await run("where.exe", ["signtool.exe"])).stdout.trim().split(/\r?\n/u)[0];
@@ -63,23 +63,27 @@ document.artifact.sha256 = createHash("sha256")
 document.publisherPolicyChecksum = publisherPolicyChecksum.toLowerCase();
 document.signing = { authenticode: "trusted_publisher", detachedCms: "trusted_publisher" };
 document.eligibility = {
-  batch: "6",
+  batch: "7",
   root: "available",
   access: "available",
   read: "available",
   index: "available",
-  mutation: "unavailable",
-  recovery: "unavailable"
+  mutation: "available",
+  recovery: "available"
 };
 document.qualification = {
   productionQualified: true,
-  eligibleCapabilities: ["root", "access", "read", "index"],
-  unavailableCapabilities: ["mutation", "recovery"],
+  eligibleCapabilities: ["root", "access", "read", "index", "mutation", "recovery"],
+  unavailableCapabilities: [],
   // This input is release-pipeline evidence only. CMS signs the enclosing manifest; Main compares
   // the signer pins and recomputes a fresh installed-addon observation before using it.
   probeEvidence: {
     positiveProtections: probeEvidence.positiveProtections,
     negativeControls: probeEvidence.negativeControls
+  },
+  mutationRecoveryEvidence: {
+    positiveProtections: probeEvidence.mutationRecoveryEvidence.positiveProtections,
+    negativeControls: probeEvidence.mutationRecoveryEvidence.negativeControls
   }
 };
 await writeFile(manifest, `${JSON.stringify(document, null, 2)}\n`, "utf8");
@@ -107,7 +111,7 @@ const hashes = {
 };
 console.log(`Signed engineering native artifacts: ${JSON.stringify(hashes)}`);
 
-function hasProductionProbeEvidence(value) {
+function hasBatch7ProductionProbeEvidence(value) {
   return (
     value &&
     typeof value === "object" &&
@@ -133,6 +137,18 @@ function hasProductionProbeEvidence(value) {
         "durabilityDisabled",
         "recoveryRootBindingDisabled"
       ],
+      "canary_exposed"
+    ) &&
+    value.mutationRecoveryEvidence &&
+    typeof value.mutationRecoveryEvidence === "object" &&
+    hasExactMap(
+      value.mutationRecoveryEvidence.positiveProtections,
+      ["replace", "create", "receiptBinding", "walPreparation", "recoveryScan"],
+      "passed"
+    ) &&
+    hasExactMap(
+      value.mutationRecoveryEvidence.negativeControls,
+      ["rawByteManifestMismatch", "staleBase", "createRace", "faultRecoveryRequired"],
       "canary_exposed"
     )
   );

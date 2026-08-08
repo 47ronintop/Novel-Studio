@@ -5,9 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS,
+  ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS,
   ENGINEERING_FILE_NEGATIVE_CONTROLS,
   ENGINEERING_FILE_POSITIVE_PROTECTIONS,
-  validateEngineeringFileProbeReport
+  validateEngineeringFileProbeReport,
+  validateEngineeringFileProbeReportV2
 } from "@novel-studio/agent-engine";
 import { describe, expect, test, vi } from "vitest";
 
@@ -87,6 +90,27 @@ describe("Main-owned engineering file access fresh probe", () => {
       expect(loadAddon).not.toHaveBeenCalled();
     });
   });
+
+  test("emits a versioned Batch 7 report only after checking the installed mutation/recovery surface", async () => {
+    await withInstalledArtifacts(async (paths) => {
+      const probe = createMainOwnedEngineeringFileAccessFreshProbe({
+        loadAddon: () => batch7HardenedFixtureAddon()
+      });
+      const report = await probe.probe({
+        ...paths,
+        checkedAt,
+        publisherPolicyChecksum,
+        protectionEvidence: passingProtectionEvidence(),
+        mutationRecoveryEvidence: passingBatch7MutationRecoveryEvidence()
+      });
+
+      expect(report).toMatchObject({ schemaVersion: "2.0", batch: "7" });
+      expect(validateEngineeringFileProbeReportV2(report, checkedAt)).toEqual({
+        valid: true,
+        failureReasons: []
+      });
+    }, "7");
+  });
 });
 
 async function withInstalledArtifacts(
@@ -94,7 +118,8 @@ async function withInstalledArtifacts(
     artifactPath: string;
     manifestPath: string;
     signaturePath: string;
-  }) => Promise<void>
+  }) => Promise<void>,
+  batch: "6" | "7" = "6"
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "engineering-file-access-fresh-probe-test-"));
   const artifactPath = join(directory, "engineering_file_access.node");
@@ -111,7 +136,8 @@ async function withInstalledArtifacts(
         adapterId: "novel_studio_engineering_file_access",
         target: "win32-x64",
         artifact: { sha256: artifactSha256 },
-        publisherPolicyChecksum
+        publisherPolicyChecksum,
+        eligibility: { batch }
       }),
       "utf8"
     );
@@ -120,6 +146,29 @@ async function withInstalledArtifacts(
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+function passingBatch7MutationRecoveryEvidence() {
+  return {
+    positiveProtections: Object.fromEntries(
+      ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS.map((key) => [key, "passed"])
+    ),
+    negativeControls: Object.fromEntries(
+      ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS.map((key) => [
+        key,
+        "canary_exposed"
+      ])
+    )
+  } as {
+    positiveProtections: Record<
+      (typeof ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_POSITIVE_PROTECTIONS)[number],
+      "passed"
+    >;
+    negativeControls: Record<
+      (typeof ENGINEERING_FILE_BATCH_7_MUTATION_RECOVERY_NEGATIVE_CONTROLS)[number],
+      "canary_exposed"
+    >;
+  };
 }
 
 function passingProtectionEvidence() {
@@ -181,5 +230,21 @@ function hardenedFixtureAddon() {
         truncated: false
       };
     }
+  };
+}
+
+function batch7HardenedFixtureAddon() {
+  return {
+    ...hardenedFixtureAddon(),
+    adapterInfo: () => ({
+      target: "win32-x64",
+      batch: "7",
+      accessEligible: "available",
+      mutation: "available",
+      recovery: "available"
+    }),
+    mutationV2ProbeInfo: () => ({ status: "available" }),
+    scanMutationRecovery: () => ({ state: "clear" }),
+    mutationV2FaultProbe: () => ({ status: "available" })
   };
 }

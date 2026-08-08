@@ -6,7 +6,12 @@ import { defineConfig } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./apps/desktop/test",
-  testMatch: ["agent-write.e2e.ts", "agent-writing-domain.e2e.ts", "agent-creative-general.e2e.ts"],
+  testMatch: [
+    "agent-write.e2e.ts",
+    "agent-writing-domain.e2e.ts",
+    "agent-creative-general.e2e.ts",
+    "engineering-file-access-package.e2e.ts"
+  ],
   fullyParallel: false,
   workers: 1,
   reporter: "list",

@@ -62,6 +62,23 @@ if (!compilerPath) throw new Error("VsDevCmd did not expose cl.exe");
 const sourceRevision = (
   process.env.SOURCE_REVISION ?? (await run("git", ["rev-parse", "HEAD"], { cwd: root })).stdout
 ).trim();
+const nativeSourceFiles = [
+  "native/engineering-file-access-win32/CMakeLists.txt",
+  "native/engineering-file-access-win32/src/engineering_file_access.cc"
+];
+const sourceFiles = await Promise.all(
+  nativeSourceFiles.map(async (path) => ({
+    path,
+    sha256: createHash("sha256")
+      .update(await readFile(join(root, path)))
+      .digest("hex")
+  }))
+);
+const sourceIdentity = {
+  revision: sourceRevision,
+  files: sourceFiles,
+  sha256: sha256(stable({ revision: sourceRevision, files: sourceFiles }))
+};
 const includeDir = process.env.NODE_API_INCLUDE_DIR;
 if (!includeDir)
   throw new Error("NODE_API_INCLUDE_DIR must point to the CI-provided Node-API headers");
@@ -82,6 +99,18 @@ const cmakeVersion = (
 ).stdout
   .split(/\r?\n/u)[0]
   .trim();
+const toolchain = {
+  cmakeVersion,
+  generator,
+  architecture: "x64",
+  nodeVersion: process.version,
+  visualStudioVersion: process.env.ENGINEERING_FILE_ACCESS_VS_VERSION ?? null,
+  vcToolsVersion: toolchainEnvironment.VCToolsVersion,
+  compilerPath
+};
+const toolchainIdentity = {
+  sha256: sha256(stable(toolchain))
+};
 const buildDir = join(root, "native", "engineering-file-access-win32", ".build", "win32-x64");
 const distDir = join(root, "native", "engineering-file-access-win32", "dist", "win32-x64");
 await mkdir(distDir, { recursive: true });
@@ -89,7 +118,8 @@ await mkdir(distDir, { recursive: true });
 // never make that artifact appear packageable or production-qualified.
 await Promise.all([
   rm(join(distDir, "engineering_file_access.manifest.p7s"), { force: true }),
-  rm(join(distDir, "engineering_file_access.probe.json"), { force: true })
+  rm(join(distDir, "engineering_file_access.probe.json"), { force: true }),
+  rm(join(distDir, "engineering_file_access.sha256"), { force: true })
 ]);
 await run(
   "cmake",
@@ -135,14 +165,20 @@ const manifest = {
   target: "win32-x64",
   sourceRevision,
   nodeApiVersion: 8,
+  sourceIdentity,
   toolchain: {
-    cmakeVersion,
-    generator,
-    architecture: "x64",
-    nodeVersion: process.version,
-    visualStudioVersion: process.env.ENGINEERING_FILE_ACCESS_VS_VERSION ?? null,
-    vcToolsVersion: toolchainEnvironment.VCToolsVersion,
-    compilerPath
+    ...toolchain,
+    ...toolchainIdentity
+  },
+  buildIdentity: {
+    sha256: sha256(
+      stable({
+        target: "win32-x64",
+        nodeApiVersion: 8,
+        sourceIdentitySha256: sourceIdentity.sha256,
+        toolchainIdentitySha256: toolchainIdentity.sha256
+      })
+    )
   },
   publisherPolicyChecksum: process.env.PUBLISHER_POLICY_CHECKSUM ?? null,
   artifact: {
@@ -161,6 +197,30 @@ const manifest = {
     mutation: "unavailable",
     recovery: "unavailable"
   },
+  developmentMutationV2Probe: {
+    schemaVersion: "1.0",
+    batch: "7",
+    sourceIdentitySha256: sourceIdentity.sha256,
+    toolchainIdentitySha256: toolchainIdentity.sha256,
+    primitives: {
+      rawByteBlobs: "available",
+      absenceProof: "available",
+      absenceProofV2: "available",
+      objectMutationAbi: "available",
+      targetInspection: "available",
+      operationStateReconciliation: "available",
+      handleRelativeRevalidation: "available",
+      finalRenameNamespaceRevalidation: "available",
+      hardLinkPolicy: "reject_multiple_links",
+      copyOnReplace: "not_enabled",
+      fixedCreateMetadata: "available",
+      receiptDurability: "available",
+      stagingWalRecoveryScan: "available",
+      faultProbe: "available",
+      stateDurability: "available"
+    },
+    productCapability: "unavailable"
+  },
   signing: {
     authenticode: "required-for-production",
     detachedCms: "required-for-production",
@@ -178,3 +238,18 @@ await writeFile(
   "utf8"
 );
 console.log(`Built ${artifactPath}`);
+
+function stable(value) {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stable(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
