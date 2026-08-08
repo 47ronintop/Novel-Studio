@@ -30,6 +30,7 @@ import {
   hasCurrentMainOwnedApprovalSurfaceQualification
 } from "./agent-feature-flags.js";
 import { createCreativeFileOperationQualificationService } from "./creative-file-operation-qualification.js";
+import { createMainOwnedCreativeFileOperationCandidateInspector } from "./creative-file-operation-fresh-probe.js";
 import { createMainOwnedEngineeringFileAccessFreshProbe } from "./engineering-file-access-fresh-probe.js";
 import { createEngineeringFileAccessQualificationService } from "./engineering-file-access-qualification.js";
 import { createEngineeringWorkspaceAccessRuntime } from "./engineering-workspace-access-runtime.js";
@@ -245,7 +246,14 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     ? approvalQualificationResult.value
     : undefined;
   const creativeFileOperationQualification = createCreativeFileOperationQualificationService({
-    packageKind: app.isPackaged ? "production" : "development"
+    packageKind: app.isPackaged ? "production" : "development",
+    ...(app.isPackaged && approvalSurfaceQualification !== undefined
+      ? {
+          candidateInspector: createMainOwnedCreativeFileOperationCandidateInspector({
+            packageIdentityChecksum: approvalSurfaceQualification.attestationChecksum
+          })
+        }
+      : {})
   });
   // This Main-only authority never treats a locally built or unsigned CI artifact as production.
   const engineeringFileAccessQualification = createEngineeringFileAccessQualificationService({
