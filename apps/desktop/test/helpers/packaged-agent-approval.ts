@@ -59,6 +59,50 @@ export async function configureLocalModelThroughUi(
   await click(application.processId, mainWindowTitle, "关闭设置");
 }
 
+export async function selectCreativeProjectFilesContextThroughUi(
+  application: PackagedAgentApplication
+): Promise<void> {
+  await click(application.processId, mainWindowTitle, "项目文件");
+  await waitForControl(application, "项目文件列表");
+}
+
+export async function expandCreativeProjectDirectoryThroughUi(
+  application: PackagedAgentApplication,
+  name: string
+): Promise<void> {
+  await click(application.processId, mainWindowTitle, `展开目录：${name}`);
+}
+
+export async function openCreativeProjectFileThroughUi(
+  application: PackagedAgentApplication,
+  name: string
+): Promise<void> {
+  await click(application.processId, mainWindowTitle, `打开文件：${name}`);
+  await waitForControl(application, "普通文件正文");
+}
+
+export async function controlExistsThroughUi(
+  application: PackagedAgentApplication,
+  name: string
+): Promise<boolean> {
+  return (
+    (await invokeUiAutomation("exists", application.processId, mainWindowTitle, name)) === "true"
+  );
+}
+
+export async function readControlTextThroughUi(
+  application: PackagedAgentApplication,
+  name: string
+): Promise<string> {
+  const encoded = await invokeUiAutomation(
+    "read-text",
+    application.processId,
+    mainWindowTitle,
+    name
+  );
+  return Buffer.from(encoded, "base64").toString("utf8");
+}
+
 export async function startAgentRunThroughUi(
   application: PackagedAgentApplication,
   request: string
@@ -321,7 +365,7 @@ async function isPortableExecutable(path: string): Promise<boolean> {
 }
 
 async function invokeUiAutomation(
-  action: "click" | "exists" | "set-value" | "wait-control" | "wait-window",
+  action: "click" | "exists" | "read-text" | "set-value" | "wait-control" | "wait-window",
   processId: number,
   windowTitle: string | readonly string[],
   name?: string | readonly string[],
@@ -360,6 +404,35 @@ function Find-Control($window, [string[]]$controlNames) {
   $condition = Find-NameCondition $controlNames
   return $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
+function Read-ControlText($control) {
+  $pattern = $null
+  if ($control.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+    return ([System.Windows.Automation.ValuePattern]$pattern).Current.Value
+  }
+  $pattern = $null
+  if ($control.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) {
+    return ([System.Windows.Automation.TextPattern]$pattern).DocumentRange.GetText(-1)
+  }
+  $descendants = $control.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition
+  )
+  foreach ($descendant in $descendants) {
+    $pattern = $null
+    if ($descendant.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+      return ([System.Windows.Automation.ValuePattern]$pattern).Current.Value
+    }
+  }
+  $bestText = $null
+  foreach ($descendant in $descendants) {
+    $pattern = $null
+    if ($descendant.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) {
+      $candidate = ([System.Windows.Automation.TextPattern]$pattern).DocumentRange.GetText(-1)
+      if ($null -eq $bestText -or $candidate.Length -gt $bestText.Length) { $bestText = $candidate }
+    }
+  }
+  return $bestText
+}
 while ([DateTime]::UtcNow -lt $deadline) {
   $window = Find-Window $input.windowTitles
   if ($input.action -eq 'wait-window' -and $null -ne $window) { 'true'; exit 0 }
@@ -367,6 +440,11 @@ while ([DateTime]::UtcNow -lt $deadline) {
     $control = Find-Control $window $input.controlNames
     if ($input.action -eq 'exists') { if ($null -ne $control) { 'true' } else { 'false' }; exit 0 }
     if ($input.action -eq 'wait-control' -and $null -ne $control) { 'true'; exit 0 }
+    if ($input.action -eq 'read-text' -and $null -ne $control) {
+      $text = Read-ControlText $control
+      if ($null -eq $text) { throw "Control '$($input.controlNames -join '|')' has no readable text pattern." }
+      [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$text)); exit 0
+    }
     if ($input.action -eq 'click' -and $null -ne $control) {
       $pattern = $null
       if ($control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
