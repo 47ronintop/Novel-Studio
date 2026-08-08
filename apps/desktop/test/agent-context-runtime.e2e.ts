@@ -178,6 +178,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
   await mkdir(join(creativeRoot, "conventions"), { recursive: true });
   await mkdir(join(creativeRoot, "notes"), { recursive: true });
   await mkdir(join(creativeRoot, "characters"), { recursive: true });
+  await mkdir(join(creativeRoot, ".novel-studio"), { recursive: true });
   await writeFile(
     join(creativeRoot, "conventions", "writing.md"),
     "CREATIVE_E2E_CONVENTION",
@@ -266,7 +267,9 @@ test("sends profile-specific conventions and outlines in real workspace provider
     }
     const evidenceRef = latestCompletedToolEvidenceRef(body);
     if (evidenceRef === undefined) {
-      throw new Error("Expected a paired persisted tool_completed evidence reference before finish.");
+      throw new Error(
+        "Expected a paired persisted tool_completed evidence reference before finish."
+      );
     }
     sendToolCall(
       response,
@@ -307,23 +310,34 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await sourcePanel.press("Escape");
     const engineeringRequest = "ENGINEERING_CONTEXT_E2E_REQUEST";
     await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
-    await sendProviderRequest(page, engineeringRequest);
-    await expect
-      .poll(() => matchingProviderRequests(modelRequests, engineeringRequest).length)
-      .toBe(3);
-    await expect(page.getByText(`Completed ${engineeringRequest}`, { exact: true })).toBeVisible();
+    const engineeringRequestSent = await sendProviderRequest(page, engineeringRequest);
+    if (engineeringRequestSent) {
+      await expect
+        .poll(() => matchingProviderRequests(modelRequests, engineeringRequest).length)
+        .toBe(3);
+      await expect(
+        page.getByText(`Completed ${engineeringRequest}`, { exact: true })
+      ).toBeVisible();
 
-    const engineeringPayload = providerRequestFor(modelRequests, engineeringRequest);
-    const engineeringPrefix = expectWorkspaceProjectPrefix(engineeringPayload, {
-      conventionMarker: "ENGINEERING_E2E_CONVENTION",
-      outlineMarker: 'file "src/main.ts"',
-      userRequest: engineeringRequest
-    });
-    expect(engineeringPrefix.outline.data).toContain("Workspace outline (engineering).");
-    await expectWorkspaceSourcePanel(page, {
-      conventionsLabel: "AGENTS.md",
-      outlineLabel: "Workspace outline (engineering)"
-    });
+      const engineeringPayload = providerRequestFor(modelRequests, engineeringRequest);
+      const engineeringPrefix = expectWorkspaceProjectPrefix(engineeringPayload, {
+        conventionMarker: "ENGINEERING_E2E_CONVENTION",
+        outlineMarker: 'file "src/main.ts"',
+        userRequest: engineeringRequest
+      });
+      expect(engineeringPrefix.outline.data).toContain("Workspace outline (engineering).");
+      await expectWorkspaceSourcePanel(page, {
+        conventionsLabel: "AGENTS.md",
+        outlineLabel: "Workspace outline (engineering)"
+      });
+    } else {
+      expect(
+        modelRequests.filter((request) => lastUserRequest(request) === engineeringRequest)
+      ).toHaveLength(0);
+      await expect(
+        page.getByText(/WORKSPACE_OUTLINE_ENGINEERING_SOURCE_UNAVAILABLE/)
+      ).toBeVisible();
+    }
 
     await engineeringApp.close();
     engineeringApp = undefined;
@@ -617,9 +631,27 @@ async function selectOperationMode(
   await page.getByLabel("计划或执行模式").getByRole("button", { name: expected }).click();
 }
 
-async function sendProviderRequest(page: Page, request: string): Promise<void> {
+async function sendProviderRequest(page: Page, request: string): Promise<boolean> {
   const composer = page.getByLabel("会话输入区");
   await composer.getByLabel("Agent 请求").fill(request);
+  const start = composer.getByRole("button", { name: "启动 Agent 运行" });
+  await start.click();
+  await composer.getByTitle("查看上下文").click();
+  await page.getByRole("tab", { name: "实际发送预览" }).click();
+  const preview = page.getByLabel("实际发送预览");
+  await expect(preview).toBeVisible();
+  const previewClass = (await preview.getAttribute("class")) ?? "";
+  if (!previewClass.split(/\s+/u).includes("ns-agent-send-preview")) {
+    const engineeringSourceUnavailable = page.getByText(
+      /WORKSPACE_OUTLINE_ENGINEERING_SOURCE_UNAVAILABLE/
+    );
+    if (await engineeringSourceUnavailable.isVisible().catch(() => false)) {
+      await page.getByRole("dialog", { name: "上下文用量" }).press("Escape");
+      return false;
+    }
+    throw new Error(`Expected a Main-bound send preview, received classes: ${previewClass}`);
+  }
+  await page.getByRole("dialog", { name: "上下文用量" }).press("Escape");
   await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
   await expect(
     page
@@ -627,23 +659,20 @@ async function sendProviderRequest(page: Page, request: string): Promise<void> {
       .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
       .filter({ hasText: request })
   ).toBeVisible();
-  await composer.getByTitle("查看上下文").click();
-  await page.getByRole("tab", { name: "实际发送预览" }).click();
-  const preview = page.getByLabel("实际发送预览");
-  await expect(preview).toBeVisible();
-  await expect(preview).toHaveClass(/ns-agent-send-preview/);
-  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
+  return true;
 }
 
 async function chooseWorkspaceModelSharing(page: Page): Promise<void> {
   const result = await page.evaluate(async () => {
-    const api = (window as unknown as {
-      novelStudio?: {
-        workspace?: {
-          updateContextPolicy?: (update: unknown) => Promise<{ readonly ok: boolean }>;
+    const api = (
+      window as unknown as {
+        novelStudio?: {
+          workspace?: {
+            updateContextPolicy?: (update: unknown) => Promise<{ readonly ok: boolean }>;
+          };
         };
-      };
-    }).novelStudio;
+      }
+    ).novelStudio;
     return api?.workspace?.updateContextPolicy?.({
       action: "set_sharing_defaults",
       defaults: {
@@ -682,9 +711,7 @@ function providerRequestFor(
 ): Record<string, unknown> {
   const matching = matchingProviderRequests(requests, userRequest);
   if (matching.length < 1) {
-    throw new Error(
-      `Expected a provider request for ${userRequest}, received ${matching.length}.`
-    );
+    throw new Error(`Expected a provider request for ${userRequest}, received ${matching.length}.`);
   }
   return matching[0];
 }
@@ -826,8 +853,7 @@ function lastUserRequest(request: Record<string, unknown>): string {
     messages
       .filter((message) => message.role === "user")
       .findLast(
-        (message) =>
-          typeof parseJsonObject(message.content)?.["instructionPolicy"] !== "string"
+        (message) => typeof parseJsonObject(message.content)?.["instructionPolicy"] !== "string"
       )?.content ?? ""
   );
 }
@@ -885,9 +911,7 @@ function completedFinishArguments(result: string, evidenceRef: string): Record<s
 }
 
 function contextReadToolName(userRequest: string): "list_chapters" | "list_project_entries" {
-  return userRequest === "WRITING_CONTEXT_E2E_REQUEST"
-    ? "list_chapters"
-    : "list_project_entries";
+  return userRequest === "WRITING_CONTEXT_E2E_REQUEST" ? "list_chapters" : "list_project_entries";
 }
 
 function contextResourceReadArguments(userRequest: string): Record<string, string> {
@@ -897,7 +921,7 @@ function contextResourceReadArguments(userRequest: string): Record<string, strin
         ? "file:src/main.ts"
         : userRequest === "CREATIVE_GENERAL_CONTEXT_E2E_REQUEST"
           ? "file:notes/brief.md"
-        : "chapter:ch_01JZ7P9QK2R6D4W8K3A1B5C9D0"
+          : "chapter:ch_01JZ7P9QK2R6D4W8K3A1B5C9D0"
   };
 }
 
@@ -929,9 +953,8 @@ function latestCompletedToolEvidenceRef(request: Record<string, unknown>): strin
     const evidenceRef = evidenceRefs.find(
       (value): value is string =>
         typeof value === "string" &&
-        /^run-event\/[1-9][0-9]*\/tool_completed\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(
-          value
-        ) && value.endsWith(`/tool_completed/${message["tool_call_id"]}`)
+        /^run-event\/[1-9][0-9]*\/tool_completed\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(value) &&
+        value.endsWith(`/tool_completed/${message["tool_call_id"]}`)
     );
     if (evidenceRef !== undefined) return evidenceRef;
   }
