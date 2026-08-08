@@ -140,6 +140,7 @@ export type {
   EngineeringWorkspaceAccessBinding,
   EngineeringWorkspaceAccessDirectoryEntry,
   EngineeringWorkspaceAccessIndexEntry,
+  EngineeringWorkspaceMainOnlyRootHandleBindingV2,
   EngineeringWorkspaceAccessNativeAddon,
   EngineeringWorkspaceAccessOpenRequest,
   EngineeringWorkspaceAccessPort,
@@ -150,6 +151,15 @@ export type {
   EngineeringWorkspaceNativeRootIdentity,
   EngineeringWorkspaceRootBindingIssuer
 } from "./engineering-workspace-access-port.js";
+export * from "./engineering-file-mutation-port-v2.js";
+export * from "./engineering-mutation-blob-store.js";
+export * from "./engineering-mutation-proposal-repository-v2.js";
+export * from "./engineering-mutation-receipt.js";
+export * from "./engineering-mutation-sync-required-store-v2.js";
+export * from "./engineering-recovery-gate.js";
+export * from "./engineering-startup-recovery-gate-v2.js";
+export * from "./engineering-wal-repository.js";
+export * from "./engineering-write-transaction-v2.js";
 export {
   CREATIVE_PROJECT_FILE_LIFECYCLE_VERSION,
   CREATIVE_PROJECT_FILE_POLICY_VERSION,

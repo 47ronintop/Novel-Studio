@@ -1,0 +1,550 @@
+import { describe, expect, test, vi } from "vitest";
+
+import { ok } from "@novel-studio/shared";
+
+import {
+  createEngineeringAbsenceProofV2,
+  createEngineeringFileMutationPortV2,
+  createEngineeringRawByteManifestV2,
+  engineeringFileMutationRequestChecksumV2,
+  engineeringMutationBlobIdForSha256V2,
+  sha256EngineeringMutationTextV2,
+  type EngineeringFileMutationApplyInputV2,
+  type EngineeringFileMutationNativeAddonV2,
+  type EngineeringFileMutationProposalNativeAddonV2,
+  type EngineeringFileMutationRequestV2
+} from "../src/engineering-file-mutation-port-v2.js";
+import { createEngineeringMutationReceiptV2 } from "../src/engineering-mutation-receipt.js";
+
+const hash = (value: string) => sha256EngineeringMutationTextV2(value);
+
+describe("EngineeringFileMutationPortV2", () => {
+  test("passes Main re-read raw bytes through the root-bound native seam", async () => {
+    const addon = nativeAddon((request) => receiptFor(request));
+    const input = createApplyInput();
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+      authenticateNativeEvidence: () => ok(undefined)
+    });
+
+    const result = await port.apply(input);
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { contentRootBindingId: "root_01", transactionId: "tx_01", operationId: "op_01" }
+    });
+    expect(addon.applyEngineeringFileMutationV2).toHaveBeenCalledWith(
+      "native-root-01",
+      input.request,
+      null,
+      input.candidateBytes
+    );
+  });
+
+  test("reconciles an already-applied operation without issuing another write", async () => {
+    const input = createApplyInput();
+    const addon = nativeAddon(
+      (request) => receiptFor(request),
+      (request) => operationState("after", request)
+    );
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: 7n },
+      authenticateNativeEvidence: () => ok(undefined)
+    });
+
+    const state = await port.reconcile(input);
+
+    expect(state).toMatchObject({
+      ok: true,
+      value: { state: "after", receipt: { operationId: "op_01" } }
+    });
+    expect(addon.applyEngineeringFileMutationV2).not.toHaveBeenCalled();
+    expect(addon.inspectEngineeringFileMutationTargetV2).toHaveBeenCalledWith(
+      7n,
+      input.request,
+      null,
+      input.candidateBytes
+    );
+  });
+
+  test("fails closed without Main evidence authentication or for malformed apply input", async () => {
+    const addon = nativeAddon((request) => receiptFor(request));
+    const input = createApplyInput();
+    const withoutAuthenticator = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" }
+    });
+    const invalid = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+      authenticateNativeEvidence: () => ok(undefined)
+    });
+
+    await expect(withoutAuthenticator.apply(input)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_FILE_MUTATION_V2_EVIDENCE_UNQUALIFIED" }
+    });
+    await expect(
+      invalid.apply({
+        ...input,
+        request: { ...input.request, recoveryObjectId: "recovery_01" }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_FILE_MUTATION_V2_APPLY_INPUT_INVALID" }
+    });
+    expect(addon.applyEngineeringFileMutationV2).not.toHaveBeenCalled();
+  });
+
+  test("maps a native invocation failure to an outcome-unknown recovery result", async () => {
+    const addon = nativeAddon(() => {
+      throw new Error("native transport lost");
+    });
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+      authenticateNativeEvidence: () => ok(undefined)
+    });
+
+    await expect(port.apply(createApplyInput())).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_FILE_MUTATION_V2_OUTCOME_UNKNOWN" }
+    });
+  });
+
+  test("reads a fresh root-bound raw proposal snapshot without exposing the native root handle", async () => {
+    const bytes = proposalBytes();
+    const authenticateNativeProposalEvidence = vi.fn(
+      (input: { readonly kind: "snapshot" | "absence_proof" }) => {
+        expect(input.kind).toMatch(/^(snapshot|absence_proof)$/u);
+        return ok(undefined);
+      }
+    );
+    const addon = proposalNativeAddon({
+      snapshot: () => nativePresentSnapshot({ bytes }),
+      absence: () => nativeAbsenceProof()
+    });
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+      authenticateNativeProposalEvidence
+    });
+
+    const result = await port.inspectProposalSnapshot({ relativeIdentity: "src/main.ts" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        rootBindingId: "root_01",
+        relativeIdentity: "src/main.ts",
+        parentDirectoryIdentity: "directory_01",
+        state: "present",
+        manifest: {
+          identity: {
+            kind: "observed_file",
+            rootBindingId: "root_01",
+            relativeIdentity: "src/main.ts",
+            fileIdentity: "file_01"
+          }
+        }
+      }
+    });
+    if (!result.ok) throw new Error("expected a proposal snapshot");
+    expect(result.value.bytes).toBeInstanceOf(Uint8Array);
+    expect(result.value.bytes).toEqual(bytes);
+    expect(result.value).not.toHaveProperty("rootId");
+    expect(addon.inspectEngineeringFileSnapshotV2).toHaveBeenCalledWith(
+      "native-root-01",
+      "src/main.ts"
+    );
+    expect(authenticateNativeProposalEvidence).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "snapshot" })
+    );
+  });
+
+  test("observes a create-only absence proof against a fresh snapshot from the same native handle", async () => {
+    const authenticateNativeProposalEvidence = vi.fn(
+      (input: { readonly kind: "snapshot" | "absence_proof" }) => {
+        expect(input.kind).toMatch(/^(snapshot|absence_proof)$/u);
+        return ok(undefined);
+      }
+    );
+    const addon = proposalNativeAddon({
+      snapshot: () => nativeAbsentSnapshot(),
+      absence: () => nativeAbsenceProof()
+    });
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+      authenticateNativeProposalEvidence
+    });
+
+    const result = await port.observeCreateAbsence({
+      relativeIdentity: "src/main.ts",
+      observedAt: "2099-01-01T00:00:00.000Z"
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        rootBindingId: "root_01",
+        relativeIdentity: "src/main.ts",
+        parentDirectoryIdentity: "directory_01",
+        observedAt: "2099-01-01T00:00:00.000Z"
+      }
+    });
+    expect(addon.inspectEngineeringFileSnapshotV2).toHaveBeenCalledWith(
+      "native-root-01",
+      "src/main.ts"
+    );
+    expect(addon.observeCreateAbsenceV2).toHaveBeenCalledWith(
+      "native-root-01",
+      "root_01",
+      "src/main.ts",
+      "2099-01-01T00:00:00.000Z"
+    );
+    expect(authenticateNativeProposalEvidence.mock.calls.map(([input]) => input.kind)).toEqual([
+      "snapshot",
+      "absence_proof"
+    ]);
+  });
+
+  test("rejects forged, wrong-root, wrong-relative, byte-mismatched, and manifest-mismatched snapshots", async () => {
+    const malformedSnapshots = [
+      () => ({ ...nativePresentSnapshot(), unexpected: true }),
+      () => ({ ...nativePresentSnapshot(), rootId: "another-native-root" }),
+      () => ({ ...nativePresentSnapshot(), relativeIdentity: "src/other.ts" }),
+      () => ({ ...nativePresentSnapshot(), bytes: new TextEncoder().encode("different\n") }),
+      () => {
+        const snapshot = nativePresentSnapshot();
+        return {
+          ...snapshot,
+          manifest: { ...snapshot.manifest, sha256: hash("different manifest") }
+        };
+      }
+    ];
+
+    for (const malformedSnapshot of malformedSnapshots) {
+      const addon = proposalNativeAddon({
+        snapshot: malformedSnapshot,
+        absence: () => nativeAbsenceProof()
+      });
+      const port = createEngineeringFileMutationPortV2({
+        addon,
+        rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+        authenticateNativeProposalEvidence: () => ok(undefined)
+      });
+
+      await expect(
+        port.inspectProposalSnapshot({ relativeIdentity: "src/main.ts" })
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "ENGINEERING_FILE_MUTATION_V2_PROPOSAL_EVIDENCE_INVALID" }
+      });
+    }
+  });
+
+  test("rejects an absence proof when its root, relative identity, parent identity, or time differs from the fresh snapshot", async () => {
+    const invalidProofs = [
+      nativeAbsenceProof({ rootBindingId: "root_02" }),
+      nativeAbsenceProof({ relativeIdentity: "src/other.ts" }),
+      nativeAbsenceProof({ parentDirectoryIdentity: "directory_02" }),
+      nativeAbsenceProof({ observedAt: "2099-01-01T00:00:01.000Z" })
+    ];
+
+    for (const absence of invalidProofs) {
+      const addon = proposalNativeAddon({
+        snapshot: () => nativeAbsentSnapshot(),
+        absence: () => absence
+      });
+      const port = createEngineeringFileMutationPortV2({
+        addon,
+        rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+        authenticateNativeProposalEvidence: () => ok(undefined)
+      });
+
+      await expect(
+        port.observeCreateAbsence({
+          relativeIdentity: "src/main.ts",
+          observedAt: "2099-01-01T00:00:00.000Z"
+        })
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "ENGINEERING_FILE_MUTATION_V2_PROPOSAL_EVIDENCE_INVALID" }
+      });
+    }
+  });
+
+  test("fails closed when proposal evidence authentication is missing or throws", async () => {
+    const missingAuthAddon = proposalNativeAddon({
+      snapshot: () => nativePresentSnapshot(),
+      absence: () => nativeAbsenceProof()
+    });
+    const missingAuthenticator = createEngineeringFileMutationPortV2({
+      addon: missingAuthAddon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" }
+    });
+
+    await expect(
+      missingAuthenticator.inspectProposalSnapshot({ relativeIdentity: "src/main.ts" })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_FILE_MUTATION_V2_EVIDENCE_UNQUALIFIED" }
+    });
+    expect(missingAuthAddon.inspectEngineeringFileSnapshotV2).not.toHaveBeenCalled();
+
+    const throwingAuthenticator = createEngineeringFileMutationPortV2({
+      addon: proposalNativeAddon({
+        snapshot: () => nativeAbsentSnapshot(),
+        absence: () => nativeAbsenceProof()
+      }),
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+      authenticateNativeProposalEvidence: ({ kind }) => {
+        if (kind === "snapshot") return ok(undefined);
+        throw new Error("native proposal evidence signature rejected");
+      }
+    });
+
+    await expect(
+      throwingAuthenticator.observeCreateAbsence({
+        relativeIdentity: "src/main.ts",
+        observedAt: "2099-01-01T00:00:00.000Z"
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_FILE_MUTATION_V2_EVIDENCE_AUTHENTICATION_FAILED" }
+    });
+  });
+
+  test("fails closed when native rejects an unsafe proposal-time object", async () => {
+    const addon = proposalNativeAddon({
+      snapshot: () => {
+        throw { code: "ENGINEERING_ACCESS_UNSAFE_OBJECT" };
+      },
+      absence: () => nativeAbsenceProof()
+    });
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: "native-root-01" },
+      authenticateNativeProposalEvidence: () => ok(undefined)
+    });
+
+    await expect(
+      port.inspectProposalSnapshot({ relativeIdentity: "src/main.ts" })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_FILE_MUTATION_V2_PROPOSAL_EVIDENCE_UNAVAILABLE" }
+    });
+    expect(addon.observeCreateAbsenceV2).not.toHaveBeenCalled();
+  });
+});
+
+function nativeAddon(
+  apply: (request: EngineeringFileMutationRequestV2) => unknown,
+  inspect: (request: EngineeringFileMutationRequestV2) => unknown = () => {
+    throw new Error("not used");
+  }
+): EngineeringFileMutationNativeAddonV2 & {
+  applyEngineeringFileMutationV2: ReturnType<typeof vi.fn>;
+  inspectEngineeringFileMutationTargetV2: ReturnType<typeof vi.fn>;
+} {
+  return {
+    applyEngineeringFileMutationV2: vi.fn(
+      (_rootId: string | bigint, request: EngineeringFileMutationRequestV2) => apply(request)
+    ),
+    inspectEngineeringFileMutationTargetV2: vi.fn(
+      (_rootId: string | bigint, request: EngineeringFileMutationRequestV2) => inspect(request)
+    )
+  };
+}
+
+function proposalNativeAddon(input: {
+  readonly snapshot: () => unknown;
+  readonly absence: () => unknown;
+}): EngineeringFileMutationNativeAddonV2 &
+  EngineeringFileMutationProposalNativeAddonV2 & {
+    inspectEngineeringFileSnapshotV2: ReturnType<typeof vi.fn>;
+    observeCreateAbsenceV2: ReturnType<typeof vi.fn>;
+  } {
+  return {
+    ...nativeAddon((request) => receiptFor(request)),
+    inspectEngineeringFileSnapshotV2: vi.fn(() => input.snapshot()),
+    observeCreateAbsenceV2: vi.fn(() => input.absence())
+  };
+}
+
+function proposalBytes(): Uint8Array {
+  return new TextEncoder().encode("export const proposal = true;\n");
+}
+
+function nativePresentSnapshot(
+  input: {
+    readonly rootId?: string | bigint;
+    readonly relativeIdentity?: string;
+    readonly parentDirectoryIdentity?: string;
+    readonly bytes?: Uint8Array;
+  } = {}
+) {
+  const bytes = input.bytes ?? proposalBytes();
+  const manifest = createEngineeringRawByteManifestV2({
+    identity: {
+      kind: "observed_file",
+      rootBindingId: "root_01",
+      relativeIdentity: input.relativeIdentity ?? "src/main.ts",
+      fileIdentity: "file_01"
+    },
+    bytes,
+    metadataChecksum: hash("safe-metadata")
+  });
+  return {
+    schemaVersion: "2.0",
+    kind: "engineering_file_mutation_target_snapshot",
+    rootId: input.rootId ?? "native-root-01",
+    relativeIdentity: input.relativeIdentity ?? "src/main.ts",
+    parentDirectoryIdentity: input.parentDirectoryIdentity ?? "directory_01",
+    state: "present",
+    bytes,
+    manifest: {
+      sha256: manifest.sha256,
+      byteLength: manifest.byteLength,
+      encoding: manifest.encoding,
+      bom: manifest.bom,
+      eol: manifest.eol,
+      fileIdentity: manifest.identity.fileIdentity,
+      metadataChecksum: manifest.metadataChecksum
+    }
+  };
+}
+
+function nativeAbsentSnapshot(
+  input: {
+    readonly rootId?: string | bigint;
+    readonly relativeIdentity?: string;
+    readonly parentDirectoryIdentity?: string;
+  } = {}
+) {
+  return {
+    schemaVersion: "2.0",
+    kind: "engineering_file_mutation_target_snapshot",
+    rootId: input.rootId ?? "native-root-01",
+    relativeIdentity: input.relativeIdentity ?? "src/main.ts",
+    parentDirectoryIdentity: input.parentDirectoryIdentity ?? "directory_01",
+    state: "absent",
+    bytes: null,
+    manifest: null
+  };
+}
+
+function nativeAbsenceProof(
+  input: {
+    readonly rootBindingId?: string;
+    readonly relativeIdentity?: string;
+    readonly parentDirectoryIdentity?: string;
+    readonly observedAt?: string;
+  } = {}
+) {
+  return createEngineeringAbsenceProofV2({
+    rootBindingId: input.rootBindingId ?? "root_01",
+    relativeIdentity: input.relativeIdentity ?? "src/main.ts",
+    parentDirectoryIdentity: input.parentDirectoryIdentity ?? "directory_01",
+    observedAt: input.observedAt ?? "2099-01-01T00:00:00.000Z"
+  });
+}
+
+function createApplyInput(): EngineeringFileMutationApplyInputV2 {
+  const request = createRequest();
+  return { request, beforeBytes: null, candidateBytes: candidateBytes() };
+}
+
+function candidateBytes(): Uint8Array {
+  return new TextEncoder().encode("export const value = 1;\n");
+}
+
+function createRequest(): EngineeringFileMutationRequestV2 {
+  const bytes = candidateBytes();
+  const candidate = createEngineeringRawByteManifestV2({
+    identity: {
+      kind: "target",
+      rootBindingId: "root_01",
+      relativeIdentity: "src/main.ts",
+      fileIdentity: null
+    },
+    bytes,
+    metadataChecksum: hash("safe-metadata")
+  });
+  return {
+    schemaVersion: "2.0",
+    operationKind: "create_file",
+    contentRootBindingId: "root_01",
+    transactionId: "tx_01",
+    operationId: "op_01",
+    providerSemanticVersionSetChecksum: hash("provider-set"),
+    relativeIdentity: "src/main.ts",
+    before: {
+      schemaVersion: "2.0",
+      kind: "absent",
+      absenceProof: createEngineeringAbsenceProofV2({
+        rootBindingId: "root_01",
+        relativeIdentity: "src/main.ts",
+        parentDirectoryIdentity: "directory_01",
+        observedAt: "2099-01-01T00:00:00.000Z"
+      })
+    },
+    candidate: {
+      schemaVersion: "2.0",
+      manifest: candidate,
+      blob: {
+        schemaVersion: "2.0",
+        contentRootBindingId: "root_01",
+        blobId: engineeringMutationBlobIdForSha256V2(candidate.sha256),
+        storage: "main_owned_immutable_blob",
+        sha256: candidate.sha256,
+        byteLength: candidate.byteLength,
+        encoding: candidate.encoding,
+        bom: candidate.bom,
+        eol: candidate.eol
+      }
+    },
+    stagingObjectId: "staging_01"
+  };
+}
+
+function receiptFor(request: EngineeringFileMutationRequestV2) {
+  return createEngineeringMutationReceiptV2({
+    transactionId: request.transactionId,
+    operationId: request.operationId,
+    operationKind: request.operationKind,
+    contentRootBindingId: request.contentRootBindingId,
+    providerSemanticVersionSetChecksum: request.providerSemanticVersionSetChecksum,
+    relativeIdentity: request.relativeIdentity,
+    requestChecksum: engineeringFileMutationRequestChecksumV2(request),
+    observedBefore: request.before,
+    observedAfter: {
+      ...request.candidate.manifest,
+      identity: {
+        kind: "observed_file" as const,
+        rootBindingId: request.contentRootBindingId,
+        relativeIdentity: request.relativeIdentity,
+        fileIdentity: "file_02"
+      }
+    },
+    stagingObjectId: request.stagingObjectId,
+    recoveryObjectId: null,
+    durability: "data_and_directory_flushed"
+  });
+}
+
+function operationState(
+  state: "before" | "after" | "neither" | "unknown",
+  request: EngineeringFileMutationRequestV2
+): unknown {
+  return {
+    schemaVersion: "2.0",
+    kind: "engineering_mutation_operation_state",
+    state,
+    requestChecksum: engineeringFileMutationRequestChecksumV2(request),
+    receipt: state === "after" ? receiptFor(request) : null
+  };
+}

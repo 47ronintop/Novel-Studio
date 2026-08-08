@@ -103,8 +103,17 @@ export interface EngineeringWorkspaceAccessIndexEntry {
   readonly refChecksum: string;
 }
 
+/** Main-process only. This object must never be projected through Renderer/Provider IPC. */
+export interface EngineeringWorkspaceMainOnlyRootHandleBindingV2 {
+  readonly contentRootBindingId: string;
+  readonly pathPolicyRevision: string;
+  readonly rootId: string | bigint;
+}
+
 export interface EngineeringWorkspaceAccessSession {
   readonly binding: EngineeringWorkspaceAccessBinding;
+  /** Same native root-handle session reused by the separately qualified B7 mutation port. */
+  readonly getMainOnlyRootHandleBindingV2?: () => EngineeringWorkspaceMainOnlyRootHandleBindingV2;
   listDirectory(
     input?: unknown
   ): Promise<
@@ -203,6 +212,14 @@ class NativeEngineeringWorkspaceAccessSession implements EngineeringWorkspaceAcc
     }
   ) {
     this.binding = options.binding;
+  }
+
+  public getMainOnlyRootHandleBindingV2(): EngineeringWorkspaceMainOnlyRootHandleBindingV2 {
+    return Object.freeze({
+      contentRootBindingId: this.binding.rootBindingId,
+      pathPolicyRevision: this.binding.pathPolicyRevision,
+      rootId: this.options.rootId
+    });
   }
 
   public async listDirectory(

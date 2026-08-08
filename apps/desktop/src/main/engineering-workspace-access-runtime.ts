@@ -1,5 +1,6 @@
 import {
   createEngineeringWorkspaceAccessPort,
+  type EngineeringWorkspaceMainOnlyRootHandleBindingV2,
   type EngineeringWorkspaceAccessSession,
   type EngineeringWorkspaceRootBindingIssuer
 } from "@novel-studio/repository";
@@ -128,6 +129,14 @@ class MainOwnedEngineeringWorkspaceAccessSession implements EngineeringWorkspace
     });
     if (this.closing !== undefined) unsubscribe();
     else this.unsubscribeQualification = unsubscribe;
+  }
+
+  public getMainOnlyRootHandleBindingV2(): EngineeringWorkspaceMainOnlyRootHandleBindingV2 {
+    const binding = this.delegate.getMainOnlyRootHandleBindingV2?.();
+    if (binding === undefined || binding.contentRootBindingId !== this.binding.rootBindingId) {
+      throw new Error("ENGINEERING_WORKSPACE_MAIN_ONLY_ROOT_BINDING_UNAVAILABLE");
+    }
+    return binding;
   }
 
   public async listDirectory(
