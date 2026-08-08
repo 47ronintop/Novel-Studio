@@ -258,6 +258,33 @@ export type {
 export { validateAgentRelativePath } from "./path-guard.js";
 export type { AgentRelativePath } from "./path-guard.js";
 export {
+  CANONICAL_LEAF_NAME_MAX_CODE_POINTS,
+  CANONICAL_LEAF_NAME_MAX_UTF8_BYTES,
+  canonicalLeafNameCollisionKey,
+  findCanonicalLeafNameCollision,
+  validateCanonicalLeafName
+} from "./canonical-leaf-name.js";
+export type {
+  CanonicalLeafName,
+  CanonicalLeafNameRejectCode,
+  CanonicalLeafNameValidation
+} from "./canonical-leaf-name.js";
+export {
+  classifyEngineeringPath,
+  createEngineeringPathPolicy,
+  defaultEngineeringPathPolicy,
+  validateEngineeringRelativePath
+} from "./engineering-path-policy.js";
+export type {
+  EngineeringPathClassification,
+  EngineeringPathClassificationResult,
+  EngineeringPathPolicy,
+  EngineeringPathPolicyCreation,
+  EngineeringPathPolicyInput,
+  EngineeringPathRejectCode,
+  EngineeringRelativePathValidation
+} from "./engineering-path-policy.js";
+export {
   ENGINEERING_FILE_CONTRACT_VERSION,
   ENGINEERING_FILE_NATIVE_ADAPTER_ID,
   ENGINEERING_FILE_NEGATIVE_CONTROLS,

@@ -10,6 +10,55 @@ if (process.platform !== "win32" || process.arch !== "x64") {
   throw new Error("engineering-file-access-win32 only supports win32-x64 CI builds");
 }
 
+const vsDevCmd = process.env.ENGINEERING_FILE_ACCESS_VSDEVCMD;
+const generator = process.env.ENGINEERING_FILE_ACCESS_CMAKE_GENERATOR;
+const cmakeMakeProgram = process.env.CMAKE_MAKE_PROGRAM;
+if (!vsDevCmd || !generator || !cmakeMakeProgram) {
+  throw new Error(
+    "the CI-discovered Visual Studio environment, CMake generator, and make program are required"
+  );
+}
+if (generator !== "Ninja") {
+  throw new Error(`unsupported CI CMake generator: ${generator}`);
+}
+for (const [label, path] of [
+  ["ENGINEERING_FILE_ACCESS_VSDEVCMD", vsDevCmd],
+  ["CMAKE_MAKE_PROGRAM", cmakeMakeProgram]
+]) {
+  try {
+    await stat(path);
+  } catch {
+    throw new Error(`${label} must point to a CI-provided executable`);
+  }
+}
+
+const toolchainEnvironment = { ...process.env };
+const vsEnvironment = await run(
+  "cmd.exe",
+  ["/d", "/c", `call "${vsDevCmd}" -no_logo -host_arch=x64 -arch=x64 >nul && set`],
+  {
+    cwd: root,
+    env: toolchainEnvironment,
+    maxBuffer: 1024 * 1024,
+    windowsVerbatimArguments: true
+  }
+);
+for (const line of vsEnvironment.stdout.split(/\r?\n/u)) {
+  const separator = line.indexOf("=");
+  if (separator > 0) {
+    toolchainEnvironment[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+}
+if (!toolchainEnvironment.VCToolsVersion || !toolchainEnvironment.VCToolsInstallDir) {
+  throw new Error("VsDevCmd did not expose a Visual Studio C++ toolchain");
+}
+const compilerPath = (
+  await run("where.exe", ["cl.exe"], { cwd: root, env: toolchainEnvironment })
+).stdout
+  .split(/\r?\n/u)
+  .find(Boolean);
+if (!compilerPath) throw new Error("VsDevCmd did not expose cl.exe");
+
 const sourceRevision = (
   process.env.SOURCE_REVISION ?? (await run("git", ["rev-parse", "HEAD"], { cwd: root })).stdout
 ).trim();
@@ -20,9 +69,19 @@ const nodeLibrary = process.env.NODE_LIBRARY ?? join(process.execPath, "..", "no
 try {
   await stat(nodeLibrary);
 } catch {
-  throw new Error("NODE_LIBRARY must point to node.lib from the CI Node runtime");
+  throw new Error("NODE_LIBRARY must point to the CI-provided Node-API import library");
 }
-const cmakeVersion = (await run("cmake", ["--version"])).stdout.split(/\r?\n/u)[0].trim();
+const cmakeCapabilities = JSON.parse(
+  (await run("cmake", ["-E", "capabilities"], { cwd: root, env: toolchainEnvironment })).stdout
+);
+if (!cmakeCapabilities.generators?.some(({ name }) => name === generator)) {
+  throw new Error(`the installed CMake does not support the ${generator} generator`);
+}
+const cmakeVersion = (
+  await run("cmake", ["--version"], { cwd: root, env: toolchainEnvironment })
+).stdout
+  .split(/\r?\n/u)[0]
+  .trim();
 const buildDir = join(root, "native", "engineering-file-access-win32", ".build", "win32-x64");
 const distDir = join(root, "native", "engineering-file-access-win32", "dist", "win32-x64");
 await mkdir(distDir, { recursive: true });
@@ -40,19 +99,18 @@ await run(
     "-B",
     buildDir,
     "-G",
-    "Visual Studio 17 2022",
-    "-A",
-    "x64",
+    generator,
+    `-DCMAKE_MAKE_PROGRAM=${cmakeMakeProgram}`,
+    "-DCMAKE_BUILD_TYPE=Release",
     `-DNODE_API_INCLUDE_DIR=${includeDir}`,
     `-DNODE_LIBRARY=${nodeLibrary}`
   ],
-  { cwd: root }
+  { cwd: root, env: toolchainEnvironment }
 );
-await run(
-  "cmake",
-  ["--build", buildDir, "--config", "Release", "--target", "engineering_file_access"],
-  { cwd: root }
-);
+await run("cmake", ["--build", buildDir, "--target", "engineering_file_access"], {
+  cwd: root,
+  env: toolchainEnvironment
+});
 const candidates = [
   join(buildDir, "Release", "engineering_file_access.node"),
   join(buildDir, "engineering_file_access.node")
@@ -79,9 +137,12 @@ const manifest = {
   nodeApiVersion: 8,
   toolchain: {
     cmakeVersion,
-    generator: "Visual Studio 17 2022",
+    generator,
     architecture: "x64",
-    nodeVersion: process.version
+    nodeVersion: process.version,
+    visualStudioVersion: process.env.ENGINEERING_FILE_ACCESS_VS_VERSION ?? null,
+    vcToolsVersion: toolchainEnvironment.VCToolsVersion,
+    compilerPath
   },
   publisherPolicyChecksum: process.env.PUBLISHER_POLICY_CHECKSUM ?? null,
   artifact: {
@@ -90,10 +151,13 @@ const manifest = {
   },
   eligibility: {
     batch: "6",
-    access: "unavailable",
-    root: "unavailable",
-    read: "unavailable",
-    index: "unavailable",
+    // These describe the development ABI that CI must probe. They are not production
+    // qualification: the separate qualification block remains fail-closed until a signed,
+    // packaged artifact and its evidence have been verified by Main.
+    access: "available",
+    root: "available",
+    read: "available",
+    index: "available",
     mutation: "unavailable",
     recovery: "unavailable"
   },

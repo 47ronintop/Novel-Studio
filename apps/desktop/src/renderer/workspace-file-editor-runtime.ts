@@ -22,6 +22,7 @@ import {
 } from "./creative-project-files-bridge.js";
 import {
   createPlainFileEditorBridge,
+  type EngineeringEditorStateBinding,
   type PlainFileEditorBridge,
   type PlainFileEditorScope
 } from "./plain-file-editor-bridge.js";
@@ -34,6 +35,8 @@ import {
 
 export interface WorkspaceFileEditorRuntimeOptions {
   readonly api: NovelStudioApi | undefined;
+  /** Main-issued opaque identity for engineering editor liveness reports. */
+  readonly engineeringEditorState?: EngineeringEditorStateBinding;
   readonly agentRunBridge?: Pick<AgentRunBridge, "subscribeProjectFilesChanged"> | undefined;
   readonly activeCreativeProjectId: string | undefined;
   readonly activeCreativeWorkspaceId: string | undefined;
@@ -148,6 +151,8 @@ export function useWorkspaceFileEditorRuntime(
   fileEditorScopeRef.current = fileEditorScope;
   const creativeExpandedPathIdsRef = useRef<readonly string[]>([]);
   creativeExpandedPathIdsRef.current = creativeExpandedPathIds;
+  const engineeringEditorStateRef = useRef<EngineeringEditorStateBinding | undefined>(undefined);
+  engineeringEditorStateRef.current = options.engineeringEditorState;
   const creativePlainFileBridgeRef = useRef<PlainFileEditorBridge | undefined>(undefined);
   const creativeProjectFilesBridgeRef = useRef<CreativeProjectFilesBridge | undefined>(undefined);
   const creativeProjectFilesSyncRef = useRef(0);
@@ -168,7 +173,12 @@ export function useWorkspaceFileEditorRuntime(
     setFileEditorScope(undefined);
   }, []);
   const [plainFileBridge] = useState(() =>
-    api === undefined ? undefined : createPlainFileEditorBridge(api)
+    api === undefined
+      ? undefined
+      : createPlainFileEditorBridge(api, {
+          scope: "engineeringWorkspaceFile",
+          getEngineeringEditorState: () => engineeringEditorStateRef.current
+        })
   );
   const [creativeProjectFilesBridge] = useState<CreativeProjectFilesBridge | undefined>(() =>
     api === undefined

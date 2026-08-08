@@ -135,6 +135,21 @@ export type {
 } from "./agent-project-read-repository.js";
 export { EngineeringWorkspaceFileRepository } from "./engineering-workspace-repository.js";
 export type { EngineeringWorkspaceFileRepositoryOptions } from "./engineering-workspace-repository.js";
+export { createEngineeringWorkspaceAccessPort } from "./engineering-workspace-access-port.js";
+export type {
+  EngineeringWorkspaceAccessBinding,
+  EngineeringWorkspaceAccessDirectoryEntry,
+  EngineeringWorkspaceAccessIndexEntry,
+  EngineeringWorkspaceAccessNativeAddon,
+  EngineeringWorkspaceAccessOpenRequest,
+  EngineeringWorkspaceAccessPort,
+  EngineeringWorkspaceAccessPortOptions,
+  EngineeringWorkspaceAccessSearchMatch,
+  EngineeringWorkspaceAccessSession,
+  EngineeringWorkspaceAccessTextSnapshot,
+  EngineeringWorkspaceNativeRootIdentity,
+  EngineeringWorkspaceRootBindingIssuer
+} from "./engineering-workspace-access-port.js";
 export {
   CREATIVE_PROJECT_FILE_LIFECYCLE_VERSION,
   CREATIVE_PROJECT_FILE_POLICY_VERSION,

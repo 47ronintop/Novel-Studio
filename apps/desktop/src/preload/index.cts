@@ -98,6 +98,8 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot,
   WorkspaceContextPolicyUpdate,
+  EngineeringEditorStateReport,
+  EngineeringEditorStateReportResult,
   WritingEditorStateReport,
   WritingEditorStateReportResult,
   WorkflowRunRecord,
@@ -529,6 +531,13 @@ const api: NovelStudioApi = {
   writingEditor: {
     reportState: (report: WritingEditorStateReport) =>
       invokeTyped<WritingEditorStateReportResult>("application:writing-editor:report-state", report)
+  },
+  engineeringEditor: {
+    reportState: (report: EngineeringEditorStateReport) =>
+      invokeTyped<EngineeringEditorStateReportResult>(
+        "application:engineering-editor:report-state",
+        report
+      )
   },
   settings: {
     listModelProfiles: () =>

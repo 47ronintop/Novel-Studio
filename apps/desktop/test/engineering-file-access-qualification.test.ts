@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -57,15 +59,46 @@ describe("Main-owned engineering file access qualification", () => {
       ]
     });
     expect(Object.isFrozen(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT)).toBe(true);
+    expect(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.electronBuilderFiles).not.toContain(
+      "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.probe.json"
+    );
+    expect(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.electronBuilderAsarUnpack).not.toContain(
+      "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.probe.json"
+    );
+  });
+
+  test("passes the quoted VsDevCmd command to cmd.exe without Node re-escaping it", async () => {
+    const buildScript = await readFile(
+      ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.buildScript,
+      "utf8"
+    );
+
+    expect(buildScript).toContain("windowsVerbatimArguments: true");
+    expect(buildScript).toContain(
+      '`call "${vsDevCmd}" -no_logo -host_arch=x64 -arch=x64 >nul && set`'
+    );
+  });
+
+  test("builds a self-contained MSVC runtime and rejects dynamic CRT dependencies in CI", async () => {
+    const [buildDefinition, workflow] = await Promise.all([
+      readFile(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.buildDefinition, "utf8"),
+      readFile(".github/workflows/engineering-file-access-native.yml", "utf8")
+    ]);
+
+    expect(buildDefinition).toContain(
+      'MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"'
+    );
+    expect(workflow).toContain("dumpbin.exe /nologo /dependents");
+    expect(workflow).toContain("MSVCP\\d*|VCRUNTIME\\d*");
+    expect(workflow).toContain("api-ms-win-crt-");
   });
 
   test.each([
     ["missing", false, "host_missing"],
     ["partial", true, "host_partial"],
-    ["present", true, "candidate_unqualified"],
     ["unknown", false, "evidence_unknown"]
   ] as const)(
-    "normalizes candidate state %s to one cached unavailable attestation",
+    "normalizes incomplete candidate state %s to one cached unavailable attestation",
     async (state, candidateArtifactPresent, reason) => {
       const inspect = vi.fn(async (): Promise<EngineeringFileCandidateArtifactState> => state);
       const now = vi.fn(() => checkedAt);
@@ -77,7 +110,11 @@ describe("Main-owned engineering file access qualification", () => {
         candidateInspector: { inspect }
       });
 
-      expect(Object.keys(service)).toEqual(["readAttestation"]);
+      expect(Object.keys(service)).toEqual([
+        "readAttestation",
+        "hasCapability",
+        "subscribeRevocation"
+      ]);
       const first = await service.readAttestation();
       const second = await service.readAttestation();
 
@@ -96,12 +133,54 @@ describe("Main-owned engineering file access qualification", () => {
         }
       });
       expect(first.failureReasons).toContain(reason);
-      expect(first.failureReasons).toContain("adapter_not_implemented_batch_0");
       expect(isMainOwnedEngineeringFileQualificationAttestation(first)).toBe(true);
       expect(hasMainOwnedEngineeringFileQualification(first, "access")).toBe(false);
       expect(mainOwnedEngineeringFileQualificationRevision(first)).toBe(first.attestationChecksum);
     }
   );
+
+  test("never treats an unsigned development B6 artifact as production evidence", async () => {
+    const service = createEngineeringFileAccessQualificationService({
+      packageKind: "development",
+      platform: "win32",
+      arch: "x64",
+      now: () => checkedAt,
+      candidateInspector: { inspect: async () => "present" }
+    });
+
+    const attestation = await service.readAttestation();
+    expect(attestation).toMatchObject({
+      packageKind: "development",
+      status: "unavailable",
+      productionQualified: false,
+      candidateArtifactPresent: true,
+      capabilities: {
+        root: "unavailable",
+        access: "unavailable",
+        mutation: "unavailable",
+        recovery: "unavailable"
+      }
+    });
+    expect(attestation.failureReasons).toEqual(["candidate_unqualified"]);
+    expect(hasMainOwnedEngineeringFileQualification(attestation, "root")).toBe(false);
+    expect(hasMainOwnedEngineeringFileQualification(attestation, "access")).toBe(false);
+  });
+
+  test("fails closed for a production candidate when packaged probe evidence is unavailable", async () => {
+    const service = createEngineeringFileAccessQualificationService({
+      packageKind: "production",
+      platform: "win32",
+      arch: "x64",
+      now: () => checkedAt,
+      candidateInspector: { inspect: async () => "present" }
+    });
+
+    const attestation = await service.readAttestation();
+    expect(attestation.status).toBe("unavailable");
+    expect(attestation.failureReasons).toContain("evidence_unknown");
+    expect(hasMainOwnedEngineeringFileQualification(attestation, "mutation")).toBe(false);
+    expect(hasMainOwnedEngineeringFileQualification(attestation, "recovery")).toBe(false);
+  });
 
   test("fails closed on unsupported targets and never asks a candidate inspector", async () => {
     const inspect = vi.fn(async (): Promise<EngineeringFileCandidateArtifactState> => "present");
@@ -182,6 +261,7 @@ function syntheticAvailableAttestation(): EngineeringFileQualificationAttestatio
     artifactSha256: "a".repeat(64),
     artifactManifestSha256: "b".repeat(64),
     probeReportChecksum: "c".repeat(64),
+    expiresAt: "2099-02-01T00:00:00.000Z",
     failureReasons: [] as const,
     checkedAt
   };

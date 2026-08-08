@@ -96,6 +96,8 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot,
   WorkspaceContextPolicyUpdate,
+  EngineeringEditorStateReport,
+  EngineeringEditorStateReportResult,
   WritingEditorStateReport,
   WritingEditorStateReportResult,
   WorkflowRunRecord,
@@ -636,6 +638,14 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<WritingEditorStateReportResult>(
           ipc,
           "application:writing-editor:report-state",
+          report
+        )
+    },
+    engineeringEditor: {
+      reportState: (report: EngineeringEditorStateReport) =>
+        invokeTyped<EngineeringEditorStateReportResult>(
+          ipc,
+          "application:engineering-editor:report-state",
           report
         )
     },

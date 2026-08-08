@@ -6,8 +6,13 @@ on:
     branches:
       - "codex/**"
     paths:
+      - ".github/workflows/engineering-file-access-native.yml"
       - "native/engineering-file-access-win32/**"
+      - "apps/desktop/electron-builder.config.cjs"
+      - "apps/desktop/src/main/engineering-file-access-qualification.ts"
+      - "apps/desktop/test/engineering-file-access-package.e2e.ts"
       - "scripts/build-engineering-file-access-win32.mjs"
+      - "scripts/package-check.mjs"
       - "scripts/sign-engineering-file-access-win32.mjs"
       - "scripts/probe-engineering-file-access-package.mjs"
 
@@ -21,15 +26,71 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20.20.0"
-      - name: Install Node-API headers (no native toolchain install)
+      - name: Install Node-API headers and generate import library (no native toolchain install)
         shell: pwsh
         run: |
-          npm install --no-save --ignore-scripts node-api-headers@9.0.0
+          npm install --no-save --ignore-scripts node-api-headers@1.9.0
           $include = Join-Path (Resolve-Path "node_modules/node-api-headers") "include"
           if (-not (Test-Path (Join-Path $include "node_api.h"))) { throw "Node-API headers are unavailable" }
+          $ErrorActionPreference = "Stop"
+          $nodeApiDef = Join-Path (Resolve-Path "node_modules/node-api-headers") "def/node_api.def"
+          if (-not (Test-Path -LiteralPath $nodeApiDef -PathType Leaf)) { throw "Node-API export definition is unavailable" }
+          $nodeLibrary = Join-Path $env:RUNNER_TEMP "node_api_x64.lib"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw "Visual Studio discovery tool is unavailable" }
+          $vsRoot = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          $vsVersion = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion).Trim()
+          $vsDevCmd = Join-Path $vsRoot "Common7\Tools\VsDevCmd.bat"
+          if ([string]::IsNullOrWhiteSpace($vsRoot) -or [string]::IsNullOrWhiteSpace($vsVersion) -or -not (Test-Path -LiteralPath $vsDevCmd -PathType Leaf)) {
+            throw "Visual Studio C++ tools are unavailable"
+          }
+          # Do not ask CMake to rediscover a registered Visual Studio instance.  The hosted
+          # image exposes the C++ toolset through VsDevCmd, and CMake's bundled Ninja can use
+          # that already-qualified environment directly.
+          $ninja = (Get-Command ninja.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
+          if (-not $ninja) {
+            $bundledNinja = Join-Path $vsRoot "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+            if (Test-Path -LiteralPath $bundledNinja -PathType Leaf) {
+              $ninja = $bundledNinja
+            }
+          }
+          if (-not $ninja) { throw "Ninja is unavailable from the discovered Visual Studio toolchain" }
+          $command = 'call "{0}" -no_logo -host_arch=x64 -arch=x64 && lib.exe /nologo /machine:X64 /def:"{1}" /out:"{2}"' -f $vsDevCmd, $nodeApiDef, $nodeLibrary
+          cmd.exe /d /s /c $command
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $nodeLibrary -PathType Leaf)) {
+            throw "Node-API import-library generation failed"
+          }
           "NODE_API_INCLUDE_DIR=$include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NODE_LIBRARY=$nodeLibrary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ENGINEERING_FILE_ACCESS_VSDEVCMD=$vsDevCmd" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ENGINEERING_FILE_ACCESS_VS_VERSION=$vsVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ENGINEERING_FILE_ACCESS_CMAKE_GENERATOR=Ninja" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_MAKE_PROGRAM=$ninja" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build the canonical addon
-        run: node scripts/build-engineering-file-access-win32.mjs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $logPath = Join-Path $env:RUNNER_TEMP "engineering-file-access-build.log"
+          node scripts/build-engineering-file-access-win32.mjs 2>&1 | Tee-Object -FilePath $logPath
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            $detail = (Get-Content -LiteralPath $logPath -Tail 40) -join "`n"
+            $escaped = $detail.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+            Write-Output "::error title=Native addon build failed::$escaped"
+            exit $exitCode
+          }
+      - name: Verify the addon carries its MSVC runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $addon = (Resolve-Path "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node").Path
+          $command = 'call "{0}" -no_logo -host_arch=x64 -arch=x64 >nul && dumpbin.exe /nologo /dependents "{1}"' -f $env:ENGINEERING_FILE_ACCESS_VSDEVCMD, $addon
+          $dependencies = cmd.exe /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { throw "Unable to inspect native addon dependencies" }
+          $dynamicCrt = $dependencies | Select-String -Pattern '(?i)\b(?:MSVCP\d*|VCRUNTIME\d*(?:_\d*)?|api-ms-win-crt-[^\s]+)\.dll\b'
+          if ($dynamicCrt) {
+            throw "Native addon must carry its MSVC runtime instead of requiring a runner-installed redistributable: $($dynamicCrt.Line -join ', ')"
+          }
       - name: Record unsigned development probe result
         run: node scripts/probe-engineering-file-access-package.mjs
       - name: Record addon SHA-256

@@ -156,6 +156,7 @@ import {
   createApprovalRuleSetProjection,
   createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
+  deactivateCapabilityState,
   freezeAgentToolCapabilitySnapshot,
   inspectChangeSetConsistencyGroups,
   isCapabilityEffective,
@@ -205,7 +206,6 @@ import {
   StoryBibleReferenceDependencyFileRepository,
   deriveRelatedEntityIds,
   WorkspaceOutlineIndexRepository,
-  WorkspaceOutlineProjectEntryRepository,
   WorkspaceOutlineProjectMetadataRepository,
   validateWithSchema,
   writeTextAtomically,
@@ -218,7 +218,8 @@ import {
   type CreativeProjectFileDocument,
   type CreativeProjectFileTreeSnapshot,
   type StoryBibleRelation,
-  type UpdateAgentConversationRecordInput
+  type UpdateAgentConversationRecordInput,
+  type EngineeringWorkspaceAccessSession
 } from "@novel-studio/repository";
 
 export interface DesktopAgentRunSessionOptions {
@@ -335,6 +336,12 @@ export interface DesktopAgentRunSessionOptions {
   readonly capabilitySnapshot?: AgentToolCapabilitySnapshot;
   /** Test/host override. Production constructs a repository-backed search executor. */
   readonly searchToolExecutor?: AgentSearchToolExecutor;
+  /**
+   * Main-only B6 root-handle session. Engineering list/read/search/outline access is available
+   * exclusively through this already-qualified session; a missing session never falls back to a
+   * pathname repository.
+   */
+  readonly engineeringWorkspaceAccessSession?: EngineeringWorkspaceAccessSession;
   /** Only inject a network executor that has already passed the Main security qualification. */
   readonly networkToolExecutor?: AgentNetworkToolExecutor;
   /** Main-owned egress policy frozen into this workspace runtime. */
@@ -412,6 +419,8 @@ export interface DesktopAgentRuntimeServices {
   readonly revokeSettingsCapabilities: () => void;
   /** Immediately stops all approval-backed Agent capability before a deferred runtime refresh. */
   readonly revokeApprovalCapabilities: () => void;
+  /** Root identity drift makes every engineering capability unavailable for this runtime. */
+  readonly revokeEngineeringAccessCapabilities: () => void;
 }
 
 interface DesktopPackedContextCache {
@@ -480,17 +489,15 @@ interface DesktopWorkspaceProjectContextServices {
 
 function createDesktopWorkspaceProjectContextServices(
   options: DesktopAgentRunSessionOptions,
-  projectReads: AgentProjectReadRepository
+  projectReads: AgentProjectReadRepository,
+  engineeringAccessSession: EngineeringWorkspaceAccessSession | undefined
 ): DesktopWorkspaceProjectContextServices {
   const conventionsReader = createDesktopProjectConventionsReader({ projectReads });
   const index = new WorkspaceOutlineIndexRepository({
     ...(options.workspaceKind === "engineeringWorkspace"
-      ? {
-          engineeringEntries: new WorkspaceOutlineProjectEntryRepository({
-            projectRoot: options.contentRoot,
-            traceId: "desktop-agent-workspace-outline-entries"
-          })
-        }
+      ? engineeringAccessSession === undefined
+        ? {}
+        : { engineeringEntries: createEngineeringOutlineEntriesAdapter(engineeringAccessSession) }
       : {
           writingMetadata: new WorkspaceOutlineProjectMetadataRepository({
             projectRoot: options.contentRoot,
@@ -513,6 +520,20 @@ function createDesktopWorkspaceProjectContextServices(
         })
   });
   const identity = (async (): Promise<Result<WorkspaceProjectContextIdentity, UnifiedError>> => {
+    if (options.workspaceKind === "engineeringWorkspace") {
+      return ok({
+        workspaceKind: options.workspaceKind,
+        workspaceId: options.projectId,
+        canonicalRootIdentity: createHash("sha256")
+          .update(
+            engineeringAccessSession === undefined
+              ? `engineering-access-unavailable:${options.projectId}`
+              : `engineering-root-binding:${engineeringAccessSession.binding.rootBindingId}:${engineeringAccessSession.binding.pathPolicyRevision}`,
+            "utf8"
+          )
+          .digest("hex")
+      });
+    }
     try {
       const canonicalRoot = await realpath(options.contentRoot);
       return ok({
@@ -602,11 +623,222 @@ function resolveWorkspaceProjectContextProfile(
   return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
 }
 
+/**
+ * Adapts the single B6 root-handle session to the legacy read shape consumed by the existing
+ * runtime. This is deliberately structural: engineering never constructs a pathname reader.
+ */
+function createEngineeringProjectReadsAdapter(
+  session: EngineeringWorkspaceAccessSession | undefined
+): AgentProjectReadRepository {
+  if (session === undefined) {
+    return {
+      async readText() {
+        // A missing session must not disclose a pathname-backed file. Reporting the fixed
+        // convention resource as absent keeps a restricted read-only run usable without
+        // re-enabling any project read tool.
+        return err(runtimeError("AGENT_PROJECT_FILE_NOT_FOUND"));
+      },
+      async listEntries() {
+        return err(runtimeError("ENGINEERING_WORKSPACE_ACCESS_UNAVAILABLE"));
+      }
+    } as unknown as AgentProjectReadRepository;
+  }
+  return {
+    async readText(relativePath: string) {
+      const read = await session.readTextFile({ relativeIdentity: relativePath });
+      return read.ok
+        ? ok({
+            relativePath: read.value.relativeIdentity,
+            content: read.value.content,
+            checksum: read.value.sha256,
+            byteLength: read.value.byteLength
+          })
+        : read;
+    },
+    async listEntries(relativeDirectory = "") {
+      const listed = await session.listDirectory(
+        relativeDirectory.length === 0 ? undefined : { relativeIdentity: relativeDirectory }
+      );
+      return listed.ok
+        ? ok(
+            listed.value.entries.map((entry) => ({
+              name: entry.name,
+              relativePath: entry.relativeIdentity,
+              kind: entry.kind
+            }))
+          )
+        : listed;
+    }
+  } as unknown as AgentProjectReadRepository;
+}
+
+/** Routes the existing search tool facade through B6 search/read snapshots only. */
+function createEngineeringProjectSearchAdapter(
+  session: EngineeringWorkspaceAccessSession | undefined
+) {
+  return {
+    async searchText(input: {
+      readonly query: string;
+      readonly maxResults?: number;
+      readonly signal?: AbortSignal;
+    }) {
+      if (session === undefined)
+        return err(runtimeError("ENGINEERING_WORKSPACE_ACCESS_UNAVAILABLE"));
+      if (input.signal?.aborted === true) return err(runtimeError("AGENT_SEARCH_CANCELLED"));
+      const searched = await session.searchText({ query: input.query });
+      if (!searched.ok) return searched;
+      const snapshots = new Map<string, Awaited<ReturnType<typeof session.readTextFile>>>();
+      const limit = Math.max(0, Math.min(input.maxResults ?? 50, 200));
+      const items: {
+        relativePath: string;
+        stableRef: string;
+        range: { unit: "utf16_offset"; start: number; end: number };
+        snippet: string;
+        sourceChecksum: string;
+        resultDigest: string;
+        truncated: boolean;
+      }[] = [];
+      for (const match of searched.value.matches) {
+        if (items.length >= limit) break;
+        let snapshot = snapshots.get(match.relativeIdentity);
+        if (snapshot === undefined) {
+          snapshot = await session.readTextFile({ relativeIdentity: match.relativeIdentity });
+          snapshots.set(match.relativeIdentity, snapshot);
+        }
+        if (!snapshot.ok) continue;
+        const start = utf16OffsetAtUtf8ByteOffset(snapshot.value.content, match.byteOffset);
+        if (start === undefined) continue;
+        const end = Math.min(snapshot.value.content.length, start + input.query.length);
+        const snippet = engineeringSearchSnippet(snapshot.value.content, start, end);
+        items.push({
+          relativePath: match.relativeIdentity,
+          stableRef: match.relativeIdentity,
+          range: { unit: "utf16_offset", start, end },
+          snippet,
+          sourceChecksum: snapshot.value.sha256,
+          resultDigest: checksumText(
+            `${match.refChecksum}:${snapshot.value.refChecksum}:${start}:${end}:${snippet}`
+          ),
+          truncated: false
+        });
+      }
+      return ok({
+        kind: "search_results" as const,
+        items: Object.freeze(items),
+        totalHits: searched.value.matches.length,
+        truncated: searched.value.truncated || items.length < searched.value.matches.length,
+        indexVersion: `${session.binding.rootBindingId}:${session.binding.pathPolicyRevision}`
+      });
+    },
+    async findReferences(input: { readonly stableRef: string; readonly signal?: AbortSignal }) {
+      const baseName = input.stableRef.split("/").at(-1) ?? input.stableRef;
+      return this.searchText({
+        query: baseName,
+        maxResults: 200,
+        ...(input.signal === undefined ? {} : { signal: input.signal })
+      });
+    }
+  };
+}
+
+/** Supplies the existing outline renderer from the B6 index, never a pathname traversal. */
+function createEngineeringOutlineEntriesAdapter(session: EngineeringWorkspaceAccessSession) {
+  return {
+    async listEntries(
+      relativeDirectory: string,
+      limits: {
+        readonly maxEntries: number;
+        readonly maxBytes: number;
+        readonly maxDurationMs: number;
+      }
+    ) {
+      void limits.maxDurationMs;
+      const indexed = await session.buildIndex();
+      if (!indexed.ok) return indexed;
+      const prefix = relativeDirectory.length === 0 ? "" : `${relativeDirectory}/`;
+      const entries = new Map<
+        string,
+        { name: string; relativePath: string; kind: "directory" | "file"; byteLength: number }
+      >();
+      for (const file of indexed.value.files) {
+        if (!file.relativeIdentity.startsWith(prefix)) continue;
+        const remaining = file.relativeIdentity.slice(prefix.length);
+        const [name, ...rest] = remaining.split("/");
+        if (name === undefined || name.length === 0) continue;
+        const relativePath = relativeDirectory.length === 0 ? name : `${relativeDirectory}/${name}`;
+        const existing = entries.get(relativePath);
+        if (rest.length > 0) {
+          entries.set(relativePath, { name, relativePath, kind: "directory", byteLength: 0 });
+        } else if (existing?.kind !== "directory") {
+          entries.set(relativePath, {
+            name,
+            relativePath,
+            kind: "file",
+            byteLength: file.byteLength
+          });
+        }
+      }
+      const visible = [...entries.values()].sort((left, right) =>
+        left.relativePath.localeCompare(right.relativePath)
+      );
+      const accepted: { name: string; relativePath: string; kind: "directory" | "file" }[] = [];
+      let scannedBytes = 0;
+      let truncated = indexed.value.truncated;
+      for (const entry of visible) {
+        const metadataBytes = new TextEncoder().encode(
+          `${entry.kind}:${entry.relativePath}`
+        ).byteLength;
+        if (
+          accepted.length >= limits.maxEntries ||
+          scannedBytes + metadataBytes > limits.maxBytes
+        ) {
+          truncated = true;
+          break;
+        }
+        scannedBytes += metadataBytes;
+        accepted.push({ name: entry.name, relativePath: entry.relativePath, kind: entry.kind });
+      }
+      return ok({
+        entries: Object.freeze(accepted),
+        scannedEntries: visible.length,
+        scannedBytes,
+        truncationReasons: Object.freeze(
+          truncated ? (["max_scanned_entries"] as const) : ([] as const)
+        )
+      });
+    }
+  };
+}
+
+function utf16OffsetAtUtf8ByteOffset(content: string, byteOffset: number): number | undefined {
+  let bytes = 0;
+  for (let offset = 0; offset < content.length;) {
+    if (bytes === byteOffset) return offset;
+    const codePoint = content.codePointAt(offset);
+    if (codePoint === undefined) return undefined;
+    const width = codePoint > 0xffff ? 2 : 1;
+    bytes += new TextEncoder().encode(content.slice(offset, offset + width)).byteLength;
+    offset += width;
+  }
+  return bytes === byteOffset ? content.length : undefined;
+}
+
+function engineeringSearchSnippet(content: string, start: number, end: number): string {
+  const radius = 160;
+  const from = Math.max(0, start - radius);
+  const to = Math.min(content.length, end + radius);
+  return `${from > 0 ? "…" : ""}${content.slice(from, to)}${to < content.length ? "…" : ""}`;
+}
+
 /** @internal Main-owned release request; exported for boundary tests only. */
 export function requestedCapabilitySnapshot(
   options: DesktopAgentRunSessionOptions
 ): AgentToolCapabilitySnapshot {
   const explicit = options.capabilitySnapshot;
+  const engineeringAccessEnabled =
+    options.workspaceKind !== "engineeringWorkspace" ||
+    ((options.featureFlags ?? DEFAULT_AGENT_FEATURE_FLAGS).engineeringHardenedAccessV1 &&
+      options.engineeringWorkspaceAccessSession !== undefined);
   if (explicit !== undefined) {
     if (explicit.workspaceKind !== options.workspaceKind) {
       throw new Error(
@@ -615,6 +847,10 @@ export function requestedCapabilitySnapshot(
     }
     return freezeAgentToolCapabilitySnapshot({
       ...explicit,
+      searchEnabled: explicit.searchEnabled && engineeringAccessEnabled,
+      ...(options.workspaceKind === "engineeringWorkspace"
+        ? { workspaceFileOperations: [] as const }
+        : {}),
       // Batch 0 has no qualified engineering native host. A test/pre-qualified legacy snapshot
       // cannot turn the old lifecycle umbrella back into engineering authority.
       fileLifecycleEnabled:
@@ -645,16 +881,12 @@ export function requestedCapabilitySnapshot(
           ...(flags.creativeFileMoveV2 ? (["move_file"] as const) : []),
           ...(flags.creativeFileDeleteV2 ? (["delete_file"] as const) : [])
         ]
-      : [
-          ...(flags.engineeringReplaceV2 ? (["replace_file"] as const) : []),
-          ...(flags.engineeringCreateV2 ? (["create_file"] as const) : []),
-          ...(flags.engineeringMoveV2 ? (["move_file"] as const) : []),
-          ...(flags.engineeringDeleteV2 ? (["delete_file"] as const) : []),
-          ...(flags.engineeringDirectoryCreateV1 ? (["create_directory"] as const) : [])
-        ];
+      : [];
   return freezeAgentToolCapabilitySnapshot({
     workspaceKind: options.workspaceKind,
-    searchEnabled: flags.phaseA_searchEnabled,
+    searchEnabled:
+      flags.phaseA_searchEnabled &&
+      (options.workspaceKind !== "engineeringWorkspace" || engineeringAccessEnabled),
     // The Phase B lifecycle flag remains a creative-project compatibility gate. Engineering must
     // wait for the operation-specific qualified backend introduced after Batch 0.
     fileLifecycleEnabled:
@@ -931,13 +1163,21 @@ function createDesktopAgentRuntimeServices(
     (options.lifecycleOperations !== undefined || trustedCreativeMutations?.mutate !== undefined
       ? createAgentFileOperationSession({ traceId: "desktop-agent-file-operations" })
       : undefined);
-  const projectReads = new AgentProjectReadRepository({
-    projectRoot: options.contentRoot,
-    traceId: "desktop-agent-project-read"
-  });
+  const engineeringAccessSession =
+    options.workspaceKind === "engineeringWorkspace"
+      ? options.engineeringWorkspaceAccessSession
+      : undefined;
+  const projectReads =
+    options.workspaceKind === "engineeringWorkspace"
+      ? createEngineeringProjectReadsAdapter(engineeringAccessSession)
+      : new AgentProjectReadRepository({
+          projectRoot: options.contentRoot,
+          traceId: "desktop-agent-project-read"
+        });
   const workspaceProjectContext = createDesktopWorkspaceProjectContextServices(
     options,
-    projectReads
+    projectReads,
+    engineeringAccessSession
   );
   const creativeProjectFiles =
     options.workspaceKind === "creativeProject"
@@ -1064,14 +1304,18 @@ function createDesktopAgentRuntimeServices(
     traceId: "desktop-agent-conversation-store"
   });
   const baseSearchToolExecutor = requestedCapabilities.searchEnabled
-    ? (options.searchToolExecutor ??
-      createAgentSearchToolSession({
-        searchRepository: new AgentProjectSearchRepository({
-          projectRoot: options.contentRoot,
-          workspaceKind: options.workspaceKind,
-          traceId: "desktop-agent-project-search"
+    ? options.workspaceKind === "engineeringWorkspace"
+      ? createAgentSearchToolSession({
+          searchRepository: createEngineeringProjectSearchAdapter(engineeringAccessSession)
         })
-      }))
+      : (options.searchToolExecutor ??
+        createAgentSearchToolSession({
+          searchRepository: new AgentProjectSearchRepository({
+            projectRoot: options.contentRoot,
+            workspaceKind: options.workspaceKind,
+            traceId: "desktop-agent-project-search"
+          })
+        }))
     : undefined;
   const creativeGeneralSearchToolExecutor =
     requestedCapabilities.searchEnabled &&
@@ -1681,6 +1925,15 @@ function createDesktopAgentRuntimeServices(
     );
     options.releasePromptCacheScope?.();
   };
+  const revokeEngineeringAccessCapabilities = (): void => {
+    if (options.workspaceKind !== "engineeringWorkspace") return;
+    effectiveCapabilityState = deactivateCapabilityState(
+      effectiveCapabilityState,
+      "connection_lost",
+      options.now?.() ?? new Date().toISOString()
+    );
+    options.releasePromptCacheScope?.();
+  };
   const providerNameMapping = buildRuntimeProviderNameMapping(
     capabilitySnapshot,
     options.externalToolDescriptors
@@ -2085,20 +2338,34 @@ function createDesktopAgentRuntimeServices(
     prepare,
     revokeSettingsCapabilities,
     revokeApprovalCapabilities,
+    revokeEngineeringAccessCapabilities,
     ...(options.releasePromptCacheScope === undefined
       ? {}
       : { releasePromptCacheResources: options.releasePromptCacheScope }),
-    ...(options.disposeExternalTools === undefined && options.releasePromptCacheScope === undefined
+    ...(options.disposeExternalTools === undefined &&
+    options.releasePromptCacheScope === undefined &&
+    engineeringAccessSession === undefined
       ? {}
       : {
           dispose: () => {
             packedContextCache.clear();
             options.releasePromptCacheScope?.();
             options.disposeExternalTools?.();
+            closeEngineeringAccessSessionOnce(engineeringAccessSession);
           }
         })
   };
 }
+
+function closeEngineeringAccessSessionOnce(
+  session: EngineeringWorkspaceAccessSession | undefined
+): void {
+  if (session === undefined || closedEngineeringAccessSessions.has(session)) return;
+  closedEngineeringAccessSessions.add(session);
+  void session.close();
+}
+
+const closedEngineeringAccessSessions = new WeakSet<EngineeringWorkspaceAccessSession>();
 
 function desktopUsageTime(options: DesktopAgentRunSessionOptions): AgentUsageTimeFacts {
   if (options.usageTime !== undefined) return options.usageTime();
@@ -6097,13 +6364,45 @@ async function resolveContextDraftSources(
           : await input.projectReads.readText(ref.relativePath);
       if (read === undefined) return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
       if (!read.ok) return err(read.error);
+      const relativePath =
+        input.workspaceKind === "engineeringWorkspace" && "relativePath" in read.value
+          ? read.value.relativePath
+          : ref.relativePath;
+      const editorState =
+        input.workspaceKind === "engineeringWorkspace"
+          ? await input.readEditorState?.(relativePath)
+          : undefined;
       sources.push({
         refId: ref.refId,
         sourceKind: "disk_file",
-        relativePath: ref.relativePath,
+        relativePath,
         content: read.value.content,
         dirty: false
       });
+      if (
+        input.workspaceKind === "engineeringWorkspace" &&
+        editorState?.status !== "unknown" &&
+        editorState?.dirty
+      ) {
+        if (input.operationMode === "execution") {
+          return err(engineeringProjectFileEditorStateError(relativePath, "dirty_editor"));
+        }
+        if (
+          (input.operationMode === "planning" || input.operationMode === "conversation") &&
+          editorState.content.length > 0
+        ) {
+          sources.push({
+            refId: `editor_buffer:engineering:${relativePath}`,
+            sourceKind: "editor_buffer",
+            relativePath,
+            content: editorState.content,
+            dirty: true,
+            ...(editorState.rendererRevision === undefined
+              ? {}
+              : { sourceRevision: editorState.rendererRevision })
+          });
+        }
+      }
       continue;
     }
     if (ref.kind === "story_bible" && ref.assetId !== undefined) {
@@ -6116,7 +6415,7 @@ async function resolveContextDraftSources(
     const activeSources =
       activeResourceRef.kind === "story_bible"
         ? await resolveStoryBibleContextSources(activeResourceRef, input)
-        : await resolveActiveCreativeProjectFileSource(activeResourceRef, input);
+        : await resolveActiveProjectFileSource(activeResourceRef, input);
     if (!activeSources.ok) return err(activeSources.error);
     // The current file must stay in the dynamic prompt suffix after the request and manual refs.
     sources.push(
@@ -6189,43 +6488,70 @@ function permitsDirtyEditorContext(input: {
   );
 }
 
-async function resolveActiveCreativeProjectFileSource(
+async function resolveActiveProjectFileSource(
   ref: Extract<ContextDraftRef, { readonly kind: "project_file" }>,
   input: {
     readonly projectId?: string;
+    readonly projectReads: AgentProjectReadRepository;
     readonly readCreativeProjectFile?: NonNullable<
       DesktopAgentRunSessionOptions["readCreativeProjectFile"]
     >;
+    readonly readEditorState?: NonNullable<DesktopAgentRunSessionOptions["readEditorState"]>;
     readonly workspaceKind: DesktopAgentRunSessionOptions["workspaceKind"];
     readonly contextMode: "standalone_chat" | "writing" | "general_file";
   }
 ): Promise<Result<AgentContextSourceInput, UnifiedError>> {
   const expectedChecksum = ref.expectedChecksum;
-  if (
-    input.workspaceKind !== "creativeProject" ||
-    input.contextMode !== "general_file" ||
-    input.readCreativeProjectFile === undefined
-  ) {
+  if (input.contextMode !== "general_file") {
     return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
   }
   if (!isExpectedDiskChecksum(expectedChecksum)) {
     return err(activeProjectFileStaleError("expected_checksum_missing"));
   }
 
-  // The active creative-file session owns both the current project identity and the file policy.
-  const read = await input.readCreativeProjectFile(ref.relativePath);
+  if (input.workspaceKind === "creativeProject") {
+    if (input.readCreativeProjectFile === undefined) {
+      return err(runtimeError("AGENT_CONTEXT_MODE_UNAVAILABLE"));
+    }
+    // The active creative-file session owns both the current project identity and the file policy.
+    const read = await input.readCreativeProjectFile(ref.relativePath);
+    if (!read.ok) return err(read.error);
+    if (
+      (input.projectId !== undefined && read.value.workspaceId !== input.projectId) ||
+      read.value.path !== ref.relativePath ||
+      read.value.checksum !== expectedChecksum
+    ) {
+      return err(activeProjectFileStaleError("disk_checksum_or_identity_mismatch"));
+    }
+    return ok({
+      refId: ref.refId,
+      sourceKind: "disk_file",
+      relativePath: read.value.path,
+      content: read.value.content,
+      dirty: false
+    });
+  }
+
+  // Engineering `projectReads` is the B6 root-handle session adapter. Do not substitute a
+  // pathname reader here: an absent or failed session must surface as a failed context read.
+  const read = await input.projectReads.readText(ref.relativePath);
   if (!read.ok) return err(read.error);
-  if (
-    (input.projectId !== undefined && read.value.workspaceId !== input.projectId) ||
-    read.value.path !== ref.relativePath ||
-    read.value.checksum !== expectedChecksum
-  ) {
+  if (read.value.relativePath !== ref.relativePath || read.value.checksum !== expectedChecksum) {
     return err(activeProjectFileStaleError("disk_checksum_or_identity_mismatch"));
+  }
+  const editorState = await input.readEditorState?.(read.value.relativePath);
+  if (editorState?.status === "unknown") {
+    return err(
+      engineeringProjectFileEditorStateError(read.value.relativePath, "editor_state_unknown")
+    );
+  }
+  if (editorState?.dirty) {
+    return err(engineeringProjectFileEditorStateError(read.value.relativePath, "dirty_editor"));
   }
   return ok({
     refId: ref.refId,
     sourceKind: "disk_file",
-    relativePath: read.value.path,
+    relativePath: read.value.relativePath,
     content: read.value.content,
     dirty: false
   });
@@ -6238,6 +6564,17 @@ function isExpectedDiskChecksum(value: string | undefined): value is string {
 function activeProjectFileStaleError(reason: string): UnifiedError {
   return runtimeError("AGENT_CONTEXT_STALE", {
     contextSource: "active_project_file",
+    reason
+  });
+}
+
+function engineeringProjectFileEditorStateError(
+  relativePath: string,
+  reason: "dirty_editor" | "editor_state_unknown"
+): UnifiedError {
+  return runtimeError("AGENT_CONTEXT_STALE", {
+    contextSource: "engineering_project_file",
+    relativePath,
     reason
   });
 }

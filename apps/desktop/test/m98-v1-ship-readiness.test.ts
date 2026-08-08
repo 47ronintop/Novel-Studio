@@ -121,7 +121,8 @@ describe("M98 V1 ship readiness", () => {
       "apps/desktop/test/agent-context-runtime.e2e.ts",
       "apps/desktop/test/agent-permission-plan.e2e.ts",
       "apps/desktop/test/agent-diagnostics.e2e.ts",
-      "apps/desktop/test/agent-usage-settings.e2e.ts"
+      "apps/desktop/test/agent-usage-settings.e2e.ts",
+      "apps/desktop/test/agent-creative-general.e2e.ts"
     ];
 
     expect(packageCheck).toContain("checkAgentStage5Prerequisites");
