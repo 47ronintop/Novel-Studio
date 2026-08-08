@@ -1,0 +1,5 @@
+# These fixtures are verified as immutable UTF-8 byte artifacts. Keep their
+# working-tree line endings stable even when Git is configured with autocrlf.
+/packages/application/test/fixtures/writing-style-corpus.json text eol=lf
+/packages/application/test/fixtures/writing-style-annotation-rubric.md text eol=lf
+/packages/application/test/fixtures/agent-system-guidance-2.1/*.txt text eol=lf
