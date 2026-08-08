@@ -7,7 +7,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   ProjectLockFileRepository,
   type AgentOperationPathSnapshot,
-  type AgentWriteLifecycleOperationPort
+  type AgentWriteLifecycleOperationPort,
+  type EngineeringWorkspaceAccessSession
 } from "@novel-studio/repository";
 import { err, ok, type UnifiedError } from "@novel-studio/shared";
 import { createDesktopAgentRuntime } from "../src/main/agent-run-runtime.js";
@@ -24,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("engineering Agent runtime", () => {
-  test("keeps engineering read-only when Phase B and a legacy test lifecycle port are injected", async () => {
+  test("keeps qualified engineering access read-only when Phase B and a legacy lifecycle port are injected", async () => {
     const contentRoot = await createRoot("content");
     const stateRoot = await createRoot("state");
     await mkdir(join(contentRoot, "src"), { recursive: true });
@@ -40,6 +41,7 @@ describe("engineering Agent runtime", () => {
       stateRoot,
       projectLockOwnerId: lockOwnerId,
       createRunId: () => "run-engineering-write",
+      engineeringWorkspaceAccessSession: createTestingEngineeringAccessSession(),
       lifecycleOperations: createTestingReplaceLifecyclePort(contentRoot),
       featureFlags: createAgentFeatureFlags({
         phaseB_fileLifecycleEnabled: true,
@@ -222,6 +224,31 @@ function modelFacts() {
     },
     requiredContextTokens: 8000,
     reasoningStrength: { status: "hidden" as const, reason: "test model" }
+  };
+}
+
+function createTestingEngineeringAccessSession(): EngineeringWorkspaceAccessSession {
+  const binding = {
+    rootBindingId: "engineering-agent-runtime-root",
+    pathPolicyRevision: "engineering-agent-runtime-policy-v1"
+  };
+  return {
+    binding,
+    async listDirectory() {
+      return ok({ entries: [] });
+    },
+    async readTextFile() {
+      return err(testLifecycleError("AGENT_PROJECT_FILE_NOT_FOUND"));
+    },
+    async searchText() {
+      return ok({ matches: [], truncated: false });
+    },
+    async buildIndex() {
+      return ok({ files: [], truncated: false });
+    },
+    async close() {
+      return ok({ closed: true });
+    }
   };
 }
 
