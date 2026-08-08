@@ -256,7 +256,7 @@ bool canonicalRootPathChecksum(HANDLE handle, std::string* output) {
 bool readUtf16String(napi_env env, napi_value value, size_t maxUnits, std::wstring* output) {
   size_t length = 0;
   if (napi_get_value_string_utf16(env, value, nullptr, 0, &length) != napi_ok ||
-      length > maxUnits || length > static_cast<size_t>(std::numeric_limits<int>::max())) return false;
+      length > maxUnits || length > static_cast<size_t>((std::numeric_limits<int>::max)())) return false;
   std::vector<char16_t> buffer(length + 1, u'\0');
   if (napi_get_value_string_utf16(env, value, buffer.data(), buffer.size(), &length) != napi_ok) return false;
   output->clear();
@@ -836,7 +836,7 @@ napi_value listDirectory(napi_env env, napi_callback_info info) {
   for (size_t index = 0; index < entries.size(); ++index) {
     napi_value item, size; napi_create_object(env, &item); napi_create_string_utf16(env, reinterpret_cast<const char16_t*>(entries[index].name.data()), entries[index].name.size(), &size);
     napi_set_named_property(env, item, "name", size); napi_get_boolean(env, entries[index].directory, &size); napi_set_named_property(env, item, "directory", size);
-    napi_create_bigint_uint64(env, entries[index].byteLength, &size); napi_set_named_property(env, item, "byteLength", size); napi_set_element(env, output, index, item);
+    napi_create_bigint_uint64(env, entries[index].byteLength, &size); napi_set_named_property(env, item, "byteLength", size); napi_set_element(env, output, static_cast<uint32_t>(index), item);
   }
   return output;
   } catch (const std::bad_alloc&) {
@@ -859,7 +859,7 @@ napi_value buildIndex(napi_env env, napi_callback_info info) {
   if (result == AccessError::kOk) result = verifyRootStillCurrent(rootId);
   if (result != AccessError::kOk) { throwAccessError(env, result); return nullptr; }
   napi_value output, files, value; napi_create_object(env, &output); napi_create_array_with_length(env, snapshots.size(), &files);
-  for (size_t index = 0; index < snapshots.size(); ++index) { napi_value item; napi_create_object(env, &item); napi_create_string_utf16(env, reinterpret_cast<const char16_t*>(snapshots[index].relativePath.data()), snapshots[index].relativePath.size(), &value); napi_set_named_property(env, item, "relativePath", value); napi_create_bigint_uint64(env, snapshots[index].byteLength, &value); napi_set_named_property(env, item, "byteLength", value); napi_set_element(env, files, index, item); }
+  for (size_t index = 0; index < snapshots.size(); ++index) { napi_value item; napi_create_object(env, &item); napi_create_string_utf16(env, reinterpret_cast<const char16_t*>(snapshots[index].relativePath.data()), snapshots[index].relativePath.size(), &value); napi_set_named_property(env, item, "relativePath", value); napi_create_bigint_uint64(env, snapshots[index].byteLength, &value); napi_set_named_property(env, item, "byteLength", value); napi_set_element(env, files, static_cast<uint32_t>(index), item); }
   napi_set_named_property(env, output, "files", files); napi_get_boolean(env, truncated, &value); napi_set_named_property(env, output, "truncated", value); return output;
   } catch (const std::bad_alloc&) {
     throwAccessError(env, AccessError::kResourceLimit); return nullptr;
