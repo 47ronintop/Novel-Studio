@@ -26,8 +26,8 @@ const textExtensions = new Set([
 ]);
 
 const secretPatterns = [
-  { name: "OpenAI API key", pattern: /sk-[A-Za-z0-9_-]{20,}/ },
-  { name: "Anthropic API key", pattern: /sk-ant-[A-Za-z0-9_-]{20,}/ },
+  { name: "OpenAI API key", pattern: /\bsk-[A-Za-z0-9_-]{20,}/ },
+  { name: "Anthropic API key", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
   { name: "Bearer token", pattern: /Bearer\s+[A-Za-z0-9._-]{20,}/i },
   { name: "Generic plaintext API key", pattern: /api[_-]?key["']?\s*[:=]\s*["'][^"']{12,}["']/i },
   { name: "Generic plaintext token", pattern: /token["']?\s*[:=]\s*["'][^"']{16,}["']/i },
