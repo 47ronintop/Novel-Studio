@@ -31,5 +31,6 @@ export function resolveWorkbenchModeForContext(
   preferred: WorkbenchMode,
   context: WorkspaceContextDto
 ): WorkbenchMode {
-  return context.kind === "engineeringWorkspace" ? "engineering" : preferred;
+  if (context.kind === "engineeringWorkspace") return "engineering";
+  return context.kind === "none" ? "creative" : preferred;
 }

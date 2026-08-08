@@ -221,14 +221,20 @@ export function createWorkspaceNavigation(
   }
 
   function selectWorkbench(mode: WorkbenchMode): void {
-    if (mode === "creative" && !hasCreativeContext(dependencies.getWorkspaceContext())) {
+    const workspaceContext = dependencies.getWorkspaceContext();
+    if (mode === "creative" && !hasCreativeContext(workspaceContext)) {
       dependencies.onNavigationFeedback?.("当前工程工作区不提供创作工作台。请先打开创作项目。");
+      return;
+    }
+
+    if (mode === "engineering" && workspaceContext.kind === "none") {
+      dependencies.openEngineeringWorkspace();
       return;
     }
 
     if (
       mode === "engineering" &&
-      dependencies.getWorkspaceContext().kind !== "engineeringWorkspace" &&
+      workspaceContext.kind !== "engineeringWorkspace" &&
       dependencies.engineeringWorkspaceBridge !== undefined
     ) {
       void dependencies.engineeringWorkspaceBridge.attachCreativeProject().then(

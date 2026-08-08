@@ -466,6 +466,24 @@ describe("workspace navigation", () => {
     );
   });
 
+  test("opens the engineering directory picker from an unbound shell", () => {
+    const state = createState({
+      projectTitle: "未打开项目",
+      workspaceContext: { kind: "none" },
+      workbenchMode: "creative"
+    });
+    const openEngineeringWorkspace = vi.fn();
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies([]),
+      openEngineeringWorkspace
+    });
+
+    navigation.selectWorkbench("engineering");
+
+    expect(openEngineeringWorkspace).toHaveBeenCalledOnce();
+    expect(state.shellState.workbenchMode).toBe("creative");
+  });
+
   test("opens the supplied central review without changing the active activity", () => {
     const log: string[] = [];
     const state = createState({ activeActivity: "workspace" });

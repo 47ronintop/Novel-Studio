@@ -102,6 +102,10 @@ describe("desktop application command bridge", () => {
     ).toBe("engineering");
   });
 
+  test("returns to the creative workbench when no workspace is open", () => {
+    expect(resolveWorkbenchModeForContext("engineering", EMPTY_WORKSPACE_CONTEXT)).toBe("creative");
+  });
+
   test("converts activation state to a renderer-safe workspace DTO", () => {
     const dto = toWorkspaceContextDto({
       kind: "engineeringWorkspace",
