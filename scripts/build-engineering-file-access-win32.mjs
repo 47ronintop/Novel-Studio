@@ -36,7 +36,12 @@ const toolchainEnvironment = { ...process.env };
 const vsEnvironment = await run(
   "cmd.exe",
   ["/d", "/c", `call "${vsDevCmd}" -no_logo -host_arch=x64 -arch=x64 >nul && set`],
-  { cwd: root, env: toolchainEnvironment, maxBuffer: 1024 * 1024 }
+  {
+    cwd: root,
+    env: toolchainEnvironment,
+    maxBuffer: 1024 * 1024,
+    windowsVerbatimArguments: true
+  }
 );
 for (const line of vsEnvironment.stdout.split(/\r?\n/u)) {
   const separator = line.indexOf("=");

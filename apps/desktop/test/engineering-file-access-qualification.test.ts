@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -62,6 +64,18 @@ describe("Main-owned engineering file access qualification", () => {
     );
     expect(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.electronBuilderAsarUnpack).not.toContain(
       "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.probe.json"
+    );
+  });
+
+  test("passes the quoted VsDevCmd command to cmd.exe without Node re-escaping it", async () => {
+    const buildScript = await readFile(
+      ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.buildScript,
+      "utf8"
+    );
+
+    expect(buildScript).toContain("windowsVerbatimArguments: true");
+    expect(buildScript).toContain(
+      '`call "${vsDevCmd}" -no_logo -host_arch=x64 -arch=x64 >nul && set`'
     );
   });
 
