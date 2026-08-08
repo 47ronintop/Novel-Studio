@@ -558,7 +558,8 @@ async function checkAgentStage5Prerequisites() {
     "apps/desktop/test/agent-context-runtime.e2e.ts",
     "apps/desktop/test/agent-permission-plan.e2e.ts",
     "apps/desktop/test/agent-diagnostics.e2e.ts",
-    "apps/desktop/test/agent-usage-settings.e2e.ts"
+    "apps/desktop/test/agent-usage-settings.e2e.ts",
+    "apps/desktop/test/agent-creative-general.e2e.ts"
   ];
   for (const suite of requiredStage5Suites) {
     if (!(await fileExists(join(root, suite)))) {

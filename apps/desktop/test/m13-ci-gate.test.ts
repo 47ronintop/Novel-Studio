@@ -36,9 +36,10 @@ describe("M13 real E2E and CI gate", () => {
     expect(playwrightConfig).toContain('testMatch: "**/*.e2e.ts"');
     expect(playwrightConfig).toContain('"**/agent-write.e2e.ts"');
     expect(playwrightConfig).toContain('"**/agent-writing-domain.e2e.ts"');
+    expect(playwrightConfig).toContain('"**/agent-creative-general.e2e.ts"');
     expect(packagedPlaywrightConfig).toContain('testDir: "./apps/desktop/test"');
     expect(packagedPlaywrightConfig).toContain(
-      'testMatch: ["agent-write.e2e.ts", "agent-writing-domain.e2e.ts"]'
+      'testMatch: ["agent-write.e2e.ts", "agent-writing-domain.e2e.ts", "agent-creative-general.e2e.ts"]'
     );
     expect(packagedPlaywrightConfig).toContain("workers: 1");
   });
