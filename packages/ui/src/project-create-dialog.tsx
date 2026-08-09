@@ -48,11 +48,19 @@ export function ProjectCreateDialog(props: ProjectCreateDialogProps) {
   }
 
   return (
-    <div className="ns-project-create-dialog" aria-label="新建创作项目" aria-modal="true" role="dialog">
+    <div
+      className="ns-project-create-dialog"
+      aria-label="新建创作项目"
+      aria-modal="true"
+      role="dialog"
+    >
       <div className="ns-project-create-dialog-backdrop" onClick={props.onCancel} />
       <section className="ns-project-create-dialog-content">
         <header className="ns-project-create-dialog-header">
           <strong>新建创作项目</strong>
+          <p className="ns-project-create-dialog-description">
+            项目会创建在所选父文件夹下的新文件夹中。
+          </p>
         </header>
         <div className="ns-project-create-dialog-form">
           <label>
@@ -82,11 +90,17 @@ export function ProjectCreateDialog(props: ProjectCreateDialogProps) {
             type="button"
           >
             <FolderOpen aria-hidden="true" size={14} />
-            {props.selectedParentDisplayName ?? "选择父文件夹"}
+            {props.selectedParentDisplayName === undefined
+              ? "选择父文件夹"
+              : `父文件夹：${props.selectedParentDisplayName}`}
           </button>
           {props.creationPreview === undefined ? null : (
-            <p className="ns-project-create-dialog-preview">
-              {props.creationPreview.targetDisplayName}
+            <p className="ns-project-create-dialog-preview" aria-label="项目创建位置">
+              <span>创建位置</span>
+              <strong>
+                {props.creationPreview.parentDisplayName} /{" "}
+                {props.creationPreview.targetDisplayName}
+              </strong>
             </p>
           )}
           {props.feedback === undefined ? null : (

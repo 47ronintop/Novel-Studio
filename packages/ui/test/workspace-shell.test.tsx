@@ -118,6 +118,103 @@ describe("WorkspaceShell", () => {
     expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["settings"]);
   });
 
+  test("isolates the engineering editor from stale creative projections and keeps open failures visible", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{
+          ...application.getShellState(),
+          projectTitle: "Source",
+          workbenchMode: "engineering",
+          workspaceContext: {
+            kind: "engineeringWorkspace",
+            workspaceId: "workspace_source",
+            displayName: "Source",
+            capabilities: ["engineeringWorkbench", "generalFileContext"]
+          }
+        }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        chapterEditor={{
+          chapter: {
+            frontmatter: {
+              schemaVersion: "1.0",
+              id: "ch_stale",
+              type: "chapter",
+              title: "不应显示的章节",
+              order: 1,
+              status: "draft",
+              createdAt: "2026-08-09T00:00:00.000Z",
+              updatedAt: "2026-08-09T00:00:00.000Z"
+            },
+            body: "stale"
+          },
+          saveStatus: "Saved",
+          dirty: false,
+          versionHistory: []
+        }}
+        onboarding={{
+          visible: true,
+          dismissed: false,
+          steps: [],
+          onCreateExampleProject: () => undefined,
+          onCreateProject: () => undefined,
+          onOpenProject: () => undefined,
+          onCreateFirstChapter: () => undefined,
+          onDismiss: () => undefined
+        }}
+        projectWorkflow={{
+          projectId: "project_stale",
+          chapters: [
+            {
+              id: "ch_stale",
+              title: "不应显示的章节",
+              order: 1,
+              status: "draft",
+              updatedAt: "2026-08-09T00:00:00.000Z"
+            }
+          ],
+          activeChapterId: "ch_stale",
+          openChapterTabIds: ["ch_stale"],
+          feedback: { kind: "error", message: "所选文件夹不是创作项目。" },
+          onOpenProject: () => undefined,
+          onCreateProject: () => undefined,
+          onCreateChapter: () => undefined,
+          onSelectChapter: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="空工程工作区"');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("所选文件夹不是创作项目。");
+    expect(html).not.toContain("不应显示的章节");
+    expect(html).not.toContain("新建第一章");
+    expect(html).not.toContain('aria-label="快速开始"');
+  });
+
+  test("offers project actions instead of a non-working first-chapter action when unbound", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={application.getShellState()}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+        projectWorkflow={{
+          chapters: [],
+          onOpenProject: () => undefined,
+          onCreateProject: () => undefined,
+          onCreateChapter: () => undefined,
+          onSelectChapter: () => undefined
+        }}
+      />
+    );
+
+    expect(html).toContain('aria-label="新建创作项目"');
+    expect(html).toContain('aria-label="打开创作项目"');
+    expect(html).not.toContain('aria-label="新建第一章"');
+  });
+
   test("renders settings inside the central Editor Area and keeps Navigator, Agent Surface, and Status Bar mounted", () => {
     const application = createDesktopApplication();
     const html = renderToStaticMarkup(
@@ -783,8 +880,9 @@ describe("WorkspaceShell", () => {
       />
     );
 
-    expect(html).toContain("未命名章节");
-    expect(html).toContain("继续写下一场");
+    expect(html).toContain("未打开创作项目");
+    expect(html).toContain("新建创作项目");
+    expect(html).toContain("打开创作项目");
     expect(html).not.toMatch(/hero|marketing|landing/i);
   });
 

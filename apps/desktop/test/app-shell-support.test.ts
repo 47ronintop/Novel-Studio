@@ -13,6 +13,7 @@ import type { ChapterEditorProps } from "@novel-studio/ui";
 import {
   createChapterEditorRuntime,
   createChapterEditorSelectionCommand,
+  createOnboardingProps,
   applyShellPreferences,
   ensureCreativeWorkspaceContext,
   persistAppearancePreferences,
@@ -85,6 +86,32 @@ describe("renderer app shell editor runtime support", () => {
     );
 
     expect(applied.workbenchMode).toBe("engineering");
+  });
+
+  test("keeps creative onboarding out of an engineering workspace", () => {
+    const onboarding = createOnboardingProps({
+      dismissed: false,
+      shellState: {
+        ...rendererShellState,
+        projectTitle: "Source",
+        workbenchMode: "engineering",
+        workspaceContext: {
+          kind: "engineeringWorkspace",
+          workspaceId: "workspace_source",
+          displayName: "Source",
+          capabilities: ["engineeringWorkbench", "generalFileContext"]
+        }
+      },
+      chapterEditor: undefined,
+      projectWorkflow: undefined,
+      onCreateExampleProject: () => undefined,
+      onCreateProject: () => undefined,
+      onOpenProject: () => undefined,
+      onCreateFirstChapter: () => undefined,
+      onDismiss: () => undefined
+    });
+
+    expect(onboarding.visible).toBe(false);
   });
 
   test("restores the last non-settings activity after settings closes", () => {

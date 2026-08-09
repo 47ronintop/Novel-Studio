@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -22,12 +24,12 @@ describe("ProjectCreateDialog", () => {
     const { host } = renderDialog();
 
     expect(host.querySelector('[role="dialog"][aria-label="新建创作项目"]')).not.toBeNull();
-    expect(
-      host.querySelector<HTMLInputElement>('input[aria-label="项目标题"]')?.value
-    ).toBe("长安旧梦");
-    expect(
-      host.querySelector<HTMLInputElement>('input[aria-label="项目文件夹名称"]')?.value
-    ).toBe("长安旧梦");
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="项目标题"]')?.value).toBe(
+      "长安旧梦"
+    );
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="项目文件夹名称"]')?.value).toBe(
+      "长安旧梦"
+    );
     expect(host.querySelector('button[aria-label="选择项目父文件夹"]')).not.toBeNull();
   });
 
@@ -38,9 +40,7 @@ describe("ProjectCreateDialog", () => {
     const onCancel = vi.fn();
 
     const { host } = renderDialog({ onCancel });
-    expect(document.activeElement).toBe(
-      host.querySelector('input[aria-label="项目标题"]')
-    );
+    expect(document.activeElement).toBe(host.querySelector('input[aria-label="项目标题"]'));
 
     act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(onCancel).toHaveBeenCalledTimes(1);
@@ -60,9 +60,7 @@ describe("ProjectCreateDialog", () => {
     });
     expect(onTitleChange).toHaveBeenCalledWith("长安旧梦：终章");
 
-    const folderInput = host.querySelector<HTMLInputElement>(
-      'input[aria-label="项目文件夹名称"]'
-    );
+    const folderInput = host.querySelector<HTMLInputElement>('input[aria-label="项目文件夹名称"]');
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       setter?.call(folderInput, "长安旧梦-终章");
@@ -85,7 +83,9 @@ describe("ProjectCreateDialog", () => {
       }
     });
 
-    expect(host.textContent).toContain("文档 / 长安旧梦");
+    expect(host.querySelector('[aria-label="项目创建位置"]')?.textContent).toContain(
+      "文档 / 长安旧梦"
+    );
     expect(host.textContent).not.toMatch(/[A-Za-z]:\\|\/home\/|\/Users\//);
   });
 
@@ -113,6 +113,26 @@ describe("ProjectCreateDialog", () => {
 
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="取消创建项目"]')?.click());
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  test("positions the form as a bounded responsive modal overlay", () => {
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+
+    expect(css).toMatch(
+      /\.ns-project-create-dialog\s*\{[^}]*display:\s*grid[^}]*inset:\s*0[^}]*overflow:\s*auto[^}]*position:\s*fixed[^}]*z-index:\s*130/s
+    );
+    expect(css).toMatch(
+      /\.ns-project-create-dialog-backdrop\s*\{[^}]*inset:\s*0[^}]*position:\s*absolute/s
+    );
+    expect(css).toMatch(
+      /\.ns-project-create-dialog-content\s*\{[^}]*max-height:\s*calc\(100dvh\s*-\s*48px\)[^}]*overflow:\s*auto[^}]*position:\s*relative[^}]*width:\s*min\(520px,\s*calc\(100vw\s*-\s*48px\)\)/s
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*640px\)[\s\S]*?\.ns-project-create-dialog-content\s*\{[^}]*max-height:\s*calc\(100dvh\s*-\s*24px\)[^}]*width:\s*100%/s
+    );
+    expect(css).toMatch(
+      /\.ns-project-create-dialog-form input\s*\{[^}]*min-width:\s*0[^}]*width:\s*100%/s
+    );
   });
 });
 

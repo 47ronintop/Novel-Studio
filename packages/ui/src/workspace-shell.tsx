@@ -113,8 +113,14 @@ function WorkspaceShellContent({
   const focusMode = shellState.focusMode === true;
   const settingsMode = shellState.activeActivity === "settings";
   const editorActivity = shellState.activeActivity === "workspace";
+  const creativeEditorSurface =
+    shellState.workbenchMode === "creative" &&
+    shellState.workspaceContext.kind !== "engineeringWorkspace";
+  const visibleChapterEditor = creativeEditorSurface ? chapterEditor : undefined;
+  const visibleOnboarding = creativeEditorSurface ? onboarding : undefined;
+  const visibleCreativeProjectWorkflow = creativeEditorSurface ? projectWorkflow : undefined;
   const hasActiveDocument =
-    editorActivity && (fileEditor !== undefined || chapterEditor !== undefined);
+    editorActivity && (fileEditor !== undefined || visibleChapterEditor !== undefined);
   const activeBottomPanelTab =
     shellState.bottomPanelTabs.includes(shellState.activeBottomPanelTab) === true
       ? shellState.activeBottomPanelTab
@@ -128,7 +134,7 @@ function WorkspaceShellContent({
     "--ns-bottom-panel-height":
       !focusMode && shellState.bottomPanelVisible ? `${workspaceLayout.bottomPanelHeight}px` : "0px"
   } as CSSProperties;
-  const chapterRecoveryReview = toChapterRecoveryReview(projectWorkflow);
+  const chapterRecoveryReview = toChapterRecoveryReview(visibleCreativeProjectWorkflow);
   const mainReview =
     agentConversationWorkspace?.mainReview?.kind === "recovery"
       ? agentConversationWorkspace.mainReview
@@ -205,9 +211,10 @@ function WorkspaceShellContent({
             <AgentConversationMainReviewView review={mainReview} />
           ) : shellState.activeActivity === "workspace" ? (
             <WorkspaceEditorSurface
-              chapterEditor={chapterEditor}
+              chapterEditor={visibleChapterEditor}
+              creativeEditorSurface={creativeEditorSurface}
               fileEditor={fileEditor}
-              onboarding={onboarding}
+              onboarding={visibleOnboarding}
               projectWorkflow={projectWorkflow}
               splitView={workspaceLayout.splitView}
               onFileSelectionChange={setFileSelection}
@@ -316,14 +323,14 @@ function WorkspaceShellContent({
           <BottomPanelContent
             activeTab={activeBottomPanelTab}
             aiWritingWorkflow={aiWritingWorkflow}
-            projectWorkflow={projectWorkflow}
+            projectWorkflow={visibleCreativeProjectWorkflow}
             search={search}
           />
         </section>
       </div>
 
       <WorkspaceStatusBar
-        chapterEditor={editorActivity ? chapterEditor : undefined}
+        chapterEditor={editorActivity ? visibleChapterEditor : undefined}
         fileEditor={editorActivity ? fileEditor : undefined}
         fileSelection={fileSelection}
       />
@@ -524,6 +531,7 @@ function aiWritingWorkflowStatusLabel(
 
 function WorkspaceEditorSurface({
   chapterEditor,
+  creativeEditorSurface,
   fileEditor,
   onboarding,
   projectWorkflow,
@@ -531,6 +539,7 @@ function WorkspaceEditorSurface({
   onFileSelectionChange
 }: {
   readonly chapterEditor: ChapterEditorProps | undefined;
+  readonly creativeEditorSurface: boolean;
   readonly fileEditor: PlainFileEditorProps | undefined;
   readonly onboarding: OnboardingProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
@@ -541,10 +550,11 @@ function WorkspaceEditorSurface({
   }) => void;
 }) {
   const [findMode, setFindMode] = useState<EditorFindMode>("closed");
+  const activeProjectWorkflow = creativeEditorSurface ? projectWorkflow : undefined;
   const activeChapterId =
-    projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id ?? undefined;
-  const chapterTabs = projectWorkflow?.chapters ?? [];
-  const openChapterTabIds = projectWorkflow?.openChapterTabIds ?? [];
+    activeProjectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id ?? undefined;
+  const chapterTabs = activeProjectWorkflow?.chapters ?? [];
+  const openChapterTabIds = activeProjectWorkflow?.openChapterTabIds ?? [];
   const explicitVisibleTabs = openChapterTabIds
     .map((chapterId) => chapterTabs.find((chapter) => chapter.id === chapterId))
     .filter((chapter): chapter is ChapterSummary => chapter !== undefined);
@@ -563,7 +573,7 @@ function WorkspaceEditorSurface({
           }
         ]
       : explicitVisibleTabs;
-  const dirtyChapterIds = new Set(projectWorkflow?.dirtyChapterIds ?? []);
+  const dirtyChapterIds = new Set(activeProjectWorkflow?.dirtyChapterIds ?? []);
   const chapterDocumentTabs: readonly EditorDocumentTab[] = visibleTabs.map((chapter) => ({
     id: `chapter:${chapter.id}`,
     label: chapterDocumentLabel(chapter.title),
@@ -573,14 +583,14 @@ function WorkspaceEditorSurface({
       (chapterEditor?.chapter.frontmatter.id === chapter.id && chapterEditor.dirty),
     onSelect: () => {
       setFindMode("closed");
-      projectWorkflow?.onSelectChapter(chapter.id);
+      activeProjectWorkflow?.onSelectChapter(chapter.id);
     },
-    ...(projectWorkflow?.onCloseChapterTab === undefined
+    ...(activeProjectWorkflow?.onCloseChapterTab === undefined
       ? {}
       : {
           onClose: () => {
             setFindMode("closed");
-            projectWorkflow.onCloseChapterTab?.(chapter.id);
+            activeProjectWorkflow.onCloseChapterTab?.(chapter.id);
           }
         })
   }));
@@ -621,18 +631,18 @@ function WorkspaceEditorSurface({
           onInvoke: () => chapterEditor.onSelectionAiPreview?.(selectionAiPreviewCommand.commandId)
         }
       : undefined;
+  const projectFeedback = projectWorkflow?.feedback;
+  const hasActiveProject = activeProjectWorkflow?.projectId !== undefined;
+  const hasEditorNotice =
+    projectFeedback !== undefined ||
+    (fileEditor === undefined && chapterEditor?.completionFeedback !== undefined);
 
   useEffect(() => {
     setFindMode("closed");
   }, [activeChapterId, fileEditor?.path]);
 
   return (
-    <div
-      className="ns-editor-workspace"
-      data-completion-feedback={
-        fileEditor === undefined && chapterEditor?.completionFeedback !== undefined
-      }
-    >
+    <div className="ns-editor-workspace" data-editor-notice={hasEditorNotice}>
       <EditorDocumentBar
         chapterStatus={
           fileEditor === undefined ? chapterEditor?.chapter.frontmatter.status : undefined
@@ -651,29 +661,42 @@ function WorkspaceEditorSurface({
           ? {}
           : { onFocusModeToggle: activeFocusModeToggle })}
       />
-      {fileEditor !== undefined || chapterEditor?.completionFeedback === undefined ? null : (
-        <div
-          className="ns-chapter-completion-feedback"
-          data-kind={chapterEditor.completionFeedback.kind}
-          role={chapterEditor.completionFeedback.kind === "error" ? "alert" : "status"}
-        >
-          <span>{chapterEditor.completionFeedback.message}</span>
-          {chapterEditor.completionFeedback.action === undefined ? null : (
-            <button
-              className="ns-icon-text-button"
-              onClick={chapterEditor.completionFeedback.action.onInvoke}
-              type="button"
+      {hasEditorNotice ? (
+        <div className="ns-editor-notices">
+          {projectFeedback === undefined ? null : (
+            <div
+              className="ns-workspace-transition-feedback"
+              data-kind={projectFeedback.kind}
+              role={projectFeedback.kind === "error" ? "alert" : "status"}
             >
-              <Sparkles aria-hidden="true" size={14} />
-              {chapterEditor.completionFeedback.action.label}
-            </button>
+              {projectFeedback.message}
+            </div>
+          )}
+          {fileEditor !== undefined || chapterEditor?.completionFeedback === undefined ? null : (
+            <div
+              className="ns-chapter-completion-feedback"
+              data-kind={chapterEditor.completionFeedback.kind}
+              role={chapterEditor.completionFeedback.kind === "error" ? "alert" : "status"}
+            >
+              <span>{chapterEditor.completionFeedback.message}</span>
+              {chapterEditor.completionFeedback.action === undefined ? null : (
+                <button
+                  className="ns-icon-text-button"
+                  onClick={chapterEditor.completionFeedback.action.onInvoke}
+                  type="button"
+                >
+                  <Sparkles aria-hidden="true" size={14} />
+                  {chapterEditor.completionFeedback.action.label}
+                </button>
+              )}
+            </div>
           )}
         </div>
-      )}
+      ) : null}
       <div className="ns-editor-panes" data-editor-layout="ide" data-split-view={splitView}>
         <section className="ns-editor-surface" aria-label="章节编辑器表面">
           <OnboardingQuickStart onboarding={onboarding} />
-          <AutosaveRecoveryNotice projectWorkflow={projectWorkflow} />
+          <AutosaveRecoveryNotice projectWorkflow={activeProjectWorkflow} />
           {fileEditor?.conflict !== undefined ? (
             <PlainFileConflictReview
               fileName={fileEditor.fileName}
@@ -690,22 +713,61 @@ function WorkspaceEditorSurface({
             />
           ) : chapterEditor ? (
             <ChapterEditor {...chapterEditor} findMode={findMode} onFindModeChange={setFindMode} />
+          ) : !creativeEditorSurface ? (
+            <section className="ns-empty-editor" aria-label="空工程工作区">
+              <div>
+                <div className="ns-document-title">未打开工程文件</div>
+                <p>从工程资源管理器选择文件后在此查看或编辑。</p>
+              </div>
+              <div className="ns-editor-line" />
+              <div className="ns-editor-line ns-editor-line-short" />
+            </section>
           ) : (
             <section className="ns-empty-editor" aria-label="空章节工作区">
               <div>
-                <div className="ns-document-title">未命名章节</div>
-                <p>继续写下一场。创建第一章后开始写正文，或先打开已有项目继续编辑。</p>
+                <div className="ns-document-title">
+                  {hasActiveProject ? "未命名章节" : "未打开创作项目"}
+                </div>
+                <p>
+                  {hasActiveProject
+                    ? "创建第一章后开始写正文。"
+                    : "新建一个创作项目，或打开已有项目继续编辑。"}
+                </p>
               </div>
-              <button
-                aria-label="新建第一章"
-                className="ns-icon-text-button"
-                disabled={projectWorkflow === undefined || isProjectWorkflowBusy(projectWorkflow)}
-                onClick={projectWorkflow?.onCreateChapter}
-                type="button"
-              >
-                <FilePlus aria-hidden="true" size={14} />
-                新建第一章
-              </button>
+              {hasActiveProject ? (
+                <button
+                  aria-label="新建第一章"
+                  className="ns-icon-text-button"
+                  disabled={
+                    activeProjectWorkflow === undefined ||
+                    isProjectWorkflowBusy(activeProjectWorkflow)
+                  }
+                  onClick={activeProjectWorkflow?.onCreateChapter}
+                  type="button"
+                >
+                  <FilePlus aria-hidden="true" size={14} />
+                  新建第一章
+                </button>
+              ) : (
+                <div className="ns-empty-editor-actions">
+                  <button
+                    aria-label="新建创作项目"
+                    className="ns-icon-text-button"
+                    onClick={activeProjectWorkflow?.onCreateProject}
+                    type="button"
+                  >
+                    新建创作项目
+                  </button>
+                  <button
+                    aria-label="打开创作项目"
+                    className="ns-icon-text-button"
+                    onClick={activeProjectWorkflow?.onOpenProject}
+                    type="button"
+                  >
+                    打开创作项目
+                  </button>
+                </div>
+              )}
               <div className="ns-editor-line" />
               <div className="ns-editor-line ns-editor-line-short" />
             </section>

@@ -204,14 +204,17 @@ export function createOnboardingProps(input: {
   readonly onCreateFirstChapter: () => void;
   readonly onDismiss: () => void;
 }): OnboardingProps {
+  const creativeSurfaceAvailable =
+    input.shellState.workbenchMode === "creative" &&
+    input.shellState.workspaceContext.kind !== "engineeringWorkspace";
   const hasProject =
-    input.shellState.projectTitle !== "未打开项目" ||
+    input.shellState.workspaceContext.kind === "creativeProject" ||
     input.projectWorkflow?.projectId !== undefined;
   const hasChapter =
     input.chapterEditor !== undefined || (input.projectWorkflow?.chapters.length ?? 0) > 0;
 
   return {
-    visible: !input.dismissed && (!hasProject || !hasChapter),
+    visible: creativeSurfaceAvailable && !input.dismissed && (!hasProject || !hasChapter),
     dismissed: input.dismissed,
     steps: [
       {
