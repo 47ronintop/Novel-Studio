@@ -94,10 +94,11 @@ describe("Main-owned engineering file access qualification", () => {
   });
 
   test("requires signed Batch 7 mutation/recovery evidence and schedules the installed-package E2E", async () => {
-    const [signScript, packageCheck, packagedConfig] = await Promise.all([
+    const [signScript, packageCheck, packagedConfig, workflow] = await Promise.all([
       readFile(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.signScript, "utf8"),
       readFile("scripts/package-check.mjs", "utf8"),
-      readFile("playwright.packaged.config.ts", "utf8")
+      readFile("playwright.packaged.config.ts", "utf8"),
+      readFile(".github/workflows/engineering-file-access-native.yml", "utf8")
     ]);
 
     for (const source of [signScript, packageCheck]) {
@@ -107,6 +108,14 @@ describe("Main-owned engineering file access qualification", () => {
       expect(source).toContain("mutationRecoveryEvidence");
       expect(source).toContain("faultRecoveryRequired");
     }
+    expect(signScript).toContain("verifyEngineeringFileAccessProductionEvidence");
+    expect(signScript).not.toContain("function hasBatch7ProductionProbeEvidence");
+    expect(workflow).toContain(
+      "node scripts/probe-engineering-file-access-disabled-protections-win32.mjs"
+    );
+    expect(workflow).toContain(
+      "node scripts/compose-engineering-file-access-production-evidence.mjs"
+    );
     expect(packagedConfig).toContain("engineering-file-access-package.e2e.ts");
   });
 

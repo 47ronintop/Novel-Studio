@@ -25,6 +25,27 @@
 namespace {
 
 #ifdef _WIN32
+#if (defined(ENGINEERING_CANARY_ROOT_RELATIVE_DISABLED) + \
+     defined(ENGINEERING_CANARY_NO_FOLLOW_DISABLED) + \
+     defined(ENGINEERING_CANARY_RAW_BYTE_IDENTITY_DISABLED) + \
+     defined(ENGINEERING_CANARY_RECEIPT_BINDING_DISABLED) + \
+     defined(ENGINEERING_CANARY_DURABILITY_DISABLED) + \
+     defined(ENGINEERING_CANARY_RECOVERY_ROOT_BINDING_DISABLED)) > 1
+#error "disabled-protection canary builds must weaken exactly one protection"
+#endif
+#if defined(ENGINEERING_CANARY_ROOT_RELATIVE_DISABLED) || \
+    defined(ENGINEERING_CANARY_NO_FOLLOW_DISABLED) || \
+    defined(ENGINEERING_CANARY_RAW_BYTE_IDENTITY_DISABLED) || \
+    defined(ENGINEERING_CANARY_RECEIPT_BINDING_DISABLED) || \
+    defined(ENGINEERING_CANARY_DURABILITY_DISABLED) || \
+    defined(ENGINEERING_CANARY_RECOVERY_ROOT_BINDING_DISABLED)
+#define ENGINEERING_DISABLED_PROTECTION_CANARY_BUILD 1
+#endif
+#if defined(ENGINEERING_MUTATION_FAULT_INJECTION_BUILD) && \
+    defined(ENGINEERING_DISABLED_PROTECTION_CANARY_BUILD)
+#error "mutation fault injection must not weaken a disabled-protection canary"
+#endif
+
 constexpr uint64_t kMaxFileBytes = 5ULL * 1024ULL * 1024ULL;
 constexpr size_t kMaxPathUtf8Bytes = 4096;
 constexpr size_t kMaxRelativeUtf16Units = 4096;
@@ -247,6 +268,10 @@ std::unordered_map<uint64_t, AbsenceProof> g_absenceProofs;
 std::unordered_map<uint64_t, MutationWalBinding> g_mutationWalBindings;
 std::atomic<uint64_t> g_nextAbsenceProof{1};
 std::atomic<uint64_t> g_nextMutationWalBinding{1};
+#ifdef ENGINEERING_CANARY_DURABILITY_DISABLED
+std::atomic<uint64_t> g_bypassedDataFlushes{0};
+std::atomic<uint64_t> g_bypassedDirectoryFlushes{0};
+#endif
 
 enum class AccessError {
   kOk,
@@ -528,6 +553,9 @@ bool isHardDeniedName(const std::wstring& name) {
 }
 
 bool isCanonicalLeafName(const std::wstring& name) {
+#ifdef ENGINEERING_CANARY_ROOT_RELATIVE_DISABLED
+  if (name == L"..") return true;
+#endif
   if (name.empty() || name.size() > 255 || name == L"." || name == L".." || name.back() == L'.' || name.back() == L' ' ||
       isReservedDeviceName(name)) return false;
   std::string utf8;
@@ -598,12 +626,52 @@ bool hasExactLeafName(HANDLE handle, const std::wstring& expected) {
   return name.substr(separator == std::wstring::npos ? 0 : separator + 1) == expected;
 }
 
+bool hasExpectedLeafName(HANDLE handle, const std::wstring& expected) {
+#ifdef ENGINEERING_CANARY_NO_FOLLOW_DISABLED
+  (void)handle;
+  (void)expected;
+  return true;
+#else
+#ifdef ENGINEERING_CANARY_ROOT_RELATIVE_DISABLED
+  if (expected == L"..") return true;
+#endif
+  return hasExactLeafName(handle, expected);
+#endif
+}
+
+ULONG noFollowOpenOption() {
+#ifdef ENGINEERING_CANARY_NO_FOLLOW_DISABLED
+  return 0;
+#else
+  return kFileOpenReparsePoint;
+#endif
+}
+
+bool hasUnsafeDirectoryAttributes(DWORD attributes) {
+#ifdef ENGINEERING_CANARY_NO_FOLLOW_DISABLED
+  (void)attributes;
+  return false;
+#else
+  return (attributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE)) != 0;
+#endif
+}
+
+bool hasUnsafeFileAttributes(DWORD attributes) {
+#ifdef ENGINEERING_CANARY_NO_FOLLOW_DISABLED
+  (void)attributes;
+  return false;
+#else
+  return (attributes &
+          (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE | FILE_ATTRIBUTE_SPARSE_FILE)) != 0;
+#endif
+}
+
 AccessError verifyDirectory(HANDLE handle) {
   FILE_ATTRIBUTE_TAG_INFO attributes{};
   FILE_STANDARD_INFO standard{};
   BY_HANDLE_FILE_INFORMATION identity{};
   if (!fileAttributes(handle, &attributes, &standard, &identity)) return AccessError::kIo;
-  if (!standard.Directory || (attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE)) != 0 ||
+  if (!standard.Directory || hasUnsafeDirectoryAttributes(attributes.FileAttributes) ||
       GetFileType(handle) != FILE_TYPE_DISK) return AccessError::kUnsafeObject;
   return AccessError::kOk;
 }
@@ -613,9 +681,7 @@ AccessError verifyRegularFile(HANDLE handle, uint64_t* size) {
   FILE_STANDARD_INFO standard{};
   BY_HANDLE_FILE_INFORMATION identity{};
   if (!fileAttributes(handle, &attributes, &standard, &identity)) return AccessError::kIo;
-  if (standard.Directory ||
-      (attributes.FileAttributes &
-       (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE | FILE_ATTRIBUTE_SPARSE_FILE)) != 0 ||
+  if (standard.Directory || hasUnsafeFileAttributes(attributes.FileAttributes) ||
       identity.nNumberOfLinks != 1 || GetFileType(handle) != FILE_TYPE_DISK || standard.EndOfFile.QuadPart < 0)
     return AccessError::kUnsafeObject;
   *size = static_cast<uint64_t>(standard.EndOfFile.QuadPart);
@@ -706,8 +772,8 @@ AccessError openRelative(HANDLE root, const std::vector<std::wstring>& segments,
         expectedDirectory ? (FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
                           : (FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE),
         &objectAttributes, &statusBlock, nullptr, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        kFileOpen, expectedDirectory ? (kFileDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint)
-                                     : (kFileNonDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint),
+        kFileOpen, expectedDirectory ? (kFileDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption())
+                                     : (kFileNonDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption()),
         nullptr, 0);
     if (ownsCurrent) CloseHandle(current);
     if (!isSuccess(status) || next == INVALID_HANDLE_VALUE) return status == static_cast<NTSTATUS>(0xC0000034L) ? AccessError::kNotFound : AccessError::kUnsafeObject;
@@ -716,7 +782,7 @@ AccessError openRelative(HANDLE root, const std::vector<std::wstring>& segments,
     uint64_t ignoredSize = 0;
     const AccessError checked = expectedDirectory ? verifyDirectory(current) : verifyRegularFile(current, &ignoredSize);
     // Do not permit a case-folded or short-name alias to become a canonical ref.
-    if (checked != AccessError::kOk || !hasExactLeafName(current, segments[index])) {
+    if (checked != AccessError::kOk || !hasExpectedLeafName(current, segments[index])) {
       CloseHandle(current);
       return checked == AccessError::kOk ? AccessError::kUnsafePath : checked;
     }
@@ -1141,7 +1207,10 @@ bool readBlobManifest(napi_env env, napi_value value, BlobManifest* output) {
 }
 
 bool sameManifest(const BlobManifest& left, const BlobManifest& right) {
-  return left.byteLength == right.byteLength && left.sha256 == right.sha256 &&
+  return left.byteLength == right.byteLength &&
+#ifndef ENGINEERING_CANARY_RAW_BYTE_IDENTITY_DISABLED
+      left.sha256 == right.sha256 &&
+#endif
       left.encoding == right.encoding && left.bom == right.bom && left.eol == right.eol;
 }
 
@@ -1267,8 +1336,8 @@ AccessError openMutationRelative(uint64_t rootId, const std::vector<std::wstring
     const DWORD shareMode = index + 1 == segments.size() ? finalShareMode : FILE_SHARE_READ;
     const NTSTATUS status = create(
         &next, desiredAccess, &attributes, &statusBlock, nullptr, 0, shareMode, kFileOpen,
-        expectedDirectory ? (kFileDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint)
-                          : (kFileNonDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint),
+        expectedDirectory ? (kFileDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption())
+                          : (kFileNonDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption()),
         nullptr, 0);
     CloseHandle(current);
     if (!isSuccess(status) || next == INVALID_HANDLE_VALUE) {
@@ -1277,7 +1346,7 @@ AccessError openMutationRelative(uint64_t rootId, const std::vector<std::wstring
     current = next;
     uint64_t ignoredSize = 0;
     const AccessError checked = expectedDirectory ? verifyDirectory(current) : verifyRegularFile(current, &ignoredSize);
-    if (checked != AccessError::kOk || !hasExactLeafName(current, segments[index])) {
+    if (checked != AccessError::kOk || !hasExpectedLeafName(current, segments[index])) {
       CloseHandle(current);
       return checked == AccessError::kOk ? AccessError::kUnsafePath : checked;
     }
@@ -1443,6 +1512,23 @@ AccessError createStagingFile(HANDLE parent, const std::string& stagingId, HANDL
   return AccessError::kOk;
 }
 
+enum class DurableFlushKind { kData, kDirectory };
+
+bool flushDurably(HANDLE handle, DurableFlushKind kind) {
+#ifdef ENGINEERING_CANARY_DURABILITY_DISABLED
+  (void)handle;
+  if (kind == DurableFlushKind::kData) {
+    g_bypassedDataFlushes.fetch_add(1);
+  } else {
+    g_bypassedDirectoryFlushes.fetch_add(1);
+  }
+  return true;
+#else
+  (void)kind;
+  return FlushFileBuffers(handle) != FALSE;
+#endif
+}
+
 AccessError writeAndFlush(HANDLE handle, const std::string& bytes) {
   size_t offset = 0;
   while (offset < bytes.size()) {
@@ -1453,7 +1539,7 @@ AccessError writeAndFlush(HANDLE handle, const std::string& bytes) {
     }
     offset += written;
   }
-  return FlushFileBuffers(handle) ? AccessError::kOk : AccessError::kDurability;
+  return flushDurably(handle, DurableFlushKind::kData) ? AccessError::kOk : AccessError::kDurability;
 }
 
 AccessError applyQualifiedReplaceMetadata(HANDLE stage, const FILE_BASIC_INFO& sourceBasicInfo) {
@@ -1542,7 +1628,10 @@ AccessError readMutationWalBinding(uint64_t rootId, uint64_t bindingId, const st
                                    MutationWalBinding* output) {
   std::scoped_lock lock(g_mutationMutex);
   const auto found = g_mutationWalBindings.find(bindingId);
-  if (found == g_mutationWalBindings.end() || found->second.rootId != rootId ||
+  if (found == g_mutationWalBindings.end() ||
+#ifndef ENGINEERING_CANARY_RECOVERY_ROOT_BINDING_DISABLED
+      found->second.rootId != rootId ||
+#endif
       found->second.transactionId != transactionId || found->second.operationId != operationId ||
       found->second.stagingId != stagingId) {
     return AccessError::kInvalidProof;
@@ -1647,7 +1736,13 @@ uint64_t pendingMutationWalBindings(uint64_t rootId) {
   uint64_t pending = 0;
   for (const auto& [id, binding] : g_mutationWalBindings) {
     (void)id;
-    if (binding.rootId == rootId && binding.stageCreated) ++pending;
+    if (
+#ifndef ENGINEERING_CANARY_RECOVERY_ROOT_BINDING_DISABLED
+        binding.rootId == rootId &&
+#else
+        (static_cast<void>(rootId), true) &&
+#endif
+        binding.stageCreated) ++pending;
   }
   return pending;
 }
@@ -1657,6 +1752,9 @@ bool createMutationReceipt(napi_env env, const char* operation, uint64_t rootId,
                            const std::string& operationId, const MutationWalBinding& walBinding,
                            const FileObservation* before, const FileObservation& after,
                            const char* metadataPolicy, napi_value* output) {
+#ifdef ENGINEERING_CANARY_RECEIPT_BINDING_DISABLED
+  (void)transactionId;
+#endif
   RootSession root{};
   if (rootSessionSnapshot(rootId, &root) != AccessError::kOk) return false;
   napi_value schemaVersion;
@@ -1681,7 +1779,13 @@ bool createMutationReceipt(napi_env env, const char* operation, uint64_t rootId,
       napi_create_bigint_uint64(env, rootId, &rootIdValue) != napi_ok ||
       napi_create_string_utf16(env, reinterpret_cast<const char16_t*>(relativeIdentity.data()),
                                relativeIdentity.size(), &relativeValue) != napi_ok ||
-      napi_create_string_utf8(env, transactionId.c_str(), NAPI_AUTO_LENGTH, &transactionValue) != napi_ok ||
+      napi_create_string_utf8(env,
+#ifdef ENGINEERING_CANARY_RECEIPT_BINDING_DISABLED
+                              "canary-unbound",
+#else
+                              transactionId.c_str(),
+#endif
+                              NAPI_AUTO_LENGTH, &transactionValue) != napi_ok ||
       napi_create_string_utf8(env, operationId.c_str(), NAPI_AUTO_LENGTH, &operationIdValue) != napi_ok ||
       napi_create_string_utf8(env, walBinding.bindingChecksum.c_str(), NAPI_AUTO_LENGTH, &walChecksum) != napi_ok ||
       !makeBlobManifest(env, after.manifest, &afterManifest) ||
@@ -2316,8 +2420,14 @@ bool v2MutationReceiptChecksum(const V2MutationRequest& request,
                                const std::string& requestChecksum,
                                const V2RawManifest& observedAfter, std::string* output) {
   std::string canonical;
-  return canonicalV2MutationReceiptJson(request, requestChecksum, observedAfter, "", false, &canonical) &&
-      sha256Hex(canonical, output);
+  if (!canonicalV2MutationReceiptJson(request, requestChecksum, observedAfter, "", false, &canonical)) {
+    return false;
+  }
+#ifdef ENGINEERING_CANARY_RECEIPT_BINDING_DISABLED
+  return sha256Hex(observedAfter.sha256, output);
+#else
+  return sha256Hex(canonical, output);
+#endif
 }
 
 bool parseV2RelativeIdentity(napi_env env, napi_value object, const char* name, std::wstring* wide,
@@ -2604,13 +2714,19 @@ bool sameV2RawManifest(const V2RawManifest& expected, const V2RawManifest& actua
 bool sameV2CandidateAfter(const V2RawManifest& candidate, const V2RawManifest& observed) {
   return !candidate.observedIdentity && observed.observedIdentity &&
       candidate.rootBindingId == observed.rootBindingId &&
-      candidate.relativeIdentity == observed.relativeIdentity && candidate.sha256 == observed.sha256 &&
+      candidate.relativeIdentity == observed.relativeIdentity &&
+#ifndef ENGINEERING_CANARY_RAW_BYTE_IDENTITY_DISABLED
+      candidate.sha256 == observed.sha256 &&
+#endif
       candidate.byteLength == observed.byteLength && candidate.bom == observed.bom && candidate.eol == observed.eol &&
       candidate.metadataChecksum == observed.metadataChecksum;
 }
 
 bool sameV2ByteImage(const V2RawManifest& expected, const V2RawManifest& observed) {
-  return expected.byteLength == observed.byteLength && expected.sha256 == observed.sha256 &&
+  return expected.byteLength == observed.byteLength &&
+#ifndef ENGINEERING_CANARY_RAW_BYTE_IDENTITY_DISABLED
+      expected.sha256 == observed.sha256 &&
+#endif
       expected.bom == observed.bom && expected.eol == observed.eol;
 }
 
@@ -2659,7 +2775,13 @@ bool makeV2MutationReceiptValue(napi_env env, const V2MutationRequest& request,
       !setV2String(env, value, "requestChecksum", requestChecksum) ||
       !setV2String(env, value, "schemaVersion", "2.0") ||
       !setV2String(env, value, "stagingObjectId", request.stagingObjectId) ||
-      !setV2String(env, value, "transactionId", request.transactionId)) {
+      !setV2String(env, value, "transactionId",
+#ifdef ENGINEERING_CANARY_RECEIPT_BINDING_DISABLED
+                   "canary-unbound"
+#else
+                   request.transactionId
+#endif
+                   )) {
     return false;
   }
   return finishV2Value(value, output);
@@ -4133,7 +4255,7 @@ napi_value replaceFileV2(napi_env env, napi_callback_info info) {
     const std::wstring recoveryLeaf = recoveryStagingLeafName(stagingId);
     result = writeAndFlush(stageHandle.get(), candidateBytes);
     if (result == AccessError::kOk) result = applyQualifiedReplaceMetadata(stageHandle.get(), observedBefore.basicInfo);
-    if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
     if (result == AccessError::kOk) {
       result = revalidateReplaceNamespace(parentHandle.get(), leafName, targetHandle.get(), observedBefore,
                                           beforeManifest, beforeBytes);
@@ -4162,12 +4284,12 @@ napi_value replaceFileV2(napi_env env, napi_callback_info info) {
     // Move the exact observed target away first.  Both renames are create-only: an external
     // replacement in either window is left untouched and the staging namespace records recovery.
     result = renameOpenedFileCreateOnly(targetHandle.get(), handoffParentHandle.get(), recoveryLeaf);
-    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
     if (result == AccessError::kOk) {
       result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
     }
-    if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
     if (result != AccessError::kOk) {
       throwAccessError(env, result);
       return nullptr;
@@ -4189,7 +4311,12 @@ napi_value replaceFileV2(napi_env env, napi_callback_info info) {
       result = deleteRecoveryBeforeFile(targetHandle.get(), recoveryLeaf, observedBefore.identity);
     }
     if (result == AccessError::kOk && !targetHandle.close()) result = AccessError::kRecoveryRequired;
+#ifndef ENGINEERING_CANARY_DURABILITY_DISABLED
     if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
+#else
+    if (result == AccessError::kOk &&
+        !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
+#endif
     if (result != AccessError::kOk) {
       throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
       return nullptr;
@@ -4288,7 +4415,7 @@ napi_value createFileV2(napi_env env, napi_callback_info info) {
     ScopedHandle stageHandle(stage);
     markMutationStageCreated(walBindingId);
     result = writeAndFlush(stageHandle.get(), candidateBytes);
-    if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
     if (result == AccessError::kOk) result = verifyRootStillCurrent(rootId);
     if (result == AccessError::kOk && !parentHandle.close()) result = AccessError::kIo;
     HANDLE handoffParent = INVALID_HANDLE_VALUE;
@@ -4301,8 +4428,8 @@ napi_value createFileV2(napi_env env, napi_callback_info info) {
     if (result == AccessError::kOk) {
       result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
     }
-    if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
     if (result != AccessError::kOk) {
       throwAccessError(env, result);
       return nullptr;
@@ -4351,20 +4478,46 @@ napi_value createFileV2(napi_env env, napi_callback_info info) {
 napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info) {
 #ifdef _WIN32
   try {
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    size_t argc = 5;
+    napi_value argv[5];
+#else
     size_t argc = 4;
     napi_value argv[4];
+#endif
     bool lossless = false;
     uint64_t rootId = 0;
-    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 4 ||
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+        argc != 5 ||
+#else
+        argc != 4 ||
+#endif
         napi_get_value_bigint_uint64(env, argv[0], &rootId, &lossless) != napi_ok || !lossless) {
       throwAccessError(env, AccessError::kInvalidArgument);
       return nullptr;
     }
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    std::string faultInjectionPoint;
+    if (!readUtf8StringValue(env, argv[4], 32, &faultInjectionPoint) ||
+        (faultInjectionPoint != "after_staging_flush" &&
+         faultInjectionPoint != "after_original_handoff" &&
+         faultInjectionPoint != "after_candidate_handoff")) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+#endif
     V2MutationRequest request{};
     if (!parseV2MutationRequest(env, argv[1], &request)) {
       throwAccessError(env, AccessError::kInvalidArgument);
       return nullptr;
     }
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    if (request.operationKind != "replace_file") {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+#endif
     std::string beforeBytes;
     napi_valuetype beforeType;
     if (napi_typeof(env, argv[2], &beforeType) != napi_ok ||
@@ -4453,7 +4606,13 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
       const std::wstring recoveryLeaf = recoveryStagingLeafName(stageToken);
       result = writeAndFlush(stageHandle.get(), candidateBytes);
       if (result == AccessError::kOk) result = applyQualifiedReplaceMetadata(stageHandle.get(), beforeObservation.basicInfo);
-      if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
+      if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+      if (result == AccessError::kOk && faultInjectionPoint == "after_staging_flush") {
+        throwAccessError(env, AccessError::kRecoveryRequired);
+        return nullptr;
+      }
+#endif
       if (result == AccessError::kOk) {
         result = revalidateV2ReplaceNamespace(parentHandle.get(), leafName, targetHandle.get(), beforeObservation,
                                               request.before.manifest, beforeBytes);
@@ -4483,12 +4642,24 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
       // permits replacement, so a final-window target swap wins over this mutation rather than
       // being silently overwritten.
       result = renameOpenedFileCreateOnly(targetHandle.get(), handoffParentHandle.get(), recoveryLeaf);
-      if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
+      if (result == AccessError::kOk && !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+      if (result == AccessError::kOk && faultInjectionPoint == "after_original_handoff") {
+        throwAccessError(env, AccessError::kRecoveryRequired);
+        return nullptr;
+      }
+#endif
       if (result == AccessError::kOk) {
         result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
       }
-      if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-      if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
+      if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
+      if (result == AccessError::kOk && !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+      if (result == AccessError::kOk && faultInjectionPoint == "after_candidate_handoff") {
+        throwAccessError(env, AccessError::kRecoveryRequired);
+        return nullptr;
+      }
+#endif
       if (result != AccessError::kOk) {
         throwAccessError(env, result);
         return nullptr;
@@ -4512,7 +4683,12 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
         result = deleteRecoveryBeforeFile(targetHandle.get(), recoveryLeaf, beforeObservation.identity);
       }
       if (result == AccessError::kOk && !targetHandle.close()) result = AccessError::kRecoveryRequired;
+#ifndef ENGINEERING_CANARY_DURABILITY_DISABLED
       if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
+#else
+      if (result == AccessError::kOk &&
+          !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
+#endif
       if (result != AccessError::kOk) {
         throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
         return nullptr;
@@ -4552,7 +4728,7 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
     ScopedHandle stageHandle(stage);
     result = writeAndFlush(stageHandle.get(), candidateBytes);
     if (result == AccessError::kOk) result = applyFixedCreateMetadataV2(stageHandle.get());
-    if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
     if (result == AccessError::kOk && !parentHandle.close()) result = AccessError::kIo;
     HANDLE handoffParent = INVALID_HANDLE_VALUE;
     if (result == AccessError::kOk) {
@@ -4566,8 +4742,8 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
       return nullptr;
     }
     result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
-    if (result == AccessError::kOk && !FlushFileBuffers(stageHandle.get())) result = AccessError::kDurability;
-    if (result == AccessError::kOk && !FlushFileBuffers(handoffParentHandle.get())) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
+    if (result == AccessError::kOk && !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
     if (result != AccessError::kOk) {
       throwAccessError(env, result);
       return nullptr;
@@ -4673,6 +4849,73 @@ napi_value scanMutationRecovery(napi_env env, napi_callback_info info) {
 #endif
 }
 
+#ifdef ENGINEERING_DISABLED_PROTECTION_CANARY_BUILD
+const char* disabledProtectionCanaryName() {
+#if defined(ENGINEERING_CANARY_ROOT_RELATIVE_DISABLED)
+  return "rootRelativeDisabled";
+#elif defined(ENGINEERING_CANARY_NO_FOLLOW_DISABLED)
+  return "noFollowDisabled";
+#elif defined(ENGINEERING_CANARY_RAW_BYTE_IDENTITY_DISABLED)
+  return "rawByteIdentityDisabled";
+#elif defined(ENGINEERING_CANARY_RECEIPT_BINDING_DISABLED)
+  return "receiptBindingDisabled";
+#elif defined(ENGINEERING_CANARY_DURABILITY_DISABLED)
+  return "durabilityDisabled";
+#elif defined(ENGINEERING_CANARY_RECOVERY_ROOT_BINDING_DISABLED)
+  return "recoveryRootBindingDisabled";
+#else
+#error "disabled-protection canary build is missing its fixed protection name"
+#endif
+}
+
+napi_value disabledProtectionCanaryInfo(napi_env env, napi_callback_info) {
+  napi_value output;
+  napi_value dataFlushes;
+  napi_value directoryFlushes;
+  napi_create_object(env, &output);
+  napi_create_bigint_uint64(
+      env,
+#ifdef ENGINEERING_CANARY_DURABILITY_DISABLED
+      g_bypassedDataFlushes.load(),
+#else
+      0,
+#endif
+      &dataFlushes);
+  napi_create_bigint_uint64(
+      env,
+#ifdef ENGINEERING_CANARY_DURABILITY_DISABLED
+      g_bypassedDirectoryFlushes.load(),
+#else
+      0,
+#endif
+      &directoryFlushes);
+  napi_set_named_property(env, output, "schemaVersion", makeString(env, "engineering_disabled_protection_canary_v1"));
+  napi_set_named_property(env, output, "buildKind", makeString(env, "test_only_compile_time_variant"));
+  napi_set_named_property(env, output, "disabledProtection", makeString(env, disabledProtectionCanaryName()));
+  napi_set_named_property(env, output, "bypassedDataFlushes", dataFlushes);
+  napi_set_named_property(env, output, "bypassedDirectoryFlushes", directoryFlushes);
+  return output;
+}
+#endif
+
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+napi_value mutationFaultInjectionInfo(napi_env env, napi_callback_info) {
+  napi_value output;
+  napi_value faultPoints;
+  napi_create_object(env, &output);
+  napi_create_array_with_length(env, 3, &faultPoints);
+  napi_set_element(env, faultPoints, 0, makeString(env, "after_staging_flush"));
+  napi_set_element(env, faultPoints, 1, makeString(env, "after_original_handoff"));
+  napi_set_element(env, faultPoints, 2, makeString(env, "after_candidate_handoff"));
+  napi_set_named_property(env, output, "schemaVersion",
+                          makeString(env, "engineering_mutation_fault_injection_v1"));
+  napi_set_named_property(env, output, "buildKind",
+                          makeString(env, "test_only_compile_time_diagnostic"));
+  napi_set_named_property(env, output, "faultPoints", faultPoints);
+  return output;
+}
+#endif
+
 napi_value mutationV2FaultProbe(napi_env env, napi_callback_info) {
   napi_value output;
   napi_value status;
@@ -4736,6 +4979,12 @@ napi_value Init(napi_env env, napi_value exports) {
     {"replaceFileV2", nullptr, replaceFileV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"createFileV2", nullptr, createFileV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"scanMutationRecovery", nullptr, scanMutationRecovery, nullptr, nullptr, nullptr, napi_default, nullptr},
+#ifdef ENGINEERING_DISABLED_PROTECTION_CANARY_BUILD
+    {"disabledProtectionCanaryInfo", nullptr, disabledProtectionCanaryInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
+#endif
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    {"mutationFaultInjectionInfo", nullptr, mutationFaultInjectionInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
+#endif
     {"mutationV2FaultProbe", nullptr, mutationV2FaultProbe, nullptr, nullptr, nullptr, napi_default, nullptr}
   };
   napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);

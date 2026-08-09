@@ -281,6 +281,11 @@ describe("engineering file access development probe contract", () => {
     );
     await expect(probeMutationV2Abi(adapter)).resolves.toMatchObject({
       status: "passed",
+      objectReplace: "passed",
+      objectCreate: "passed",
+      objectReceiptBinding: "passed",
+      walPreparation: "passed",
+      recoveryScan: "passed",
       rawByteCandidateBefore: "passed",
       absenceProof: "passed",
       absenceProofV2: "passed",
@@ -300,6 +305,10 @@ describe("engineering file access development probe contract", () => {
         staleAbsenceProof: "canary_exposed",
         v2RawByteManifestMismatch: "canary_exposed",
         v2StaleAbsenceProof: "canary_exposed",
+        objectV2RawByteManifestMismatch: "canary_exposed",
+        objectV2StaleBase: "canary_exposed",
+        objectV2CreateRace: "canary_exposed",
+        objectV2FaultRecoveryRequired: "canary_exposed",
         replaceFinalRenameNamespaceRevalidation: "canary_exposed",
         targetSwapFinalWindowNoOverwrite: "canary_exposed",
         createOnlyHandoffCollisionRecoveryRequired: "canary_exposed"

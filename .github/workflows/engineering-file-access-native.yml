@@ -12,9 +12,12 @@ on:
       - "apps/desktop/src/main/engineering-file-access-qualification.ts"
       - "apps/desktop/test/engineering-file-access-package.e2e.ts"
       - "apps/desktop/test/engineering-file-access-probe-contract.test.ts"
+      - "apps/desktop/test/engineering-file-access-production-evidence.test.ts"
       - "scripts/build-engineering-file-access-win32.mjs"
+      - "scripts/compose-engineering-file-access-production-evidence.mjs"
       - "scripts/package-check.mjs"
       - "scripts/sign-engineering-file-access-win32.mjs"
+      - "scripts/probe-engineering-file-access-disabled-protections-win32.mjs"
       - "scripts/probe-engineering-file-access-package.mjs"
 
 jobs:
@@ -24,6 +27,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Verify clean checkout and remove stale native outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $trackedChanges = @(git status --porcelain --untracked-files=no)
+          if ($LASTEXITCODE -ne 0 -or $trackedChanges.Count -ne 0) {
+            throw "Native qualification requires a clean tracked checkout"
+          }
+          $nativeRoot = (Resolve-Path "native/engineering-file-access-win32").Path
+          foreach ($relativePath in @(".build", "dist")) {
+            $target = Join-Path $nativeRoot $relativePath
+            if (Test-Path -LiteralPath $target) {
+              Remove-Item -LiteralPath $target -Recurse -Force
+            }
+          }
       - uses: actions/setup-node@v4
         with:
           node-version: "24.14.0"
@@ -185,6 +203,24 @@ jobs:
           ) {
             throw "Missing native fault-probe evidence"
           }
+      - name: Execute compile-time disabled-protection controls
+        run: node scripts/probe-engineering-file-access-disabled-protections-win32.mjs
+      - name: Compose and reverify strict unsigned production evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sourceRoot = (Resolve-Path ".").Path
+          $dist = (Resolve-Path "native/engineering-file-access-win32/dist/win32-x64").Path
+          $canaryBuild = (Resolve-Path "native/engineering-file-access-win32/.build/disabled-protection-canaries-win32-x64").Path
+          $evidence = Join-Path $env:RUNNER_TEMP "engineering-file-access.production-evidence.json"
+          node scripts/compose-engineering-file-access-production-evidence.mjs `
+            --source-root $sourceRoot `
+            --artifact (Join-Path $dist "engineering_file_access.node") `
+            --manifest (Join-Path $dist "engineering_file_access.manifest.json") `
+            --signature (Join-Path $dist "engineering_file_access.manifest.p7s") `
+            --development-report (Join-Path $dist "engineering_file_access.probe.json") `
+            --disabled-protection-report (Join-Path $canaryBuild "engineering_file_access.disabled-protection-canaries.json") `
+            --out $evidence
       - name: Record addon SHA-256
         shell: pwsh
         run: |
@@ -197,3 +233,13 @@ jobs:
           name: engineering-file-access-win32
           path: native/engineering-file-access-win32/dist/win32-x64/
           if-no-files-found: error
+      - name: Upload disabled-protection diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-file-access-win32-disabled-protection-diagnostics
+          path: |
+            native/engineering-file-access-win32/.build/disabled-protection-canaries-win32-x64/*.node
+            native/engineering-file-access-win32/.build/disabled-protection-canaries-win32-x64/*.json
+            ${{ runner.temp }}/engineering-file-access.production-evidence.json
+          if-no-files-found: warn

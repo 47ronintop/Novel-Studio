@@ -2,7 +2,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { readFile, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+
+import { verifyEngineeringFileAccessProductionEvidence } from "./compose-engineering-file-access-production-evidence.mjs";
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -12,6 +14,8 @@ const manifest = join(dist, "engineering_file_access.manifest.json");
 const signature = join(dist, "engineering_file_access.manifest.p7s");
 const publisherPolicyChecksum = process.env.PUBLISHER_POLICY_CHECKSUM;
 const probeEvidencePath = process.env.ENGINEERING_FILE_ACCESS_PROBE_EVIDENCE;
+const disabledProtectionReportPath = process.env.ENGINEERING_FILE_ACCESS_DISABLED_PROTECTION_REPORT;
+const developmentReport = join(dist, "engineering_file_access.probe.json");
 await stat(addon);
 await stat(manifest);
 if (
@@ -27,21 +31,36 @@ if (
 if (publisherPolicyChecksum === undefined || !/^[0-9a-f]{64}$/iu.test(publisherPolicyChecksum)) {
   throw new Error("Production signing requires a 64-hex PUBLISHER_POLICY_CHECKSUM");
 }
-if (probeEvidencePath === undefined || probeEvidencePath.length === 0) {
-  throw new Error("Production signing requires ENGINEERING_FILE_ACCESS_PROBE_EVIDENCE");
+if (!probeEvidencePath || !isAbsolute(probeEvidencePath)) {
+  throw new Error("Production signing requires an absolute ENGINEERING_FILE_ACCESS_PROBE_EVIDENCE");
 }
-let probeEvidence;
-try {
-  probeEvidence = JSON.parse(await readFile(probeEvidencePath, "utf8"));
-} catch {
-  throw new Error("Production signing requires readable native positive/negative probe evidence");
-}
-if (!hasBatch7ProductionProbeEvidence(probeEvidence)) {
+if (!disabledProtectionReportPath || !isAbsolute(disabledProtectionReportPath)) {
   throw new Error(
-    "Batch 7 production signing requires every native and mutation/recovery protection canary"
+    "Production signing requires an absolute ENGINEERING_FILE_ACCESS_DISABLED_PROTECTION_REPORT"
   );
 }
 const signtool = (await run("where.exe", ["signtool.exe"])).stdout.trim().split(/\r?\n/u)[0];
+const probeEvidence = await verifyEngineeringFileAccessProductionEvidence({
+  sourceRoot: root,
+  artifactPath: addon,
+  manifestPath: manifest,
+  signaturePath: signature,
+  developmentReportPath: developmentReport,
+  disabledProtectionReportPath,
+  outputPath: probeEvidencePath
+});
+const requiredMutationRecoveryEvidenceKeys = [
+  "rawByteManifestMismatch",
+  "staleBase",
+  "createRace",
+  "faultRecoveryRequired"
+];
+if (
+  Object.keys(probeEvidence.mutationRecoveryEvidence.negativeControls).sort().join(",") !==
+  requiredMutationRecoveryEvidenceKeys.sort().join(",")
+) {
+  throw new Error("Strict production evidence omitted faultRecoveryRequired");
+}
 await run(signtool, [
   "sign",
   "/fd",
@@ -84,7 +103,8 @@ document.qualification = {
   mutationRecoveryEvidence: {
     positiveProtections: probeEvidence.mutationRecoveryEvidence.positiveProtections,
     negativeControls: probeEvidence.mutationRecoveryEvidence.negativeControls
-  }
+  },
+  productionEvidence: probeEvidence
 };
 await writeFile(manifest, `${JSON.stringify(document, null, 2)}\n`, "utf8");
 await run("openssl", [
@@ -110,56 +130,3 @@ const hashes = {
   signature: await digest(signature)
 };
 console.log(`Signed engineering native artifacts: ${JSON.stringify(hashes)}`);
-
-function hasBatch7ProductionProbeEvidence(value) {
-  return (
-    value &&
-    typeof value === "object" &&
-    hasExactMap(
-      value.positiveProtections,
-      [
-        "rootRelativeTraversal",
-        "noFollowTraversal",
-        "rawByteIdentity",
-        "receiptBinding",
-        "durability",
-        "recoveryRootBinding"
-      ],
-      "passed"
-    ) &&
-    hasExactMap(
-      value.negativeControls,
-      [
-        "rootRelativeDisabled",
-        "noFollowDisabled",
-        "rawByteIdentityDisabled",
-        "receiptBindingDisabled",
-        "durabilityDisabled",
-        "recoveryRootBindingDisabled"
-      ],
-      "canary_exposed"
-    ) &&
-    value.mutationRecoveryEvidence &&
-    typeof value.mutationRecoveryEvidence === "object" &&
-    hasExactMap(
-      value.mutationRecoveryEvidence.positiveProtections,
-      ["replace", "create", "receiptBinding", "walPreparation", "recoveryScan"],
-      "passed"
-    ) &&
-    hasExactMap(
-      value.mutationRecoveryEvidence.negativeControls,
-      ["rawByteManifestMismatch", "staleBase", "createRace", "faultRecoveryRequired"],
-      "canary_exposed"
-    )
-  );
-}
-
-function hasExactMap(value, keys, expected) {
-  return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === keys.length &&
-    keys.every((key) => value[key] === expected)
-  );
-}

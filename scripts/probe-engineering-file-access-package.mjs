@@ -691,6 +691,7 @@ export async function probeMutationV2Abi(addon) {
     const objectRelativePath = "docs/object-mutation-v2.txt";
     const objectCreateRelativePath = "docs/object-created-v2.txt";
     const objectStaleRelativePath = "docs/object-stale-v2.txt";
+    const objectStaleReplaceRelativePath = "docs/object-stale-replace-v2.txt";
     const objectBefore = Buffer.from("B7 V2 before bytes: 你好\r\n", "utf8");
     const objectCandidate = Buffer.concat([
       Buffer.from([0xef, 0xbb, 0xbf]),
@@ -836,6 +837,63 @@ export async function probeMutationV2Abi(addon) {
       objectCreateRequest,
       "after",
       objectCreateRequest.candidate.manifest
+    );
+
+    const objectStaleReplaceBefore = Buffer.from("B7 V2 stale replace before\r\n", "utf8");
+    const objectStaleReplaceCandidate = Buffer.from("B7 V2 stale replace candidate\r\n", "utf8");
+    await writeFile(join(workspace, objectStaleReplaceRelativePath), objectStaleReplaceBefore, {
+      flush: true
+    });
+    const objectStaleReplaceSnapshot = addon.inspectEngineeringFileSnapshotV2(
+      rootId,
+      objectStaleReplaceRelativePath
+    );
+    const objectStaleReplaceBeforeManifest = assertV2PresentTargetSnapshot(
+      objectStaleReplaceSnapshot,
+      rootId,
+      objectRootBindingId,
+      objectStaleReplaceRelativePath,
+      objectStaleReplaceBefore
+    );
+    const objectStaleReplaceRequest = createV2ReplaceRequest({
+      rootBindingId: objectRootBindingId,
+      relativeIdentity: objectStaleReplaceRelativePath,
+      transactionId: "tx:stale-replace-v2",
+      operationId: "op/stale-replace-v2",
+      stagingObjectId: "stage:stale-replace-v2",
+      beforeManifest: objectStaleReplaceBeforeManifest,
+      candidateManifest: createV2TargetManifest(
+        objectRootBindingId,
+        objectStaleReplaceRelativePath,
+        objectStaleReplaceCandidate,
+        objectStaleReplaceBeforeManifest.metadataChecksum
+      )
+    });
+    await writeFile(
+      join(workspace, objectStaleReplaceRelativePath),
+      "external V2 replace race\r\n",
+      { encoding: "utf8", flush: true }
+    );
+    assertV2MutationOperationState(
+      addon.inspectEngineeringFileMutationTargetV2(
+        rootId,
+        objectStaleReplaceRequest,
+        objectStaleReplaceBefore,
+        objectStaleReplaceCandidate
+      ),
+      objectStaleReplaceRequest,
+      "neither",
+      objectStaleReplaceRequest.candidate.manifest
+    );
+    await expectMutationFailure(
+      () =>
+        addon.applyEngineeringFileMutationV2(
+          rootId,
+          objectStaleReplaceRequest,
+          objectStaleReplaceBefore,
+          objectStaleReplaceCandidate
+        ),
+      "V2 stale replace base"
     );
 
     const staleV2Proof = addon.observeCreateAbsenceV2(
@@ -985,6 +1043,11 @@ export async function probeMutationV2Abi(addon) {
     }
     return {
       status: "passed",
+      objectReplace: "passed",
+      objectCreate: "passed",
+      objectReceiptBinding: "passed",
+      walPreparation: "passed",
+      recoveryScan: "passed",
       rawByteCandidateBefore: "passed",
       absenceProof: "passed",
       absenceProofV2: "passed",
@@ -1007,6 +1070,10 @@ export async function probeMutationV2Abi(addon) {
         staleAbsenceProof: "canary_exposed",
         v2RawByteManifestMismatch: "canary_exposed",
         v2StaleAbsenceProof: "canary_exposed",
+        objectV2RawByteManifestMismatch: "canary_exposed",
+        objectV2StaleBase: "canary_exposed",
+        objectV2CreateRace: "canary_exposed",
+        objectV2FaultRecoveryRequired: "canary_exposed",
         replaceFinalRenameNamespaceRevalidation: "canary_exposed",
         targetSwapFinalWindowNoOverwrite: "canary_exposed",
         createOnlyHandoffCollisionRecoveryRequired: "canary_exposed"
