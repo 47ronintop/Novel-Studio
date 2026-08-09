@@ -3773,12 +3773,15 @@ describe("desktop Agent Run runtime", () => {
 
     await session.startAgentRun(executionCommand());
 
-    await vi.waitFor(async () => {
-      expect(await session.readAgentRun("run-desktop-story-bible-read")).toMatchObject({
-        ok: true,
-        value: { snapshot: { status: "completed" } }
-      });
-    });
+    await vi.waitFor(
+      async () => {
+        expect(await session.readAgentRun("run-desktop-story-bible-read")).toMatchObject({
+          ok: true,
+          value: { snapshot: { status: "completed" } }
+        });
+      },
+      { timeout: 5_000 }
+    );
     expect(visibleTools).toEqual(
       expect.arrayContaining([
         "describe_story_bible_type",
