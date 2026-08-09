@@ -57,6 +57,13 @@ import { createAgentFeatureFlags } from "../src/main/agent-feature-flags.js";
 
 const roots: string[] = [];
 
+function waitForDesktopRuntime<T>(
+  callback: () => T | Promise<T>,
+  options: { readonly interval?: number; readonly timeout?: number } = {}
+): Promise<T> {
+  return vi.waitFor(callback, { timeout: 10_000, ...options });
+}
+
 afterEach(async () => {
   await Promise.all(
     roots
@@ -514,7 +521,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
       ok: true
     });
-    await vi.waitFor(
+    await waitForDesktopRuntime(
       async () => {
         const state = await runtime.agentRunSession.readAgentRun(
           "run-story-bible-dependency-prepare"
@@ -767,7 +774,7 @@ describe("desktop Agent Run runtime", () => {
     ).agentUsageSession;
 
     expect(usageSession).toBeDefined();
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect((await usageRepository.readById(String(expired["usageId"]))).value).toBeUndefined();
     });
     expect((await usageRepository.readById(String(retained["usageId"]))).value).toBeDefined();
@@ -817,7 +824,7 @@ describe("desktop Agent Run runtime", () => {
     });
 
     await session.startAgentRun(executionCommand());
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-usage")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -948,7 +955,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
       ok: true
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -1113,7 +1120,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
       ok: true
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -1248,7 +1255,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
       ok: true
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
         ok: true,
         value: {
@@ -1994,7 +2001,7 @@ describe("desktop Agent Run runtime", () => {
       ok: true,
       value: { schemaVersion: "2.0", runId }
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
         ok: true,
         value: {
@@ -2009,7 +2016,7 @@ describe("desktop Agent Run runtime", () => {
     });
 
     const repository = new AgentRunFileRepository({ projectRoot });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const [snapshot, events, planArtifact] = await Promise.all([
         repository.readSnapshotV20(runId),
         repository.readEventsV20(runId),
@@ -2259,7 +2266,7 @@ describe("desktop Agent Run runtime", () => {
         strictPlanningCommand(conversation.value.conversationId, "start-legacy-restart")
       )
     ).toMatchObject({ ok: true, value: { schemaVersion: "1.3", runId } });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
         ok: true,
         value: { snapshot: { schemaVersion: "1.3", status: "plan_ready" } }
@@ -2322,7 +2329,7 @@ describe("desktop Agent Run runtime", () => {
         strictPlanningCommand(conversationId, "start-strict-conversation")
       )
     ).toMatchObject({ ok: true });
-    await vi.waitFor(
+    await waitForDesktopRuntime(
       async () => {
         expect(await runtime.agentRunSession.readAgentRun("run-strict-conversation")).toMatchObject(
           {
@@ -2487,7 +2494,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
       ok: true
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun(runId)).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -2914,7 +2921,7 @@ describe("desktop Agent Run runtime", () => {
       return;
     const started = await runtime.agentRunSession.startAgentRun(previewed.command);
     expect(started).toMatchObject({ ok: true });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await runtime.agentRunSession.readAgentRun("run-saved-editor-preflight");
       expect(read).not.toMatchObject({
         value: {
@@ -3029,7 +3036,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
       ok: true
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-active-file-suffix")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -3130,7 +3137,7 @@ describe("desktop Agent Run runtime", () => {
     expect(await runtime.agentRunSession.startAgentRun(previewed.command)).toMatchObject({
       ok: true
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-active-story-suffix")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -3404,7 +3411,7 @@ describe("desktop Agent Run runtime", () => {
       userRequest: "Remember the lantern clue."
     });
     expect(firstStarted).toMatchObject({ ok: true });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-context-first")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -3418,7 +3425,7 @@ describe("desktop Agent Run runtime", () => {
       userRequest: "Continue from the clue."
     });
     expect(secondStarted).toMatchObject({ ok: true });
-    await vi.waitFor(() => expect(roundMessages).toHaveLength(2), { timeout: 5_000 });
+    await waitForDesktopRuntime(() => expect(roundMessages).toHaveLength(2), { timeout: 5_000 });
 
     expect(roundMessages[1]).toEqual(
       expect.arrayContaining([
@@ -3501,7 +3508,7 @@ describe("desktop Agent Run runtime", () => {
     )
       return;
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-read-propose")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "awaiting_write_approval" } }
@@ -3575,7 +3582,7 @@ describe("desktop Agent Run runtime", () => {
     )
       return;
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-foreshadow-edit")).toMatchObject({
         ok: true,
         value: {
@@ -3666,7 +3673,7 @@ describe("desktop Agent Run runtime", () => {
     )
       return;
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-foreshadow-create")).toMatchObject({
         ok: true,
         value: {
@@ -3773,7 +3780,7 @@ describe("desktop Agent Run runtime", () => {
 
     await session.startAgentRun(executionCommand());
 
-    await vi.waitFor(
+    await waitForDesktopRuntime(
       async () => {
         expect(await session.readAgentRun("run-desktop-story-bible-read")).toMatchObject({
           ok: true,
@@ -3839,7 +3846,7 @@ describe("desktop Agent Run runtime", () => {
     });
 
     await session.startAgentRun(executionCommand());
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-story-bible-ref-error")).toMatchObject({
         ok: true,
         value: {
@@ -3925,7 +3932,7 @@ describe("desktop Agent Run runtime", () => {
       return;
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await session.readAgentRun("run-desktop-story-bible-patch");
       expect(read).toMatchObject({
         ok: true,
@@ -3962,7 +3969,7 @@ describe("desktop Agent Run runtime", () => {
         decision: "apply_selected"
       })
     ).toMatchObject({ ok: true });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-story-bible-patch")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -4048,7 +4055,7 @@ describe("desktop Agent Run runtime", () => {
       return;
     let changeSet: Record<string, unknown> | undefined;
     let awaitingRevision = 0;
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await session.readAgentRun("run-desktop-story-bible-legacy");
       expect(read).toMatchObject({
         ok: true,
@@ -4088,7 +4095,7 @@ describe("desktop Agent Run runtime", () => {
       checksum: changeSet["checksum"],
       decision: "apply_selected"
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-story-bible-legacy")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -4878,7 +4885,7 @@ describe("desktop Agent Run runtime", () => {
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
     let operation: Record<string, unknown> | undefined;
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await session.readAgentRun("run-desktop-story-bible-create");
       expect(read).toMatchObject({
         ok: true,
@@ -4932,7 +4939,7 @@ describe("desktop Agent Run runtime", () => {
       decision: "apply_selected"
     });
     expect(applied).toMatchObject({ ok: true });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-story-bible-create")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -5015,7 +5022,7 @@ describe("desktop Agent Run runtime", () => {
     )
       return;
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-memory-story-bible-edit")).toMatchObject({
         ok: true,
         value: {
@@ -5121,7 +5128,7 @@ describe("desktop Agent Run runtime", () => {
       )
         return;
 
-      await vi.waitFor(async () => {
+      await waitForDesktopRuntime(async () => {
         expect(await session.readAgentRun("run-desktop-unknown-story-bible-edit")).toMatchObject({
           ok: true,
           value: {
@@ -5238,7 +5245,7 @@ describe("desktop Agent Run runtime", () => {
         requiredContextTokens: 8000
       }
     });
-    await vi.waitFor(
+    await waitForDesktopRuntime(
       async () => {
         expect(await session.readAgentRun("run-desktop-plan")).toMatchObject({
           ok: true,
@@ -5262,7 +5269,7 @@ describe("desktop Agent Run runtime", () => {
       { timeout: 10_000 }
     );
     expect(await readFile(chapterPath, "utf8")).toBe(original);
-    await vi.waitFor(
+    await waitForDesktopRuntime(
       async () => {
         expect(
           JSON.parse(
@@ -5357,7 +5364,7 @@ describe("desktop Agent Run runtime", () => {
       return;
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await session.readAgentRun("run-desktop-write");
       expect(read).toMatchObject({
         ok: true,
@@ -5382,7 +5389,7 @@ describe("desktop Agent Run runtime", () => {
       checksum: changeSet["checksum"],
       decision: "apply_selected"
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-write")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -5472,7 +5479,7 @@ describe("desktop Agent Run runtime", () => {
       return;
     let awaitingRevision = 0;
     let changeSet: Record<string, unknown> | undefined;
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await session.readAgentRun("run-desktop-conflict");
       expect(read).toMatchObject({
         ok: true,
@@ -5588,7 +5595,7 @@ describe("desktop Agent Run runtime", () => {
       return;
     let changeSet: Record<string, unknown> | undefined;
     let revision = 0;
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await session.readAgentRun("run-desktop-dirty-undo");
       expect(read).toMatchObject({
         ok: true,
@@ -5611,7 +5618,7 @@ describe("desktop Agent Run runtime", () => {
       checksum: changeSet["checksum"],
       decision: "apply_selected"
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-dirty-undo")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -5737,7 +5744,7 @@ describe("desktop Agent Run runtime", () => {
 
     let changeSet: Record<string, unknown> | undefined;
     let awaitingRevision = 0;
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await session.readAgentRun("run-desktop-text-validation");
       expect(read).toMatchObject({
         ok: true,
@@ -5779,7 +5786,7 @@ describe("desktop Agent Run runtime", () => {
     expect(projectChanges).toEqual([]);
 
     changeSet = undefined;
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await session.readAgentRun("run-desktop-text-validation");
       expect(read).toMatchObject({
         ok: true,
@@ -5803,7 +5810,7 @@ describe("desktop Agent Run runtime", () => {
       checksum: changeSet["checksum"],
       decision: "apply_selected"
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-text-validation")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -5944,7 +5951,7 @@ describe("desktop Agent Run runtime", () => {
       extraExpected: Record<string, unknown> = {}
     ): Promise<PendingChangeSet> => {
       let pending: PendingChangeSet | undefined;
-      await vi.waitFor(async () => {
+      await waitForDesktopRuntime(async () => {
         const read = await session.readAgentRun("run-desktop-v2-lifecycle");
         expect(read).toMatchObject({
           ok: true,
@@ -6029,7 +6036,7 @@ describe("desktop Agent Run runtime", () => {
       await waitForPendingChangeSet({ kind: "delete_file", relativePath: "obsolete.txt" }),
       "apply-desktop-v2-delete-file"
     );
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-v2-lifecycle")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -6104,7 +6111,7 @@ describe("desktop Agent Run runtime", () => {
     )
       return;
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-settings-schema")).toMatchObject({
         ok: true,
         value: {
@@ -6242,7 +6249,7 @@ describe("desktop Agent Run runtime", () => {
     )
       return;
 
-    await vi.waitFor(
+    await waitForDesktopRuntime(
       async () => {
         expect(await session.readAgentRun(runId)).toMatchObject({
           ok: true,
@@ -6316,7 +6323,7 @@ describe("desktop Agent Run runtime", () => {
 
     await session.startAgentRun(executionCommand("general_file"));
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-managed-reads")).toMatchObject({
         ok: true,
         value: {
@@ -6379,7 +6386,7 @@ describe("desktop Agent Run runtime", () => {
 
     await session.startAgentRun(executionCommand("writing"));
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-writing-managed-read")).toMatchObject({
         ok: true,
         value: {
@@ -6441,7 +6448,7 @@ describe("desktop Agent Run runtime", () => {
 
     await session.startAgentRun(executionCommand("general_file"));
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-managed-search")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed", contextMode: "general_file" } }
@@ -6505,7 +6512,7 @@ describe("desktop Agent Run runtime", () => {
 
     await session.startAgentRun(executionCommand("writing"));
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-writing-search")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed", contextMode: "writing" } }
@@ -6561,7 +6568,7 @@ describe("desktop Agent Run runtime", () => {
       conversationId: conversation.value.conversationId,
       commandId: "start-desktop-search"
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-desktop-search")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -6696,7 +6703,7 @@ describe("desktop Agent Run runtime", () => {
     if (!confirmed.ok) return;
     const runId = confirmed.value.runId;
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await runtime.agentRunSession.readAgentRun(runId);
       if (read.ok && read.value.snapshot.status === "failed") {
         throw new Error("Desktop JIT run unexpectedly failed");
@@ -6732,7 +6739,7 @@ describe("desktop Agent Run runtime", () => {
     });
     expect(approved).toMatchObject({ ok: true });
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await runtime.agentRunSession.readAgentRun(runId);
       if (read.ok && read.value.snapshot.status === "failed") {
         throw new Error("Desktop JIT run unexpectedly failed");
@@ -6915,7 +6922,7 @@ describe("desktop Agent Run runtime", () => {
     expect(confirmed).toMatchObject({ ok: true });
     if (!confirmed.ok) return;
 
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun(confirmed.value.runId)).toMatchObject({
         ok: true,
         value: { snapshot: { status: "plan_ready" } }
@@ -6948,7 +6955,7 @@ describe("desktop Agent Run runtime", () => {
       defaults: { defaultsRevision: "b".repeat(64) },
       grant: { defaultsRevision: "b".repeat(64) }
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       const read = await runtime.agentRunSession.readAgentRun(execution.value.runId);
       if (read.ok && read.value.snapshot.status === "failed") {
         throw new Error("Plan execution sharing inheritance unexpectedly failed");
@@ -7008,7 +7015,7 @@ describe("desktop Agent Run runtime", () => {
     });
 
     await session.startAgentRun(executionCommand("general_file"));
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await session.readAgentRun("run-desktop-web-search")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -7047,7 +7054,7 @@ describe("desktop Agent Run runtime", () => {
       conversationId: conversation.value.conversationId,
       commandId: "start-desktop-search-off"
     });
-    await vi.waitFor(async () => {
+    await waitForDesktopRuntime(async () => {
       expect(await runtime.agentRunSession.readAgentRun("run-desktop-search-off")).toMatchObject({
         ok: true,
         value: { snapshot: { status: "completed" } }
@@ -7212,7 +7219,7 @@ async function legacyMutationIsNotExposed(input: {
   expect(await input.session.startAgentRun(input.command ?? executionCommand())).toMatchObject({
     ok: true
   });
-  await vi.waitFor(async () => {
+  await waitForDesktopRuntime(async () => {
     expect(await input.session.readAgentRun(input.runId)).toMatchObject({
       ok: true,
       value: {
