@@ -44,6 +44,11 @@ test("switches a creative project into the engineering explorer without losing t
       expect(Math.abs(workbenchCenter - titlebarCenter)).toBeLessThanOrEqual(2);
     }
 
+    const browserWindow = await electronApp.browserWindow(page);
+    await browserWindow.evaluate((window) => window.setContentSize(1024, 900));
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024);
+    await expect(page.getByRole("navigation", { name: "项目导航" })).toBeVisible();
+
     await workbenchTrigger.click();
     await page.getByRole("menuitemradio", { name: "工程工作区" }).click();
 

@@ -164,6 +164,7 @@ function WorkspaceShellContent({
 
       <div
         className="ns-workspace-grid"
+        data-active-activity={shellState.activeActivity}
         data-agent-conversation={agentConversationWorkspace !== undefined}
         data-focus-mode={focusMode}
         data-split-view={workspaceLayout.splitView}

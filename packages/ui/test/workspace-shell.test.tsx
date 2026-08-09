@@ -341,7 +341,7 @@ describe("WorkspaceShell", () => {
     );
   });
 
-  test("collapses Bottom Panel, then Navigator, then Agent on narrow workspaces", () => {
+  test("keeps workspace navigators available until the narrow-window collapse", () => {
     const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
     const narrowStart = css.indexOf("@media (max-width: 1279px)");
     const nextMediaStart = css.indexOf("@media", narrowStart + 1);
@@ -352,7 +352,7 @@ describe("WorkspaceShell", () => {
 
     expect(narrowStart).toBeGreaterThanOrEqual(0);
     expect(narrowWorkspace).toMatch(
-      /\[data-agent-conversation="true"\]\[data-focus-mode="false"\][^{]*\.ns-navigator,[\s\S]*?\.ns-agent-conversation-navigator-region[^{]*\{[^}]*display:\s*none/s
+      /\[data-agent-conversation="true"\]\[data-focus-mode="false"\]:not\(\s*\[data-active-activity="workspace"\]\s*\)[^{]*\.ns-navigator,[\s\S]*?\.ns-agent-conversation-navigator-region[^{]*\{[^}]*display:\s*none/s
     );
     expect(narrowWorkspace).toMatch(
       /\[data-agent-conversation="true"\]\[data-focus-mode="false"\][^{]*\.ns-story-responsive-kind-switch\s*\{[^}]*display:\s*block/s
@@ -372,6 +372,9 @@ describe("WorkspaceShell", () => {
     );
     expect(css).toMatch(
       /@media\s*\(max-width:\s*900px\)[\s\S]*?\.ns-navigator-context[^}]*display:\s*none/s
+    );
+    expect(narrowWorkspace).not.toMatch(
+      /\[data-agent-conversation="true"\]\[data-focus-mode="false"\]\s+\.ns-navigator/
     );
     expect(css).toMatch(
       /@media\s*\(max-width:\s*900px\)[\s\S]*?\.ns-navigator,\s*\.ns-navigator-context[^}]*display:\s*none/s
@@ -406,6 +409,7 @@ describe("WorkspaceShell", () => {
     );
 
     expect(html).toContain('data-region="activity-bar"');
+    expect(html).toContain('data-active-activity="workspace"');
     expect(html).toContain('data-region="navigator"');
     expect(html).toContain('data-region="editor-area"');
     expect(html).toContain('data-region="ai-panel"');
