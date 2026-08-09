@@ -11,6 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  expectCreativeWorkspaceReady,
+  selectCreativeWorkbench
+} from "./helpers/workspace-readiness.js";
+
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
 const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
@@ -397,7 +402,11 @@ test("sends profile-specific conventions and outlines in real workspace provider
     expect(writingPrefix.outline.data).not.toContain("WRITING_CHAPTER_BODY_SECRET");
     expect(writingPrefix.outline.data).not.toContain("WRITING_STORY_BIBLE_BODY_SECRET");
 
-    await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
+    await selectCreativeWorkbench(page);
+    const workspaceActivity = page.getByLabel("活动栏").getByRole("button", { name: "工作区" });
+    await workspaceActivity.click();
+    await expect(workspaceActivity).toHaveAttribute("aria-current", "page", { timeout: 60_000 });
+    await expectCreativeWorkspaceReady(page, { requireWritingSurface: false });
     const navigator = page.getByRole("navigation", { name: "项目导航" });
     const modeTabs = page.getByRole("tablist", { name: "创作导航模式" });
     await expect(modeTabs).toBeVisible();

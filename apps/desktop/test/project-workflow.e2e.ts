@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { expectCreativeWorkspaceReady } from "./helpers/workspace-readiness.js";
+
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
 
@@ -73,8 +75,7 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
     await page.getByLabel("项目文件夹名称").fill("Project Smoke");
     await page.getByRole("button", { name: "选择项目父文件夹" }).click();
     await page.getByRole("button", { name: "创建项目", exact: true }).click();
-
-    await expect(page.getByText("Project Smoke")).toBeVisible();
+    await expectCreativeWorkspaceReady(page);
 
     await page.getByRole("button", { name: "新建章节" }).click();
     await expect(page.getByRole("tab", { name: "Untitled Chapter 1.md" })).toBeVisible();
@@ -204,7 +205,7 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     await page.getByLabel("项目文件夹名称").fill("Recovery Smoke");
     await page.getByRole("button", { name: "选择项目父文件夹" }).click();
     await page.getByRole("button", { name: "创建项目", exact: true }).click();
-    await expect(page.getByText("Recovery Smoke")).toBeVisible();
+    await expectCreativeWorkspaceReady(page);
     await page.getByRole("button", { name: "新建章节" }).click();
     await expect(page.getByRole("tab", { name: "Untitled Chapter 1.md" })).toBeVisible();
     await expect(chapterBody(page)).toBeVisible();

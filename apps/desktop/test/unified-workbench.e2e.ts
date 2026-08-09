@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  expectCreativeWorkspaceReady,
+  expectEngineeringWorkspaceReady
+} from "./helpers/workspace-readiness.js";
+
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
 
@@ -21,16 +26,7 @@ test("switches a creative project into the engineering explorer without losing t
   try {
     const page = await electronApp.firstWindow();
     const workbenchTrigger = page.getByRole("button", { name: "当前工作台：创作工作台" });
-    await expect(workbenchTrigger).toBeVisible();
-    await expect
-      .poll(
-        async () =>
-          page.evaluate(
-            async () => (await window.novelStudio?.getShellState())?.workspaceContext.kind
-          ),
-        { timeout: 30_000 }
-      )
-      .toBe("creativeProject");
+    await expectCreativeWorkspaceReady(page, { requireWritingSurface: false });
     const projectStatusBox = await page.locator(".ns-project-status").boundingBox();
     const titlebarBox = await page.locator(".ns-titlebar").boundingBox();
     const workbenchBox = await workbenchTrigger.boundingBox();
@@ -51,8 +47,7 @@ test("switches a creative project into the engineering explorer without losing t
     await workbenchTrigger.click();
     await page.getByRole("menuitemradio", { name: "工程工作区" }).click();
 
-    await expect(page.getByRole("navigation", { name: "工程资源管理器" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "当前工作台：工程工作区" })).toBeVisible();
+    await expectEngineeringWorkspaceReady(page);
     await expect(page.getByRole("button", { name: "搜索" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "创作系统" })).toHaveCount(0);
 

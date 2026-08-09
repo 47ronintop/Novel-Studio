@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { expectCreativeWorkspaceReady } from "./helpers/workspace-readiness.js";
+
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
 const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapter");
@@ -374,16 +376,7 @@ async function createQueuedCreativeProject(
     throw new Error(`Creative project creation failed: ${JSON.stringify(created)}`);
   }
   await page.reload();
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(
-          async () => (await window.novelStudio?.getShellState())?.workspaceContext.kind
-        ),
-      { timeout: 30_000 }
-    )
-    .toBe("creativeProject");
-  await expect(page.getByLabel("项目导航")).toBeVisible({ timeout: 30_000 });
+  await expectCreativeWorkspaceReady(page);
 }
 
 async function queueDirectorySelection(
