@@ -2,6 +2,7 @@
   "name": "novel-studio",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Local-first AI novel creation IDE.",
   "type": "module",
   "workspaces": [
