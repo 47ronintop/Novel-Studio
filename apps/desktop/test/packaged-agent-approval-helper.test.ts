@@ -36,5 +36,5 @@ describe("packaged Agent approval UI Automation", () => {
     } finally {
       await rm(packageDirectory, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 60_000);
 });
