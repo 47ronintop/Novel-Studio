@@ -15,7 +15,7 @@
     "@novel-studio/repository": "0.1.0",
     "@novel-studio/shared": "0.1.0",
     "@novel-studio/ui": "0.1.0",
-    "electron": "^41.7.1",
+    "electron": "^41.10.3",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   }
