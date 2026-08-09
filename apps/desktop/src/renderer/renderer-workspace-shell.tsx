@@ -233,9 +233,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onExternalUpdateContinue: props.onStoryBibleExternalUpdateContinue
         } satisfies StoryBibleEditorProps);
   const creativeNavigator =
-    props.shellState.workspaceContext.kind === "creativeProject" &&
-    projectWorkflow !== undefined &&
-    storyBibleEditor !== undefined
+    props.shellState.workspaceContext.kind === "creativeProject" && projectWorkflow !== undefined
       ? ({
           projectTitle: props.shellState.workspaceContext.displayName,
           projectWorkflow,
@@ -246,7 +244,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
             ? {}
             : { activeChapterId: projectWorkflow.activeChapterId }),
           dirtyChapterIds: projectWorkflow.dirtyChapterIds ?? [],
-          storyBible: storyBibleEditor,
+          ...(storyBibleEditor === undefined ? {} : { storyBible: storyBibleEditor }),
           ...(props.creativeProjectFiles === undefined
             ? {}
             : { projectFiles: props.creativeProjectFiles }),

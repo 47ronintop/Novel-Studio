@@ -93,7 +93,7 @@ export interface CreativeWorkspaceNavigatorProps {
   readonly chapters: readonly ChapterSummary[];
   readonly activeChapterId?: string;
   readonly dirtyChapterIds: readonly string[];
-  readonly storyBible: StoryBibleEditorProps;
+  readonly storyBible?: StoryBibleEditorProps | undefined;
   /**
    * The creative-project-file surface is deliberately scoped to the creative
    * navigator. It exposes only project-relative identities and lifecycle

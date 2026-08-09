@@ -148,6 +148,17 @@ describe("CreativeWorkspaceNavigator", () => {
     expect(host.querySelector('button[aria-label="新建人物"]')).toBeNull();
   });
 
+  test("keeps project navigation available while story data is loading", () => {
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({ mode: "story", storyBible: undefined })}
+      />
+    );
+
+    expect(host.querySelector('nav[aria-label="项目导航"]')).not.toBeNull();
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("正在加载故事资料");
+  });
+
   test("opens story categories without rendering the active category entry list", () => {
     const calls: string[] = [];
     render(

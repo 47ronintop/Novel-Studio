@@ -297,13 +297,22 @@ function WritingProjection(props: CreativeWorkspaceNavigatorProps) {
 }
 
 function StoryProjection(props: CreativeWorkspaceNavigatorProps) {
-  const activeKind = props.storyBible.activeKind;
+  const storyBible = props.storyBible;
+  if (storyBible === undefined) {
+    return (
+      <div className="ns-creative-empty" role="status">
+        正在加载故事资料…
+      </div>
+    );
+  }
+
+  const activeKind = storyBible.activeKind;
 
   return (
     <div aria-label="故事资料分类" className="ns-story-kind-list">
       {STORY_KINDS.map((kind) => {
         const KindIcon = storyKindIcons[kind];
-        const count = props.storyBible.entries.filter((entry) => entry.kind === kind).length;
+        const count = storyBible.entries.filter((entry) => entry.kind === kind).length;
         return (
           <button
             aria-pressed={kind === activeKind}
