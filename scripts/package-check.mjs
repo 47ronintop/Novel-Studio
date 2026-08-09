@@ -256,10 +256,10 @@ async function checkElectronBuilderConfig() {
   if (config.directories?.buildResources !== "apps/desktop/build") {
     failures.push("Electron package buildResources must point to desktop build assets.");
   }
-  if (config.win?.icon !== "apps/desktop/build/icon.svg") {
+  if (config.win?.icon !== "apps/desktop/build/icon-shanhai.png") {
     failures.push("Windows package must declare the Novel Studio icon asset.");
   }
-  if (!(await fileExists(join(root, "apps", "desktop", "build", "icon.svg")))) {
+  if (!(await fileExists(join(root, "apps", "desktop", "build", "icon-shanhai.png")))) {
     failures.push("Missing desktop icon asset.");
   }
   if (config.win?.forceCodeSigning !== false) {

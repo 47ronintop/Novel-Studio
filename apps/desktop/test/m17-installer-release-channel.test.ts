@@ -63,7 +63,7 @@ describe("M17 installer and release channel", () => {
     expect(config.artifactName).toBe("Novel-Studio-${version}-${os}-${arch}.${ext}");
     expect(config.files).toContain("packages/schemas/schema/**");
     expect(config.directories?.buildResources).toBe("apps/desktop/build");
-    expect(config.win?.icon).toBe("apps/desktop/build/icon.svg");
+    expect(config.win?.icon).toBe("apps/desktop/build/icon-shanhai.png");
     expect(config.win?.forceCodeSigning).toBe(false);
     expect(config.nsis?.oneClick).toBe(false);
     expect(config.nsis?.perMachine).toBe(false);
@@ -71,7 +71,9 @@ describe("M17 installer and release channel", () => {
     expect(config.nsis?.createDesktopShortcut).toBe(true);
     expect(config.nsis?.createStartMenuShortcut).toBe(true);
     expect(config.nsis?.shortcutName).toBe("Novel Studio");
-    expect(existsSync(join(process.cwd(), "apps", "desktop", "build", "icon.svg"))).toBe(true);
+    expect(existsSync(join(process.cwd(), "apps", "desktop", "build", "icon-shanhai.png"))).toBe(
+      true
+    );
   });
 
   test("defines a local beta release channel manifest and notes", () => {

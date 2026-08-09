@@ -38,7 +38,7 @@ module.exports = {
   asar: true,
   electronLanguages: ["zh-CN", "en-US"],
   win: {
-    icon: "apps/desktop/build/icon.svg",
+    icon: "apps/desktop/build/icon-shanhai.png",
     forceCodeSigning: false,
     target: ["dir", "nsis"]
   },

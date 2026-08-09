@@ -322,10 +322,10 @@ async function checkElectronBuilderConfig() {
   if (config.win?.forceCodeSigning !== false) {
     failures.push("Local beta release channel must not require code signing.");
   }
-  if (config.win?.icon !== "apps/desktop/build/icon.svg") {
+  if (config.win?.icon !== "apps/desktop/build/icon-shanhai.png") {
     failures.push("Windows builder config must declare the icon asset.");
   }
-  if (!(await fileExists("apps/desktop/build/icon.svg"))) {
+  if (!(await fileExists("apps/desktop/build/icon-shanhai.png"))) {
     failures.push("Icon asset is missing.");
   }
   if (config.nsis?.oneClick !== false) {
