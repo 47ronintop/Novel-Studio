@@ -234,15 +234,22 @@ export function createProjectWorkspaceSession(
     getSnapshot: () => state,
     getActiveChapterEditorSession: () => activeChapterEditorSession,
     async openProject(projectRoot) {
+      // Validate the selected folder before acquiring a lock so a rejected folder
+      // cannot be marked with a Novel Studio state directory.
+      const projectRepository = options.createProjectRepository(projectRoot);
+      const initialOpened = await projectRepository.openProject();
+      if (!initialOpened.ok) {
+        return initialOpened;
+      }
+
       const acquiredLock = await acquireWorkspaceLock(projectRoot);
       if (!acquiredLock.ok) {
         return acquiredLock;
       }
 
-      const projectRepository = options.createProjectRepository(projectRoot);
       const opened = await projectRepository.openProject();
       if (!opened.ok) {
-        await acquiredLock.value.repository?.releaseProjectLock();
+        await releaseProjectLockBestEffort(acquiredLock.value.repository);
         return opened;
       }
 

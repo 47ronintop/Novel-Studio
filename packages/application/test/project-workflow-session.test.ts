@@ -10,7 +10,8 @@ import {
   ChapterFileRepository,
   HistoryRepository,
   ProjectCreationFileRepository,
-  ProjectFileRepository
+  ProjectFileRepository,
+  ProjectLockFileRepository
 } from "@novel-studio/repository";
 
 import { createProjectWorkspaceSession } from "../src/project-workspace-session.js";
@@ -1106,6 +1107,27 @@ describe("M12 project workflow session", () => {
       ownerId: "window_b",
       projectRoot: firstRoot
     });
+  });
+
+  test("does not create a Novel Studio state directory when opening an ordinary folder", async () => {
+    const projectRoot = await createTempRoot();
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
+      createProjectRepository: (root) => new ProjectFileRepository({ projectRoot: root }),
+      createChapterRepository: (root) => new ChapterFileRepository({ projectRoot: root }),
+      createHistoryRepository: (root) => new HistoryRepository({ projectRoot: root }),
+      createRecoveryRepository: () => emptyRecoveryRepository(),
+      createProjectLockRepository: (root) =>
+        new ProjectLockFileRepository({ projectRoot: root, ownerId: "window_invalid-folder" })
+    });
+
+    const opened = await session.openProject(projectRoot);
+
+    expect(isErr(opened)).toBe(true);
+    if (!opened.ok) {
+      expect(opened.error.code).toBe("PROJECT_FILE_MISSING");
+    }
+    await expect(pathExists(join(projectRoot, ".novel-studio"))).resolves.toBe(false);
   });
 });
 
