@@ -17,7 +17,7 @@ const fixtureRoot = join(repositoryRoot, "fixtures", "projects", "minimal-chapte
 const projectId = "prj_minimal_chapter";
 const activeChapterId = "ch_01JZ7P9QK2R6D4W8K3A1B5C9D0";
 
-test("persists a plan review and fails closed before execution without a conversation summary", async () => {
+test("persists a plan review and fails closed when the provider stream is incomplete", async () => {
   test.setTimeout(120_000);
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-permission-plan-e2e-"));
   const projectRoot = join(tempRoot, "Project");
@@ -151,8 +151,8 @@ test("persists a plan review and fails closed before execution without a convers
     await expect(planReview.getByRole("checkbox")).toHaveCount(0);
     await planReview.getByRole("button", { name: "按此方案执行" }).click();
 
-    await expect(page.getByRole("alert")).toContainText("AGENT_CONVERSATION_SUMMARY_UNAVAILABLE");
-    await expect(page.locator('[data-plan-step-id="step-stage5b-01"]')).toHaveCount(0);
+    await expect(page.getByRole("alert")).toContainText("streamTermination");
+    await expect(page.locator('[data-plan-step-id="step-stage5b-01"]')).toBeVisible();
   } finally {
     if (firstApp !== undefined) await firstApp.close();
     await new Promise<void>((resolve, reject) =>

@@ -397,8 +397,10 @@ test("sends profile-specific conventions and outlines in real workspace provider
     expect(writingPrefix.outline.data).not.toContain("WRITING_CHAPTER_BODY_SECRET");
     expect(writingPrefix.outline.data).not.toContain("WRITING_STORY_BIBLE_BODY_SECRET");
 
+    await page.getByLabel("活动栏").getByRole("button", { name: "工作区" }).click();
     const navigator = page.getByRole("navigation", { name: "项目导航" });
     const modeTabs = page.getByRole("tablist", { name: "创作导航模式" });
+    await expect(modeTabs).toBeVisible();
     await modeTabs.getByRole("tab", { name: "项目文件" }).click();
     const notesToggle = navigator.getByRole("button", { name: "展开目录：notes" });
     await expect(notesToggle).toBeVisible();

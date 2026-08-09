@@ -198,6 +198,15 @@ async function triggerFileMenuItem(
 
 async function expectCreativeWorkbench(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "当前工作台：创作工作台" })).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          async () => (await window.novelStudio?.getShellState())?.workspaceContext.kind
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe("creativeProject");
   await expect(page.getByRole("navigation", { name: "工程资源管理器" })).toHaveCount(0);
 }
 

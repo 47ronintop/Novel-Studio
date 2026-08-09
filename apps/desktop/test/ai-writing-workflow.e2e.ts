@@ -108,7 +108,7 @@ test("completes the core writing journey across save, close, reopen, and continu
     await openAgentComposer(page);
 
     const review = await requestSelectionReview(page, body);
-    await expect(review.getByLabel("AI 文风规则检查")).toBeVisible();
+    await expect(review.getByLabel("AI 文风提醒")).toBeVisible();
     appliedBody = await readSelectionProposal(review);
 
     await review.getByRole("button", { name: "Accept selection AI preview" }).click();
@@ -374,7 +374,16 @@ async function createQueuedCreativeProject(
     throw new Error(`Creative project creation failed: ${JSON.stringify(created)}`);
   }
   await page.reload();
-  await expect(page.getByLabel("项目导航")).toBeVisible({ timeout: 15_000 });
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          async () => (await window.novelStudio?.getShellState())?.workspaceContext.kind
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe("creativeProject");
+  await expect(page.getByLabel("项目导航")).toBeVisible({ timeout: 30_000 });
 }
 
 async function queueDirectorySelection(

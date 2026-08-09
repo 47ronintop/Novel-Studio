@@ -22,6 +22,15 @@ test("switches a creative project into the engineering explorer without losing t
     const page = await electronApp.firstWindow();
     const workbenchTrigger = page.getByRole("button", { name: "当前工作台：创作工作台" });
     await expect(workbenchTrigger).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            async () => (await window.novelStudio?.getShellState())?.workspaceContext.kind
+          ),
+        { timeout: 30_000 }
+      )
+      .toBe("creativeProject");
     const projectStatusBox = await page.locator(".ns-project-status").boundingBox();
     const titlebarBox = await page.locator(".ns-titlebar").boundingBox();
     const workbenchBox = await workbenchTrigger.boundingBox();
