@@ -19,6 +19,7 @@
     "format:changed": "node scripts/format-changed.mjs",
     "format:full-debt": "prettier --check .",
     "format:write": "prettier --write .",
+    "runtime:check": "node scripts/check-file-identity-runtime.mjs",
     "schema:story-bible": "npm run build:types -- --pretty false && node scripts/generate-story-bible-schemas.mjs",
     "test": "vitest run --passWithNoTests --maxWorkers=2",
     "test:contract": "vitest run packages/schemas/test --passWithNoTests",
@@ -41,7 +42,7 @@
     "release:gate": "node scripts/release-check.mjs --strict --package-dir"
   },
   "engines": {
-    "node": ">=22.12.0",
+    "node": ">=24.14.0",
     "npm": ">=10.8.0"
   },
   "devDependencies": {
