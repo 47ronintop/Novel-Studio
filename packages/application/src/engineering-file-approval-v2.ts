@@ -14,7 +14,8 @@ import {
   type ApprovalBindingV2Eol,
   type ChangeSetV2,
   type CreateApprovalBindingV2Input,
-  type MainOnlyApprovalDecisionProofV1
+  type MainOnlyApprovalDecisionProofV1,
+  type ProviderVisibleWorkspaceFileOperation
 } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
@@ -27,7 +28,7 @@ import { hasApprovalBindingV2Authorization } from "./agent-write-authorization.j
  */
 export const ENGINEERING_FILE_APPROVAL_V2_SCHEMA_VERSION = "2.0" as const;
 
-export type EngineeringFileApprovalOperationKindV2 = "replace_file" | "create_file";
+export type EngineeringFileApprovalOperationKindV2 = ProviderVisibleWorkspaceFileOperation;
 export type EngineeringApprovalBeforeKindV2 = "present" | "absent";
 
 /**
@@ -63,6 +64,9 @@ export interface EngineeringApprovalBindingFactsV2 {
   readonly policyRevision: string;
   readonly capabilityRevision: string;
   readonly providerSemanticVersionSetChecksum: string;
+  readonly recoveryRootBindingId?: string;
+  readonly recoveryGrantRevision?: string;
+  readonly recoverySideEffectChecksum?: string;
 }
 
 /** All stable Binding v2 fields; capability, nonce, and binding id are Main-generated later. */
@@ -189,7 +193,10 @@ const FACT_KEYS = [
   "executionWritePolicy",
   "policyRevision",
   "capabilityRevision",
-  "providerSemanticVersionSetChecksum"
+  "providerSemanticVersionSetChecksum",
+  "recoveryRootBindingId",
+  "recoveryGrantRevision",
+  "recoverySideEffectChecksum"
 ] as const;
 
 const BUILD_KEYS = ["schemaVersion", "changeSet", "facts", "issuedAt", "expiresAt"] as const;
@@ -284,6 +291,15 @@ export function buildEngineeringApprovalBindingV2(
     executionWritePolicy: facts.value.executionWritePolicy,
     policyRevision: facts.value.policyRevision,
     capabilityRevision: facts.value.capabilityRevision,
+    ...(facts.value.recoveryRootBindingId === undefined
+      ? {}
+      : { recoveryRootBindingId: facts.value.recoveryRootBindingId }),
+    ...(facts.value.recoveryGrantRevision === undefined
+      ? {}
+      : { recoveryGrantRevision: facts.value.recoveryGrantRevision }),
+    ...(facts.value.recoverySideEffectChecksum === undefined
+      ? {}
+      : { recoverySideEffectChecksum: facts.value.recoverySideEffectChecksum }),
     // Batch 7's replace/create rule proof must still lead to a qualified human confirmation.
     approvalSource: "human_confirmation",
     issuedAt: input.issuedAt,
@@ -462,10 +478,20 @@ function validateFacts(
   changeSet: ChangeSetV2
 ): Result<EngineeringApprovalBindingFactsV2, UnifiedError> {
   if (hasLegacyToken(value)) return legacyTokenRejected();
-  if (!hasExactKeys(value, FACT_KEYS)) {
+  if (!hasRequiredAndOnlyKeys(value, FACT_KEYS.slice(0, -3), FACT_KEYS)) {
     return invalidInput("Engineering approval facts contain an unknown or missing field.");
   }
   const facts = value as unknown as EngineeringApprovalBindingFactsV2;
+  const lifecycle =
+    facts.operationKind === "move_file" ||
+    facts.operationKind === "delete_file" ||
+    facts.operationKind === "create_directory";
+  const isDelete = facts.operationKind === "delete_file";
+  const recoveryKeysPresent = [
+    facts.recoveryRootBindingId,
+    facts.recoveryGrantRevision,
+    facts.recoverySideEffectChecksum
+  ].some((field) => field !== undefined);
   if (
     facts.schemaVersion !== ENGINEERING_FILE_APPROVAL_V2_SCHEMA_VERSION ||
     !isStableId(facts.workspaceBindingId) ||
@@ -480,10 +506,10 @@ function validateFacts(
     !isNonEmptyString(facts.sourceRef) ||
     !isNonEmptyString(facts.targetRef) ||
     !isBeforeKind(facts.beforeKind) ||
-    !isBaseChecksumValid(facts.baseChecksum, facts.beforeKind) ||
-    !isHash(facts.candidateChecksum) ||
-    !isHash(facts.baseManifestChecksum) ||
-    !isHash(facts.candidateManifestChecksum) ||
+    !isBaseChecksumValid(facts.baseChecksum, facts.beforeKind, lifecycle) ||
+    !isEngineeringChecksum(facts.candidateChecksum, lifecycle) ||
+    !isEngineeringChecksum(facts.baseManifestChecksum, lifecycle) ||
+    !isEngineeringChecksum(facts.candidateManifestChecksum, lifecycle) ||
     !isEncoding(facts.encoding) ||
     !isBom(facts.bom) ||
     !isEol(facts.eol) ||
@@ -498,6 +524,20 @@ function validateFacts(
     return invalidInput("Engineering approval facts are invalid.");
   }
 
+  if (isDelete) {
+    if (
+      !isStableId(facts.recoveryRootBindingId) ||
+      !isStableId(facts.recoveryGrantRevision) ||
+      !isHash(facts.recoverySideEffectChecksum)
+    ) {
+      return invalidInput(
+        "Delete approval facts must bind the recovery root, grant, and side effect."
+      );
+    }
+  } else if (recoveryKeysPresent) {
+    return invalidInput("Recovery binding facts are only valid for delete authorization.");
+  }
+
   const selectedOperationIds = selectedIds(changeSet);
   if (
     selectedOperationIds.length !== facts.selectedOperationIds.length ||
@@ -510,12 +550,14 @@ function validateFacts(
   }
 
   if (
-    (facts.operationKind === "replace_file" && facts.beforeKind !== "present") ||
-    (facts.operationKind === "create_file" && facts.beforeKind !== "absent")
+    ((facts.operationKind === "replace_file" ||
+      facts.operationKind === "move_file" ||
+      facts.operationKind === "delete_file") &&
+      facts.beforeKind !== "present") ||
+    ((facts.operationKind === "create_file" || facts.operationKind === "create_directory") &&
+      facts.beforeKind !== "absent")
   ) {
-    return invalidInput(
-      "Engineering replace/create facts have an invalid before or absence binding."
-    );
+    return invalidInput("Engineering lifecycle facts have an invalid before or absence binding.");
   }
 
   let proof: MainOnlyApprovalDecisionProofV1;
@@ -618,7 +660,10 @@ function bindingMatchesSeed(
     binding.capabilityRevision === seed.capabilityRevision &&
     binding.approvalSource === seed.approvalSource &&
     binding.issuedAt === seed.issuedAt &&
-    binding.expiresAt === seed.expiresAt
+    binding.expiresAt === seed.expiresAt &&
+    binding.recoveryRootBindingId === seed.recoveryRootBindingId &&
+    binding.recoveryGrantRevision === seed.recoveryGrantRevision &&
+    binding.recoverySideEffectChecksum === seed.recoverySideEffectChecksum
   );
 }
 
@@ -657,15 +702,31 @@ function hasOnlyKeys(value: unknown, keys: readonly string[]): value is Record<s
 }
 
 function isEngineeringOperation(value: unknown): value is EngineeringFileApprovalOperationKindV2 {
-  return value === "replace_file" || value === "create_file";
+  return (
+    value === "replace_file" ||
+    value === "create_file" ||
+    value === "move_file" ||
+    value === "delete_file" ||
+    value === "create_directory"
+  );
 }
 
 function isBeforeKind(value: unknown): value is EngineeringApprovalBeforeKindV2 {
   return value === "present" || value === "absent";
 }
 
-function isBaseChecksumValid(value: unknown, beforeKind: EngineeringApprovalBeforeKindV2): boolean {
-  return beforeKind === "present" ? isHash(value) : value === "not_applicable";
+function isBaseChecksumValid(
+  value: unknown,
+  beforeKind: EngineeringApprovalBeforeKindV2,
+  lifecycle: boolean
+): boolean {
+  return lifecycle || beforeKind === "present"
+    ? isHash(value) || value === "not_applicable"
+    : value === "not_applicable";
+}
+
+function isEngineeringChecksum(value: unknown, lifecycle: boolean): boolean {
+  return lifecycle ? isHash(value) || value === "not_applicable" : isHash(value);
 }
 
 function isEncoding(value: unknown): value is ApprovalBindingV2Encoding {
