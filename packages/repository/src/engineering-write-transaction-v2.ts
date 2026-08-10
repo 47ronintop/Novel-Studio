@@ -5,11 +5,15 @@ import {
   canonicalizeEngineeringMutationV2Json,
   inspectEngineeringRawBytesV2,
   validateEngineeringAbsenceProofV2,
+  validateEngineeringFileLifecycleRequestV2,
   validateEngineeringFileMutationRequestV2,
   validateEngineeringRawByteManifestV2,
   type EngineeringAbsenceProofV2,
   type EngineeringFileMutationApplyInputV2,
   type EngineeringFileMutationPortV2,
+  type EngineeringFileLifecycleReceiptV2,
+  type EngineeringFileLifecycleRequestV2,
+  type EngineeringLifecycleRecoveryRootBindingV2,
   type EngineeringFileMutationOperationKindV2,
   type EngineeringFileMutationRequestV2,
   type EngineeringRawByteManifestV2
@@ -108,6 +112,209 @@ export interface EngineeringWriteTransactionV2Options {
   readonly verifyFullAfterManifest: EngineeringFullAfterManifestVerifierV2;
   readonly now?: () => string;
   readonly traceId?: string;
+}
+
+export interface EngineeringLifecycleWriteOperationV2 {
+  readonly request: EngineeringFileLifecycleRequestV2;
+  /** Durable binding facts only. Native root handles are reacquired by Main and never journaled. */
+  readonly recoveryBinding: Omit<
+    EngineeringLifecycleRecoveryRootBindingV2,
+    "recoveryRootId"
+  > | null;
+}
+
+export interface EngineeringLifecycleWriteTransactionInputV2 {
+  readonly schemaVersion: typeof ENGINEERING_MUTATION_V2_SCHEMA_VERSION;
+  readonly transactionId: string;
+  readonly contentRootBindingId: string;
+  readonly providerSemanticVersionSetChecksum: string;
+  readonly authorization: EngineeringV2AuthorizationBinding;
+  readonly operations: readonly EngineeringLifecycleWriteOperationV2[];
+  readonly preparedAt: string;
+}
+
+export interface EngineeringLifecycleWriteAheadLogV2 {
+  readonly schemaVersion: typeof ENGINEERING_MUTATION_V2_SCHEMA_VERSION;
+  readonly kind: "engineering_lifecycle_write_ahead_log";
+  readonly prepared: EngineeringLifecycleWriteTransactionInputV2;
+  readonly preparedChecksum: string;
+  readonly receipts: readonly EngineeringFileLifecycleReceiptV2[];
+  readonly committedAt: string | null;
+  readonly journalChecksum: string;
+}
+
+export interface EngineeringLifecycleWalRepositoryV2 {
+  read(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+  }): Promise<Result<EngineeringLifecycleWriteAheadLogV2 | undefined, UnifiedError>>;
+  prepare(
+    input: EngineeringLifecycleWriteTransactionInputV2
+  ): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>>;
+  appendProgress(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly receipt: EngineeringFileLifecycleReceiptV2;
+    readonly recordedAt: string;
+  }): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>>;
+  commit(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly committedAt: string;
+  }): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>>;
+}
+
+export interface EngineeringLifecycleWriteTransactionV2Options {
+  readonly walRepository: EngineeringLifecycleWalRepositoryV2;
+  readonly mutationPort: EngineeringFileMutationPortV2;
+  readonly recoveryGate: EngineeringMutationRecoveryGatePortV2;
+  readonly validateReservedAuthorization: (
+    prepared: EngineeringLifecycleWriteTransactionInputV2
+  ) => Promise<Result<void, UnifiedError>>;
+  readonly resolveRecoveryBinding?: (
+    operation: EngineeringLifecycleWriteOperationV2
+  ) => Promise<Result<EngineeringLifecycleRecoveryRootBindingV2, UnifiedError>>;
+  readonly now?: () => string;
+  readonly traceId?: string;
+}
+
+/** Durable B8 lifecycle coordinator. The injected WAL must flush before returning from each call. */
+export class EngineeringLifecycleWriteTransactionV2 {
+  private readonly now: () => string;
+  private readonly traceId: string;
+  private queue: Promise<void> = Promise.resolve();
+
+  public constructor(private readonly options: EngineeringLifecycleWriteTransactionV2Options) {
+    this.now = options.now ?? (() => new Date().toISOString());
+    this.traceId = options.traceId ?? "engineering-lifecycle-write-transaction-v2";
+  }
+
+  public async apply(
+    input: unknown
+  ): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>> {
+    return this.serialized(async () => {
+      const prepared = validateEngineeringLifecycleWriteTransactionInputV2(input, this.traceId);
+      if (!prepared.ok) return prepared;
+      const existing = await this.options.walRepository.read({
+        contentRootBindingId: prepared.value.contentRootBindingId,
+        transactionId: prepared.value.transactionId
+      });
+      if (!existing.ok) return existing;
+      let journal = existing.value;
+      let createdThisAttempt = false;
+      if (journal === undefined) {
+        const gate = await this.options.recoveryGate.assertMutationAllowed(
+          prepared.value.contentRootBindingId
+        );
+        if (!gate.ok) return gate;
+        const authorized = await this.options.validateReservedAuthorization(prepared.value);
+        if (!authorized.ok) return authorized;
+        const created = await this.options.walRepository.prepare(prepared.value);
+        if (!created.ok) return created;
+        journal = created.value;
+        createdThisAttempt = true;
+      } else if (
+        canonicalizeEngineeringMutationV2Json(journal.prepared) !==
+        canonicalizeEngineeringMutationV2Json(prepared.value)
+      ) {
+        return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_CONFLICT", this.traceId);
+      }
+      if (journal.committedAt !== null) return ok(journal);
+      // A lifecycle mutation has no pathname fallback and cannot be safely replayed after a
+      // process crash between the native mutation and its durable progress receipt.  A normal
+      // apply may proceed only from the WAL it created in this attempt; recovery must classify
+      // every pre-existing incomplete operation through a Main-owned recovery implementation.
+      if (!createdThisAttempt) return lifecycleRecoveryRequired(this.traceId);
+      const lease = await this.options.recoveryGate.acquireMutationLease({
+        contentRootBindingId: prepared.value.contentRootBindingId,
+        transactionId: prepared.value.transactionId,
+        preparedChecksum: journal.preparedChecksum
+      });
+      if (!lease.ok) return lease;
+      try {
+        for (
+          let index = journal.receipts.length;
+          index < prepared.value.operations.length;
+          index += 1
+        ) {
+          const current = prepared.value.operations[index];
+          if (current === undefined)
+            return invalid(
+              "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_ORDER_INVALID",
+              this.traceId
+            );
+          const active = await lease.value.assertCurrent();
+          if (!active.ok) return active;
+          const authorized = await this.options.validateReservedAuthorization(prepared.value);
+          if (!authorized.ok) return authorized;
+          let result: Result<EngineeringFileLifecycleReceiptV2, UnifiedError>;
+          if (current.request.operationKind === "move_file") {
+            result = await this.invoke("move", current.request);
+          } else if (current.request.operationKind === "delete_file") {
+            if (this.options.resolveRecoveryBinding === undefined)
+              return lifecycleUnavailable(this.traceId);
+            const recovery = await this.options.resolveRecoveryBinding(current);
+            if (!recovery.ok) return recovery;
+            if (
+              current.recoveryBinding === null ||
+              recovery.value.recoveryRootBindingId !==
+                current.recoveryBinding.recoveryRootBindingId ||
+              recovery.value.grantRevision !== current.recoveryBinding.grantRevision ||
+              recovery.value.sideEffectChecksum !== current.recoveryBinding.sideEffectChecksum
+            )
+              return invalid(
+                "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_BINDING_STALE",
+                this.traceId
+              );
+            result = await this.invoke("quarantine", {
+              request: current.request,
+              recoveryBinding: recovery.value
+            });
+          } else {
+            result = await this.invoke("createDirectory", current.request);
+          }
+          if (!result.ok) return result;
+          const advanced = await this.options.walRepository.appendProgress({
+            contentRootBindingId: prepared.value.contentRootBindingId,
+            transactionId: prepared.value.transactionId,
+            receipt: result.value,
+            recordedAt: this.now()
+          });
+          if (!advanced.ok) return advanced;
+          journal = advanced.value;
+        }
+        return this.options.walRepository.commit({
+          contentRootBindingId: prepared.value.contentRootBindingId,
+          transactionId: prepared.value.transactionId,
+          committedAt: this.now()
+        });
+      } finally {
+        await releaseLease(lease.value);
+      }
+    });
+  }
+
+  private async invoke(
+    kind: "move" | "quarantine" | "createDirectory",
+    input: unknown
+  ): Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>> {
+    const method = this.options.mutationPort[kind];
+    return method === undefined ? lifecycleUnavailable(this.traceId) : method(input);
+  }
+
+  private async serialized<T>(task: () => Promise<T>): Promise<T> {
+    const previous = this.queue;
+    let release!: () => void;
+    this.queue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  }
 }
 
 /**
@@ -503,6 +710,83 @@ function parseTransactionInput(value: unknown): EngineeringWriteTransactionInput
   });
 }
 
+export function validateEngineeringLifecycleWriteTransactionInputV2(
+  value: unknown,
+  traceId = "engineering-lifecycle-write-transaction-v2"
+): Result<EngineeringLifecycleWriteTransactionInputV2, UnifiedError> {
+  if (
+    !hasExactKeys(value, lifecycleTransactionInputKeys) ||
+    value["schemaVersion"] !== ENGINEERING_MUTATION_V2_SCHEMA_VERSION ||
+    !isStableId(value["transactionId"]) ||
+    !isStableId(value["contentRootBindingId"]) ||
+    !isSha256(value["providerSemanticVersionSetChecksum"]) ||
+    !isAuthorization(value["authorization"]) ||
+    !isCanonicalUtcTimestamp(value["preparedAt"]) ||
+    !Array.isArray(value["operations"]) ||
+    value["operations"].length === 0 ||
+    value["operations"].length > 64
+  )
+    return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_INPUT_INVALID", traceId);
+  const operations: EngineeringLifecycleWriteOperationV2[] = [];
+  const ids = new Set<string>();
+  for (const candidate of value["operations"]) {
+    if (!hasExactKeys(candidate, lifecycleOperationInputKeys))
+      return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_INPUT_INVALID", traceId);
+    const request = validateEngineeringFileLifecycleRequestV2(candidate["request"]);
+    if (
+      !request.ok ||
+      request.value.transactionId !== value["transactionId"] ||
+      request.value.contentRootBindingId !== value["contentRootBindingId"] ||
+      ids.has(request.value.operationId)
+    )
+      return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_INPUT_INVALID", traceId);
+    ids.add(request.value.operationId);
+    const recovery = candidate["recoveryBinding"];
+    if (request.value.operationKind === "delete_file") {
+      if (
+        !hasExactKeys(recovery, lifecycleRecoveryBindingKeys) ||
+        recovery["recoveryRootBindingId"] !== request.value.recoveryRootBindingId ||
+        recovery["grantRevision"] !== request.value.recoveryGrantRevision ||
+        recovery["sideEffectChecksum"] !== request.value.recoverySideEffectChecksum ||
+        !isStableId(recovery["recoveryRootBindingId"]) ||
+        !isStableId(recovery["grantRevision"]) ||
+        !isSha256(recovery["sideEffectChecksum"])
+      )
+        return invalid(
+          "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_BINDING_INVALID",
+          traceId
+        );
+      operations.push(
+        freeze({
+          request: request.value,
+          recoveryBinding: recovery as unknown as Omit<
+            EngineeringLifecycleRecoveryRootBindingV2,
+            "recoveryRootId"
+          >
+        })
+      );
+    } else {
+      if (recovery !== null)
+        return invalid(
+          "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_BINDING_INVALID",
+          traceId
+        );
+      operations.push(freeze({ request: request.value, recoveryBinding: null }));
+    }
+  }
+  return ok(
+    freeze({
+      schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+      transactionId: value["transactionId"] as string,
+      contentRootBindingId: value["contentRootBindingId"] as string,
+      providerSemanticVersionSetChecksum: value["providerSemanticVersionSetChecksum"] as string,
+      authorization: value["authorization"] as EngineeringV2AuthorizationBinding,
+      operations,
+      preparedAt: value["preparedAt"] as string
+    })
+  );
+}
+
 function parseOperationInput(
   value: unknown,
   contentRootBindingId: string
@@ -819,6 +1103,30 @@ function blobReferenceMismatch<T = never>(traceId: string): Result<T, UnifiedErr
   );
 }
 
+function lifecycleUnavailable<T = never>(traceId: string): Result<T, UnifiedError> {
+  return err(
+    storageError({
+      code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_UNAVAILABLE",
+      message: "The qualified Engineering lifecycle mutation backend is unavailable.",
+      suggestedAction:
+        "Keep the corresponding operation disabled until its native backend is qualified.",
+      traceId
+    })
+  );
+}
+
+function lifecycleRecoveryRequired<T = never>(traceId: string): Result<T, UnifiedError> {
+  return err(
+    storageError({
+      code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_REQUIRED",
+      message: "An incomplete Engineering lifecycle transaction requires Main-owned recovery.",
+      suggestedAction:
+        "Keep the content root closed until recovery has classified the native operation; do not retry it.",
+      traceId
+    })
+  );
+}
+
 const transactionInputKeys = [
   "authorization",
   "contentRootBindingId",
@@ -848,4 +1156,19 @@ const authorizationKeys = [
   "changeSetId",
   "changeSetRevision",
   "sideEffectSubjectChecksum"
+] as const;
+const lifecycleTransactionInputKeys = [
+  "authorization",
+  "contentRootBindingId",
+  "operations",
+  "preparedAt",
+  "providerSemanticVersionSetChecksum",
+  "schemaVersion",
+  "transactionId"
+] as const;
+const lifecycleOperationInputKeys = ["recoveryBinding", "request"] as const;
+const lifecycleRecoveryBindingKeys = [
+  "grantRevision",
+  "recoveryRootBindingId",
+  "sideEffectChecksum"
 ] as const;

@@ -16,12 +16,62 @@ import {
  * normalize or accept legacy string-content mutation requests.
  */
 export const ENGINEERING_MUTATION_V2_SCHEMA_VERSION = "2.0" as const;
+/**
+ * B8 lifecycle requests have a distinct native ABI.  They deliberately retain their own fixed
+ * schema marker so a raw-byte V2 request can never be interpreted as a move/delete/mkdir request.
+ * The containing Engineering V2 WAL remains schema 2.0.
+ */
+export const ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION = "3.0" as const;
 export const ENGINEERING_MUTATION_V2_MAX_RAW_BYTES = 5 * 1024 * 1024;
 
 export type EngineeringRawByteEncodingV2 = "utf-8";
 export type EngineeringRawByteBomV2 = "none" | "utf-8";
 export type EngineeringRawByteEolV2 = "none" | "lf" | "crlf" | "mixed";
 export type EngineeringFileMutationOperationKindV2 = "replace_file" | "create_file";
+
+/** B8 handle-relative lifecycle operations. These are intentionally separate from raw-byte V2. */
+export type EngineeringFileLifecycleOperationKindV2 =
+  "move_file" | "delete_file" | "create_directory";
+
+export interface EngineeringFileLifecycleRequestV2 {
+  readonly schemaVersion: typeof ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION;
+  readonly operationKind: EngineeringFileLifecycleOperationKindV2;
+  readonly transactionId: string;
+  readonly operationId: string;
+  readonly contentRootBindingId: string;
+  readonly relativeSource: string;
+  readonly relativeTarget: string;
+  readonly sourceFileIdentity: string;
+  readonly sourceSha256: string;
+  readonly targetProof: "absent" | "same_object_case_only";
+  readonly recoveryRootBindingId: string;
+  readonly recoveryGrantRevision: string;
+  readonly recoverySideEffectChecksum: string;
+  readonly recoveryObjectId: string;
+  readonly stagingObjectId: string;
+  readonly expectedState: "wal_prepared";
+}
+
+export interface EngineeringFileLifecycleReceiptV2 {
+  readonly schemaVersion: typeof ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION;
+  readonly kind: "engineering_file_lifecycle_receipt";
+  readonly operationKind: EngineeringFileLifecycleOperationKindV2;
+  readonly transactionId: string;
+  readonly operationId: string;
+  readonly contentRootBindingId: string;
+  readonly relativeSource: string;
+  readonly relativeTarget: string;
+  readonly state: "committed" | "quarantined";
+  readonly recoveryObjectId: string;
+  readonly durability: "data_and_directory_flushed";
+}
+
+export interface EngineeringLifecycleRecoveryRootBindingV2 {
+  readonly recoveryRootBindingId: string;
+  readonly recoveryRootId: string | bigint;
+  readonly grantRevision: string;
+  readonly sideEffectChecksum: string;
+}
 
 /**
  * An observed identity names the native object that was read.  A target identity intentionally
@@ -212,6 +262,22 @@ export interface EngineeringFileMutationNativeAddonV2 {
   ): unknown;
 }
 
+export interface EngineeringFileLifecycleNativeAddonV2 {
+  moveEngineeringPathV2(
+    rootId: string | bigint,
+    request: EngineeringFileLifecycleRequestV2
+  ): unknown;
+  quarantineEngineeringFileV2(
+    rootId: string | bigint,
+    recoveryRootId: string | bigint,
+    request: EngineeringFileLifecycleRequestV2
+  ): unknown;
+  createEngineeringDirectoryV2(
+    rootId: string | bigint,
+    request: EngineeringFileLifecycleRequestV2
+  ): unknown;
+}
+
 /**
  * The proposal-time subset of the same native addon/root-handle ABI. There is intentionally no
  * pathname-backed alternative for either operation.
@@ -242,13 +308,28 @@ export interface EngineeringFileMutationPortV2 {
   readonly observeCreateAbsence?: EngineeringFileMutationProposalPortV2["observeCreateAbsence"];
   apply(input: unknown): Promise<Result<EngineeringMutationReceiptV2, UnifiedError>>;
   reconcile(input: unknown): Promise<Result<EngineeringMutationOperationStateV2, UnifiedError>>;
+  readonly move?: (
+    input: unknown
+  ) => Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>>;
+  readonly quarantine?: (
+    input: unknown
+  ) => Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>>;
+  readonly createDirectory?: (
+    input: unknown
+  ) => Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>>;
 }
 
 export type EngineeringQualifiedFileMutationPortV2 = Omit<
   EngineeringFileMutationPortV2,
-  keyof EngineeringFileMutationProposalPortV2
+  keyof EngineeringFileMutationProposalPortV2 | "move" | "quarantine" | "createDirectory"
 > &
-  EngineeringFileMutationProposalPortV2;
+  EngineeringFileMutationProposalPortV2 & {
+    move(input: unknown): Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>>;
+    quarantine(input: unknown): Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>>;
+    createDirectory(
+      input: unknown
+    ): Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>>;
+  };
 
 export interface EngineeringFileMutationPortV2Options {
   readonly addon: unknown;
@@ -271,7 +352,92 @@ export function createEngineeringFileMutationPortV2(
 ): EngineeringQualifiedFileMutationPortV2 {
   const addon = parseNativeAddon(options.addon);
   const proposalAddon = parseProposalNativeAddon(options.addon);
+  const lifecycleAddon = parseLifecycleNativeAddon(options.addon);
   const traceId = options.traceId ?? "engineering-file-mutation-port-v2";
+
+  const lifecycle = {
+    async move(input: unknown): Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>> {
+      const request = validateEngineeringFileLifecycleRequestV2(
+        input,
+        "move_file",
+        options.pathPolicy
+      );
+      if (!request.ok) return request;
+      if (lifecycleAddon === undefined || options.rootBinding === undefined)
+        return unavailable(traceId);
+      if (request.value.contentRootBindingId !== options.rootBinding.contentRootBindingId)
+        return unavailable(traceId);
+      let raw: unknown;
+      try {
+        raw = await lifecycleAddon.moveEngineeringPathV2(options.rootBinding.rootId, request.value);
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      return validateEngineeringFileLifecycleReceiptV2(raw, request.value);
+    },
+    async quarantine(
+      input: unknown
+    ): Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>> {
+      if (!hasExactKeys(input, lifecycleQuarantineInputKeys)) return lifecycleInvalid(traceId);
+      const request = validateEngineeringFileLifecycleRequestV2(
+        input["request"],
+        "delete_file",
+        options.pathPolicy
+      );
+      if (!request.ok) return request;
+      const recovery = parseLifecycleRecoveryBinding(input["recoveryBinding"]);
+      if (
+        recovery === undefined ||
+        lifecycleAddon === undefined ||
+        options.rootBinding === undefined
+      )
+        return unavailable(traceId);
+      if (
+        request.value.contentRootBindingId !== options.rootBinding.contentRootBindingId ||
+        request.value.recoveryRootBindingId !== recovery.recoveryRootBindingId ||
+        request.value.recoveryGrantRevision !== recovery.grantRevision ||
+        request.value.recoverySideEffectChecksum !== recovery.sideEffectChecksum
+      )
+        return lifecycleInvalid(traceId);
+      let raw: unknown;
+      try {
+        raw = await lifecycleAddon.quarantineEngineeringFileV2(
+          options.rootBinding.rootId,
+          recovery.recoveryRootId,
+          request.value
+        );
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      return validateEngineeringFileLifecycleReceiptV2(raw, request.value);
+    },
+    async createDirectory(
+      input: unknown
+    ): Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>> {
+      const request = validateEngineeringFileLifecycleRequestV2(
+        input,
+        "create_directory",
+        options.pathPolicy
+      );
+      if (!request.ok) return request;
+      if (
+        lifecycleAddon === undefined ||
+        options.rootBinding === undefined ||
+        request.value.contentRootBindingId !== options.rootBinding.contentRootBindingId
+      )
+        return unavailable(traceId);
+      let raw: unknown;
+      try {
+        raw = await lifecycleAddon.createEngineeringDirectoryV2(
+          options.rootBinding.rootId,
+          request.value
+        );
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      return validateEngineeringFileLifecycleReceiptV2(raw, request.value);
+    }
+  };
 
   return Object.freeze({
     async inspectProposalSnapshot(
@@ -430,8 +596,108 @@ export function createEngineeringFileMutationPortV2(
         traceId
       );
       return receiptAuthenticated.ok ? state : receiptAuthenticated;
-    }
+    },
+    ...lifecycle
   });
+}
+
+export function validateEngineeringFileLifecycleRequestV2(
+  value: unknown,
+  expectedKind?: EngineeringFileLifecycleOperationKindV2,
+  pathPolicy?: EngineeringPathPolicy
+): Result<EngineeringFileLifecycleRequestV2, UnifiedError> {
+  if (!hasExactKeys(value, lifecycleRequestKeys)) return lifecycleInvalid();
+  const source = value["relativeSource"];
+  const target = value["relativeTarget"];
+  const kind = value["operationKind"];
+  if (
+    value["schemaVersion"] !== ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION ||
+    !isLifecycleKind(kind) ||
+    (expectedKind !== undefined && kind !== expectedKind) ||
+    !isStableId(value["transactionId"]) ||
+    !isStableOperationId(value["operationId"]) ||
+    !isStableId(value["contentRootBindingId"]) ||
+    !isStableId(value["stagingObjectId"]) ||
+    value["expectedState"] !== "wal_prepared" ||
+    !isSha256(value["sourceSha256"]) ||
+    (kind !== "create_directory" && !isStableId(value["sourceFileIdentity"])) ||
+    (value["targetProof"] !== "absent" && value["targetProof"] !== "same_object_case_only") ||
+    (kind === "create_directory"
+      ? source !== "" || !isCanonicalOrdinaryRelativeIdentity(target, pathPolicy)
+      : !isCanonicalOrdinaryRelativeIdentity(source, pathPolicy)) ||
+    (kind === "delete_file"
+      ? target !== ""
+      : !isCanonicalOrdinaryRelativeIdentity(target, pathPolicy))
+  )
+    return lifecycleInvalid();
+  if (
+    kind === "delete_file" &&
+    (target !== "" ||
+      value["targetProof"] !== "absent" ||
+      !isStableId(value["recoveryRootBindingId"]) ||
+      !isStableId(value["recoveryGrantRevision"]) ||
+      !isSha256(value["recoverySideEffectChecksum"]) ||
+      !isStableId(value["recoveryObjectId"]))
+  )
+    return lifecycleInvalid();
+  if (
+    kind === "create_directory" &&
+    (value["targetProof"] !== "absent" ||
+      value["sourceSha256"] !== "0".repeat(64) ||
+      value["sourceFileIdentity"] !== "")
+  )
+    return lifecycleInvalid();
+  if (kind === "move_file" && source === target) return lifecycleInvalid();
+  if (
+    kind === "move_file" &&
+    value["targetProof"] === "same_object_case_only" &&
+    !isCaseOnlyMove(source as string, target as string)
+  )
+    return lifecycleInvalid();
+  return ok(freeze(value as unknown as EngineeringFileLifecycleRequestV2));
+}
+
+export function validateEngineeringFileLifecycleReceiptV2(
+  value: unknown,
+  request?: EngineeringFileLifecycleRequestV2
+): Result<EngineeringFileLifecycleReceiptV2, UnifiedError> {
+  if (
+    !hasExactKeys(value, lifecycleReceiptKeys) ||
+    value["schemaVersion"] !== ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION ||
+    value["kind"] !== "engineering_file_lifecycle_receipt" ||
+    !isLifecycleKind(value["operationKind"]) ||
+    !isStableId(value["transactionId"]) ||
+    !isStableOperationId(value["operationId"]) ||
+    !isStableId(value["contentRootBindingId"]) ||
+    (!isCanonicalOrdinaryRelativeIdentity(value["relativeSource"]) &&
+      !(value["operationKind"] === "create_directory" && value["relativeSource"] === "")) ||
+    (!isCanonicalOrdinaryRelativeIdentity(value["relativeTarget"]) &&
+      value["relativeTarget"] !== "") ||
+    !(value["recoveryObjectId"] === "" || isStableId(value["recoveryObjectId"])) ||
+    value["durability"] !== "data_and_directory_flushed" ||
+    !["committed", "quarantined"].includes(value["state"] as string)
+  )
+    return lifecycleInvalid();
+  if (
+    (value["operationKind"] === "delete_file" &&
+      (value["state"] !== "quarantined" || !isStableId(value["recoveryObjectId"]))) ||
+    (value["operationKind"] !== "delete_file" &&
+      (value["state"] !== "committed" || value["recoveryObjectId"] !== ""))
+  )
+    return lifecycleInvalid();
+  if (
+    request !== undefined &&
+    (value["operationKind"] !== request.operationKind ||
+      value["transactionId"] !== request.transactionId ||
+      value["operationId"] !== request.operationId ||
+      value["contentRootBindingId"] !== request.contentRootBindingId ||
+      value["relativeSource"] !== request.relativeSource ||
+      value["relativeTarget"] !== request.relativeTarget ||
+      (request.operationKind === "delete_file" &&
+        value["recoveryObjectId"] !== request.recoveryObjectId))
+  )
+    return lifecycleInvalid();
+  return ok(freeze(value as unknown as EngineeringFileLifecycleReceiptV2));
 }
 
 export function validateEngineeringFileMutationProposalSnapshotInputV2(
@@ -936,6 +1202,86 @@ function parseNativeAddon(value: unknown): EngineeringFileMutationNativeAddonV2 
     typeof value["inspectEngineeringFileMutationTargetV2"] === "function"
     ? (value as unknown as EngineeringFileMutationNativeAddonV2)
     : undefined;
+}
+
+function parseLifecycleNativeAddon(
+  value: unknown
+): EngineeringFileLifecycleNativeAddonV2 | undefined {
+  return isRecord(value) &&
+    typeof value["moveEngineeringPathV2"] === "function" &&
+    typeof value["quarantineEngineeringFileV2"] === "function" &&
+    typeof value["createEngineeringDirectoryV2"] === "function"
+    ? (value as unknown as EngineeringFileLifecycleNativeAddonV2)
+    : undefined;
+}
+
+function parseLifecycleRecoveryBinding(
+  value: unknown
+): EngineeringLifecycleRecoveryRootBindingV2 | undefined {
+  return isRecord(value) &&
+    isStableId(value["recoveryRootBindingId"]) &&
+    (typeof value["recoveryRootId"] === "string" || typeof value["recoveryRootId"] === "bigint") &&
+    isStableId(value["grantRevision"]) &&
+    isSha256(value["sideEffectChecksum"])
+    ? freeze({
+        recoveryRootBindingId: value["recoveryRootBindingId"] as string,
+        recoveryRootId: value["recoveryRootId"] as string | bigint,
+        grantRevision: value["grantRevision"] as string,
+        sideEffectChecksum: value["sideEffectChecksum"] as string
+      })
+    : undefined;
+}
+
+function isLifecycleKind(value: unknown): value is EngineeringFileLifecycleOperationKindV2 {
+  return value === "move_file" || value === "delete_file" || value === "create_directory";
+}
+
+function isCaseOnlyMove(source: string, target: string): boolean {
+  const sourceSegments = source.split("/");
+  const targetSegments = target.split("/");
+  const sourceLeaf = sourceSegments.pop();
+  const targetLeaf = targetSegments.pop();
+  if (
+    sourceLeaf === undefined ||
+    targetLeaf === undefined ||
+    sourceSegments.join("/") !== targetSegments.join("/") ||
+    sourceLeaf === targetLeaf ||
+    sourceLeaf.toLocaleLowerCase("en-US") !== targetLeaf.toLocaleLowerCase("en-US")
+  )
+    return false;
+  // Unicode-normalization-only renames are not case-only renames.
+  return sourceLeaf.normalize("NFC") !== targetLeaf.normalize("NFC");
+}
+
+function lifecycleInvalid<T = never>(
+  traceId = "engineering-file-mutation-port-v2"
+): Result<T, UnifiedError> {
+  return err(
+    validationError({
+      code: "ENGINEERING_FILE_LIFECYCLE_V2_INVALID",
+      message: "Engineering file lifecycle request or receipt is invalid.",
+      suggestedAction: "Regenerate the Main-owned lifecycle operation.",
+      traceId
+    })
+  );
+}
+
+function lifecycleNativeFailure<T = never>(
+  cause: unknown,
+  traceId: string
+): Result<T, UnifiedError> {
+  const code =
+    isRecord(cause) && typeof cause["code"] === "string"
+      ? cause["code"]
+      : "ENGINEERING_FILE_LIFECYCLE_V2_OUTCOME_UNKNOWN";
+  return err(
+    storageError({
+      code,
+      message: "The native engineering lifecycle outcome is unknown.",
+      suggestedAction: "Enter recovery review before retrying the operation.",
+      traceId
+    })
+  );
 }
 
 function parseProposalNativeAddon(
@@ -1524,6 +1870,38 @@ const mutationRequestKeys = [
 ] as const;
 const rootBindingKeys = ["contentRootBindingId", "rootId"] as const;
 const mutationApplyInputKeys = ["beforeBytes", "candidateBytes", "request"] as const;
+const lifecycleRequestKeys = [
+  "contentRootBindingId",
+  "expectedState",
+  "operationId",
+  "operationKind",
+  "recoveryGrantRevision",
+  "recoveryObjectId",
+  "recoveryRootBindingId",
+  "recoverySideEffectChecksum",
+  "relativeSource",
+  "relativeTarget",
+  "schemaVersion",
+  "sourceFileIdentity",
+  "sourceSha256",
+  "stagingObjectId",
+  "targetProof",
+  "transactionId"
+] as const;
+const lifecycleReceiptKeys = [
+  "contentRootBindingId",
+  "durability",
+  "kind",
+  "operationId",
+  "operationKind",
+  "recoveryObjectId",
+  "relativeSource",
+  "relativeTarget",
+  "schemaVersion",
+  "state",
+  "transactionId"
+] as const;
+const lifecycleQuarantineInputKeys = ["recoveryBinding", "request"] as const;
 const operationStateKeys = [
   "kind",
   "receipt",

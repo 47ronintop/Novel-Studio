@@ -22,6 +22,14 @@ export type EngineeringRecoveryGateReasonV2 =
   | "orphaned_object"
   | "legacy_recovery_pending";
 
+export type EngineeringRecoveryRootGateReasonV2 =
+  | "binding_invalid"
+  | "binding_revoked"
+  | "orphaned_global_record"
+  | "orphaned_manifest"
+  | "manifest_mismatch"
+  | "capacity_exceeded";
+
 export interface EngineeringRecoveryGateSnapshotV2 {
   readonly schemaVersion: typeof ENGINEERING_MUTATION_V2_SCHEMA_VERSION;
   readonly contentRootBindingId: string;
@@ -92,6 +100,16 @@ export interface EngineeringRecoveryGateV2Options {
     readonly contentRootBindingId: string;
     readonly referencedAuthorizationIds: readonly string[];
   }) => Promise<Result<EngineeringRecoveryReservationScanV2, UnifiedError>>;
+  /** Main-owned volume-local recovery scan. Missing means the delete/recovery capability is unavailable. */
+  readonly scanVolumeLocalRecovery?: (contentRootBindingId: string) => Promise<
+    Result<
+      {
+        readonly status: "clear" | "blocked";
+        readonly reasons: readonly EngineeringRecoveryRootGateReasonV2[];
+      },
+      UnifiedError
+    >
+  >;
   readonly now?: () => string;
   readonly traceId?: string;
 }
@@ -321,6 +339,22 @@ export class EngineeringRecoveryGateV2 {
       reasons.add("unknown_record");
     }
 
+    if (this.options.scanVolumeLocalRecovery !== undefined) {
+      const scanVolumeLocalRecovery = this.options.scanVolumeLocalRecovery;
+      const recovery = await safely(() => scanVolumeLocalRecovery(contentRootBindingId));
+      if (!recovery.ok || !isVolumeLocalRecoveryScan(recovery.value)) {
+        reasons.add("unknown_record");
+      } else if (recovery.value.status !== "clear" || recovery.value.reasons.length > 0) {
+        // The B7 gate has a deliberately small public reason set. Any volume-local failure is
+        // represented as a root-bound unknown/auth failure and therefore keeps all mutation closed.
+        reasons.add(
+          recovery.value.reasons.includes("binding_revoked")
+            ? "authentication_failed"
+            : "orphaned_object"
+        );
+      }
+    }
+
     const snapshot = createSnapshot(contentRootBindingId, [...reasons], this.now());
     this.snapshots.set(contentRootBindingId, snapshot);
     return ok(freeze({ snapshot, journals }));
@@ -506,6 +540,28 @@ function isLegacyScan(value: unknown): value is EngineeringLegacyRecoveryScanV2 
   return (
     hasExactKeys(value, legacyScanKeys) &&
     (value["status"] === "clean" || value["status"] === "pending" || value["status"] === "unknown")
+  );
+}
+
+function isVolumeLocalRecoveryScan(value: unknown): value is {
+  readonly status: "clear" | "blocked";
+  readonly reasons: readonly EngineeringRecoveryRootGateReasonV2[];
+} {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record["status"] === "clear" || record["status"] === "blocked") &&
+    Array.isArray(record["reasons"]) &&
+    record["reasons"].every((reason: unknown) =>
+      [
+        "binding_invalid",
+        "binding_revoked",
+        "orphaned_global_record",
+        "orphaned_manifest",
+        "manifest_mismatch",
+        "capacity_exceeded"
+      ].includes(reason as string)
+    )
   );
 }
 

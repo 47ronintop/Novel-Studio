@@ -24,12 +24,44 @@ import {
 } from "../src/engineering-wal-repository.js";
 import {
   EngineeringWriteTransactionV2,
+  validateEngineeringLifecycleWriteTransactionInputV2,
   type EngineeringMutationRecoveryGatePortV2
 } from "../src/engineering-write-transaction-v2.js";
 
 const hash = (value: string) => sha256EngineeringMutationTextV2(value);
 
 describe("EngineeringWriteTransactionV2", () => {
+  test("strictly validates B8 lifecycle transaction operations and recovery bindings", () => {
+    const request = lifecycleRequest("delete_file");
+    const input = {
+      schemaVersion: "2.0",
+      transactionId: "tx_lifecycle",
+      contentRootBindingId: "root_01",
+      providerSemanticVersionSetChecksum: hash("provider-set"),
+      authorization: authorizationBinding(),
+      operations: [
+        {
+          request,
+          recoveryBinding: {
+            recoveryRootBindingId: request.recoveryRootBindingId,
+            grantRevision: request.recoveryGrantRevision,
+            sideEffectChecksum: request.recoverySideEffectChecksum
+          }
+        }
+      ],
+      preparedAt: "2099-01-01T00:00:00.000Z"
+    };
+    expect(validateEngineeringLifecycleWriteTransactionInputV2(input)).toMatchObject({ ok: true });
+    expect(
+      validateEngineeringLifecycleWriteTransactionInputV2({
+        ...input,
+        operations: [{ ...input.operations[0], recoveryBinding: null }]
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_BINDING_INVALID" }
+    });
+  });
   test("authorizes the full prepared record, re-reads bytes, reconciles, then applies", async () => {
     const events: string[] = [];
     const mutationPort: EngineeringFileMutationPortV2 = {
@@ -145,6 +177,39 @@ describe("EngineeringWriteTransactionV2", () => {
     await expect(blobStore.listRoot("root_01")).resolves.toMatchObject({ ok: true, value: [] });
   });
 });
+
+function lifecycleRequest(kind: "delete_file") {
+  return {
+    schemaVersion: "3.0" as const,
+    operationKind: kind,
+    transactionId: "tx_lifecycle",
+    operationId: "op_lifecycle",
+    contentRootBindingId: "root_01",
+    relativeSource: "src/main.ts",
+    relativeTarget: "",
+    sourceFileIdentity: "file_01",
+    sourceSha256: hash("source"),
+    targetProof: "absent" as const,
+    recoveryRootBindingId: "recovery_01",
+    recoveryGrantRevision: "grant_01",
+    recoverySideEffectChecksum: hash("side-effect"),
+    recoveryObjectId: "object_01",
+    stagingObjectId: "staging_01",
+    expectedState: "wal_prepared" as const
+  };
+}
+
+function authorizationBinding() {
+  return {
+    authorizationId: "auth_01",
+    approvalBindingId: "approval_01",
+    approvalBindingChecksum: hash("approval"),
+    sideEffectSubjectChecksum: hash("subject"),
+    changeSetId: "change_01",
+    changeSetRevision: 1,
+    changeSetChecksum: hash("change")
+  };
+}
 
 function createTransaction(
   input: {

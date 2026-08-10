@@ -16,6 +16,7 @@ import {
   validateEngineeringMutationBeforeImageV2,
   validateEngineeringMutationCandidateImageV2,
   type EngineeringFileMutationOperationKindV2,
+  type EngineeringFileLifecycleOperationKindV2,
   type EngineeringMutationBeforeImageV2,
   type EngineeringMutationCandidateImageV2
 } from "./engineering-file-mutation-port-v2.js";
@@ -36,7 +37,7 @@ export const ENGINEERING_MUTATION_PROPOSAL_V2_SCHEMA_VERSION =
 export type EngineeringMutationProposalStatusV2 = "proposed" | "rejected" | "applied";
 
 /** Immutable raw proposal facts prepared before Change Set/approval binding. */
-export interface EngineeringMutationProposalPayloadV2 {
+interface EngineeringMutationProposalPayloadBaseV2 {
   readonly schemaVersion: typeof ENGINEERING_MUTATION_PROPOSAL_V2_SCHEMA_VERSION;
   readonly proposalId: string;
   readonly runId: string;
@@ -44,7 +45,6 @@ export interface EngineeringMutationProposalPayloadV2 {
   readonly toolCallId: string;
   /** Digest of the exact canonical Provider tool payload, not a display checksum. */
   readonly canonicalPayloadChecksum: string;
-  readonly operationKind: EngineeringFileMutationOperationKindV2;
   readonly contentRootBindingId: string;
   readonly pathPolicyRevision: string;
   readonly policyRevision: string;
@@ -52,18 +52,54 @@ export interface EngineeringMutationProposalPayloadV2 {
   readonly providerSemanticVersionSetChecksum: string;
   readonly approvalRuleSetVersion: string;
   readonly approvalRuleSetChecksum: string;
-  readonly relativeIdentity: string;
-  /** Main-issued opaque source reference. It is never a pathname. */
-  readonly sourceRef: string;
-  /** Main-issued opaque target reference. It is never a pathname. */
-  readonly targetRef: string;
-  readonly before: EngineeringMutationBeforeImageV2;
-  readonly candidate: EngineeringMutationCandidateImageV2;
   /** Allocated before any approval or mutation attempt. */
   readonly operationId: string;
   /** Allocated before any approval or mutation attempt. */
   readonly stagingObjectId: string;
 }
+
+export interface EngineeringMutationLifecycleTargetProofV2 {
+  readonly schemaVersion: typeof ENGINEERING_MUTATION_PROPOSAL_V2_SCHEMA_VERSION;
+  readonly kind: "absent" | "same_object_case_only";
+  readonly relativeIdentity: string;
+  readonly parentDirectoryIdentity: string;
+  readonly proofChecksum: string;
+}
+
+export type EngineeringMutationProposalPayloadV2 =
+  | (EngineeringMutationProposalPayloadBaseV2 & {
+      readonly operationKind: EngineeringFileMutationOperationKindV2;
+      readonly relativeIdentity: string;
+      /** Main-issued opaque source reference. It is never a pathname. */
+      readonly sourceRef: string;
+      /** Main-issued opaque target reference. It is never a pathname. */
+      readonly targetRef: string;
+      readonly before: EngineeringMutationBeforeImageV2;
+      readonly candidate: EngineeringMutationCandidateImageV2;
+    })
+  | (EngineeringMutationProposalPayloadBaseV2 & {
+      readonly operationKind: EngineeringFileLifecycleOperationKindV2;
+      /** Primary Change Set identity: source for move/delete, target for directory create. */
+      readonly relativeIdentity: string;
+      readonly sourceRef: string;
+      readonly targetRef: string;
+      readonly before: EngineeringMutationBeforeImageV2;
+      readonly targetRelativeIdentity: string;
+      readonly targetProof: EngineeringMutationLifecycleTargetProofV2 | null;
+      readonly recoveryRootBindingId: string | null;
+      readonly recoveryGrantRevision: string | null;
+      readonly recoverySideEffectChecksum: string | null;
+      readonly recoveryObjectId: string | null;
+    });
+
+type EngineeringRawMutationProposalPayloadV2 = Extract<
+  EngineeringMutationProposalPayloadV2,
+  { readonly operationKind: EngineeringFileMutationOperationKindV2 }
+>;
+type EngineeringLifecycleMutationProposalPayloadV2 = Extract<
+  EngineeringMutationProposalPayloadV2,
+  { readonly operationKind: EngineeringFileLifecycleOperationKindV2 }
+>;
 
 export type EngineeringMutationProposalCreateInputV2 = EngineeringMutationProposalPayloadV2;
 
@@ -83,7 +119,7 @@ export interface EngineeringMutationProposalChangeSetBindingV2 {
 }
 
 /** A complete durable proposal envelope. `recordChecksum` covers mutable state as well. */
-export interface EngineeringMutationProposalRecordV2 extends EngineeringMutationProposalPayloadV2 {
+interface EngineeringMutationProposalRecordFieldsV2 {
   readonly kind: "engineering_mutation_proposal";
   /** SHA-256 over the complete immutable raw proposal payload. */
   readonly proposalPayloadChecksum: string;
@@ -95,6 +131,9 @@ export interface EngineeringMutationProposalRecordV2 extends EngineeringMutation
   /** Tamper-evident checksum over every persisted field except this one. */
   readonly recordChecksum: string;
 }
+
+export type EngineeringMutationProposalRecordV2 = EngineeringMutationProposalPayloadV2 &
+  EngineeringMutationProposalRecordFieldsV2;
 
 export interface EngineeringMutationProposalRunToolCallLookupV2 {
   readonly runId: string;
@@ -718,17 +757,18 @@ export function engineeringMutationProposalPayloadChecksumV2(value: unknown): st
 }
 
 /** SHA-256 over the complete durable record excluding the checksum field itself. */
-export function engineeringMutationProposalRecordChecksumV2(
-  value: Omit<EngineeringMutationProposalRecordV2, "recordChecksum">
-): string {
+export function engineeringMutationProposalRecordChecksumV2(value: unknown): string {
   return sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(value));
 }
 
 function parsePayload(value: unknown): EngineeringMutationProposalPayloadV2 | undefined {
-  if (!hasExactKeys(value, payloadKeys)) return undefined;
+  if (!isRecord(value)) return undefined;
+  const operationKind = value["operationKind"];
+  const lifecycle = isLifecycleOperationKind(operationKind);
+  if (!hasExactKeys(value, lifecycle ? lifecyclePayloadKeys : rawPayloadKeys)) return undefined;
   const relativePath = validateEngineeringRelativePath(value["relativeIdentity"]);
   const before = validateEngineeringMutationBeforeImageV2(value["before"]);
-  const candidate = validateEngineeringMutationCandidateImageV2(value["candidate"]);
+  if (!relativePath.ok || !before.ok) return undefined;
   if (
     value["schemaVersion"] !== ENGINEERING_MUTATION_PROPOSAL_V2_SCHEMA_VERSION ||
     !isStableId(value["proposalId"]) ||
@@ -736,7 +776,7 @@ function parsePayload(value: unknown): EngineeringMutationProposalPayloadV2 | un
     !isStableId(value["projectId"]) ||
     !isStableId(value["toolCallId"]) ||
     !isSha256(value["canonicalPayloadChecksum"]) ||
-    !isOperationKind(value["operationKind"]) ||
+    (!isOperationKind(operationKind) && !lifecycle) ||
     !isStableId(value["contentRootBindingId"]) ||
     !isOpaqueIdentity(value["pathPolicyRevision"]) ||
     !isOpaqueIdentity(value["policyRevision"]) ||
@@ -744,25 +784,22 @@ function parsePayload(value: unknown): EngineeringMutationProposalPayloadV2 | un
     !isSha256(value["providerSemanticVersionSetChecksum"]) ||
     !isRuleSetVersion(value["approvalRuleSetVersion"]) ||
     !isSha256(value["approvalRuleSetChecksum"]) ||
-    !relativePath.ok ||
     !isOpaqueRef(value["sourceRef"]) ||
     !isOpaqueRef(value["targetRef"]) ||
-    !before.ok ||
-    !candidate.ok ||
     !isStableOperationId(value["operationId"]) ||
     !isStableId(value["stagingObjectId"])
   ) {
     return undefined;
   }
 
-  const payload = {
+  const base = {
     schemaVersion: ENGINEERING_MUTATION_PROPOSAL_V2_SCHEMA_VERSION,
     proposalId: value["proposalId"],
     runId: value["runId"],
     projectId: value["projectId"],
     toolCallId: value["toolCallId"],
     canonicalPayloadChecksum: value["canonicalPayloadChecksum"],
-    operationKind: value["operationKind"],
+    operationKind,
     contentRootBindingId: value["contentRootBindingId"],
     pathPolicyRevision: value["pathPolicyRevision"],
     policyRevision: value["policyRevision"],
@@ -774,15 +811,104 @@ function parsePayload(value: unknown): EngineeringMutationProposalPayloadV2 | un
     sourceRef: value["sourceRef"],
     targetRef: value["targetRef"],
     before: before.value,
-    candidate: candidate.value,
     operationId: value["operationId"],
     stagingObjectId: value["stagingObjectId"]
-  } as EngineeringMutationProposalPayloadV2;
+  };
+
+  if (!lifecycle) {
+    if (!isOperationKind(operationKind)) return undefined;
+    const candidate = validateEngineeringMutationCandidateImageV2(value["candidate"]);
+    if (!candidate.ok) return undefined;
+    const payload = {
+      ...base,
+      operationKind,
+      candidate: candidate.value
+    } as EngineeringRawMutationProposalPayloadV2;
+    return proposalImagesAndRefsMatch(payload) ? freeze(payload) : undefined;
+  }
+
+  if (!isLifecycleOperationKind(operationKind)) return undefined;
+
+  let targetRelativeIdentity: string | undefined;
+  if (operationKind === "delete_file") {
+    targetRelativeIdentity = value["targetRelativeIdentity"] === "" ? "" : undefined;
+  } else {
+    const targetPath = validateEngineeringRelativePath(value["targetRelativeIdentity"]);
+    targetRelativeIdentity = targetPath.ok ? targetPath.relativeIdentity : undefined;
+  }
+  const targetProof = parseLifecycleTargetProof(value["targetProof"]);
+  const deleteRecoveryValid =
+    operationKind === "delete_file" &&
+    isStableId(value["recoveryRootBindingId"]) &&
+    isStableId(value["recoveryGrantRevision"]) &&
+    isSha256(value["recoverySideEffectChecksum"]) &&
+    isStableId(value["recoveryObjectId"]);
+  const nonDeleteRecoveryEmpty =
+    operationKind !== "delete_file" &&
+    value["recoveryRootBindingId"] === null &&
+    value["recoveryGrantRevision"] === null &&
+    value["recoverySideEffectChecksum"] === null &&
+    value["recoveryObjectId"] === null;
+  if (
+    targetRelativeIdentity === undefined ||
+    (operationKind === "delete_file"
+      ? targetProof !== null
+      : targetProof === undefined || targetProof === null) ||
+    (!deleteRecoveryValid && !nonDeleteRecoveryEmpty)
+  ) {
+    return undefined;
+  }
+  const payload = {
+    ...base,
+    operationKind,
+    targetRelativeIdentity,
+    targetProof: targetProof ?? null,
+    recoveryRootBindingId: value["recoveryRootBindingId"] as string | null,
+    recoveryGrantRevision: value["recoveryGrantRevision"] as string | null,
+    recoverySideEffectChecksum: value["recoverySideEffectChecksum"] as string | null,
+    recoveryObjectId: value["recoveryObjectId"] as string | null
+  } as EngineeringLifecycleMutationProposalPayloadV2;
 
   return proposalImagesAndRefsMatch(payload) ? freeze(payload) : undefined;
 }
 
 function proposalImagesAndRefsMatch(payload: EngineeringMutationProposalPayloadV2): boolean {
+  if (isLifecycleProposalPayload(payload)) {
+    if (payload.operationKind === "create_directory") {
+      return (
+        payload.before.kind === "absent" &&
+        payload.before.absenceProof.rootBindingId === payload.contentRootBindingId &&
+        payload.before.absenceProof.relativeIdentity === payload.relativeIdentity &&
+        payload.targetRelativeIdentity === payload.relativeIdentity &&
+        payload.targetProof?.kind === "absent" &&
+        payload.targetProof.relativeIdentity === payload.relativeIdentity &&
+        isOpaqueRefKind(payload.sourceRef, "directory") &&
+        isOpaqueRefKind(payload.targetRef, "directory")
+      );
+    }
+    if (
+      payload.before.kind !== "present" ||
+      payload.before.manifest.identity.kind !== "observed_file" ||
+      payload.before.manifest.identity.rootBindingId !== payload.contentRootBindingId ||
+      payload.before.manifest.identity.relativeIdentity !== payload.relativeIdentity ||
+      !doesEngineeringMutationBlobMatchManifestV2(
+        payload.before.blob,
+        payload.before.manifest,
+        payload.contentRootBindingId
+      ) ||
+      !isOpaqueRefKind(payload.sourceRef, "file")
+    ) {
+      return false;
+    }
+    if (payload.operationKind === "delete_file") {
+      return payload.targetRelativeIdentity === "" && isOpaqueRefKind(payload.targetRef, "file");
+    }
+    return (
+      payload.targetProof !== null &&
+      payload.targetProof.relativeIdentity === payload.targetRelativeIdentity &&
+      isOpaqueRefKind(payload.targetRef, "directory")
+    );
+  }
   const candidate = payload.candidate;
   if (
     candidate.manifest.identity.kind !== "target" ||
@@ -825,7 +951,11 @@ function proposalImagesAndRefsMatch(payload: EngineeringMutationProposalPayloadV
 }
 
 function parseRecord(value: unknown): EngineeringMutationProposalRecordV2 | undefined {
-  if (!hasExactKeys(value, recordKeys)) return undefined;
+  if (!isRecord(value)) return undefined;
+  const payloadKeys = isLifecycleOperationKind(value["operationKind"])
+    ? lifecyclePayloadKeys
+    : rawPayloadKeys;
+  if (!hasExactKeys(value, [...payloadKeys, ...recordFieldKeys])) return undefined;
   const payload = parsePayload(pickPayload(value));
   const binding = parseChangeSetBinding(value["changeSetBinding"]);
   if (
@@ -857,11 +987,34 @@ function parseRecord(value: unknown): EngineeringMutationProposalRecordV2 | unde
   if (value["recordChecksum"] !== engineeringMutationProposalRecordChecksumV2(unsigned)) {
     return undefined;
   }
-  return freeze({ ...unsigned, recordChecksum: value["recordChecksum"] });
+  return freeze({
+    ...unsigned,
+    recordChecksum: value["recordChecksum"]
+  } as EngineeringMutationProposalRecordV2);
 }
 
 function pickPayload(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(payloadKeys.map((key) => [key, value[key]]));
+  const keys = isLifecycleOperationKind(value["operationKind"])
+    ? lifecyclePayloadKeys
+    : rawPayloadKeys;
+  return Object.fromEntries(keys.map((key) => [key, value[key]]));
+}
+
+function parseLifecycleTargetProof(
+  value: unknown
+): EngineeringMutationLifecycleTargetProofV2 | null | undefined {
+  if (value === null) return null;
+  if (
+    !hasExactKeys(value, lifecycleTargetProofKeys) ||
+    value["schemaVersion"] !== ENGINEERING_MUTATION_PROPOSAL_V2_SCHEMA_VERSION ||
+    (value["kind"] !== "absent" && value["kind"] !== "same_object_case_only") ||
+    !validateEngineeringRelativePath(value["relativeIdentity"]).ok ||
+    !isStableId(value["parentDirectoryIdentity"]) ||
+    !isSha256(value["proofChecksum"])
+  ) {
+    return undefined;
+  }
+  return freeze({ ...value }) as unknown as EngineeringMutationLifecycleTargetProofV2;
 }
 
 function parseChangeSetBinding(
@@ -975,16 +1128,20 @@ function createRecord(
   createdAt: string
 ): EngineeringMutationProposalRecordV2 | undefined {
   if (!isCanonicalTimestamp(createdAt)) return undefined;
-  return sealRecord({
-    ...payload,
+  const fields: EngineeringMutationProposalRecordFieldsV2 = {
     kind: "engineering_mutation_proposal",
     proposalPayloadChecksum: engineeringMutationProposalPayloadChecksumV2(payload),
     changeSetBinding: null,
     status: "proposed",
     createdAt,
     rejectedAt: null,
-    appliedAt: null
-  });
+    appliedAt: null,
+    recordChecksum: ""
+  };
+  return sealRecord({
+    ...payload,
+    ...fields
+  } as Omit<EngineeringMutationProposalRecordV2, "recordChecksum">);
 }
 
 function sealRecord(
@@ -1047,6 +1204,18 @@ function isOpaqueRefKind(value: string, kind: "file" | "directory"): boolean {
 
 function isOperationKind(value: unknown): value is EngineeringFileMutationOperationKindV2 {
   return value === "replace_file" || value === "create_file";
+}
+
+function isLifecycleOperationKind(
+  value: unknown
+): value is EngineeringFileLifecycleOperationKindV2 {
+  return value === "move_file" || value === "delete_file" || value === "create_directory";
+}
+
+function isLifecycleProposalPayload(
+  value: EngineeringMutationProposalPayloadV2
+): value is EngineeringLifecycleMutationProposalPayloadV2 {
+  return isLifecycleOperationKind(value.operationKind);
 }
 
 function isProposalStatus(value: unknown): value is EngineeringMutationProposalStatusV2 {
@@ -1115,6 +1284,10 @@ function hasExactKeys(
   return (
     keys.length === expectedKeys.length && keys.every((key, index) => key === expectedKeys[index])
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function sameCanonicalJson(left: unknown, right: unknown): boolean {
@@ -1308,11 +1481,10 @@ function storageFailure<T = never>(code: string, traceId: string): Result<T, Uni
   );
 }
 
-const payloadKeys = [
+const commonPayloadKeys = [
   "approvalRuleSetChecksum",
   "approvalRuleSetVersion",
   "before",
-  "candidate",
   "canonicalPayloadChecksum",
   "capabilityRevision",
   "contentRootBindingId",
@@ -1332,8 +1504,19 @@ const payloadKeys = [
   "toolCallId"
 ] as const;
 
-const recordKeys = [
-  ...payloadKeys,
+const rawPayloadKeys = [...commonPayloadKeys, "candidate"] as const;
+
+const lifecyclePayloadKeys = [
+  ...commonPayloadKeys,
+  "recoveryGrantRevision",
+  "recoveryObjectId",
+  "recoveryRootBindingId",
+  "recoverySideEffectChecksum",
+  "targetProof",
+  "targetRelativeIdentity"
+] as const;
+
+const recordFieldKeys = [
   "appliedAt",
   "changeSetBinding",
   "createdAt",
@@ -1342,6 +1525,14 @@ const recordKeys = [
   "recordChecksum",
   "rejectedAt",
   "status"
+] as const;
+
+const lifecycleTargetProofKeys = [
+  "kind",
+  "parentDirectoryIdentity",
+  "proofChecksum",
+  "relativeIdentity",
+  "schemaVersion"
 ] as const;
 
 const changeSetBindingKeys = [

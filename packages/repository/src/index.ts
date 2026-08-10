@@ -157,6 +157,8 @@ export * from "./engineering-mutation-proposal-repository-v2.js";
 export * from "./engineering-mutation-receipt.js";
 export * from "./engineering-mutation-sync-required-store-v2.js";
 export * from "./engineering-recovery-gate.js";
+export * from "./volume-local-recovery-binding.js";
+export * from "./engineering-recovery-root-repository.js";
 export * from "./engineering-startup-recovery-gate-v2.js";
 export * from "./engineering-wal-repository.js";
 export * from "./engineering-write-transaction-v2.js";

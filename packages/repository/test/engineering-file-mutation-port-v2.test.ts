@@ -19,6 +19,59 @@ import { createEngineeringMutationReceiptV2 } from "../src/engineering-mutation-
 const hash = (value: string) => sha256EngineeringMutationTextV2(value);
 
 describe("EngineeringFileMutationPortV2", () => {
+  test("binds B8 move/delete/create-directory to the same native addon and fails closed when partial", async () => {
+    const receipt = (request: ReturnType<typeof lifecycleRequest>) => ({
+      schemaVersion: "3.0",
+      kind: "engineering_file_lifecycle_receipt",
+      operationKind: request.operationKind,
+      transactionId: request.transactionId,
+      operationId: request.operationId,
+      contentRootBindingId: request.contentRootBindingId,
+      relativeSource: request.relativeSource,
+      relativeTarget: request.relativeTarget,
+      state: request.operationKind === "delete_file" ? "quarantined" : "committed",
+      recoveryObjectId: request.operationKind === "delete_file" ? request.recoveryObjectId : "",
+      durability: "data_and_directory_flushed"
+    });
+    const addon = {
+      ...nativeAddon((request) => receiptFor(request)),
+      moveEngineeringPathV2: vi.fn((_root, request) => receipt(request)),
+      quarantineEngineeringFileV2: vi.fn((_root, _recovery, request) => receipt(request)),
+      createEngineeringDirectoryV2: vi.fn((_root, request) => receipt(request))
+    };
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: 7n }
+    });
+    await expect(port.move(lifecycleRequest("move_file"))).resolves.toMatchObject({
+      ok: true,
+      value: { state: "committed" }
+    });
+    const deleted = lifecycleRequest("delete_file");
+    await expect(
+      port.quarantine({
+        request: deleted,
+        recoveryBinding: {
+          recoveryRootBindingId: deleted.recoveryRootBindingId,
+          recoveryRootId: 8n,
+          grantRevision: deleted.recoveryGrantRevision,
+          sideEffectChecksum: deleted.recoverySideEffectChecksum
+        }
+      })
+    ).resolves.toMatchObject({ ok: true, value: { state: "quarantined" } });
+    await expect(port.createDirectory(lifecycleRequest("create_directory"))).resolves.toMatchObject(
+      { ok: true, value: { state: "committed" } }
+    );
+
+    const partial = createEngineeringFileMutationPortV2({
+      addon: nativeAddon((request) => receiptFor(request)),
+      rootBinding: { contentRootBindingId: "root_01", rootId: 7n }
+    });
+    await expect(partial.move(lifecycleRequest("move_file"))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE" }
+    });
+  });
   test("passes Main re-read raw bytes through the root-bound native seam", async () => {
     const addon = nativeAddon((request) => receiptFor(request));
     const input = createApplyInput();
@@ -340,6 +393,28 @@ describe("EngineeringFileMutationPortV2", () => {
     expect(addon.observeCreateAbsenceV2).not.toHaveBeenCalled();
   });
 });
+
+function lifecycleRequest(kind: "move_file" | "delete_file" | "create_directory") {
+  return {
+    schemaVersion: "3.0" as const,
+    operationKind: kind,
+    transactionId: "tx_02",
+    operationId: "op_02",
+    contentRootBindingId: "root_01",
+    relativeSource: kind === "create_directory" ? "" : "src/main.ts",
+    relativeTarget:
+      kind === "move_file" ? "src/Main.ts" : kind === "create_directory" ? "src/new" : "",
+    sourceFileIdentity: kind === "create_directory" ? "" : "file_01",
+    sourceSha256: kind === "create_directory" ? "0".repeat(64) : hash("source"),
+    targetProof: "absent" as const,
+    recoveryRootBindingId: "recovery_01",
+    recoveryGrantRevision: "grant_01",
+    recoverySideEffectChecksum: hash("side-effect"),
+    recoveryObjectId: "object_01",
+    stagingObjectId: "staging_02",
+    expectedState: "wal_prepared" as const
+  };
+}
 
 function nativeAddon(
   apply: (request: EngineeringFileMutationRequestV2) => unknown,

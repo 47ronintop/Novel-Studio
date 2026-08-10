@@ -7,8 +7,12 @@ import {
   sha256EngineeringMutationTextV2,
   validateEngineeringFileMutationRequestV2,
   validateEngineeringMutationBeforeImageV2,
+  validateEngineeringFileLifecycleReceiptV2,
+  validateEngineeringFileLifecycleRequestV2,
   validateEngineeringRawByteManifestV2,
   type EngineeringFileMutationOperationKindV2,
+  type EngineeringFileLifecycleReceiptV2,
+  type EngineeringFileLifecycleRequestV2,
   type EngineeringMutationBeforeImageV2,
   type EngineeringRawByteManifestV2
 } from "./engineering-file-mutation-port-v2.js";
@@ -174,6 +178,25 @@ export function engineeringMutationReceiptChecksumV2(
   const validated = validateEngineeringMutationReceiptV2(receipt);
   if (!validated.ok) throw new Error("ENGINEERING_MUTATION_RECEIPT_V2_INVALID");
   return validated.value.nativeReceiptChecksum;
+}
+
+/** WAL binding for B8 lifecycle receipts, whose native ABI does not expose an untrusted checksum. */
+export function verifyEngineeringFileLifecycleReceiptBindingV2(
+  receiptValue: unknown,
+  requestValue: unknown
+): Result<EngineeringFileLifecycleReceiptV2, UnifiedError> {
+  const request = validateEngineeringFileLifecycleRequestV2(requestValue);
+  if (!request.ok) return request;
+  return validateEngineeringFileLifecycleReceiptV2(receiptValue, request.value);
+}
+
+export function engineeringFileLifecycleReceiptChecksumV2(
+  receipt: EngineeringFileLifecycleReceiptV2,
+  request: EngineeringFileLifecycleRequestV2
+): string {
+  const bound = verifyEngineeringFileLifecycleReceiptBindingV2(receipt, request);
+  if (!bound.ok) throw new Error("ENGINEERING_FILE_LIFECYCLE_RECEIPT_INVALID");
+  return sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(bound.value));
 }
 
 function observedStateMatchesReceipt(receipt: EngineeringMutationReceiptV2): boolean {
