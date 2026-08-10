@@ -852,7 +852,7 @@ function parsePayload(value: unknown): EngineeringMutationProposalPayloadV2 | un
   if (
     targetRelativeIdentity === undefined ||
     (operationKind === "delete_file"
-      ? targetProof !== null
+      ? targetProof === undefined || targetProof === null || targetProof.kind !== "absent"
       : targetProof === undefined || targetProof === null) ||
     (!deleteRecoveryValid && !nonDeleteRecoveryEmpty)
   ) {
@@ -901,7 +901,13 @@ function proposalImagesAndRefsMatch(payload: EngineeringMutationProposalPayloadV
       return false;
     }
     if (payload.operationKind === "delete_file") {
-      return payload.targetRelativeIdentity === "" && isOpaqueRefKind(payload.targetRef, "file");
+      return (
+        payload.targetRelativeIdentity === "" &&
+        payload.targetProof !== null &&
+        payload.targetProof.kind === "absent" &&
+        payload.targetProof.relativeIdentity === payload.relativeIdentity &&
+        isOpaqueRefKind(payload.targetRef, "file")
+      );
     }
     return (
       payload.targetProof !== null &&

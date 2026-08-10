@@ -35,7 +35,10 @@ import {
 } from "@novel-studio/repository";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
-import { createDesktopEngineeringFileMutationSessionV2 } from "../src/main/engineering-file-mutation-session-v2.js";
+import {
+  createDesktopEngineeringFileMutationSessionV2,
+  type DesktopEngineeringFileMutationSessionV2Options
+} from "../src/main/engineering-file-mutation-session-v2.js";
 import type {
   EngineeringMutationProposalApprovalPortV2,
   EngineeringMutationRuntimeApplyRequestV2,
@@ -265,6 +268,44 @@ describe("DesktopEngineeringFileMutationSessionV2", () => {
     });
     expect(expectOk(await harness.proposalRepository.scan()).proposals).toHaveLength(0);
     expect(expectOk(await harness.blobStore.listRoot(ROOT_BINDING_ID))).toHaveLength(0);
+  });
+
+  test("binds a recoverable delete proposal to an authenticated absent after-state", async () => {
+    const snapshot = presentSnapshot(encodeText("delete me\n", false));
+    const harness = createHarness(snapshot, {
+      resolveLifecycleRecoveryBinding: async () =>
+        ok({
+          recoveryRootBindingId: "recovery_01",
+          recoveryGrantRevision: "grant_01",
+          recoverySideEffectChecksum: checksum("delete-side-effect"),
+          recoveryObjectId: "recovery_object_01"
+        })
+    });
+
+    const prepared = expectOk(
+      await harness.bundle.session.prepare({
+        runId: "run_01",
+        projectId: "project_01",
+        toolCallId: "delete_call_bound_01",
+        toolName: "propose_file_delete",
+        arguments: { fileRef: issueFileRef(harness, snapshot) },
+        canonicalPayloadChecksum: checksum("delete-bound-payload"),
+        writePolicy: "write_before_confirmation",
+        boundary: proposalBoundary()
+      })
+    );
+
+    expect(prepared).toMatchObject({ operationKind: "delete_file" });
+    expect(await onlyRecord(harness)).toMatchObject({
+      operationKind: "delete_file",
+      targetRelativeIdentity: "",
+      targetProof: {
+        kind: "absent",
+        relativeIdentity: "src/file.ts",
+        parentDirectoryIdentity: "directory_01",
+        proofChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      }
+    });
   });
 
   test("keeps same-toolCallId preparation idempotent and rejects a changed canonical payload", async () => {
@@ -661,7 +702,13 @@ interface Harness {
   readonly proofReads: { value: number };
 }
 
-function createHarness(snapshot: EngineeringFileMutationProposalSnapshotV2): Harness {
+function createHarness(
+  snapshot: EngineeringFileMutationProposalSnapshotV2,
+  input: Pick<
+    DesktopEngineeringFileMutationSessionV2Options,
+    "resolveLifecycleRecoveryBinding"
+  > = {}
+): Harness {
   const blobStore = new InMemoryEngineeringMutationBlobStoreV2();
   const state: HarnessState = { snapshot };
   const proposalRepository = new InMemoryEngineeringMutationProposalRepositoryV2({
@@ -778,6 +825,9 @@ function createHarness(snapshot: EngineeringFileMutationProposalSnapshotV2): Har
       proposalApproval = approval;
       return runtime;
     },
+    ...(input.resolveLifecycleRecoveryBinding === undefined
+      ? {}
+      : { resolveLifecycleRecoveryBinding: input.resolveLifecycleRecoveryBinding }),
     now: () => NOW,
     randomId: (() => {
       let next = 0;

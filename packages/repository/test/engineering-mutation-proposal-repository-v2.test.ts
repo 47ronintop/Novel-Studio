@@ -17,6 +17,7 @@ import { createOperationsChangeSetRevisionV2 } from "@novel-studio/agent-engine"
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  canonicalizeEngineeringMutationV2Json,
   createEngineeringAbsenceProofV2,
   createEngineeringRawByteManifestV2,
   engineeringMutationBlobIdForSha256V2,
@@ -106,6 +107,31 @@ describe("EngineeringMutationProposalRepositoryV2", () => {
     await expect(repository.reject(input.proposalId)).resolves.toMatchObject({
       ok: false,
       error: { code: "ENGINEERING_MUTATION_PROPOSAL_STATE_CONFLICT" }
+    });
+  });
+
+  test("accepts delete only with an authenticated absent target proof", async () => {
+    const repository = new InMemoryEngineeringMutationProposalRepositoryV2({
+      now: () => createdAt
+    });
+    const input = deleteProposalInput();
+
+    await expect(repository.create(input)).resolves.toMatchObject({
+      ok: true,
+      value: {
+        operationKind: "delete_file",
+        targetProof: { kind: "absent", relativeIdentity: input.relativeIdentity }
+      }
+    });
+
+    const invalidRepository = new InMemoryEngineeringMutationProposalRepositoryV2({
+      now: () => createdAt
+    });
+    await expect(
+      invalidRepository.create({ ...input, proposalId: "proposal_delete_null", targetProof: null })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_MUTATION_PROPOSAL_INPUT_INVALID" }
     });
   });
 
@@ -311,6 +337,65 @@ function proposalInput(
     },
     operationId: "op_01",
     stagingObjectId: "staging_01"
+  };
+}
+
+function deleteProposalInput(): EngineeringMutationProposalCreateInputV2 {
+  const contentRootBindingId = "root_01";
+  const relativeIdentity = "src/main.ts";
+  const beforeBytes = new TextEncoder().encode("export const candidate = false;\n");
+  const beforeManifest = createEngineeringRawByteManifestV2({
+    identity: {
+      kind: "observed_file",
+      rootBindingId: contentRootBindingId,
+      relativeIdentity,
+      fileIdentity: "file_01"
+    },
+    bytes: beforeBytes,
+    metadataChecksum: hash("before-metadata")
+  });
+  const proof = {
+    schemaVersion: "2.0" as const,
+    kind: "absent" as const,
+    relativeIdentity,
+    parentDirectoryIdentity: "directory_01"
+  };
+
+  return {
+    schemaVersion: "2.0",
+    proposalId: "proposal_delete_01",
+    runId: "run_01",
+    projectId: "project_01",
+    toolCallId: "tool_delete_01",
+    canonicalPayloadChecksum: hash("delete-canonical-tool-payload"),
+    operationKind: "delete_file",
+    contentRootBindingId,
+    pathPolicyRevision: "path-policy_01",
+    policyRevision: "policy_01",
+    capabilityRevision: "capability_01",
+    providerSemanticVersionSetChecksum: hash("provider-semantic-version-set"),
+    approvalRuleSetVersion: "all-human@1.0",
+    approvalRuleSetChecksum: hash("approval-rule-set"),
+    relativeIdentity,
+    sourceRef: opaqueRef("file", "a"),
+    targetRef: opaqueRef("file", "a"),
+    before: {
+      schemaVersion: "2.0",
+      kind: "present",
+      manifest: beforeManifest,
+      blob: blobFor(beforeManifest, contentRootBindingId)
+    },
+    targetRelativeIdentity: "",
+    targetProof: {
+      ...proof,
+      proofChecksum: hash(canonicalizeEngineeringMutationV2Json(proof))
+    },
+    recoveryRootBindingId: "recovery_01",
+    recoveryGrantRevision: "grant_01",
+    recoverySideEffectChecksum: hash("delete-side-effect"),
+    recoveryObjectId: "recovery_object_01",
+    operationId: "op_delete_01",
+    stagingObjectId: "staging_delete_01"
   };
 }
 

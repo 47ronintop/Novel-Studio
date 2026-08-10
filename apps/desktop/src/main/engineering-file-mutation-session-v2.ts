@@ -676,7 +676,13 @@ export function createDesktopEngineeringFileMutationSessionV2(
           targetRef: sourceRef,
           before,
           targetRelativeIdentity: "",
-          targetProof: null,
+          // Delete's after-state is an authenticated absence at the original path. Keep the
+          // proof in the proposal so the approval binding has a real candidate checksum.
+          targetProof: lifecycleTargetProof(
+            "absent",
+            source.relativeIdentity,
+            snapshot.value.parentDirectoryIdentity
+          ),
           recovery: recovery.value
         })
       });
@@ -1144,6 +1150,7 @@ function proofInput(
   const changeSetBinding = record.changeSetBinding;
   if (changeSetBinding === null) return undefined;
   if (!isRawMutationProposalRecord(record)) {
+    if (record.targetProof === null) return undefined;
     const baseManifestChecksum =
       record.before.kind === "present"
         ? engineeringRawByteManifestChecksumV2(record.before.manifest)
@@ -1155,7 +1162,7 @@ function proofInput(
       selectionChecksum: changeSetBinding.selectionChecksum,
       proposalPayloadChecksum: record.proposalPayloadChecksum,
       baseManifestChecksum,
-      candidateManifestChecksum: record.targetProof?.proofChecksum ?? "not_applicable",
+      candidateManifestChecksum: record.targetProof.proofChecksum,
       ...(record.operationKind === "delete_file" && record.recoveryRootBindingId !== null
         ? {
             recoveryRootBindingId: record.recoveryRootBindingId,
