@@ -4742,6 +4742,11 @@ napi_value applyEngineeringFileMutationV2(napi_env env, napi_callback_info info)
       return nullptr;
     }
     result = renameOpenedFileCreateOnly(stageHandle.get(), handoffParentHandle.get(), leafName);
+    // Windows marks a renamed file as ARCHIVE, so restore the fixed create-only metadata on the
+    // installed handle before flushing and observing the receipt image.
+    if (result == AccessError::kOk && applyFixedCreateMetadataV2(stageHandle.get()) != AccessError::kOk) {
+      result = AccessError::kRecoveryRequired;
+    }
     if (result == AccessError::kOk && !flushDurably(stageHandle.get(), DurableFlushKind::kData)) result = AccessError::kDurability;
     if (result == AccessError::kOk && !flushDurably(handoffParentHandle.get(), DurableFlushKind::kDirectory)) result = AccessError::kDurability;
     if (result != AccessError::kOk) {

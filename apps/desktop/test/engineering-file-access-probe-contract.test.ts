@@ -75,6 +75,20 @@ describe("engineering file access development probe contract", () => {
     }
   });
 
+  test("restores fixed create metadata after the Windows rename handoff", async () => {
+    const nativeSource = await readFile(
+      "native/engineering-file-access-win32/src/engineering_file_access.cc",
+      "utf8"
+    );
+
+    expect(nativeSource.match(/applyFixedCreateMetadataV2\(stageHandle\.get\(\)\)/gu)?.length).toBe(
+      2
+    );
+    expect(nativeSource).toMatch(
+      /renameOpenedFileCreateOnly\(stageHandle\.get\(\), handoffParentHandle\.get\(\), leafName\);\s+\/\/ Windows marks a renamed file as ARCHIVE,[\s\S]{0,320}applyFixedCreateMetadataV2\(stageHandle\.get\(\)\)[\s\S]{0,160}flushDurably\(stageHandle\.get\(\), DurableFlushKind::kData\)/u
+    );
+  });
+
   test("uses the SDK-compatible native create-only hard-link ABI for state durability", async () => {
     const nativeSource = await readFile(
       "native/engineering-file-access-win32/src/engineering_file_access.cc",
