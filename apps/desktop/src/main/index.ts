@@ -96,8 +96,10 @@ import {
   CreativeProjectFileRepository,
   RecoveryRepository,
   canonicalizeEngineeringMutationV2Json,
+  engineeringLifecycleSideEffectSubjectChecksumV2,
   engineeringSideEffectSubjectChecksumV2,
   type EngineeringFileMutationRequestV2,
+  type EngineeringLifecycleWriteTransactionInputV2,
   type EngineeringWriteTransactionPreparedV2
 } from "@novel-studio/repository";
 import type {
@@ -585,6 +587,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                     prepared,
                     expectedState
                   ),
+
                 scanLegacyRecovery: async () => {
                   const [records, journals] = await Promise.all([
                     legacyEngineeringRecovery.listRecoveryRecords(),
@@ -600,6 +603,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                   });
                 }
               },
+              verifyPreparedLifecycleAuthorization: (prepared) =>
+                verifyEngineeringPreparedLifecycleAuthorization(authorizationLedger, prepared),
               validateStagingReservation: validateEngineeringStagingReservation,
               saveAuthority: agentWriteSaveCoordinator,
               editorStateRegistry: engineeringEditorStateRegistry,
@@ -626,9 +631,11 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           engineeringHardenedAccessV1: engineeringWorkspaceAccessSession !== undefined,
           engineeringReplaceV2: engineeringMutationComposition !== undefined,
           engineeringCreateV2: engineeringMutationComposition !== undefined,
-          engineeringMoveV2: false,
-          engineeringDeleteV2: false,
-          engineeringDirectoryCreateV1: false,
+          engineeringMoveV2: engineeringMutationComposition?.lifecycleCapabilities.move === true,
+          engineeringDeleteV2:
+            engineeringMutationComposition?.lifecycleCapabilities.delete === true,
+          engineeringDirectoryCreateV1:
+            engineeringMutationComposition?.lifecycleCapabilities.createDirectory === true,
           ...(binding.kind === "creativeProject"
             ? {
                 creativeTrustedReplaceV2: changeSetApprovalV2 !== undefined,
@@ -1099,6 +1106,45 @@ async function verifyEngineeringPreparedAuthorization(
     );
   }
   return record.state === expectedState &&
+    record.reservedTransactionId === prepared.transactionId &&
+    record.providerSemanticVersionSetChecksum === prepared.providerSemanticVersionSetChecksum &&
+    record.binding.bindingId === prepared.authorization.approvalBindingId &&
+    record.binding.rootBindingId === prepared.contentRootBindingId &&
+    record.binding.changeSetId === prepared.authorization.changeSetId &&
+    record.binding.changeSetRevision === prepared.authorization.changeSetRevision &&
+    record.binding.changeSetChecksum === prepared.authorization.changeSetChecksum &&
+    bindingChecksum === prepared.authorization.approvalBindingChecksum &&
+    sideEffectSubjectChecksum === prepared.authorization.sideEffectSubjectChecksum
+    ? ok(undefined)
+    : err(engineeringMutationAuthorityError("ENGINEERING_MUTATION_AUTHORIZATION_BINDING_STALE"));
+}
+
+async function verifyEngineeringPreparedLifecycleAuthorization(
+  ledger: ApprovalAuthorizationLedger,
+  prepared: EngineeringLifecycleWriteTransactionInputV2
+): Promise<Result<void, UnifiedError>> {
+  const queried = await ledger.query(
+    prepared.authorization.authorizationId,
+    prepared.transactionId
+  );
+  if (!queried.ok) return queried;
+  const record = queried.value;
+  let bindingChecksum: string;
+  let sideEffectSubjectChecksum: string;
+  try {
+    bindingChecksum = approvalBindingV2Checksum(record.binding);
+    sideEffectSubjectChecksum = engineeringLifecycleSideEffectSubjectChecksumV2({
+      transactionId: prepared.transactionId,
+      contentRootBindingId: prepared.contentRootBindingId,
+      providerSemanticVersionSetChecksum: prepared.providerSemanticVersionSetChecksum,
+      operations: prepared.operations.map((operation) => operation.request)
+    });
+  } catch {
+    return err(
+      engineeringMutationAuthorityError("ENGINEERING_MUTATION_AUTHORIZATION_BINDING_INVALID")
+    );
+  }
+  return record.state === "reserved" &&
     record.reservedTransactionId === prepared.transactionId &&
     record.providerSemanticVersionSetChecksum === prepared.providerSemanticVersionSetChecksum &&
     record.binding.bindingId === prepared.authorization.approvalBindingId &&

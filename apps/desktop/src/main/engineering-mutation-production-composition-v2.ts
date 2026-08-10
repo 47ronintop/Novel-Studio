@@ -127,6 +127,22 @@ export interface DesktopEngineeringMutationProductionCompositionV2Options {
   readonly resolveLifecycleRecoveryBinding?: (
     operation: EngineeringLifecycleWriteTransactionInputV2["operations"][number]
   ) => Promise<Result<EngineeringLifecycleRecoveryRootBindingV2, UnifiedError>>;
+  /** Proposal-time recovery facts. Omission keeps delete out of the Engineering tool catalog. */
+  readonly prepareLifecycleRecoveryBinding?: (input: {
+    readonly contentRootBindingId: string;
+    readonly relativeIdentity: string;
+    readonly sourceRef: string;
+  }) => Promise<
+    Result<
+      {
+        readonly recoveryRootBindingId: string;
+        readonly recoveryGrantRevision: string;
+        readonly recoverySideEffectChecksum: string;
+        readonly recoveryObjectId: string;
+      },
+      UnifiedError
+    >
+  >;
   /** Validates the native preallocated staging object for the exact prepared operation. */
   readonly validateStagingReservation: EngineeringV2StagingReservationValidator;
   readonly saveAuthority: DesktopEngineeringMutationSaveAuthorityV2;
@@ -157,6 +173,11 @@ export interface DesktopEngineeringMutationProductionCompositionV2 {
   readonly transaction: EngineeringWriteTransactionV2;
   readonly lifecycleWalRepository: FileEngineeringLifecycleWalRepositoryV2;
   readonly lifecycleTransaction: EngineeringLifecycleWriteTransactionV2;
+  readonly lifecycleCapabilities: Readonly<{
+    readonly move: boolean;
+    readonly delete: boolean;
+    readonly createDirectory: boolean;
+  }>;
   readonly recoveryRuntime: DesktopEngineeringRecoveryRuntimeV2;
   /** Revokes this composition when its workspace is replaced or Main shuts down. */
   dispose(): void;
@@ -203,7 +224,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
   const loaded = addonLoader.load();
   if (
     loaded.status !== "loaded" ||
-    loaded.metadata.batch !== "7" ||
+    (loaded.metadata.batch !== "7" && loaded.metadata.batch !== "8") ||
     loaded.metadata.mutation !== "available" ||
     loaded.metadata.recovery !== "available"
   ) {
@@ -211,6 +232,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
   }
   const addon = asBatch7NativeAddon(loaded.addon);
   if (addon === undefined) return undefined;
+  const lifecycleNativeCapabilities = readLifecycleNativeCapabilities(loaded.addon);
 
   // This calls the same cached loader above; there is no separate state host or Node fs fallback.
   const durability = createEngineeringStateDurabilityPortV2({
@@ -567,6 +589,25 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
             ? ok("prepared" as const)
             : unavailable("ENGINEERING_MUTATION_PRODUCTION_WAL_AUTHORIZATION_MISMATCH", traceId);
         }
+        const lifecycleJournal = await safelyCall(
+          () =>
+            lifecycleWalRepository.read({
+              contentRootBindingId: input.contentRootBindingId,
+              transactionId: input.transactionId
+            }),
+          "ENGINEERING_MUTATION_PRODUCTION_LIFECYCLE_WAL_RECONCILIATION_UNAVAILABLE",
+          traceId
+        );
+        if (!lifecycleJournal.ok) return lifecycleJournal;
+        if (lifecycleJournal.value !== undefined) {
+          return lifecycleJournal.value.prepared.authorization.authorizationId ===
+            input.authorizationId
+            ? ok("prepared" as const)
+            : unavailable(
+                "ENGINEERING_MUTATION_PRODUCTION_LIFECYCLE_WAL_AUTHORIZATION_MISMATCH",
+                traceId
+              );
+        }
 
         const reserved = await safelyCall(
           () => options.authorizationLedger.query(input.authorizationId, input.transactionId),
@@ -613,6 +654,10 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           traceId: `${traceId}:runtime`,
           ...(options.now === undefined ? {} : { now: options.now })
         }),
+      lifecycleTransaction,
+      ...(options.prepareLifecycleRecoveryBinding === undefined
+        ? {}
+        : { resolveLifecycleRecoveryBinding: options.prepareLifecycleRecoveryBinding }),
       ...(options.now === undefined ? {} : { now: options.now })
     });
 
@@ -628,6 +673,19 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       syncRequiredStore,
       transaction,
       lifecycleTransaction,
+      lifecycleCapabilities: Object.freeze({
+        move:
+          lifecycleNativeCapabilities.move &&
+          options.verifyPreparedLifecycleAuthorization !== undefined,
+        delete:
+          lifecycleNativeCapabilities.delete &&
+          options.verifyPreparedLifecycleAuthorization !== undefined &&
+          options.prepareLifecycleRecoveryBinding !== undefined &&
+          options.resolveLifecycleRecoveryBinding !== undefined,
+        createDirectory:
+          lifecycleNativeCapabilities.createDirectory &&
+          options.verifyPreparedLifecycleAuthorization !== undefined
+      }),
       recoveryRuntime: recoveryRuntime.value,
       dispose() {
         try {
@@ -713,6 +771,22 @@ function asBatch7NativeAddon(value: unknown): EngineeringBatch7NativeAddon | und
   return required.every((name) => typeof record[name] === "function")
     ? (value as EngineeringBatch7NativeAddon)
     : undefined;
+}
+
+function readLifecycleNativeCapabilities(value: unknown): Readonly<{
+  readonly move: boolean;
+  readonly delete: boolean;
+  readonly createDirectory: boolean;
+}> {
+  if (value === null || typeof value !== "object") {
+    return Object.freeze({ move: false, delete: false, createDirectory: false });
+  }
+  const record = value as Record<string, unknown>;
+  return Object.freeze({
+    move: typeof record["moveEngineeringPathV2"] === "function",
+    delete: typeof record["quarantineEngineeringFileV2"] === "function",
+    createDirectory: typeof record["createEngineeringDirectoryV2"] === "function"
+  });
 }
 
 function parseNativeRecoveryScan(value: unknown): NativeRecoveryScan | undefined {

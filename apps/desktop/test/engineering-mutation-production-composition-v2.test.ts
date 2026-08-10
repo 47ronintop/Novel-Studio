@@ -197,6 +197,7 @@ describe("Desktop Engineering mutation production composition V2", () => {
       walRepository: expect.any(Object),
       lifecycleWalRepository: expect.any(Object),
       lifecycleTransaction: expect.any(Object),
+      lifecycleCapabilities: { move: false, delete: false, createDirectory: false },
       syncRequiredStore: expect.any(Object)
     });
     await expect(
@@ -214,6 +215,23 @@ describe("Desktop Engineering mutation production composition V2", () => {
     composition.dispose();
     composition.dispose();
     expect(closeStateRootCalls).toBe(1);
+  });
+
+  test("advertises B8 lifecycle operations only with native exports and authorization seams", async () => {
+    const enabled = createHarness({
+      addon: createBatch7Addon({ lifecycle: true }),
+      verifyPreparedLifecycleAuthorization: async () => ok(undefined)
+    });
+    const composition = await createDesktopEngineeringMutationProductionCompositionV2({
+      ...enabled.options,
+      addonLoader: loadedAddon(enabled.addon, "8")
+    });
+    expect(composition?.lifecycleCapabilities).toEqual({
+      move: true,
+      delete: false,
+      createDirectory: true
+    });
+    composition?.dispose();
   });
 
   test("blocks reported-unknown and disconnected create targets before proposal revalidation", async () => {
@@ -397,6 +415,7 @@ function createHarness(
     readonly addon?: ReturnType<typeof createBatch7Addon>;
     readonly readApprovalDecisionProof?: DesktopEngineeringMutationProductionCompositionV2Options["readApprovalDecisionProof"];
     readonly validateStagingReservation?: DesktopEngineeringMutationProductionCompositionV2Options["validateStagingReservation"];
+    readonly verifyPreparedLifecycleAuthorization?: DesktopEngineeringMutationProductionCompositionV2Options["verifyPreparedLifecycleAuthorization"];
   } = {}
 ) {
   const editorStateRegistry = createEngineeringEditorStateRegistry();
@@ -424,6 +443,11 @@ function createHarness(
       verifyPreparedAuthorization: async () => ok(undefined),
       scanLegacyRecovery: async () => ok({ status: "clean" as const })
     },
+    ...(input.verifyPreparedLifecycleAuthorization === undefined
+      ? {}
+      : {
+          verifyPreparedLifecycleAuthorization: input.verifyPreparedLifecycleAuthorization
+        }),
     validateStagingReservation: input.validateStagingReservation ?? (async () => ok(undefined)),
     saveAuthority: {
       async pauseAndDrainEngineeringRoot() {
@@ -871,32 +895,35 @@ function expectOk<T>(result: Result<T, UnifiedError>): T {
   return result.value;
 }
 
-function loadedAddon(addon: unknown, batch: "6" | "7" = "7"): EngineeringFileAccessAddonLoader {
+function loadedAddon(
+  addon: unknown,
+  batch: "6" | "7" | "8" = "7"
+): EngineeringFileAccessAddonLoader {
   return {
     load() {
       return {
         status: "loaded" as const,
         addon: addon as EngineeringFileAccessAddon,
         metadata:
-          batch === "7"
+          batch === "6"
             ? {
-                adapterId: "novel_studio_engineering_file_access" as const,
-                target: "win32-x64" as const,
-                batch: "7" as const,
-                accessEligible: "available" as const,
-                mutation: "available" as const,
-                recovery: "available" as const,
-                mutationV2Probe: "available" as const,
-                recoveryScanProbe: "available" as const,
-                stateDurabilityProbe: "available" as const
-              }
-            : {
                 adapterId: "novel_studio_engineering_file_access" as const,
                 target: "win32-x64" as const,
                 batch: "6" as const,
                 accessEligible: "available" as const,
                 mutation: "unavailable" as const,
                 recovery: "unavailable" as const
+              }
+            : {
+                adapterId: "novel_studio_engineering_file_access" as const,
+                target: "win32-x64" as const,
+                batch,
+                accessEligible: "available" as const,
+                mutation: "available" as const,
+                recovery: "available" as const,
+                mutationV2Probe: "available" as const,
+                recoveryScanProbe: "available" as const,
+                stateDurabilityProbe: "available" as const
               }
       };
     }
@@ -908,6 +935,7 @@ function createBatch7Addon(
     readonly durability?: boolean;
     readonly nativeRecoveryScan?: unknown;
     readonly onCloseStateRoot?: () => void;
+    readonly lifecycle?: boolean;
   } = {}
 ) {
   const files = new Map<string, Uint8Array>();
@@ -1021,7 +1049,39 @@ function createBatch7Addon(
     },
     scanMutationRecovery: () => input.nativeRecoveryScan ?? nativeRecoveryScan()
   };
-  return input.durability === false ? addon : { ...addon, ...stateDurability };
+  const lifecycle =
+    input.lifecycle === true
+      ? {
+          moveEngineeringPathV2: (_rootId: bigint, request: Record<string, unknown>) =>
+            lifecycleReceipt(request, "committed"),
+          quarantineEngineeringFileV2: (
+            _rootId: bigint,
+            _recoveryRootId: bigint,
+            request: Record<string, unknown>
+          ) => lifecycleReceipt(request, "quarantined"),
+          createEngineeringDirectoryV2: (_rootId: bigint, request: Record<string, unknown>) =>
+            lifecycleReceipt(request, "committed")
+        }
+      : {};
+  return input.durability === false
+    ? { ...addon, ...lifecycle }
+    : { ...addon, ...stateDurability, ...lifecycle };
+}
+
+function lifecycleReceipt(request: Record<string, unknown>, state: "committed" | "quarantined") {
+  return {
+    schemaVersion: "3.0",
+    kind: "engineering_file_lifecycle_receipt",
+    operationKind: request["operationKind"],
+    transactionId: request["transactionId"],
+    operationId: request["operationId"],
+    contentRootBindingId: request["contentRootBindingId"],
+    relativeSource: request["relativeSource"],
+    relativeTarget: request["relativeTarget"],
+    state,
+    recoveryObjectId: state === "quarantined" ? request["recoveryObjectId"] : "",
+    durability: "data_and_directory_flushed"
+  };
 }
 
 function nativeRecoveryScan(
