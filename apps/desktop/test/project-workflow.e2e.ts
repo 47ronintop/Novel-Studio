@@ -98,8 +98,9 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
       throw new Error("Expected one saved chapter file.");
     }
 
-    const savedChapter = await readFile(join(projectRoot, "chapters", chapterFile), "utf8");
-    expect(savedChapter).toContain("E2E opening line.");
+    await expect
+      .poll(() => readFile(join(projectRoot, "chapters", chapterFile), "utf8"))
+      .toContain("E2E opening line.");
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });
@@ -287,12 +288,17 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
     await saveButton.click();
     await expect(saveButton).toBeDisabled();
 
-    const savedChapter = await readFile(chapterPath, "utf8");
-    expect(savedChapter).toContain("Recovered draft from autosave.");
-    const recoveryRecord = JSON.parse(
-      await readFile(join(projectRoot, "history", "recovery", `${sessionId}.json`), "utf8")
-    ) as { readonly dirty: boolean };
-    expect(recoveryRecord.dirty).toBe(false);
+    await expect
+      .poll(() => readFile(chapterPath, "utf8"))
+      .toContain("Recovered draft from autosave.");
+    await expect
+      .poll(async () => {
+        const recoveryRecord = JSON.parse(
+          await readFile(join(projectRoot, "history", "recovery", `${sessionId}.json`), "utf8")
+        ) as { readonly dirty: boolean };
+        return recoveryRecord.dirty;
+      })
+      .toBe(false);
   } finally {
     await secondApp.close();
     await rm(tempRoot, { recursive: true, force: true });
