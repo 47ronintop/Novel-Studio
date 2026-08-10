@@ -1633,6 +1633,9 @@ std::string mutationWalChecksum(uint64_t rootId, const std::string& transactionI
 AccessError readMutationWalBinding(uint64_t rootId, uint64_t bindingId, const std::string& transactionId,
                                    const std::string& operationId, const std::string& stagingId,
                                    MutationWalBinding* output) {
+#ifdef ENGINEERING_CANARY_RECOVERY_ROOT_BINDING_DISABLED
+  (void)rootId;
+#endif
   std::scoped_lock lock(g_mutationMutex);
   const auto found = g_mutationWalBindings.find(bindingId);
   if (found == g_mutationWalBindings.end() ||
