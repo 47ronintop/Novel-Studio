@@ -141,6 +141,26 @@ export interface EngineeringLifecycleWriteTransactionInputV2 {
   readonly preparedAt: string;
 }
 
+/** Canonical approval-ledger subject for an ordered B8 lifecycle transaction. */
+export function engineeringLifecycleSideEffectSubjectChecksumV2(input: {
+  readonly transactionId: string;
+  readonly contentRootBindingId: string;
+  readonly providerSemanticVersionSetChecksum: string;
+  readonly operations: readonly EngineeringFileLifecycleRequestV2[];
+}): string {
+  return sha256EngineeringMutationTextV2(
+    canonicalizeEngineeringMutationV2Json({
+      schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+      transactionId: input.transactionId,
+      contentRootBindingId: input.contentRootBindingId,
+      providerSemanticVersionSetChecksum: input.providerSemanticVersionSetChecksum,
+      operationRequestChecksums: input.operations.map((operation) =>
+        sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(operation))
+      )
+    })
+  );
+}
+
 export interface EngineeringLifecycleWriteAheadLogV2 {
   readonly schemaVersion: typeof ENGINEERING_MUTATION_V2_SCHEMA_VERSION;
   readonly kind: "engineering_lifecycle_write_ahead_log";

@@ -24,6 +24,7 @@ import {
 } from "../src/engineering-wal-repository.js";
 import {
   EngineeringWriteTransactionV2,
+  engineeringLifecycleSideEffectSubjectChecksumV2,
   validateEngineeringLifecycleWriteTransactionInputV2,
   type EngineeringMutationRecoveryGatePortV2
 } from "../src/engineering-write-transaction-v2.js";
@@ -31,6 +32,26 @@ import {
 const hash = (value: string) => sha256EngineeringMutationTextV2(value);
 
 describe("EngineeringWriteTransactionV2", () => {
+  test("binds the ordered B8 lifecycle request set into one authorization subject", () => {
+    const request = lifecycleRequest("delete_file");
+    const subject = engineeringLifecycleSideEffectSubjectChecksumV2({
+      transactionId: "tx_lifecycle",
+      contentRootBindingId: "root_01",
+      providerSemanticVersionSetChecksum: hash("provider-set"),
+      operations: [request]
+    });
+
+    expect(subject).toMatch(/^[a-f0-9]{64}$/u);
+    expect(
+      engineeringLifecycleSideEffectSubjectChecksumV2({
+        transactionId: "tx_other",
+        contentRootBindingId: "root_01",
+        providerSemanticVersionSetChecksum: hash("provider-set"),
+        operations: [request]
+      })
+    ).not.toBe(subject);
+  });
+
   test("strictly validates B8 lifecycle transaction operations and recovery bindings", () => {
     const request = lifecycleRequest("delete_file");
     const input = {
