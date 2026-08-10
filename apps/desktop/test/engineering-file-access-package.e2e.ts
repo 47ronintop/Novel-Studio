@@ -11,7 +11,7 @@ const artifactPath = process.env["NOVEL_STUDIO_PACKAGED_ENGINEERING_ADDON"];
 const manifestPath = process.env["NOVEL_STUDIO_PACKAGED_ENGINEERING_MANIFEST"];
 const signaturePath = process.env["NOVEL_STUDIO_PACKAGED_ENGINEERING_MANIFEST_SIGNATURE"];
 
-test.describe("signed Batch 7 engineering file access package", () => {
+test.describe("signed engineering file access package", () => {
   test("executes installed mutation/recovery positive and negative probes against the signed artifact", async () => {
     test.skip(
       artifactPath === undefined || manifestPath === undefined || signaturePath === undefined,
@@ -51,6 +51,16 @@ test.describe("signed Batch 7 engineering file access package", () => {
             createRace: "canary_exposed",
             faultRecoveryRequired: "canary_exposed"
           }
+        },
+        lifecycleEvidence: {
+          positiveProtections: {
+            createDirectory: "passed",
+            move: "passed",
+            quarantine: "passed",
+            restore: "passed",
+            purge: "passed"
+          },
+          negativeControls: {}
         }
       }
     });
