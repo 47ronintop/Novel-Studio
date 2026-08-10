@@ -107,7 +107,9 @@ describe("Main-owned engineering file access qualification", () => {
       expect(source).toContain('recovery: "available"');
       expect(source).toContain("mutationRecoveryEvidence");
       expect(source).toContain("faultRecoveryRequired");
+      expect(source).toContain("lifecycleEvidence");
     }
+    expect(packageCheck).toContain("createDirectory");
     expect(signScript).toContain("verifyEngineeringFileAccessProductionEvidence");
     expect(signScript).not.toContain("function hasBatch7ProductionProbeEvidence");
     expect(workflow).toContain(

@@ -53,6 +53,13 @@ export interface EngineeringFileBatch7MutationRecoveryEvidence {
   >;
 }
 
+export interface EngineeringFileBatch8LifecycleEvidence {
+  readonly positiveProtections: Readonly<
+    Record<"createDirectory" | "move" | "quarantine" | "restore" | "purge", "passed">
+  >;
+  readonly negativeControls: Readonly<Record<never, never>>;
+}
+
 export interface EngineeringFileAccessFreshProbe {
   /**
    * Main composition supplies only the exact installed artifact set it has already authenticated.
@@ -71,6 +78,7 @@ export interface EngineeringFileAccessFreshProbeInput {
   readonly publisherPolicyChecksum: string;
   readonly protectionEvidence: EngineeringFileProtectionEvidence;
   readonly mutationRecoveryEvidence?: EngineeringFileBatch7MutationRecoveryEvidence;
+  readonly lifecycleEvidence?: EngineeringFileBatch8LifecycleEvidence;
 }
 
 interface EngineeringFileAccessAddon {
@@ -121,6 +129,9 @@ export function createMainOwnedEngineeringFileAccessFreshProbe(options?: {
       }
       if (manifest.batch === "7" && input.mutationRecoveryEvidence === undefined) {
         throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_MISSING_BATCH_7_EVIDENCE");
+      }
+      if (manifest.batch === "7" && input.lifecycleEvidence === undefined) {
+        throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_MISSING_BATCH_8_EVIDENCE");
       }
 
       const addon = loadAddon(input.artifactPath) as EngineeringFileAccessAddon;
@@ -222,6 +233,18 @@ function assertProbeInput(input: EngineeringFileAccessFreshProbeInput): void {
       ))
   ) {
     throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_INVALID_BATCH_7_EVIDENCE");
+  }
+  if (
+    input.lifecycleEvidence !== undefined &&
+    (!hasExactMap(
+      input.lifecycleEvidence.positiveProtections,
+      ["createDirectory", "move", "quarantine", "restore", "purge"],
+      "passed"
+    ) ||
+      !isRecord(input.lifecycleEvidence.negativeControls) ||
+      Object.keys(input.lifecycleEvidence.negativeControls).length !== 0)
+  ) {
+    throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_INVALID_BATCH_8_EVIDENCE");
   }
 }
 

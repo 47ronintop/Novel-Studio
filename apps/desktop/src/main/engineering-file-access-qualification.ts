@@ -89,6 +89,8 @@ export interface EngineeringFileAccessProductionProbe {
     readonly protectionEvidence: EngineeringFileAccessProtectionEvidence;
     /** Present only for a signed Batch 7 manifest; omission keeps B6 read-only. */
     readonly mutationRecoveryEvidence?: EngineeringFileAccessBatch7MutationRecoveryEvidence;
+    /** Present only for a signed Batch 7 manifest; omission keeps lifecycle-gated capabilities closed. */
+    readonly lifecycleEvidence?: EngineeringFileAccessBatch8LifecycleEvidence;
   }): Promise<EngineeringFileProbeReportV1 | EngineeringFileProbeReportV2>;
 }
 
@@ -127,6 +129,15 @@ export interface EngineeringFileAccessBatch7MutationRecoveryEvidence {
       "canary_exposed"
     >
   >;
+}
+
+/** B8 lifecycle evidence is a prerequisite for the B7 mutation/recovery grant. */
+export interface EngineeringFileAccessBatch8LifecycleEvidence {
+  readonly positiveProtections: Readonly<
+    Record<"createDirectory" | "move" | "quarantine" | "restore" | "purge", "passed">
+  >;
+  /** The lifecycle probe has no negative canaries; an empty map is part of the contract. */
+  readonly negativeControls: Readonly<Record<never, never>>;
 }
 
 const mainOwnedAttestations = new WeakSet<object>();
@@ -361,6 +372,10 @@ async function verifyProductionEvidence(
   if (batch === "7" && mutationRecoveryEvidence === undefined) {
     return productionUnavailable(["probe_contract_mismatch"]);
   }
+  const lifecycleEvidence = batch === "7" ? signedBatch8LifecycleEvidence(manifest) : undefined;
+  if (batch === "7" && lifecycleEvidence === undefined) {
+    return productionUnavailable(["probe_contract_mismatch"]);
+  }
 
   const signaturesTrusted = await verifyInstalledSignatures(paths);
   if (!signaturesTrusted) return productionUnavailable(["signature_mismatch"]);
@@ -373,7 +388,8 @@ async function verifyProductionEvidence(
       checkedAt,
       publisherPolicyChecksum: ENGINEERING_FILE_ACCESS_PUBLISHER_POLICY_CHECKSUM,
       protectionEvidence,
-      ...(mutationRecoveryEvidence === undefined ? {} : { mutationRecoveryEvidence })
+      ...(mutationRecoveryEvidence === undefined ? {} : { mutationRecoveryEvidence }),
+      ...(lifecycleEvidence === undefined ? {} : { lifecycleEvidence })
     });
   } catch {
     return productionUnavailable(["probe_error"]);
@@ -400,7 +416,8 @@ async function verifyProductionEvidence(
       !sameBatch7MutationRecoveryEvidence(
         report.mutationRecoveryEvidence,
         mutationRecoveryEvidence
-      ))
+      ) ||
+      lifecycleEvidence === undefined)
   ) {
     reasons.add("probe_contract_mismatch");
   }
@@ -550,7 +567,8 @@ function isBatch7Qualification(value: unknown): boolean {
     Array.isArray(value["unavailableCapabilities"]) &&
     sameStrings(value["unavailableCapabilities"], []) &&
     isSignedBatch6ProbeEvidence(value["probeEvidence"]) &&
-    isSignedBatch7MutationRecoveryEvidence(value["mutationRecoveryEvidence"])
+    isSignedBatch7MutationRecoveryEvidence(value["mutationRecoveryEvidence"]) &&
+    isSignedBatch8LifecycleEvidence(value["lifecycleEvidence"])
   );
 }
 
@@ -617,6 +635,31 @@ function signedBatch7MutationRecoveryEvidence(
   const evidence = manifest["qualification"]["mutationRecoveryEvidence"];
   return isSignedBatch7MutationRecoveryEvidence(evidence)
     ? (evidence as EngineeringFileAccessBatch7MutationRecoveryEvidence)
+    : undefined;
+}
+
+function isSignedBatch8LifecycleEvidence(
+  value: unknown
+): value is EngineeringFileAccessBatch8LifecycleEvidence {
+  return (
+    isRecord(value) &&
+    hasExactStatusMap(
+      value["positiveProtections"],
+      ["createDirectory", "move", "quarantine", "restore", "purge"],
+      "passed"
+    ) &&
+    isRecord(value["negativeControls"]) &&
+    Object.keys(value["negativeControls"]).length === 0
+  );
+}
+
+function signedBatch8LifecycleEvidence(
+  manifest: unknown
+): EngineeringFileAccessBatch8LifecycleEvidence | undefined {
+  if (!isRecord(manifest) || !isRecord(manifest["qualification"])) return undefined;
+  const evidence = manifest["qualification"]["lifecycleEvidence"];
+  return isSignedBatch8LifecycleEvidence(evidence)
+    ? (evidence as EngineeringFileAccessBatch8LifecycleEvidence)
     : undefined;
 }
 

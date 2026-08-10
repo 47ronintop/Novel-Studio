@@ -101,7 +101,8 @@ describe("Main-owned engineering file access fresh probe", () => {
         checkedAt,
         publisherPolicyChecksum,
         protectionEvidence: passingProtectionEvidence(),
-        mutationRecoveryEvidence: passingBatch7MutationRecoveryEvidence()
+        mutationRecoveryEvidence: passingBatch7MutationRecoveryEvidence(),
+        lifecycleEvidence: passingBatch8LifecycleEvidence()
       });
 
       expect(report).toMatchObject({ schemaVersion: "2.0", batch: "7" });
@@ -122,7 +123,8 @@ describe("Main-owned engineering file access fresh probe", () => {
         checkedAt,
         publisherPolicyChecksum,
         protectionEvidence: passingProtectionEvidence(),
-        mutationRecoveryEvidence: passingBatch7MutationRecoveryEvidence()
+        mutationRecoveryEvidence: passingBatch7MutationRecoveryEvidence(),
+        lifecycleEvidence: passingBatch8LifecycleEvidence()
       });
 
       expect(report).toMatchObject({ schemaVersion: "2.0", batch: "7" });
@@ -130,6 +132,23 @@ describe("Main-owned engineering file access fresh probe", () => {
         valid: true,
         failureReasons: []
       });
+    }, "7");
+  });
+
+  test("fails closed when a signed B7 probe omits the B8 lifecycle evidence contract", async () => {
+    await withInstalledArtifacts(async (paths) => {
+      const probe = createMainOwnedEngineeringFileAccessFreshProbe({
+        loadAddon: () => batch7HardenedFixtureAddon("8")
+      });
+      await expect(
+        probe.probe({
+          ...paths,
+          checkedAt,
+          publisherPolicyChecksum,
+          protectionEvidence: passingProtectionEvidence(),
+          mutationRecoveryEvidence: passingBatch7MutationRecoveryEvidence()
+        })
+      ).rejects.toThrow("ENGINEERING_FILE_ACCESS_FRESH_PROBE_MISSING_BATCH_8_EVIDENCE");
     }, "7");
   });
 });
@@ -190,6 +209,19 @@ function passingBatch7MutationRecoveryEvidence() {
       "canary_exposed"
     >;
   };
+}
+
+function passingBatch8LifecycleEvidence() {
+  return {
+    positiveProtections: {
+      createDirectory: "passed",
+      move: "passed",
+      quarantine: "passed",
+      restore: "passed",
+      purge: "passed"
+    },
+    negativeControls: {}
+  } as const;
 }
 
 function passingProtectionEvidence() {
