@@ -101,9 +101,7 @@ export interface EngineeringRecoveryGateV2Options {
     readonly referencedAuthorizationIds: readonly string[];
   }) => Promise<Result<EngineeringRecoveryReservationScanV2, UnifiedError>>;
   /** Optional B8 lifecycle WAL scan. Any incomplete/unknown lifecycle record blocks the root. */
-  readonly scanLifecycleRecovery?: (
-    contentRootBindingId: string
-  ) => Promise<
+  readonly scanLifecycleRecovery?: (contentRootBindingId: string) => Promise<
     Result<
       {
         readonly status: "clear" | "blocked";
@@ -604,9 +602,7 @@ function isVolumeLocalRecoveryScan(value: unknown): value is {
   );
 }
 
-function isLifecycleRecoveryScan(
-  value: unknown
-): value is {
+function isLifecycleRecoveryScan(value: unknown): value is {
   readonly status: "clear" | "blocked";
   readonly unknownRecordCount?: number;
   readonly authenticationFailureCount?: number;
