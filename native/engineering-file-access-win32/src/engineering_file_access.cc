@@ -878,10 +878,14 @@ AccessError openStateRelative(HANDLE root, const std::vector<std::wstring>& segm
         ? finalAccess
         : FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES |
               FILE_ADD_SUBDIRECTORY | SYNCHRONIZE;
+    const ULONG segmentDisposition =
+        directory && disposition == kFileOpenIf
+            ? kFileOpenIf
+            : (index + 1 == segments.size() ? disposition : kFileOpen);
     const NTSTATUS status = create(
         &next, access, &attributes, &statusBlock, nullptr, 0,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        index + 1 == segments.size() ? disposition : kFileOpen,
+        segmentDisposition,
         expectedDirectory ? (kFileDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint)
                           : (kFileNonDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint),
         nullptr, 0);
