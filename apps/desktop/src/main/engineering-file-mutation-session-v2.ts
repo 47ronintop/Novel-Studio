@@ -24,6 +24,7 @@ import {
   createEngineeringRawByteManifestV2,
   engineeringRawByteManifestChecksumV2,
   engineeringSideEffectSubjectChecksumV2,
+  engineeringLifecycleSideEffectSubjectChecksumV2,
   sha256EngineeringMutationTextV2,
   type EngineeringFileMutationProposalPortV2,
   type EngineeringFileLifecycleRequestV2,
@@ -388,6 +389,11 @@ export function createDesktopEngineeringFileMutationSessionV2(
   async function reconcileFailedAuthorizationReservation(
     pending: PendingApply
   ): Promise<Result<"revoked" | "prepared", UnifiedError>> {
+    // The injected B7 reconciler scans only the raw-byte WAL. It must never revoke a reservation
+    // that may already be owned by the separate lifecycle WAL.
+    if (!isRawMutationProposalRecord(pending.record)) {
+      return unavailable("ENGINEERING_LIFECYCLE_RESERVATION_RECONCILIATION_REQUIRED");
+    }
     try {
       return await options.reconcileFailedAuthorizationReservation({
         authorizationId: pending.approval.authorizationId,
@@ -972,7 +978,7 @@ export function createDesktopEngineeringFileMutationSessionV2(
         authorizationId: approval.authorizationId,
         approvalBindingId: approval.binding.bindingId,
         approvalBindingChecksum: approvalChecksum,
-        sideEffectSubjectChecksum: lifecycleSideEffectSubjectChecksum({
+        sideEffectSubjectChecksum: engineeringLifecycleSideEffectSubjectChecksumV2({
           transactionId,
           contentRootBindingId: record.contentRootBindingId,
           providerSemanticVersionSetChecksum: record.providerSemanticVersionSetChecksum,
@@ -998,25 +1004,6 @@ export function createDesktopEngineeringFileMutationSessionV2(
       preparedAt: record.createdAt
     });
   }
-}
-
-function lifecycleSideEffectSubjectChecksum(input: {
-  readonly transactionId: string;
-  readonly contentRootBindingId: string;
-  readonly providerSemanticVersionSetChecksum: string;
-  readonly operations: readonly EngineeringFileLifecycleRequestV2[];
-}): string {
-  return sha256EngineeringMutationTextV2(
-    canonicalizeEngineeringMutationV2Json({
-      schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
-      transactionId: input.transactionId,
-      contentRootBindingId: input.contentRootBindingId,
-      providerSemanticVersionSetChecksum: input.providerSemanticVersionSetChecksum,
-      operationRequestChecksums: input.operations.map((operation) =>
-        sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(operation))
-      )
-    })
-  );
 }
 
 function joinRelative(parent: string, leaf: string): string {
