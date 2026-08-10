@@ -111,8 +111,6 @@ describe("engineering file access development probe contract", () => {
     expect(nativeSource).toContain("openMutationHandoffDirectory");
     expect(nativeSource).toContain("FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE");
     expect(nativeSource).toContain("!sameObjectKey(expectedIdentity, observedIdentity)");
-    expect(nativeSource.match(/parentHandle\.close\(\)/gu)?.length).toBe(4);
-    expect(nativeSource.match(/openMutationHandoffDirectory\(/gu)?.length).toBe(5);
     expect(
       nativeSource.match(/revalidateReplaceNamespace\(handoffParentHandle\.get\(\)/gu)?.length
     ).toBe(1);
@@ -120,6 +118,69 @@ describe("engineering file access development probe contract", () => {
       nativeSource.match(/revalidateV2ReplaceNamespace\(handoffParentHandle\.get\(\)/gu)?.length
     ).toBe(1);
     expect(nativeSource).toContain("ShareAccess=0 pins this staged object");
+  });
+
+  test("reopens identity-proven move parents for rename handoff, including same-parent case-only moves", async () => {
+    const nativeSource = await readFile(
+      "native/engineering-file-access-win32/src/engineering_file_access.cc",
+      "utf8"
+    );
+    const moveStart = nativeSource.indexOf("napi_value moveEngineeringPathV2");
+    const moveEnd = nativeSource.indexOf("napi_value mutationV2ProbeInfo");
+    const handoffStart = nativeSource.indexOf("AccessError openMutationHandoffDirectory");
+    const handoffEnd = nativeSource.indexOf("AccessError openMutationFile", handoffStart);
+
+    expect(moveStart).toBeGreaterThanOrEqual(0);
+    expect(moveEnd).toBeGreaterThan(moveStart);
+    expect(handoffStart).toBeGreaterThanOrEqual(0);
+    expect(handoffEnd).toBeGreaterThan(handoffStart);
+
+    const moveSource = nativeSource.slice(moveStart, moveEnd);
+    const handoffSource = nativeSource.slice(handoffStart, handoffEnd);
+
+    expect(handoffSource).toContain("const BY_HANDLE_FILE_INFORMATION& expectedIdentity");
+    expect(handoffSource).toContain("FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE");
+    expect(handoffSource).toContain(
+      "!GetFileInformationByHandle(parent, &observedIdentity) || !sameObjectKey(expectedIdentity, observedIdentity)"
+    );
+
+    expect(moveSource).toContain(
+      "const bool sameParent = sourceParentPath == destinationParentPath;"
+    );
+    expect(moveSource).toContain("destinationParentIdentity = sourceParentIdentity;");
+    expect(moveSource).toMatch(
+      /!sourceParentHandle\.close\(\) \|\| !destinationParentHandle\.close\(\)/u
+    );
+    expect(moveSource).toContain(
+      "openMutationHandoffDirectory(rootId, sourceParentPath, sourceParentIdentity, &handoffSourceRaw)"
+    );
+    expect(moveSource).toContain(
+      "openMutationHandoffDirectory(rootId, destinationParentPath, destinationParentIdentity,"
+    );
+    expect(moveSource).toContain("handoffDestinationRaw = handoffSourceRaw;");
+    expect(moveSource).toContain("handoffSourceRaw = INVALID_HANDLE_VALUE;");
+    expect(moveSource).toContain(
+      "const HANDLE moveSourceParent = sameParent ? handoffDestinationParent.get() : handoffSourceParent.get();"
+    );
+    expect(moveSource).toContain(
+      "const HANDLE moveDestinationParent = handoffDestinationParent.get();"
+    );
+
+    expect(moveSource).toContain(
+      'const bool caseOnly = request.targetProof == "same_object_case_only";'
+    );
+    expect(moveSource).toContain(
+      "if (!sameParent || _wcsicmp(sourceLeaf.c_str(), destinationLeaf.c_str()) != 0 ||"
+    );
+    expect(moveSource).toContain(
+      "renameOpenedFileCreateOnly(sourceHandle.get(), moveDestinationParent, temporaryLeaf);"
+    );
+    expect(moveSource).toContain(
+      "renameOpenedFileCreateOnly(sourceHandle.get(), moveDestinationParent, destinationLeaf);"
+    );
+    expect(moveSource).toContain(
+      "openMutationLeaf(moveDestinationParent, destinationLeaf, &finalRaw);"
+    );
   });
 
   test("requires Main to provide absolute installed inputs and a distinct output path", () => {
