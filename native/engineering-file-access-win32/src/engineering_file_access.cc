@@ -1558,16 +1558,19 @@ AccessError applyQualifiedReplaceMetadata(HANDLE stage, const FILE_BASIC_INFO& s
 }
 
 AccessError renameOpenedFile(HANDLE file, HANDLE parent, const std::wstring& leaf, bool replaceExisting) {
+  const auto setInformation = ntSetInformationFile();
+  if (setInformation == nullptr) return AccessError::kRecoveryRequired;
   const size_t byteLength = leaf.size() * sizeof(wchar_t);
-  std::vector<unsigned char> storage(offsetof(FILE_RENAME_INFO, FileName) + byteLength, 0);
-  auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
-  rename->ReplaceIfExists = replaceExisting ? TRUE : FALSE;
-  rename->RootDirectory = parent;
-  rename->FileNameLength = static_cast<DWORD>(byteLength);
-  std::memcpy(rename->FileName, leaf.data(), byteLength);
-  return SetFileInformationByHandle(file, FileRenameInfo, rename, static_cast<DWORD>(storage.size()))
-      ? AccessError::kOk
-      : AccessError::kRecoveryRequired;
+  std::vector<unsigned char> storage(offsetof(NativeFileRenameInformation, fileName) + byteLength, 0);
+  auto* rename = reinterpret_cast<NativeFileRenameInformation*>(storage.data());
+  rename->replaceIfExists = replaceExisting ? TRUE : FALSE;
+  rename->rootDirectory = parent;
+  rename->fileNameLength = static_cast<ULONG>(byteLength);
+  std::memcpy(rename->fileName, leaf.data(), byteLength);
+  IO_STATUS_BLOCK statusBlock{};
+  const NTSTATUS status = setInformation(file, &statusBlock, rename, static_cast<ULONG>(storage.size()),
+                                         kFileRenameInformation);
+  return isSuccess(status) ? AccessError::kOk : AccessError::kRecoveryRequired;
 }
 
 // The mutation handoff never uses pathname overwrite.  If another process installs a leaf in
