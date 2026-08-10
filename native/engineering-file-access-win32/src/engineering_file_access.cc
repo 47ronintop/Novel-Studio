@@ -809,6 +809,34 @@ AccessError openDirectory(uint64_t rootId, const std::wstring& relative, HANDLE*
 AccessError openFile(uint64_t rootId, const std::wstring& relative, HANDLE* output) {
   std::vector<std::wstring> segments;
   if (!parseRelativePath(relative, false, &segments)) return AccessError::kUnsafePath;
+#ifdef ENGINEERING_CANARY_ROOT_RELATIVE_DISABLED
+  if (segments.size() > 1 && segments.front() == L"..") {
+    AccessError result = verifyRootStillCurrent(rootId);
+    if (result != AccessError::kOk) return result;
+    std::wstring rootPath;
+    {
+      std::scoped_lock lock(g_rootsMutex);
+      const auto found = g_roots.find(rootId);
+      if (found == g_roots.end()) return AccessError::kRootUnavailable;
+      rootPath = found->second.path;
+    }
+    if (!rootPath.empty() && rootPath.back() != L'\\' && rootPath.back() != L'/') {
+      rootPath.push_back(L'\\');
+    }
+    // This test-only target deliberately resolves one parent segment by pathname. The
+    // production target never enters this branch and remains handle-relative throughout.
+    rootPath += L"..";
+    ScopedHandle parent(CreateFileW(
+        rootPath.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (parent.get() == INVALID_HANDLE_VALUE || verifyDirectory(parent.get()) != AccessError::kOk) {
+      return AccessError::kUnsafeObject;
+    }
+    const std::vector<std::wstring> escapedSegments(segments.begin() + 1, segments.end());
+    return openRelative(parent.get(), escapedSegments, false, output);
+  }
+#endif
   HANDLE root = INVALID_HANDLE_VALUE;
   AccessError result = duplicateRoot(rootId, &root);
   if (result != AccessError::kOk) return result;
