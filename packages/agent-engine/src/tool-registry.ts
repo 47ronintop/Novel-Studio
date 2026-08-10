@@ -499,19 +499,17 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
       ["delete_file", "propose_file_delete"],
       ["create_directory", "propose_directory_create"]
     ] as const) {
-      // Batch 8 operations stay structurally absent from the Engineering catalog even if a
-      // malformed or prematurely widened capability snapshot contains them.  They may only be
-      // introduced together with their independent native/recovery/UI qualification in Batch 8.
-      if (engineering) continue;
       if (workspaceOperations.has(operation)) {
         mutations.push(
           coreTool(name, "file_tool", "propose", {
             writeOperation: operation,
-            ...(!engineering && operation === "move_file"
-              ? { inputSchema: v2FileMoveSchema() }
-              : !engineering && operation === "delete_file"
-                ? { inputSchema: v2FileDeleteSchema() }
-                : {})
+            ...(engineering
+              ? engineeringLifecycleToolOptions(operation)
+              : operation === "move_file"
+                ? { inputSchema: v2FileMoveSchema() }
+                : operation === "delete_file"
+                  ? { inputSchema: v2FileDeleteSchema() }
+                  : {})
           })
         );
       }
@@ -1353,6 +1351,76 @@ function engineeringFileCreateSchema(): JsonObject {
       },
       candidate: { type: "string", maxLength: 1_000_000 }
     }
+  };
+}
+
+function engineeringLifecycleToolOptions(
+  operation: "move_file" | "delete_file" | "create_directory"
+): { readonly description: string; readonly inputSchema: JsonObject } {
+  switch (operation) {
+    case "move_file":
+      return {
+        description:
+          "基于应用签发的源文件和目标父目录引用提案同根同卷移动或重命名；目标名必须是单个规范路径段，且始终需要人工确认。",
+        inputSchema: engineeringFileMoveSchema()
+      };
+    case "delete_file":
+      return {
+        description:
+          "基于应用签发的文件引用提案可恢复删除；后端仅能移入已授权的同卷 quarantine，且始终需要人工确认。",
+        inputSchema: engineeringFileDeleteSchema()
+      };
+    case "create_directory":
+      return {
+        description:
+          "基于应用签发的父目录引用提案创建一层目录；名称必须是单个规范路径段，且始终需要人工确认。",
+        inputSchema: engineeringDirectoryCreateSchema()
+      };
+  }
+}
+
+function engineeringFileMoveSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["sourceRef", "targetParentRef", "targetName"],
+    properties: {
+      sourceRef: engineeringMutationRefSchema("file"),
+      targetParentRef: engineeringMutationRefSchema("directory"),
+      targetName: engineeringLeafNameSchema()
+    }
+  };
+}
+
+function engineeringFileDeleteSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["fileRef"],
+    properties: {
+      fileRef: engineeringMutationRefSchema("file")
+    }
+  };
+}
+
+function engineeringDirectoryCreateSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["parentRef", "name"],
+    properties: {
+      parentRef: engineeringMutationRefSchema("directory"),
+      name: engineeringLeafNameSchema()
+    }
+  };
+}
+
+function engineeringLeafNameSchema(): JsonObject {
+  return {
+    type: "string",
+    minLength: 1,
+    maxLength: 255,
+    pattern: '^(?!\\.{1,2}$)(?!.*[ .]$)[^\\\\/:*?"<>|\\u0000-\\u001F]+$'
   };
 }
 

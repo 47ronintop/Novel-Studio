@@ -963,10 +963,9 @@ describe("Agent tool registry", () => {
     });
     const engineeringNames = engineering.map((tool) => tool.name);
     expect(engineeringNames).toEqual(
-      expect.arrayContaining(["propose_file_write", "propose_file_create"])
-    );
-    expect(engineeringNames).not.toEqual(
       expect.arrayContaining([
+        "propose_file_write",
+        "propose_file_create",
         "propose_file_move",
         "propose_file_delete",
         "propose_directory_create"
@@ -977,7 +976,7 @@ describe("Agent tool registry", () => {
     expect(engineeringNames).not.toContain("manage_path");
     expect(
       engineering.filter((tool) => tool.effect === "propose").map((tool) => tool.writeOperation)
-    ).toEqual(["replace_file", "create_file"]);
+    ).toEqual(["replace_file", "create_file", "move_file", "delete_file", "create_directory"]);
   });
 
   test("qualifies the four chapter lifecycle tools independently with strict schemas", () => {
@@ -1208,8 +1207,8 @@ describe("Agent tool registry", () => {
     ).not.toContain("list_chapters");
   });
 
-  test("publishes only B7 engineering replace/create with opaque app-owned refs", () => {
-    const catalog = engineExports.listAgentTools({
+  test("publishes B8 engineering lifecycle tools only for individually qualified operations", () => {
+    const input = {
       facadeVersion: "v2",
       catalogSchemaVersion: "2.0",
       operationMode: "execution",
@@ -1220,8 +1219,6 @@ describe("Agent tool registry", () => {
         searchEnabled: true,
         fileLifecycleEnabled: true,
         writingOperations: [],
-        // A compromised caller may try to smuggle Batch 8 operations into the snapshot. The
-        // Engineering catalog itself remains a second, fail-closed boundary for Batch 7.
         workspaceFileOperations: [
           "replace_file",
           "create_file",
@@ -1234,25 +1231,61 @@ describe("Agent tool registry", () => {
         networkReadEnabled: false,
         pluginToolsEnabled: false,
         mcpToolsEnabled: false,
-        featureFlagRevision: "engineering-b7-contract"
+        featureFlagRevision: "engineering-b8-contract"
       }
-    });
+    } as const;
+    const catalog = engineExports.listAgentTools(input);
     const proposalNames = catalog
       .filter((tool) => tool.effect === "propose")
       .map((tool) => tool.name);
-    expect(proposalNames).toEqual(["propose_file_write", "propose_file_create"]);
-    expect(proposalNames).not.toEqual(
-      expect.arrayContaining([
-        "propose_file_move",
-        "propose_file_delete",
-        "propose_directory_create"
-      ])
-    );
+    expect(proposalNames).toEqual([
+      "propose_file_write",
+      "propose_file_create",
+      "propose_file_move",
+      "propose_file_delete",
+      "propose_directory_create"
+    ]);
+
+    for (const [operation, name] of [
+      ["move_file", "propose_file_move"],
+      ["delete_file", "propose_file_delete"],
+      ["create_directory", "propose_directory_create"]
+    ] as const) {
+      const qualified = engineExports
+        .listAgentTools({
+          ...input,
+          capabilitySnapshot: {
+            ...input.capabilitySnapshot,
+            workspaceFileOperations: [operation]
+          }
+        })
+        .filter((tool) => tool.effect === "propose");
+      expect(qualified.map((tool) => [tool.name, tool.writeOperation])).toEqual([
+        [name, operation]
+      ]);
+    }
+    expect(
+      engineExports
+        .listAgentTools({
+          ...input,
+          capabilitySnapshot: { ...input.capabilitySnapshot, workspaceFileOperations: [] }
+        })
+        .filter((tool) => tool.effect === "propose")
+    ).toEqual([]);
 
     const replace = catalog.find((tool) => tool.name === "propose_file_write");
     const create = catalog.find((tool) => tool.name === "propose_file_create");
-    if (replace === undefined || create === undefined) {
-      throw new Error("Expected B7 engineering proposal descriptors.");
+    const move = catalog.find((tool) => tool.name === "propose_file_move");
+    const remove = catalog.find((tool) => tool.name === "propose_file_delete");
+    const createDirectory = catalog.find((tool) => tool.name === "propose_directory_create");
+    if (
+      replace === undefined ||
+      create === undefined ||
+      move === undefined ||
+      remove === undefined ||
+      createDirectory === undefined
+    ) {
+      throw new Error("Expected B8 engineering proposal descriptors.");
     }
     const valid = (descriptor: typeof replace, arguments_: Record<string, unknown>): boolean =>
       engineExports.validateAgentToolArguments({
@@ -1262,6 +1295,7 @@ describe("Agent tool registry", () => {
       }).ok;
     const fileRef = `engineering_file_ref:${"a".repeat(32)}`;
     const parentRef = `engineering_directory_ref:${"b".repeat(32)}`;
+    const targetParentRef = `engineering_directory_ref:${"c".repeat(32)}`;
 
     expect(
       valid(replace, {
@@ -1311,5 +1345,47 @@ describe("Agent tool registry", () => {
     }
     expect(valid(create, { parentRef, name: "../new.ts", candidate: "x" })).toBe(false);
     expect(valid(create, { parentRef, name: "nested/new.ts", candidate: "x" })).toBe(false);
+
+    expect(valid(move, { sourceRef: fileRef, targetParentRef, targetName: "Renamed.ts" })).toBe(
+      true
+    );
+    expect(valid(move, { sourceRef: parentRef, targetParentRef, targetName: "Renamed.ts" })).toBe(
+      false
+    );
+    expect(valid(move, { sourceRef: fileRef, targetParentRef, targetName: "nested/new.ts" })).toBe(
+      false
+    );
+    expect(valid(move, { sourceRef: fileRef, targetParentRef, targetName: ".." })).toBe(false);
+    expect(
+      valid(move, {
+        sourceRef: fileRef,
+        targetParentRef,
+        targetName: "Renamed.ts",
+        sourcePath: "src/old.ts"
+      })
+    ).toBe(false);
+
+    expect(valid(remove, { fileRef })).toBe(true);
+    expect(valid(remove, { fileRef: parentRef })).toBe(false);
+    expect(valid(remove, { fileRef, recursive: true })).toBe(false);
+    expect(valid(remove, { relativePath: "src/old.ts" })).toBe(false);
+
+    expect(valid(createDirectory, { parentRef, name: "generated" })).toBe(true);
+    expect(valid(createDirectory, { parentRef: fileRef, name: "generated" })).toBe(false);
+    expect(valid(createDirectory, { parentRef, name: "nested/generated" })).toBe(false);
+    expect(valid(createDirectory, { parentRef, name: "." })).toBe(false);
+    expect(valid(createDirectory, { parentRef, name: "generated", recursive: true })).toBe(false);
+
+    expect(
+      engineExports.createApprovalRuleSetProjection([
+        "move_file",
+        "delete_file",
+        "create_directory"
+      ]).rules
+    ).toEqual([
+      { operation: "move_file", reviewMode: "always_human" },
+      { operation: "delete_file", reviewMode: "always_human" },
+      { operation: "create_directory", reviewMode: "always_human" }
+    ]);
   });
 });

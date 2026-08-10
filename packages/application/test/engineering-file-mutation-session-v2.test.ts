@@ -76,4 +76,46 @@ describe("Engineering file mutation session V2 contract", () => {
       code: "ENGINEERING_TOOL_CALL_ID_PAYLOAD_CONFLICT"
     });
   });
+
+  test("accepts only opaque effect-specific Batch 8 lifecycle payloads", () => {
+    const fileRef = `engineering_file_ref:${"a".repeat(64)}`;
+    const parentRef = `engineering_directory_ref:${"b".repeat(64)}`;
+    for (const input of [
+      {
+        toolName: "propose_file_move" as const,
+        arguments: { sourceRef: fileRef, targetParentRef: parentRef, targetName: "Renamed.ts" }
+      },
+      { toolName: "propose_file_delete" as const, arguments: { fileRef } },
+      {
+        toolName: "propose_directory_create" as const,
+        arguments: { parentRef, name: "components" }
+      }
+    ]) {
+      expect(checksumEngineeringFileMutationToolPayloadV2(input)).toMatchObject({ ok: true });
+    }
+
+    expect(
+      checksumEngineeringFileMutationToolPayloadV2({
+        toolName: "propose_file_move",
+        arguments: {
+          sourceRef: fileRef,
+          targetParentRef: parentRef,
+          targetName: "Renamed.ts",
+          sourcePath: "src/index.ts"
+        }
+      })
+    ).toMatchObject({ ok: false });
+    expect(
+      checksumEngineeringFileMutationToolPayloadV2({
+        toolName: "propose_file_delete",
+        arguments: { fileRef, baseHash: "a".repeat(64) }
+      })
+    ).toMatchObject({ ok: false });
+    expect(
+      checksumEngineeringFileMutationToolPayloadV2({
+        toolName: "propose_directory_create",
+        arguments: { parentRef, name: "nested/path" }
+      })
+    ).toMatchObject({ ok: false });
+  });
 });

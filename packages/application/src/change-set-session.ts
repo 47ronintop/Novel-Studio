@@ -156,14 +156,14 @@ export interface ProposeOperationInput {
 }
 
 /**
- * The four ordinary creative-file effects share one Change Set orchestration entry point. The
+ * Ordinary workspace-file effects share one Change Set orchestration entry point. The
  * effect-specific target/operation validators remain in the existing methods below; this union
  * only prevents callers from creating parallel proposal sessions for each effect.
  */
 export type ProposeWorkspaceFileMutationInput =
   | { readonly kind: "replace_file"; readonly file: ProposeFileWriteInput }
   | {
-      readonly kind: "create_file" | "move_file" | "delete_file";
+      readonly kind: "create_file" | "move_file" | "delete_file" | "create_directory";
       readonly operation: ProposeOperationInput;
     };
 

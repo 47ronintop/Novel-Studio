@@ -232,6 +232,7 @@ import {
   isEngineeringFileMutationToolNameV2,
   type EngineeringApprovalProofInputV2,
   type EngineeringFileMutationSessionV2,
+  type EngineeringFileMutationToolNameV2,
   type EngineeringPreparedFileMutationProposalV2
 } from "./engineering-file-mutation-session-v2.js";
 import {
@@ -6379,7 +6380,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
               }
             })
           : await proposeWorkspaceFileMutation(options.changeSetSession, {
-              kind: "create_file",
+              kind: prepared.value.changeSetMutation.kind,
               operation: {
                 ...commonProposal,
                 toolCallId: call.toolCallId,
@@ -11460,7 +11461,14 @@ function createV2AgentRunApprovalProof(input: {
     candidateManifestChecksum: input.manifests.candidateManifestChecksum,
     executionWritePolicy: input.changeSet.writePolicy ?? "write_before_confirmation",
     policyRevision: input.boundary.policyRevision,
-    capabilityRevision: input.catalog.catalogRevision
+    capabilityRevision: input.catalog.catalogRevision,
+    ...(input.engineeringProofInput?.recoveryRootBindingId === undefined
+      ? {}
+      : {
+          recoveryRootBindingId: input.engineeringProofInput.recoveryRootBindingId,
+          recoveryGrantRevision: input.engineeringProofInput.recoveryGrantRevision,
+          recoverySideEffectChecksum: input.engineeringProofInput.recoverySideEffectChecksum
+        })
   } as const;
   try {
     const effectRuleId = approvalEffectRuleFor(input.catalog, operation);
@@ -11531,6 +11539,7 @@ function validateEngineeringApprovalProofInput(
     !isChecksum(value.proposalPayloadChecksum) ||
     !isChecksum(value.baseManifestChecksum) ||
     !isChecksum(value.candidateManifestChecksum) ||
+    !hasValidEngineeringRecoveryProofBinding(value) ||
     !validEvidence
   ) {
     return err(
@@ -11545,6 +11554,24 @@ function validateEngineeringApprovalProofInput(
       ...value,
       evidence: Object.freeze({ ...value.evidence })
     })
+  );
+}
+
+function hasValidEngineeringRecoveryProofBinding(value: EngineeringApprovalProofInputV2): boolean {
+  const fields = [
+    value.recoveryRootBindingId,
+    value.recoveryGrantRevision,
+    value.recoverySideEffectChecksum
+  ];
+  const present = fields.filter((field) => field !== undefined).length;
+  if (value.operationKind !== "delete_file") return present === 0;
+  return (
+    present === 3 &&
+    typeof value.recoveryRootBindingId === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value.recoveryRootBindingId) &&
+    typeof value.recoveryGrantRevision === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value.recoveryGrantRevision) &&
+    isChecksum(value.recoverySideEffectChecksum)
   );
 }
 
@@ -12882,11 +12909,11 @@ async function proposeWorkspaceFileMutation(
 function validatePreparedEngineeringProposal(
   value: EngineeringPreparedFileMutationProposalV2,
   toolCallId: string,
-  toolName: "propose_file_write" | "propose_file_create",
+  toolName: EngineeringFileMutationToolNameV2,
   canonicalPayloadChecksum: string,
   argumentsValue: JsonObject
 ): Result<void, UnifiedError> {
-  const expectedOperation = toolName === "propose_file_write" ? "replace_file" : "create_file";
+  const expectedOperation = engineeringOperationForTool(toolName);
   const validEnvelope =
     value.schemaVersion === "2.0" &&
     /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value.proposalId) &&
@@ -12916,6 +12943,45 @@ function validatePreparedEngineeringProposal(
   }
 
   const mutation = value.changeSetMutation;
+  if (toolName === "propose_file_move") {
+    if (mutation.kind !== "move_file") return err(engineeringPreparedProposalInvalid());
+    const operation = mutation.operation;
+    if (
+      operation.kind !== "move_file" ||
+      operation.operationId.length === 0 ||
+      operation.sourcePath !== value.relativeIdentity ||
+      operation.toolCallIdempotencyKey !== toolCallId ||
+      !isChecksum(operation.sourceChecksum)
+    ) {
+      return err(engineeringPreparedProposalInvalid());
+    }
+    return ok(undefined);
+  }
+  if (toolName === "propose_file_delete") {
+    if (mutation.kind !== "delete_file") return err(engineeringPreparedProposalInvalid());
+    const operation = mutation.operation;
+    if (
+      operation.kind !== "delete_file" ||
+      operation.relativePath !== value.relativeIdentity ||
+      operation.toolCallIdempotencyKey !== toolCallId ||
+      !isChecksum(operation.baseChecksum)
+    ) {
+      return err(engineeringPreparedProposalInvalid());
+    }
+    return ok(undefined);
+  }
+  if (toolName === "propose_directory_create") {
+    if (mutation.kind !== "create_directory") return err(engineeringPreparedProposalInvalid());
+    const operation = mutation.operation;
+    if (
+      operation.kind !== "create_directory" ||
+      operation.relativePath !== value.relativeIdentity ||
+      operation.toolCallIdempotencyKey !== toolCallId
+    ) {
+      return err(engineeringPreparedProposalInvalid());
+    }
+    return ok(undefined);
+  }
   if (
     mutation.kind !== "create_file" ||
     mutation.operation.kind !== "create_file" ||
@@ -12926,6 +12992,16 @@ function validatePreparedEngineeringProposal(
     return err(engineeringPreparedProposalInvalid());
   }
   return ok(undefined);
+}
+
+function engineeringOperationForTool(
+  toolName: EngineeringFileMutationToolNameV2
+): EngineeringPreparedFileMutationProposalV2["operationKind"] {
+  if (toolName === "propose_file_write") return "replace_file";
+  if (toolName === "propose_file_create") return "create_file";
+  if (toolName === "propose_file_move") return "move_file";
+  if (toolName === "propose_file_delete") return "delete_file";
+  return "create_directory";
 }
 
 function engineeringPreparedProposalInvalid(): UnifiedError {

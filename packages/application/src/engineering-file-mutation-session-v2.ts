@@ -22,8 +22,14 @@ import type { EngineeringApprovalBindingFactsV2 } from "./engineering-file-appro
 
 export const ENGINEERING_FILE_MUTATION_SESSION_V2_SCHEMA_VERSION = "2.0" as const;
 
-export type EngineeringFileMutationToolNameV2 = "propose_file_write" | "propose_file_create";
-export type EngineeringFileMutationOperationKindV2 = "replace_file" | "create_file";
+export type EngineeringFileMutationToolNameV2 =
+  | "propose_file_write"
+  | "propose_file_create"
+  | "propose_file_move"
+  | "propose_file_delete"
+  | "propose_directory_create";
+export type EngineeringFileMutationOperationKindV2 =
+  "replace_file" | "create_file" | "move_file" | "delete_file" | "create_directory";
 
 export interface EngineeringFileMutationProposalBoundaryV2 {
   readonly workspaceBindingId: string;
@@ -47,6 +53,9 @@ export interface EngineeringApprovalProofInputV2 {
   readonly proposalPayloadChecksum: string;
   readonly baseManifestChecksum: string;
   readonly candidateManifestChecksum: string;
+  readonly recoveryRootBindingId?: string;
+  readonly recoveryGrantRevision?: string;
+  readonly recoverySideEffectChecksum?: string;
   readonly evidence: ApprovalDecisionProofEvidenceV1;
 }
 
@@ -60,6 +69,10 @@ export type EngineeringPreparedChangeSetMutationV2 =
     }>
   | Readonly<{
       readonly kind: "create_file";
+      readonly operation: ChangeSetOperation;
+    }>
+  | Readonly<{
+      readonly kind: "move_file" | "delete_file" | "create_directory";
       readonly operation: ChangeSetOperation;
     }>;
 
@@ -181,7 +194,13 @@ export function checksumEngineeringFileMutationToolPayloadV2(input: {
 export function isEngineeringFileMutationToolNameV2(
   value: string
 ): value is EngineeringFileMutationToolNameV2 {
-  return value === "propose_file_write" || value === "propose_file_create";
+  return (
+    value === "propose_file_write" ||
+    value === "propose_file_create" ||
+    value === "propose_file_move" ||
+    value === "propose_file_delete" ||
+    value === "propose_directory_create"
+  );
 }
 
 export function engineeringToolCallPayloadConflictV2(): UnifiedError {
@@ -220,6 +239,35 @@ function normalizePayload(
       range: { unit: "character", start: range["start"], end: range["end"] },
       replacement: value["replacement"]
     };
+  }
+
+  if (toolName === "propose_file_move") {
+    if (!hasExactKeys(value, ["sourceRef", "targetParentRef", "targetName"])) return undefined;
+    if (
+      !isOpaqueRef(value["sourceRef"], "file") ||
+      !isOpaqueRef(value["targetParentRef"], "directory") ||
+      !isCanonicalLeafName(value["targetName"])
+    ) {
+      return undefined;
+    }
+    return {
+      sourceRef: value["sourceRef"],
+      targetParentRef: value["targetParentRef"],
+      targetName: value["targetName"]
+    };
+  }
+
+  if (toolName === "propose_file_delete") {
+    return hasExactKeys(value, ["fileRef"]) && isOpaqueRef(value["fileRef"], "file")
+      ? { fileRef: value["fileRef"] }
+      : undefined;
+  }
+
+  if (toolName === "propose_directory_create") {
+    if (!hasExactKeys(value, ["parentRef", "name"])) return undefined;
+    return isOpaqueRef(value["parentRef"], "directory") && isCanonicalLeafName(value["name"])
+      ? { parentRef: value["parentRef"], name: value["name"] }
+      : undefined;
   }
 
   if (!hasExactKeys(value, ["parentRef", "name", "candidate"])) return undefined;
@@ -306,7 +354,7 @@ function invalidPayload(): Result<never, UnifiedError> {
     createUnifiedError({
       code: "ENGINEERING_FILE_MUTATION_V2_ARGUMENTS_INVALID",
       category: "ValidationError",
-      message: "The Engineering replace/create payload is invalid.",
+      message: "The Engineering mutation payload is invalid.",
       recoverability: "user-action",
       suggestedAction: "Use the current effect-specific tool schema and app-owned opaque refs.",
       traceId: "engineering-file-mutation-session-v2"

@@ -67,17 +67,17 @@ describe("Approval Binding 2.0", () => {
     });
   });
 
-  test("requires the recovery triple for delete and forbids it for replacement", () => {
-    expect(() =>
-      binding({ operationKind: "delete_file", recoveryRootBindingId: "recovery_01" })
-    ).toThrow();
-    expect(() =>
-      binding({
-        recoveryRootBindingId: "recovery_01",
-        recoveryGrantRevision: "grant_01",
-        recoverySideEffectChecksum: hash
-      })
-    ).toThrow();
+  test("requires the complete recovery triple only for engineering file deletion", () => {
+    for (const incomplete of [
+      { recoveryRootBindingId: "recovery_01" },
+      { recoveryGrantRevision: "grant_01" },
+      { recoverySideEffectChecksum: hash },
+      { recoveryRootBindingId: "recovery_01", recoveryGrantRevision: "grant_01" },
+      { recoveryRootBindingId: "recovery_01", recoverySideEffectChecksum: hash },
+      { recoveryGrantRevision: "grant_01", recoverySideEffectChecksum: hash }
+    ]) {
+      expect(() => binding({ operationKind: "delete_file", ...incomplete })).toThrow();
+    }
     expect(
       binding({
         operationKind: "delete_file",
@@ -86,6 +86,31 @@ describe("Approval Binding 2.0", () => {
         recoverySideEffectChecksum: hash
       }).operationKind
     ).toBe("delete_file");
+
+    for (const operationKind of [
+      "replace_file",
+      "create_file",
+      "move_file",
+      "create_directory"
+    ] as const) {
+      expect(() =>
+        binding({
+          operationKind,
+          recoveryRootBindingId: "recovery_01",
+          recoveryGrantRevision: "grant_01",
+          recoverySideEffectChecksum: hash
+        })
+      ).toThrow();
+    }
+
+    expect(
+      binding({
+        operationKind: "chapter_delete",
+        recoveryRootBindingId: "recovery_01",
+        recoveryGrantRevision: "grant_01",
+        recoverySideEffectChecksum: hash
+      }).operationKind
+    ).toBe("chapter_delete");
   });
 
   test("a display checksum cannot authorize a Change Set 2.0", async () => {

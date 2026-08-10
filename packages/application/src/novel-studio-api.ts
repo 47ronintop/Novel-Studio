@@ -739,7 +739,8 @@ export interface EngineeringEditorStateAcknowledgement {
 export interface EngineeringMutationRendererSyncRequestV2 {
   readonly schemaVersion: "2.0";
   readonly requestId: string;
-  readonly operationKind: "replace_file" | "create_file";
+  readonly operationKind:
+    "replace_file" | "create_file" | "move_file" | "delete_file" | "create_directory";
   readonly relativePaths: readonly string[];
 }
 
