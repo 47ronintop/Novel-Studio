@@ -28,6 +28,7 @@ const replacedDraft = "Replaced creative draft.\n";
 const movedContent = "Move this creative file.\n";
 const obsoleteContent = "Delete this creative file.\n";
 const createdContent = "Created by creative_general.\n";
+const createdDirectory = "generated";
 
 test("uses packaged creative_general Agent to apply and undo the complete text lifecycle", async () => {
   test.setTimeout(300_000);
@@ -40,6 +41,7 @@ test("uses packaged creative_general Agent to apply and undo the complete text l
   const moveSourcePath = join(projectRoot, "notes", "move-source.md");
   const moveTargetPath = join(projectRoot, "notes", "moved.md");
   const obsoletePath = join(projectRoot, "notes", "obsolete.md");
+  const createdDirectoryPath = join(projectRoot, "notes", createdDirectory);
   await writeFile(draftPath, originalDraft, "utf8");
   await writeFile(moveSourcePath, movedContent, "utf8");
   await writeFile(obsoletePath, obsoleteContent, "utf8");
@@ -50,7 +52,8 @@ test("uses packaged creative_general Agent to apply and undo the complete text l
     2: createRoundGate(),
     3: createRoundGate(),
     4: createRoundGate(),
-    5: createRoundGate()
+    5: createRoundGate(),
+    6: createRoundGate()
   } as const;
   const server = createServer(async (request, response) => {
     const body = await readJsonBody(request);
@@ -95,7 +98,7 @@ test("uses packaged creative_general Agent to apply and undo the complete text l
     await expect
       .poll(() => readControlTextThroughUi(application, "普通文件正文"), { timeout: 30_000 })
       .toContain("Original creative draft.");
-    const request = "依次修改、新建、移动并删除指定项目文本文件";
+    const request = "依次修改、新建、移动并删除指定项目文本文件，并创建一个目录";
     await startAgentRunThroughUi(application, request);
     await saveFirstUseSharingAndRestartRun(application, request);
     await expect
@@ -105,7 +108,8 @@ test("uses packaged creative_general Agent to apply and undo the complete text l
           "edit_text",
           "create_resource",
           "propose_file_move",
-          "propose_file_delete"
+          "propose_file_delete",
+          "propose_directory_create"
         ])
       );
     expect(providerToolNames).not.toContain("manage_path");
@@ -159,10 +163,15 @@ test("uses packaged creative_general Agent to apply and undo the complete text l
       .toBe(false);
     roundGates[5].release();
 
+    await applyNextChangeSet(application);
+    await expect.poll(() => pathExists(createdDirectoryPath), { timeout: 30_000 }).toBe(true);
+    roundGates[6].release();
+
     await waitForControl(application, "撤销本次运行");
     await undoAgentRunThroughUi(application);
     await expect.poll(() => readFile(draftPath, "utf8"), { timeout: 30_000 }).toBe(originalDraft);
     await expect.poll(() => pathExists(createPath), { timeout: 30_000 }).toBe(false);
+    await expect.poll(() => pathExists(createdDirectoryPath), { timeout: 30_000 }).toBe(false);
     await expect
       .poll(() => readFile(moveSourcePath, "utf8"), { timeout: 30_000 })
       .toBe(movedContent);
@@ -222,10 +231,12 @@ function createRoundGate(): RoundGate {
 }
 
 function gateForRound(
-  gates: Readonly<Record<2 | 3 | 4 | 5, RoundGate>>,
+  gates: Readonly<Record<2 | 3 | 4 | 5 | 6, RoundGate>>,
   round: number
 ): RoundGate | undefined {
-  return round === 2 || round === 3 || round === 4 || round === 5 ? gates[round] : undefined;
+  return round === 2 || round === 3 || round === 4 || round === 5 || round === 6
+    ? gates[round]
+    : undefined;
 }
 
 async function applyNextChangeSet(
@@ -280,6 +291,12 @@ function toolCallForRound(round: number): {
           ref: "file:notes/obsolete.md",
           baseHash: sha256(obsoleteContent)
         }
+      };
+    case 5:
+      return {
+        id: "create-creative-directory",
+        name: "propose_directory_create",
+        arguments: { relativePath: `notes/${createdDirectory}` }
       };
     default:
       return {
