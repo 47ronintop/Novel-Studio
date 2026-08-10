@@ -37,6 +37,8 @@ describe("EngineeringFileMutationPortV2", () => {
       ...nativeAddon((request) => receiptFor(request)),
       moveEngineeringPathV2: vi.fn((_root, request) => receipt(request)),
       quarantineEngineeringFileV2: vi.fn((_root, _recovery, request) => receipt(request)),
+      restoreEngineeringFileV2: vi.fn(),
+      purgeEngineeringQuarantineObjectV2: vi.fn(),
       createEngineeringDirectoryV2: vi.fn((_root, request) => receipt(request))
     };
     const port = createEngineeringFileMutationPortV2({
@@ -72,6 +74,98 @@ describe("EngineeringFileMutationPortV2", () => {
       error: { code: "ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE" }
     });
   });
+
+  test("keeps restore and retention-authorized purge Main-only and root-bound", async () => {
+    const restore = restoreRequest();
+    const restoredReceipt = {
+      schemaVersion: "3.0",
+      kind: "engineering_file_lifecycle_receipt",
+      operationKind: "restore_file",
+      transactionId: restore.transactionId,
+      operationId: restore.operationId,
+      contentRootBindingId: restore.contentRootBindingId,
+      relativeSource: "",
+      relativeTarget: restore.relativeTarget,
+      state: "restored",
+      recoveryObjectId: restore.recoveryObjectId,
+      durability: "data_and_directory_flushed"
+    };
+    const addon = {
+      ...nativeAddon((request) => receiptFor(request)),
+      moveEngineeringPathV2: vi.fn(),
+      quarantineEngineeringFileV2: vi.fn(),
+      restoreEngineeringFileV2: vi.fn(() => restoredReceipt),
+      purgeEngineeringQuarantineObjectV2: vi.fn(),
+      createEngineeringDirectoryV2: vi.fn()
+    };
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: 7n },
+      authenticateRecoveryOperation: () => ok(undefined)
+    });
+    const recoveryBinding = {
+      recoveryRootBindingId: restore.recoveryRootBindingId,
+      recoveryRootId: 8n,
+      grantRevision: restore.recoveryGrantRevision,
+      sideEffectChecksum: restore.recoverySideEffectChecksum
+    };
+
+    await expect(port.restore!({ request: restore, recoveryBinding })).resolves.toMatchObject({
+      ok: true,
+      value: { state: "restored" }
+    });
+    await expect(port.purge!(purgeInput(recoveryBinding))).resolves.toMatchObject({ ok: true });
+    expect(addon.restoreEngineeringFileV2).toHaveBeenCalledWith(7n, 8n, restore);
+    expect(addon.purgeEngineeringQuarantineObjectV2).toHaveBeenCalledWith(8n, "object_02");
+
+    await expect(
+      port.restore!({
+        request: { ...restore, recoveryGrantRevision: "grant_changed" },
+        recoveryBinding
+      })
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      port.purge!({
+        ...purgeInput(recoveryBinding),
+        retentionDecision: {
+          ...purgeInput(recoveryBinding).retentionDecision,
+          recoverySideEffectChecksum: hash("drifted-side-effect")
+        }
+      })
+    ).resolves.toMatchObject({ ok: false });
+    expect(addon.restoreEngineeringFileV2).toHaveBeenCalledTimes(1);
+    expect(addon.purgeEngineeringQuarantineObjectV2).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not invoke native recovery operations without Main authentication", async () => {
+    const restore = restoreRequest();
+    const addon = {
+      ...nativeAddon((request) => receiptFor(request)),
+      moveEngineeringPathV2: vi.fn(),
+      quarantineEngineeringFileV2: vi.fn(),
+      restoreEngineeringFileV2: vi.fn(),
+      purgeEngineeringQuarantineObjectV2: vi.fn(),
+      createEngineeringDirectoryV2: vi.fn()
+    };
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: 7n }
+    });
+    const recoveryBinding = {
+      recoveryRootBindingId: restore.recoveryRootBindingId,
+      recoveryRootId: 8n,
+      grantRevision: restore.recoveryGrantRevision,
+      sideEffectChecksum: restore.recoverySideEffectChecksum
+    };
+
+    await expect(port.restore!({ request: restore, recoveryBinding })).resolves.toMatchObject({
+      ok: false
+    });
+    await expect(port.purge!(purgeInput(recoveryBinding))).resolves.toMatchObject({ ok: false });
+    expect(addon.restoreEngineeringFileV2).not.toHaveBeenCalled();
+    expect(addon.purgeEngineeringQuarantineObjectV2).not.toHaveBeenCalled();
+  });
+
   test("passes Main re-read raw bytes through the root-bound native seam", async () => {
     const addon = nativeAddon((request) => receiptFor(request));
     const input = createApplyInput();
@@ -413,6 +507,49 @@ function lifecycleRequest(kind: "move_file" | "delete_file" | "create_directory"
     recoveryObjectId: "object_01",
     stagingObjectId: "staging_02",
     expectedState: "wal_prepared" as const
+  };
+}
+
+function restoreRequest() {
+  return {
+    schemaVersion: "3.0" as const,
+    operationKind: "restore_file" as const,
+    transactionId: "tx_03",
+    operationId: "op_03",
+    contentRootBindingId: "root_01",
+    relativeSource: "" as const,
+    relativeTarget: "src/restored.ts",
+    sourceFileIdentity: "file_02",
+    sourceSha256: hash("restored-source"),
+    targetProof: "absent" as const,
+    recoveryRootBindingId: "recovery_02",
+    recoveryGrantRevision: "grant_02",
+    recoverySideEffectChecksum: hash("restore-side-effect"),
+    recoveryObjectId: "object_02",
+    stagingObjectId: "staging_03",
+    expectedState: "wal_prepared" as const
+  };
+}
+
+function purgeInput(recoveryBinding: {
+  readonly recoveryRootBindingId: string;
+  readonly recoveryRootId: string | bigint;
+  readonly grantRevision: string;
+  readonly sideEffectChecksum: string;
+}) {
+  return {
+    recoveryBinding,
+    retentionDecision: {
+      schemaVersion: "2.0" as const,
+      kind: "engineering_quarantine_retention_decision" as const,
+      contentRootBindingId: "root_01",
+      recoveryRootBindingId: recoveryBinding.recoveryRootBindingId,
+      recoveryGrantRevision: recoveryBinding.grantRevision,
+      recoverySideEffectChecksum: recoveryBinding.sideEffectChecksum,
+      recoveryObjectId: "object_02",
+      state: "purge_authorized" as const,
+      decisionChecksum: hash("purge-decision")
+    }
   };
 }
 

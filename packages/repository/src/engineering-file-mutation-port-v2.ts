@@ -66,11 +66,64 @@ export interface EngineeringFileLifecycleReceiptV2 {
   readonly durability: "data_and_directory_flushed";
 }
 
+/** Restore is Main-only recovery work, not an Agent lifecycle operation. */
+export interface EngineeringFileRestoreRequestV2 {
+  readonly schemaVersion: typeof ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION;
+  readonly operationKind: "restore_file";
+  readonly transactionId: string;
+  readonly operationId: string;
+  readonly contentRootBindingId: string;
+  readonly relativeSource: "";
+  readonly relativeTarget: string;
+  readonly sourceFileIdentity: string;
+  readonly sourceSha256: string;
+  readonly targetProof: "absent";
+  readonly recoveryRootBindingId: string;
+  readonly recoveryGrantRevision: string;
+  readonly recoverySideEffectChecksum: string;
+  readonly recoveryObjectId: string;
+  readonly stagingObjectId: string;
+  readonly expectedState: "wal_prepared";
+}
+
+export interface EngineeringFileRestoreReceiptV2 {
+  readonly schemaVersion: typeof ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION;
+  readonly kind: "engineering_file_lifecycle_receipt";
+  readonly operationKind: "restore_file";
+  readonly transactionId: string;
+  readonly operationId: string;
+  readonly contentRootBindingId: string;
+  readonly relativeSource: "";
+  readonly relativeTarget: string;
+  readonly state: "restored";
+  readonly recoveryObjectId: string;
+  readonly durability: "data_and_directory_flushed";
+}
+
 export interface EngineeringLifecycleRecoveryRootBindingV2 {
   readonly recoveryRootBindingId: string;
   readonly recoveryRootId: string | bigint;
   readonly grantRevision: string;
   readonly sideEffectChecksum: string;
+}
+
+/**
+ * A purge can only be requested after Main has durably decided retention.  The decision record
+ * is authenticated by `authenticateRecoveryOperation` before the native unlink is reached.
+ */
+export interface EngineeringQuarantinePurgeInputV2 {
+  readonly recoveryBinding: EngineeringLifecycleRecoveryRootBindingV2;
+  readonly retentionDecision: {
+    readonly schemaVersion: typeof ENGINEERING_MUTATION_V2_SCHEMA_VERSION;
+    readonly kind: "engineering_quarantine_retention_decision";
+    readonly contentRootBindingId: string;
+    readonly recoveryRootBindingId: string;
+    readonly recoveryGrantRevision: string;
+    readonly recoverySideEffectChecksum: string;
+    readonly recoveryObjectId: string;
+    readonly state: "purge_authorized";
+    readonly decisionChecksum: string;
+  };
 }
 
 /**
@@ -246,6 +299,15 @@ export type EngineeringNativeProposalEvidenceAuthenticatorV2 = (input: {
   readonly value: EngineeringFileMutationProposalSnapshotV2 | EngineeringAbsenceProofV2;
 }) => Result<void, UnifiedError>;
 
+/** Main verifies recovery-root authority and durable recovery/retention evidence here. */
+export type EngineeringRecoveryOperationAuthenticatorV2 = (input: {
+  readonly kind: "restore" | "purge";
+  readonly rootBinding: EngineeringFileMutationRootBindingV2;
+  readonly recoveryBinding: EngineeringLifecycleRecoveryRootBindingV2;
+  readonly request?: EngineeringFileRestoreRequestV2;
+  readonly retentionDecision?: EngineeringQuarantinePurgeInputV2["retentionDecision"];
+}) => Result<void, UnifiedError>;
+
 /** The one native mutation entry point added to the B6 addon source stream. */
 export interface EngineeringFileMutationNativeAddonV2 {
   applyEngineeringFileMutationV2(
@@ -271,6 +333,15 @@ export interface EngineeringFileLifecycleNativeAddonV2 {
     rootId: string | bigint,
     recoveryRootId: string | bigint,
     request: EngineeringFileLifecycleRequestV2
+  ): unknown;
+  restoreEngineeringFileV2(
+    rootId: string | bigint,
+    recoveryRootId: string | bigint,
+    request: EngineeringFileRestoreRequestV2
+  ): unknown;
+  purgeEngineeringQuarantineObjectV2(
+    recoveryRootId: string | bigint,
+    recoveryObjectId: string
   ): unknown;
   createEngineeringDirectoryV2(
     rootId: string | bigint,
@@ -317,6 +388,12 @@ export interface EngineeringFileMutationPortV2 {
   readonly createDirectory?: (
     input: unknown
   ) => Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>>;
+  /** Main-only recovery action. It is intentionally not part of the Provider lifecycle surface. */
+  readonly restore?: (
+    input: unknown
+  ) => Promise<Result<EngineeringFileRestoreReceiptV2, UnifiedError>>;
+  /** Main-only permanent deletion after a local retention decision. */
+  readonly purge?: (input: unknown) => Promise<Result<void, UnifiedError>>;
 }
 
 export type EngineeringQualifiedFileMutationPortV2 = Omit<
@@ -339,6 +416,8 @@ export interface EngineeringFileMutationPortV2Options {
   readonly authenticateNativeEvidence?: EngineeringNativeEvidenceAuthenticatorV2;
   /** Required before a native proposal snapshot or absence proof is treated as qualified. */
   readonly authenticateNativeProposalEvidence?: EngineeringNativeProposalEvidenceAuthenticatorV2;
+  /** Required before a restore or permanent quarantine purge can invoke native code. */
+  readonly authenticateRecoveryOperation?: EngineeringRecoveryOperationAuthenticatorV2;
   readonly pathPolicy?: EngineeringPathPolicy;
   readonly traceId?: string;
 }
@@ -436,6 +515,85 @@ export function createEngineeringFileMutationPortV2(
         return lifecycleNativeFailure(cause, traceId);
       }
       return validateEngineeringFileLifecycleReceiptV2(raw, request.value);
+    },
+    async restore(input: unknown): Promise<Result<EngineeringFileRestoreReceiptV2, UnifiedError>> {
+      if (!hasExactKeys(input, lifecycleRestoreInputKeys)) return lifecycleInvalid(traceId);
+      const request = validateEngineeringFileRestoreRequestV2(input["request"], options.pathPolicy);
+      if (!request.ok) return request;
+      const recovery = parseLifecycleRecoveryBinding(input["recoveryBinding"]);
+      if (
+        recovery === undefined ||
+        lifecycleAddon === undefined ||
+        options.rootBinding === undefined ||
+        options.authenticateRecoveryOperation === undefined
+      )
+        return unavailable(traceId);
+      if (
+        request.value.contentRootBindingId !== options.rootBinding.contentRootBindingId ||
+        request.value.recoveryRootBindingId !== recovery.recoveryRootBindingId ||
+        request.value.recoveryGrantRevision !== recovery.grantRevision ||
+        request.value.recoverySideEffectChecksum !== recovery.sideEffectChecksum
+      )
+        return lifecycleInvalid(traceId);
+      const authenticated = authenticateRecoveryOperation(
+        options.authenticateRecoveryOperation,
+        {
+          kind: "restore",
+          rootBinding: options.rootBinding,
+          recoveryBinding: recovery,
+          request: request.value
+        },
+        traceId
+      );
+      if (!authenticated.ok) return authenticated;
+      let raw: unknown;
+      try {
+        raw = await lifecycleAddon.restoreEngineeringFileV2(
+          options.rootBinding.rootId,
+          recovery.recoveryRootId,
+          request.value
+        );
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      return validateEngineeringFileRestoreReceiptV2(raw, request.value);
+    },
+    async purge(input: unknown): Promise<Result<void, UnifiedError>> {
+      const parsed = validateEngineeringQuarantinePurgeInputV2(input);
+      if (!parsed.ok) return parsed;
+      const recovery = parseLifecycleRecoveryBinding(parsed.value.recoveryBinding);
+      if (
+        recovery === undefined ||
+        lifecycleAddon === undefined ||
+        options.rootBinding === undefined ||
+        options.authenticateRecoveryOperation === undefined ||
+        parsed.value.retentionDecision.contentRootBindingId !==
+          options.rootBinding.contentRootBindingId ||
+        parsed.value.retentionDecision.recoveryRootBindingId !== recovery.recoveryRootBindingId ||
+        parsed.value.retentionDecision.recoveryGrantRevision !== recovery.grantRevision ||
+        parsed.value.retentionDecision.recoverySideEffectChecksum !== recovery.sideEffectChecksum
+      )
+        return lifecycleInvalid(traceId);
+      const authenticated = authenticateRecoveryOperation(
+        options.authenticateRecoveryOperation,
+        {
+          kind: "purge",
+          rootBinding: options.rootBinding,
+          recoveryBinding: recovery,
+          retentionDecision: parsed.value.retentionDecision
+        },
+        traceId
+      );
+      if (!authenticated.ok) return authenticated;
+      try {
+        await lifecycleAddon.purgeEngineeringQuarantineObjectV2(
+          recovery.recoveryRootId,
+          parsed.value.retentionDecision.recoveryObjectId
+        );
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      return ok(undefined);
     }
   };
 
@@ -698,6 +856,103 @@ export function validateEngineeringFileLifecycleReceiptV2(
   )
     return lifecycleInvalid();
   return ok(freeze(value as unknown as EngineeringFileLifecycleReceiptV2));
+}
+
+export function validateEngineeringFileRestoreRequestV2(
+  value: unknown,
+  pathPolicy?: EngineeringPathPolicy
+): Result<EngineeringFileRestoreRequestV2, UnifiedError> {
+  if (
+    !hasExactKeys(value, lifecycleRequestKeys) ||
+    value["schemaVersion"] !== ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION ||
+    value["operationKind"] !== "restore_file" ||
+    !isStableId(value["transactionId"]) ||
+    !isStableOperationId(value["operationId"]) ||
+    !isStableId(value["contentRootBindingId"]) ||
+    value["relativeSource"] !== "" ||
+    !isCanonicalOrdinaryRelativeIdentity(value["relativeTarget"], pathPolicy) ||
+    !isStableId(value["sourceFileIdentity"]) ||
+    !isSha256(value["sourceSha256"]) ||
+    value["targetProof"] !== "absent" ||
+    !isStableId(value["recoveryRootBindingId"]) ||
+    !isStableId(value["recoveryGrantRevision"]) ||
+    !isSha256(value["recoverySideEffectChecksum"]) ||
+    !isStableId(value["recoveryObjectId"]) ||
+    !isStableId(value["stagingObjectId"]) ||
+    value["expectedState"] !== "wal_prepared"
+  )
+    return lifecycleInvalid();
+  return ok(freeze(value as unknown as EngineeringFileRestoreRequestV2));
+}
+
+export function validateEngineeringFileRestoreReceiptV2(
+  value: unknown,
+  request?: EngineeringFileRestoreRequestV2
+): Result<EngineeringFileRestoreReceiptV2, UnifiedError> {
+  if (
+    !hasExactKeys(value, lifecycleReceiptKeys) ||
+    value["schemaVersion"] !== ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION ||
+    value["kind"] !== "engineering_file_lifecycle_receipt" ||
+    value["operationKind"] !== "restore_file" ||
+    !isStableId(value["transactionId"]) ||
+    !isStableOperationId(value["operationId"]) ||
+    !isStableId(value["contentRootBindingId"]) ||
+    value["relativeSource"] !== "" ||
+    !isCanonicalOrdinaryRelativeIdentity(value["relativeTarget"]) ||
+    value["state"] !== "restored" ||
+    !isStableId(value["recoveryObjectId"]) ||
+    value["durability"] !== "data_and_directory_flushed"
+  )
+    return lifecycleInvalid();
+  if (
+    request !== undefined &&
+    (value["transactionId"] !== request.transactionId ||
+      value["operationId"] !== request.operationId ||
+      value["contentRootBindingId"] !== request.contentRootBindingId ||
+      value["relativeTarget"] !== request.relativeTarget ||
+      value["recoveryObjectId"] !== request.recoveryObjectId)
+  )
+    return lifecycleInvalid();
+  return ok(freeze(value as unknown as EngineeringFileRestoreReceiptV2));
+}
+
+export function validateEngineeringQuarantinePurgeInputV2(
+  value: unknown
+): Result<EngineeringQuarantinePurgeInputV2, UnifiedError> {
+  if (!hasExactKeys(value, lifecyclePurgeInputKeys)) return lifecycleInvalid();
+  const recoveryBinding = parseLifecycleRecoveryBinding(value["recoveryBinding"]);
+  const decision = value["retentionDecision"];
+  if (
+    recoveryBinding === undefined ||
+    !hasExactKeys(decision, retentionDecisionKeys) ||
+    decision["schemaVersion"] !== ENGINEERING_MUTATION_V2_SCHEMA_VERSION ||
+    decision["kind"] !== "engineering_quarantine_retention_decision" ||
+    !isStableId(decision["contentRootBindingId"]) ||
+    !isStableId(decision["recoveryRootBindingId"]) ||
+    !isStableId(decision["recoveryGrantRevision"]) ||
+    !isSha256(decision["recoverySideEffectChecksum"]) ||
+    !isStableId(decision["recoveryObjectId"]) ||
+    decision["state"] !== "purge_authorized" ||
+    !isSha256(decision["decisionChecksum"]) ||
+    decision["recoveryRootBindingId"] !== recoveryBinding.recoveryRootBindingId
+  )
+    return lifecycleInvalid();
+  return ok(
+    freeze({
+      recoveryBinding,
+      retentionDecision: {
+        schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+        kind: "engineering_quarantine_retention_decision" as const,
+        contentRootBindingId: decision["contentRootBindingId"] as string,
+        recoveryRootBindingId: decision["recoveryRootBindingId"] as string,
+        recoveryGrantRevision: decision["recoveryGrantRevision"] as string,
+        recoverySideEffectChecksum: decision["recoverySideEffectChecksum"] as string,
+        recoveryObjectId: decision["recoveryObjectId"] as string,
+        state: "purge_authorized" as const,
+        decisionChecksum: decision["decisionChecksum"] as string
+      }
+    })
+  );
 }
 
 export function validateEngineeringFileMutationProposalSnapshotInputV2(
@@ -1210,6 +1465,8 @@ function parseLifecycleNativeAddon(
   return isRecord(value) &&
     typeof value["moveEngineeringPathV2"] === "function" &&
     typeof value["quarantineEngineeringFileV2"] === "function" &&
+    typeof value["restoreEngineeringFileV2"] === "function" &&
+    typeof value["purgeEngineeringQuarantineObjectV2"] === "function" &&
     typeof value["createEngineeringDirectoryV2"] === "function"
     ? (value as unknown as EngineeringFileLifecycleNativeAddonV2)
     : undefined;
@@ -1420,6 +1677,26 @@ function authenticateProposalEvidence(
         code: "ENGINEERING_FILE_MUTATION_V2_EVIDENCE_AUTHENTICATION_FAILED",
         message: "Engineering native proposal evidence could not be authenticated.",
         suggestedAction: "Regenerate the proposal before trying again.",
+        traceId
+      })
+    );
+  }
+}
+
+function authenticateRecoveryOperation(
+  authenticate: EngineeringRecoveryOperationAuthenticatorV2,
+  input: Parameters<EngineeringRecoveryOperationAuthenticatorV2>[0],
+  traceId: string
+): Result<void, UnifiedError> {
+  try {
+    const result = authenticate(input);
+    return result.ok ? ok(undefined) : result;
+  } catch {
+    return err(
+      storageError({
+        code: "ENGINEERING_FILE_LIFECYCLE_V2_RECOVERY_AUTHENTICATION_FAILED",
+        message: "The Main-owned recovery operation could not be authenticated.",
+        suggestedAction: "Keep recovery operations disabled and review the recovery root.",
         traceId
       })
     );
@@ -1902,6 +2179,19 @@ const lifecycleReceiptKeys = [
   "transactionId"
 ] as const;
 const lifecycleQuarantineInputKeys = ["recoveryBinding", "request"] as const;
+const lifecycleRestoreInputKeys = ["recoveryBinding", "request"] as const;
+const lifecyclePurgeInputKeys = ["recoveryBinding", "retentionDecision"] as const;
+const retentionDecisionKeys = [
+  "contentRootBindingId",
+  "decisionChecksum",
+  "kind",
+  "recoveryObjectId",
+  "recoveryGrantRevision",
+  "recoveryRootBindingId",
+  "recoverySideEffectChecksum",
+  "schemaVersion",
+  "state"
+] as const;
 const operationStateKeys = [
   "kind",
   "receipt",
