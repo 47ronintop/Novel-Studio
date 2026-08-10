@@ -109,6 +109,35 @@ describe("Desktop Engineering mutation production composition V2", () => {
     expect(closeStateRootCalls).toBe(1);
   });
 
+  test("keeps the root closed after a durable incomplete lifecycle WAL", async () => {
+    const harness = createHarness();
+    const first = await createDesktopEngineeringMutationProductionCompositionV2(harness.options);
+    if (first === undefined) throw new Error("expected clear production composition");
+    await expect(first.lifecycleWalRepository.prepare(lifecyclePrepared())).resolves.toMatchObject({
+      ok: true,
+      value: { committedAt: null }
+    });
+    const lifecycleScan = await first.lifecycleWalRepository.scanRoot(ROOT_BINDING_ID);
+    await expect(Promise.resolve(lifecycleScan)).resolves.toMatchObject({
+      ok: true,
+      value: { journals: [{ committedAt: null }] }
+    });
+    if (!lifecycleScan.ok || lifecycleScan.value.journals[0] === undefined)
+      throw new Error("expected lifecycle WAL");
+    const lease = await first.recoveryRuntime.transactionGate.acquireMutationLease({
+      contentRootBindingId: ROOT_BINDING_ID,
+      transactionId: "lifecycle_transaction_01",
+      preparedChecksum: lifecycleScan.value.journals[0].preparedChecksum
+    });
+    expect(lease).toMatchObject({ ok: true });
+    if (lease.ok) await lease.value.release();
+    first.dispose();
+
+    await expect(
+      createDesktopEngineeringMutationProductionCompositionV2(harness.options)
+    ).resolves.toBeUndefined();
+  });
+
   test("keeps composition unavailable for a shared-ledger root-bound orphan reservation", async () => {
     const wal = reservationWal();
     const orphan = createHarness({
@@ -166,7 +195,15 @@ describe("Desktop Engineering mutation production composition V2", () => {
       proposalRepository: expect.any(Object),
       blobStore: expect.any(Object),
       walRepository: expect.any(Object),
+      lifecycleWalRepository: expect.any(Object),
+      lifecycleTransaction: expect.any(Object),
       syncRequiredStore: expect.any(Object)
+    });
+    await expect(
+      composition.lifecycleWalRepository.scanRoot(ROOT_BINDING_ID)
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { contentRootBindingId: ROOT_BINDING_ID, journals: [] }
     });
     // The session has no pending proposal for this deliberately synthetic apply request. Reaching
     // that later check proves a missing editor did not incorrectly block a create target.
@@ -579,6 +616,48 @@ function runtimeRequest() {
     approvalBindingChecksum: "b".repeat(64),
     capabilityRevision: "capability_01",
     transactionInput: {}
+  };
+}
+
+function lifecyclePrepared() {
+  return {
+    schemaVersion: "2.0" as const,
+    transactionId: "lifecycle_transaction_01",
+    contentRootBindingId: ROOT_BINDING_ID,
+    providerSemanticVersionSetChecksum: "a".repeat(64),
+    authorization: {
+      authorizationId: "lifecycle_authorization_01",
+      approvalBindingId: "lifecycle_approval_01",
+      approvalBindingChecksum: "b".repeat(64),
+      sideEffectSubjectChecksum: "c".repeat(64),
+      changeSetId: "lifecycle_change_set_01",
+      changeSetRevision: 1,
+      changeSetChecksum: "d".repeat(64)
+    },
+    operations: [
+      {
+        request: {
+          schemaVersion: "3.0" as const,
+          operationKind: "move_file" as const,
+          transactionId: "lifecycle_transaction_01",
+          operationId: "lifecycle_operation_01",
+          contentRootBindingId: ROOT_BINDING_ID,
+          relativeSource: "src/old.ts",
+          relativeTarget: "src/new.ts",
+          sourceFileIdentity: "file_lifecycle_01",
+          sourceSha256: "e".repeat(64),
+          targetProof: "absent" as const,
+          recoveryRootBindingId: "",
+          recoveryGrantRevision: "",
+          recoverySideEffectChecksum: "f".repeat(64),
+          recoveryObjectId: "",
+          stagingObjectId: "staging_lifecycle_01",
+          expectedState: "wal_prepared" as const
+        },
+        recoveryBinding: null
+      }
+    ],
+    preparedAt: NOW
   };
 }
 

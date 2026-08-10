@@ -100,6 +100,23 @@ export interface EngineeringRecoveryGateV2Options {
     readonly contentRootBindingId: string;
     readonly referencedAuthorizationIds: readonly string[];
   }) => Promise<Result<EngineeringRecoveryReservationScanV2, UnifiedError>>;
+  /** Optional B8 lifecycle WAL scan. Any incomplete/unknown lifecycle record blocks the root. */
+  readonly scanLifecycleRecovery?: (
+    contentRootBindingId: string
+  ) => Promise<
+    Result<
+      {
+        readonly status: "clear" | "blocked";
+        readonly unknownRecordCount?: number;
+        readonly authenticationFailureCount?: number;
+      },
+      UnifiedError
+    >
+  >;
+  /** Allows the lifecycle coordinator to lease the one WAL it just prepared. */
+  readonly verifyLifecycleLease?: (
+    input: EngineeringRecoveryMutationLeaseInputV2
+  ) => Promise<Result<boolean, UnifiedError>>;
   /** Main-owned volume-local recovery scan. Missing means the delete/recovery capability is unavailable. */
   readonly scanVolumeLocalRecovery?: (contentRootBindingId: string) => Promise<
     Result<
@@ -195,7 +212,15 @@ export class EngineeringRecoveryGateV2 {
     // A concurrent acquirer may have completed its scan while this lease was scanning.
     if (this.leases.has(parsed.contentRootBindingId)) return leaseUnavailable(this.traceId);
     if (!isExactUncommittedPrepared(evaluated.value, parsed)) {
-      return leaseRejected(this.traceId);
+      if (
+        this.options.verifyLifecycleLease === undefined ||
+        evaluated.value.journals.some((journal) => journal.commit !== null)
+      )
+        return leaseRejected(this.traceId);
+      const verifyLifecycleLease = this.options.verifyLifecycleLease;
+      if (verifyLifecycleLease === undefined) return leaseRejected(this.traceId);
+      const lifecycle = await safely(() => verifyLifecycleLease(parsed));
+      if (!lifecycle.ok || lifecycle.value !== true) return leaseRejected(this.traceId);
     }
     const token = Object.freeze({});
     const active = freeze({ token, input: parsed, kind });
@@ -352,6 +377,20 @@ export class EngineeringRecoveryGateV2 {
             ? "authentication_failed"
             : "orphaned_object"
         );
+      }
+    }
+
+    if (this.options.scanLifecycleRecovery !== undefined) {
+      const scanLifecycleRecovery = this.options.scanLifecycleRecovery;
+      const lifecycle = await safely(() => scanLifecycleRecovery(contentRootBindingId));
+      if (
+        !lifecycle.ok ||
+        !isLifecycleRecoveryScan(lifecycle.value) ||
+        lifecycle.value.status !== "clear" ||
+        (lifecycle.value.unknownRecordCount ?? 0) > 0 ||
+        (lifecycle.value.authenticationFailureCount ?? 0) > 0
+      ) {
+        reasons.add("prepared_transaction");
       }
     }
 
@@ -562,6 +601,23 @@ function isVolumeLocalRecoveryScan(value: unknown): value is {
         "capacity_exceeded"
       ].includes(reason as string)
     )
+  );
+}
+
+function isLifecycleRecoveryScan(
+  value: unknown
+): value is {
+  readonly status: "clear" | "blocked";
+  readonly unknownRecordCount?: number;
+  readonly authenticationFailureCount?: number;
+} {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record["status"] === "clear" || record["status"] === "blocked") &&
+    (record["unknownRecordCount"] === undefined || isCount(record["unknownRecordCount"])) &&
+    (record["authenticationFailureCount"] === undefined ||
+      isCount(record["authenticationFailureCount"]))
   );
 }
 

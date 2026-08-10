@@ -9,6 +9,8 @@ import type {
 } from "@novel-studio/application";
 import {
   EngineeringWriteTransactionV2,
+  EngineeringLifecycleWriteTransactionV2,
+  FileEngineeringLifecycleWalRepositoryV2,
   FileEngineeringMutationBlobStoreV2,
   FileEngineeringMutationProposalRepositoryV2,
   FileEngineeringMutationSyncRequiredStoreV2,
@@ -27,7 +29,9 @@ import {
   type EngineeringRecoveryReservationScanV2,
   type EngineeringRecoveryStagingScanV2,
   type EngineeringV2StagingReservationValidator,
-  type EngineeringWriteTransactionPreparedV2
+  type EngineeringWriteTransactionPreparedV2,
+  type EngineeringLifecycleWriteTransactionInputV2,
+  type EngineeringLifecycleRecoveryRootBindingV2
 } from "@novel-studio/repository";
 import type { EngineeringWorkspaceAccessSession } from "@novel-studio/repository";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -116,6 +120,13 @@ export interface DesktopEngineeringMutationProductionCompositionV2Options {
   /** Authenticates proposal-time snapshot and absence-proof evidence from that same addon. */
   readonly authenticateNativeProposalEvidence: EngineeringNativeProposalEvidenceAuthenticatorV2;
   readonly recovery: DesktopEngineeringMutationRecoveryDependenciesV2;
+  readonly verifyPreparedLifecycleAuthorization?: (
+    prepared: EngineeringLifecycleWriteTransactionInputV2
+  ) => Promise<Result<void, UnifiedError>>;
+  /** Main-owned recovery binding resolver. Omission keeps delete/quarantine fail closed. */
+  readonly resolveLifecycleRecoveryBinding?: (
+    operation: EngineeringLifecycleWriteTransactionInputV2["operations"][number]
+  ) => Promise<Result<EngineeringLifecycleRecoveryRootBindingV2, UnifiedError>>;
   /** Validates the native preallocated staging object for the exact prepared operation. */
   readonly validateStagingReservation: EngineeringV2StagingReservationValidator;
   readonly saveAuthority: DesktopEngineeringMutationSaveAuthorityV2;
@@ -144,6 +155,8 @@ export interface DesktopEngineeringMutationProductionCompositionV2 {
   readonly walRepository: FileEngineeringWalRepositoryV2;
   readonly syncRequiredStore: FileEngineeringMutationSyncRequiredStoreV2;
   readonly transaction: EngineeringWriteTransactionV2;
+  readonly lifecycleWalRepository: FileEngineeringLifecycleWalRepositoryV2;
+  readonly lifecycleTransaction: EngineeringLifecycleWriteTransactionV2;
   readonly recoveryRuntime: DesktopEngineeringRecoveryRuntimeV2;
   /** Revokes this composition when its workspace is replaced or Main shuts down. */
   dispose(): void;
@@ -326,6 +339,11 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       durability,
       traceId: `${traceId}:wal`
     });
+    const lifecycleWalRepository = new FileEngineeringLifecycleWalRepositoryV2({
+      stateRoot: options.stateRoot,
+      durability,
+      traceId: `${traceId}:lifecycle-wal`
+    });
     const syncRequiredStore = new FileEngineeringMutationSyncRequiredStoreV2({
       stateRoot: options.stateRoot,
       durability,
@@ -381,6 +399,36 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           activeReservations.get(authorizationId) === transactionId,
         traceId
       }),
+      scanLifecycleRecovery: async (contentRootBindingId) => {
+        if (contentRootBindingId !== rootBinding.contentRootBindingId)
+          return unavailable("ENGINEERING_MUTATION_PRODUCTION_ROOT_MISMATCH", traceId);
+        const scan = await lifecycleWalRepository.scanRoot(contentRootBindingId);
+        if (!scan.ok) return scan;
+        const incomplete = scan.value.journals.some((journal) => journal.committedAt === null);
+        return ok({
+          status:
+            incomplete ||
+            scan.value.unknownRecordCount > 0 ||
+            scan.value.authenticationFailureCount > 0
+              ? ("blocked" as const)
+              : ("clear" as const),
+          unknownRecordCount: scan.value.unknownRecordCount,
+          authenticationFailureCount: scan.value.authenticationFailureCount
+        });
+      },
+      verifyLifecycleLease: async (input) => {
+        if (input.contentRootBindingId !== rootBinding.contentRootBindingId) return ok(false);
+        const journal = await lifecycleWalRepository.read({
+          contentRootBindingId: input.contentRootBindingId,
+          transactionId: input.transactionId
+        });
+        if (!journal.ok) return journal;
+        return ok(
+          journal.value !== undefined &&
+            journal.value.committedAt === null &&
+            journal.value.preparedChecksum === input.preparedChecksum
+        );
+      },
       traceId: `${traceId}:recovery`,
       ...(options.now === undefined ? {} : { now: options.now })
     });
@@ -458,6 +506,31 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       },
       verifyFullAfterManifest: fullAfterManifestVerifier,
       traceId: `${traceId}:transaction`,
+      ...(options.now === undefined ? {} : { now: options.now })
+    });
+    const lifecycleTransaction = new EngineeringLifecycleWriteTransactionV2({
+      walRepository: lifecycleWalRepository,
+      mutationPort,
+      recoveryGate: recoveryRuntime.value.transactionGate,
+      validateReservedAuthorization: async (prepared) => {
+        const root = await verifyRootAvailable();
+        if (!root.ok) return root;
+        if (options.verifyPreparedLifecycleAuthorization === undefined)
+          return unavailable(
+            "ENGINEERING_MUTATION_PRODUCTION_LIFECYCLE_AUTHORIZATION_UNAVAILABLE",
+            traceId
+          );
+        const verifyPreparedLifecycleAuthorization = options.verifyPreparedLifecycleAuthorization;
+        return safelyCall(
+          () => verifyPreparedLifecycleAuthorization(prepared),
+          "ENGINEERING_MUTATION_PRODUCTION_AUTHORIZATION_UNAVAILABLE",
+          traceId
+        );
+      },
+      ...(options.resolveLifecycleRecoveryBinding === undefined
+        ? {}
+        : { resolveRecoveryBinding: options.resolveLifecycleRecoveryBinding }),
+      traceId: `${traceId}:lifecycle-transaction`,
       ...(options.now === undefined ? {} : { now: options.now })
     });
 
@@ -551,8 +624,10 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       proposalRepository,
       blobStore,
       walRepository,
+      lifecycleWalRepository,
       syncRequiredStore,
       transaction,
+      lifecycleTransaction,
       recoveryRuntime: recoveryRuntime.value,
       dispose() {
         try {

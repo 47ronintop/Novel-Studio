@@ -42,6 +42,12 @@ export async function createDesktopEngineeringRecoveryRuntimeV2(
     scanLegacyRecovery: options.scanLegacyRecovery,
     scanStaging: options.scanStaging,
     scanReservations: options.scanReservations,
+    ...(options.scanLifecycleRecovery === undefined
+      ? {}
+      : { scanLifecycleRecovery: options.scanLifecycleRecovery }),
+    ...(options.verifyLifecycleLease === undefined
+      ? {}
+      : { verifyLifecycleLease: options.verifyLifecycleLease }),
     ...(options.scanVolumeLocalRecovery === undefined
       ? {}
       : { scanVolumeLocalRecovery: options.scanVolumeLocalRecovery }),

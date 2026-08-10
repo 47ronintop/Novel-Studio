@@ -1,9 +1,13 @@
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import {
   ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
   canonicalizeEngineeringMutationV2Json,
   inspectEngineeringRawBytesV2,
+  sha256EngineeringMutationTextV2,
   validateEngineeringAbsenceProofV2,
   validateEngineeringFileLifecycleRequestV2,
   validateEngineeringFileMutationRequestV2,
@@ -18,8 +22,12 @@ import {
   type EngineeringFileMutationRequestV2,
   type EngineeringRawByteManifestV2
 } from "./engineering-file-mutation-port-v2.js";
+import { verifyEngineeringFileLifecycleReceiptBindingV2 } from "./engineering-mutation-receipt.js";
 import {
   createEngineeringMutationBlobReferenceV2,
+  type EngineeringStateDirectoryEntryV2,
+  type EngineeringStateDurabilityPortV2,
+  type EngineeringStateFileHandleV2,
   type EngineeringMutationBlobReferenceV2,
   type EngineeringMutationBlobStoreV2
 } from "./engineering-mutation-blob-store.js";
@@ -176,6 +184,252 @@ export interface EngineeringLifecycleWriteTransactionV2Options {
   ) => Promise<Result<EngineeringLifecycleRecoveryRootBindingV2, UnifiedError>>;
   readonly now?: () => string;
   readonly traceId?: string;
+}
+
+export interface EngineeringLifecycleWalScanV2 {
+  readonly schemaVersion: typeof ENGINEERING_MUTATION_V2_SCHEMA_VERSION;
+  readonly contentRootBindingId: string;
+  readonly journals: readonly EngineeringLifecycleWriteAheadLogV2[];
+  readonly unknownRecordCount: number;
+  readonly authenticationFailureCount: number;
+}
+
+export interface FileEngineeringLifecycleWalRepositoryV2Options {
+  readonly stateRoot: string;
+  readonly durability: EngineeringStateDurabilityPortV2;
+  readonly traceId?: string;
+}
+
+/** Durable lifecycle WAL kept separate from the raw-byte WAL namespace. */
+export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifecycleWalRepositoryV2 {
+  private static readonly queues = new Map<string, Promise<void>>();
+  private readonly traceId: string;
+
+  public constructor(private readonly options: FileEngineeringLifecycleWalRepositoryV2Options) {
+    this.traceId = options.traceId ?? "engineering-lifecycle-wal-repository-v2";
+  }
+
+  public async read(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+  }) {
+    if (!isStableId(input.contentRootBindingId) || !isStableId(input.transactionId))
+      return invalid("ENGINEERING_LIFECYCLE_WAL_V2_LOCATOR_INVALID", this.traceId);
+    const durability = this.qualifiedDurability();
+    if (durability === undefined) return durabilityUnavailable(this.traceId);
+    try {
+      const bytes = await durability.readFileNoFollow(
+        this.path(input.contentRootBindingId, input.transactionId)
+      );
+      return validateLifecycleWal(
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+        this.traceId
+      );
+    } catch (cause) {
+      if (isMissing(cause)) return ok(undefined);
+      return storageFailure("ENGINEERING_LIFECYCLE_WAL_V2_READ_FAILED", this.traceId);
+    }
+  }
+
+  public async prepare(input: EngineeringLifecycleWriteTransactionInputV2) {
+    const parsed = validateEngineeringLifecycleWriteTransactionInputV2(input, this.traceId);
+    if (!parsed.ok) return parsed;
+    return this.serialized(async () => {
+      const current = await this.read(parsed.value);
+      if (!current.ok) return current;
+      if (current.value !== undefined)
+        return sameCanonicalJson(current.value.prepared, parsed.value)
+          ? ok(current.value)
+          : conflict(this.traceId);
+      const journal = createLifecycleWal(parsed.value, [], null);
+      const persisted = await this.persist(journal, "create");
+      return persisted.ok ? ok(journal) : persisted;
+    });
+  }
+
+  public async appendProgress(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly receipt: EngineeringFileLifecycleReceiptV2;
+    readonly recordedAt: string;
+  }) {
+    if (!isCanonicalUtcTimestamp(input.recordedAt))
+      return invalid("ENGINEERING_LIFECYCLE_WAL_V2_PROGRESS_INVALID", this.traceId);
+    return this.serialized(async () => {
+      const current = await this.read(input);
+      if (!current.ok) return current;
+      if (current.value === undefined) return missing(this.traceId);
+      if (current.value.committedAt !== null)
+        return invalid("ENGINEERING_LIFECYCLE_WAL_V2_PROGRESS_AFTER_COMMIT", this.traceId);
+      const index = current.value.receipts.length;
+      const request = current.value.prepared.operations[index]?.request;
+      if (request === undefined)
+        return invalid("ENGINEERING_LIFECYCLE_WAL_V2_PROGRESS_ORDER_INVALID", this.traceId);
+      const bound = verifyEngineeringFileLifecycleReceiptBindingV2(input.receipt, request);
+      if (!bound.ok) return bound;
+      const next = createLifecycleWal(
+        current.value.prepared,
+        [...current.value.receipts, bound.value],
+        current.value.committedAt
+      );
+      const persisted = await this.persist(next, "replace");
+      return persisted.ok ? ok(next) : persisted;
+    });
+  }
+
+  public async commit(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly committedAt: string;
+  }) {
+    if (!isCanonicalUtcTimestamp(input.committedAt))
+      return invalid("ENGINEERING_LIFECYCLE_WAL_V2_COMMIT_INVALID", this.traceId);
+    return this.serialized(async () => {
+      const current = await this.read(input);
+      if (!current.ok) return current;
+      if (current.value === undefined) return missing(this.traceId);
+      if (current.value.receipts.length !== current.value.prepared.operations.length)
+        return invalid("ENGINEERING_LIFECYCLE_WAL_V2_COMMIT_INCOMPLETE", this.traceId);
+      const next = createLifecycleWal(
+        current.value.prepared,
+        current.value.receipts,
+        input.committedAt
+      );
+      const persisted = await this.persist(next, "replace");
+      return persisted.ok ? ok(next) : persisted;
+    });
+  }
+
+  public async scanRoot(
+    contentRootBindingId: string
+  ): Promise<Result<EngineeringLifecycleWalScanV2, UnifiedError>> {
+    if (!isStableId(contentRootBindingId))
+      return invalid("ENGINEERING_LIFECYCLE_WAL_V2_ROOT_INVALID", this.traceId);
+    const durability = this.qualifiedDurability();
+    if (durability === undefined) return durabilityUnavailable(this.traceId);
+    const directory = this.rootDirectory(contentRootBindingId);
+    let entries: readonly EngineeringStateDirectoryEntryV2[];
+    try {
+      entries = await durability.readDirectoryNoFollow(directory);
+    } catch (cause) {
+      if (isMissing(cause))
+        return ok({
+          schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+          contentRootBindingId,
+          journals: [],
+          unknownRecordCount: 0,
+          authenticationFailureCount: 0
+        });
+      return storageFailure("ENGINEERING_LIFECYCLE_WAL_V2_SCAN_FAILED", this.traceId);
+    }
+    const journals: EngineeringLifecycleWriteAheadLogV2[] = [];
+    let unknownRecordCount = 0;
+    let authenticationFailureCount = 0;
+    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.kind !== "file" || !/^transaction-[a-f0-9]{64}\.json$/u.test(entry.name)) {
+        unknownRecordCount += 1;
+        continue;
+      }
+      try {
+        const raw = JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(
+            await durability.readFileNoFollow(join(directory, entry.name))
+          )
+        );
+        const journal = validateLifecycleWal(raw, this.traceId);
+        if (
+          !journal.ok ||
+          journal.value === undefined ||
+          journal.value.prepared.contentRootBindingId !== contentRootBindingId ||
+          entry.name !== `${diskKey("transaction", journal.value.prepared.transactionId)}.json`
+        )
+          authenticationFailureCount += 1;
+        else journals.push(journal.value);
+      } catch {
+        unknownRecordCount += 1;
+      }
+    }
+    return ok({
+      schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+      contentRootBindingId,
+      journals: journals.sort((a, b) =>
+        a.prepared.transactionId.localeCompare(b.prepared.transactionId)
+      ),
+      unknownRecordCount,
+      authenticationFailureCount
+    });
+  }
+
+  private async persist(
+    journal: EngineeringLifecycleWriteAheadLogV2,
+    mode: "create" | "replace"
+  ): Promise<Result<void, UnifiedError>> {
+    const durability = this.qualifiedDurability();
+    if (durability === undefined) return durabilityUnavailable(this.traceId);
+    const directory = this.rootDirectory(journal.prepared.contentRootBindingId);
+    const target = this.path(journal.prepared.contentRootBindingId, journal.prepared.transactionId);
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    let handle: EngineeringStateFileHandleV2 | undefined;
+    try {
+      await durability.ensureDirectoryNoFollow(directory);
+      await durability.flushDirectory(directory);
+      handle = await durability.openExclusiveNoFollow(temporary);
+      await handle.writeFile(
+        new TextEncoder().encode(canonicalizeEngineeringMutationV2Json(journal))
+      );
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      if (mode === "create") await durability.linkNoFollow(temporary, target);
+      else await durability.renameReplaceNoFollow(temporary, target);
+      await durability.flushDirectory(directory);
+      return ok(undefined);
+    } catch (cause) {
+      if (isAlreadyExists(cause)) return conflict(this.traceId);
+      return storageFailure("ENGINEERING_LIFECYCLE_WAL_V2_WRITE_FAILED", this.traceId);
+    } finally {
+      try {
+        if (handle !== undefined) await handle.close();
+        await durability.unlinkNoFollow(temporary);
+        await durability.flushDirectory(directory);
+      } catch (cause) {
+        if (!isMissing(cause)) {
+          /* startup scan remains fail closed */
+        }
+      }
+    }
+  }
+
+  private rootDirectory(root: string): string {
+    return join(this.options.stateRoot, "engineering-v2", "lifecycle-wal", diskKey("root", root));
+  }
+  private path(root: string, tx: string): string {
+    return join(this.rootDirectory(root), `${diskKey("transaction", tx)}.json`);
+  }
+  private qualifiedDurability(): EngineeringStateDurabilityPortV2 | undefined {
+    return this.options.durability?.qualification === "qualified"
+      ? this.options.durability
+      : undefined;
+  }
+  private async serialized<T>(
+    operation: () => Promise<Result<T, UnifiedError>>
+  ): Promise<Result<T, UnifiedError>> {
+    const key = this.options.stateRoot;
+    const previous = FileEngineeringLifecycleWalRepositoryV2.queues.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    FileEngineeringLifecycleWalRepositoryV2.queues.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (FileEngineeringLifecycleWalRepositoryV2.queues.get(key) === current)
+        FileEngineeringLifecycleWalRepositoryV2.queues.delete(key);
+    }
+  }
 }
 
 /** Durable B8 lifecycle coordinator. The injected WAL must flush before returning from each call. */
@@ -1115,6 +1369,134 @@ function lifecycleUnavailable<T = never>(traceId: string): Result<T, UnifiedErro
   );
 }
 
+function createLifecycleWal(
+  prepared: EngineeringLifecycleWriteTransactionInputV2,
+  receipts: readonly EngineeringFileLifecycleReceiptV2[],
+  committedAt: string | null
+): EngineeringLifecycleWriteAheadLogV2 {
+  const preparedChecksum = sha256EngineeringMutationTextV2(
+    canonicalizeEngineeringMutationV2Json(prepared)
+  );
+  const unsigned = {
+    schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+    kind: "engineering_lifecycle_write_ahead_log" as const,
+    prepared,
+    preparedChecksum,
+    receipts,
+    committedAt
+  };
+  return freeze({
+    ...unsigned,
+    journalChecksum: sha256EngineeringMutationTextV2(
+      canonicalizeEngineeringMutationV2Json(unsigned)
+    )
+  });
+}
+
+function validateLifecycleWal(
+  value: unknown,
+  traceId: string
+): Result<EngineeringLifecycleWriteAheadLogV2 | undefined, UnifiedError> {
+  if (!isRecord(value) || !hasExactKeys(value, lifecycleWalKeys))
+    return invalid("ENGINEERING_LIFECYCLE_WAL_V2_RECORD_INVALID", traceId);
+  const prepared = validateEngineeringLifecycleWriteTransactionInputV2(value["prepared"], traceId);
+  if (
+    !prepared.ok ||
+    !isSha256(value["preparedChecksum"]) ||
+    !Array.isArray(value["receipts"]) ||
+    (value["committedAt"] !== null && !isCanonicalUtcTimestamp(value["committedAt"])) ||
+    !isSha256(value["journalChecksum"])
+  )
+    return invalid("ENGINEERING_LIFECYCLE_WAL_V2_RECORD_INVALID", traceId);
+  const expectedPreparedChecksum = sha256EngineeringMutationTextV2(
+    canonicalizeEngineeringMutationV2Json(prepared.value)
+  );
+  if (value["preparedChecksum"] !== expectedPreparedChecksum)
+    return invalid("ENGINEERING_LIFECYCLE_WAL_V2_AUTHENTICATION_FAILED", traceId);
+  const receipts: EngineeringFileLifecycleReceiptV2[] = [];
+  for (let i = 0; i < (value["receipts"] as unknown[]).length; i += 1) {
+    const request = prepared.value.operations[i]?.request;
+    const receipt =
+      request === undefined
+        ? undefined
+        : verifyEngineeringFileLifecycleReceiptBindingV2(
+            (value["receipts"] as unknown[])[i],
+            request
+          );
+    if (receipt === undefined || !receipt.ok)
+      return invalid("ENGINEERING_LIFECYCLE_WAL_V2_RECORD_INVALID", traceId);
+    receipts.push(receipt.value);
+  }
+  const unsigned = {
+    schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+    kind: "engineering_lifecycle_write_ahead_log" as const,
+    prepared: prepared.value,
+    preparedChecksum: expectedPreparedChecksum,
+    receipts,
+    committedAt: value["committedAt"] as string | null
+  };
+  if (
+    value["journalChecksum"] !==
+    sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(unsigned))
+  )
+    return invalid("ENGINEERING_LIFECYCLE_WAL_V2_AUTHENTICATION_FAILED", traceId);
+  if (value["committedAt"] !== null && receipts.length !== prepared.value.operations.length)
+    return invalid("ENGINEERING_LIFECYCLE_WAL_V2_COMMIT_INCOMPLETE", traceId);
+  return ok(freeze({ ...unsigned, journalChecksum: value["journalChecksum"] as string }));
+}
+
+function diskKey(namespace: string, value: string): string {
+  return `${namespace}-${sha256EngineeringMutationTextV2(value)}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isMissing(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause as { readonly code?: unknown }).code === "ENOENT"
+  );
+}
+
+function isAlreadyExists(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause as { readonly code?: unknown }).code === "EEXIST"
+  );
+}
+
+function storageFailure<T = never>(code: string, traceId: string): Result<T, UnifiedError> {
+  return err(
+    storageError({
+      code,
+      message: "Engineering lifecycle WAL storage is unavailable.",
+      suggestedAction: "Keep lifecycle mutation disabled and enter recovery review.",
+      traceId
+    })
+  );
+}
+
+function durabilityUnavailable<T = never>(traceId: string): Result<T, UnifiedError> {
+  return storageFailure("ENGINEERING_LIFECYCLE_WAL_V2_DURABILITY_UNAVAILABLE", traceId);
+}
+
+function conflict<T = never>(traceId: string): Result<T, UnifiedError> {
+  return err(
+    storageError({
+      code: "ENGINEERING_LIFECYCLE_WAL_V2_CONFLICT",
+      message: "The lifecycle transaction already exists with different contents.",
+      suggestedAction: "Regenerate the lifecycle proposal.",
+      traceId
+    })
+  );
+}
+
 function lifecycleRecoveryRequired<T = never>(traceId: string): Result<T, UnifiedError> {
   return err(
     storageError({
@@ -1171,4 +1553,13 @@ const lifecycleRecoveryBindingKeys = [
   "grantRevision",
   "recoveryRootBindingId",
   "sideEffectChecksum"
+] as const;
+const lifecycleWalKeys = [
+  "committedAt",
+  "journalChecksum",
+  "kind",
+  "prepared",
+  "preparedChecksum",
+  "receipts",
+  "schemaVersion"
 ] as const;
