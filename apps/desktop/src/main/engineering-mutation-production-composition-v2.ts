@@ -1138,6 +1138,17 @@ function revokeOnRootLoss(
     },
     async reconcile(input: Parameters<EngineeringQualifiedFileMutationPortV2["reconcile"]>[0]) {
       return observe(await port.reconcile(input));
+    },
+    async move(input: Parameters<EngineeringQualifiedFileMutationPortV2["move"]>[0]) {
+      return observe(await port.move(input));
+    },
+    async quarantine(input: Parameters<EngineeringQualifiedFileMutationPortV2["quarantine"]>[0]) {
+      return observe(await port.quarantine(input));
+    },
+    async createDirectory(
+      input: Parameters<EngineeringQualifiedFileMutationPortV2["createDirectory"]>[0]
+    ) {
+      return observe(await port.createDirectory(input));
     }
   });
 }

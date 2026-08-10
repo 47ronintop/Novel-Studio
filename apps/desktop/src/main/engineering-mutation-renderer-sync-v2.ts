@@ -9,7 +9,8 @@ export const ENGINEERING_MUTATION_RENDERER_SYNC_EVENT =
 export interface EngineeringMutationRendererSyncRequestV2 {
   readonly schemaVersion: "2.0";
   readonly requestId: string;
-  readonly operationKind: "replace_file" | "create_file";
+  readonly operationKind:
+    "replace_file" | "create_file" | "move_file" | "delete_file" | "create_directory";
   readonly relativePaths: readonly string[];
 }
 
@@ -25,7 +26,7 @@ export interface EngineeringMutationRendererSyncTargetV2 {
 
 export interface EngineeringMutationRendererSyncCoordinatorV2 {
   request(input: {
-    readonly operationKind: "replace_file" | "create_file";
+    readonly operationKind: EngineeringMutationRendererSyncRequestV2["operationKind"];
     readonly relativePaths: readonly string[];
   }): Promise<Result<void, UnifiedError>>;
   complete(input: unknown): Result<void, UnifiedError>;
@@ -50,7 +51,7 @@ export function createEngineeringMutationRendererSyncCoordinatorV2(options: {
     | undefined;
 
   async function request(input: {
-    readonly operationKind: "replace_file" | "create_file";
+    readonly operationKind: EngineeringMutationRendererSyncRequestV2["operationKind"];
     readonly relativePaths: readonly string[];
   }): Promise<Result<void, UnifiedError>> {
     if (pending !== undefined) return failure("ENGINEERING_MUTATION_RENDERER_SYNC_BUSY");
@@ -59,7 +60,7 @@ export function createEngineeringMutationRendererSyncCoordinatorV2(options: {
     const target = options.resolveTarget();
     if (
       relativePaths === undefined ||
-      (input.operationKind !== "replace_file" && input.operationKind !== "create_file") ||
+      !isOperationKind(input.operationKind) ||
       !/^engineering_sync_[a-f0-9]{48}$/u.test(requestId) ||
       target === undefined
     ) {
@@ -112,6 +113,18 @@ export function createEngineeringMutationRendererSyncCoordinatorV2(options: {
   }
 
   return Object.freeze({ request, complete, dispose });
+}
+
+function isOperationKind(
+  value: unknown
+): value is EngineeringMutationRendererSyncRequestV2["operationKind"] {
+  return (
+    value === "replace_file" ||
+    value === "create_file" ||
+    value === "move_file" ||
+    value === "delete_file" ||
+    value === "create_directory"
+  );
 }
 
 function canonicalPaths(value: readonly string[]): readonly string[] | undefined {

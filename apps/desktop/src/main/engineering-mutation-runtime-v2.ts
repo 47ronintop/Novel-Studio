@@ -7,7 +7,8 @@ import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@no
 /** Main-only orchestration contract for the B7 replace/create release. */
 export const ENGINEERING_MUTATION_RUNTIME_V2_SCHEMA_VERSION = "2.0" as const;
 
-export type EngineeringMutationRuntimeOperationKindV2 = "replace_file" | "create_file";
+export type EngineeringMutationRuntimeOperationKindV2 =
+  "replace_file" | "create_file" | "move_file" | "delete_file" | "create_directory";
 
 export interface EngineeringMutationRuntimeApplyRequestV2 {
   readonly schemaVersion: typeof ENGINEERING_MUTATION_RUNTIME_V2_SCHEMA_VERSION;
@@ -435,7 +436,13 @@ function sameTargetList(value: unknown, expected: readonly string[]): boolean {
 }
 
 function isOperationKind(value: unknown): value is EngineeringMutationRuntimeOperationKindV2 {
-  return value === "replace_file" || value === "create_file";
+  return (
+    value === "replace_file" ||
+    value === "create_file" ||
+    value === "move_file" ||
+    value === "delete_file" ||
+    value === "create_directory"
+  );
 }
 
 function isStableId(value: unknown): value is string {

@@ -42,6 +42,15 @@ export type EngineeringFileAccessAddonMetadata =
       readonly mutationV2Probe: "available";
       readonly recoveryScanProbe: "available";
       readonly stateDurabilityProbe: "available";
+    })
+  | (EngineeringFileAccessAddonMetadataBase & {
+      /** B8 exposes additional probe-only primitives; production authorization remains external. */
+      readonly batch: "8";
+      readonly mutation: "available";
+      readonly recovery: "available";
+      readonly mutationV2Probe: "available";
+      readonly recoveryScanProbe: "available";
+      readonly stateDurabilityProbe: "available";
     });
 
 export interface EngineeringFileAccessAddon {
@@ -440,7 +449,7 @@ function isEngineeringFileAccessAddonMetadata(
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   const expectedKeys =
-    record["batch"] === "7"
+    record["batch"] === "7" || record["batch"] === "8"
       ? [
           "accessEligible",
           "adapterId",
@@ -463,7 +472,7 @@ function isEngineeringFileAccessAddonMetadata(
     ((record["batch"] === "6" &&
       record["mutation"] === "unavailable" &&
       record["recovery"] === "unavailable") ||
-      (record["batch"] === "7" &&
+      ((record["batch"] === "7" || record["batch"] === "8") &&
         record["mutation"] === "available" &&
         record["recovery"] === "available" &&
         record["mutationV2Probe"] === "available" &&

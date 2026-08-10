@@ -1084,9 +1084,19 @@ function isEngineeringMutationRendererSyncRequest(
     request["schemaVersion"] === "2.0" &&
     typeof request["requestId"] === "string" &&
     /^engineering_sync_[a-f0-9]{48}$/u.test(request["requestId"]) &&
-    (request["operationKind"] === "replace_file" || request["operationKind"] === "create_file") &&
+    isEngineeringMutationOperationKind(request["operationKind"]) &&
     Array.isArray(request["relativePaths"]) &&
     request["relativePaths"].every((path) => typeof path === "string")
+  );
+}
+
+function isEngineeringMutationOperationKind(value: unknown): boolean {
+  return (
+    value === "replace_file" ||
+    value === "create_file" ||
+    value === "move_file" ||
+    value === "delete_file" ||
+    value === "create_directory"
   );
 }
 

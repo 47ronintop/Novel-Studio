@@ -143,6 +143,14 @@ export type RecoveryReviewProps =
       readonly errorCode: string;
       readonly message: string;
       readonly failedHooks: readonly string[];
+      readonly recoveryGate?: {
+        readonly status: "blocked" | "review_required";
+        readonly scope: "workspace_root" | "volume_local_quarantine";
+        readonly storageLabel?: string;
+        readonly authorityStatus?: "qualified" | "revoked" | "unavailable";
+        readonly capacityLabel?: string;
+        readonly retentionLabel?: string;
+      };
       readonly onOpenRollback?: () => void;
       readonly onRetry?: () => void;
     };

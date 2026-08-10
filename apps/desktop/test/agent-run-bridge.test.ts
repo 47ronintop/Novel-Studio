@@ -1708,7 +1708,19 @@ describe("Agent Run renderer bridge", () => {
       message: "Agent writing failed and applied files were rolled back.",
       recoverability: "user-action" as const,
       suggestedActions: ["Open recovery review."],
-      redactedDetail: { recoveryJournal: { versionGroupId: "version-group-partial" } },
+      redactedDetail: {
+        recoveryJournal: {
+          versionGroupId: "version-group-partial",
+          recoveryGate: {
+            status: "review_required",
+            scope: "volume_local_quarantine",
+            storageLabel: "Workspace recovery storage",
+            authorityStatus: "qualified",
+            capacityLabel: "4 GB available",
+            retentionLabel: "30 days"
+          }
+        }
+      },
       recoveryState: "recovery_review" as const,
       retryTargets: [],
       createdAt: "2026-07-17T12:00:00.000Z"

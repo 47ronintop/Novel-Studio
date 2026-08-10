@@ -445,7 +445,16 @@ function isSignedBatch7Manifest(value, addonSha256) {
       staleBase: "canary_exposed",
       createRace: "canary_exposed",
       faultRecoveryRequired: "canary_exposed"
-    })
+    }) &&
+    isRecord(qualification.lifecycleEvidence) &&
+    hasExactValues(qualification.lifecycleEvidence.positiveProtections, {
+      createDirectory: "passed",
+      move: "passed",
+      quarantine: "passed",
+      restore: "passed",
+      purge: "passed"
+    }) &&
+    hasExactValues(qualification.lifecycleEvidence.negativeControls, {})
   );
 }
 

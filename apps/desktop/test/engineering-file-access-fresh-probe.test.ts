@@ -111,6 +111,27 @@ describe("Main-owned engineering file access fresh probe", () => {
       });
     }, "7");
   });
+
+  test("accepts the B8 native superset only for the signed B7 operation set", async () => {
+    await withInstalledArtifacts(async (paths) => {
+      const probe = createMainOwnedEngineeringFileAccessFreshProbe({
+        loadAddon: () => batch7HardenedFixtureAddon("8")
+      });
+      const report = await probe.probe({
+        ...paths,
+        checkedAt,
+        publisherPolicyChecksum,
+        protectionEvidence: passingProtectionEvidence(),
+        mutationRecoveryEvidence: passingBatch7MutationRecoveryEvidence()
+      });
+
+      expect(report).toMatchObject({ schemaVersion: "2.0", batch: "7" });
+      expect(validateEngineeringFileProbeReportV2(report, checkedAt)).toEqual({
+        valid: true,
+        failureReasons: []
+      });
+    }, "7");
+  });
 });
 
 async function withInstalledArtifacts(
@@ -233,12 +254,12 @@ function hardenedFixtureAddon() {
   };
 }
 
-function batch7HardenedFixtureAddon() {
+function batch7HardenedFixtureAddon(addonBatch: "7" | "8" = "7") {
   return {
     ...hardenedFixtureAddon(),
     adapterInfo: () => ({
       target: "win32-x64",
-      batch: "7",
+      batch: addonBatch,
       accessEligible: "available",
       mutation: "available",
       recovery: "available"

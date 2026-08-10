@@ -173,6 +173,9 @@ export interface ApplicationIpcHandlerOptions {
   readonly getActiveEngineeringEditorRootBindingId?: () => string | undefined;
   /** Main-owned acknowledgement coordinator for committed Engineering V2 mutations. */
   readonly engineeringMutationRendererSync?: EngineeringMutationRendererSyncCoordinatorV2;
+  /** Main-owned startup recovery gate. When present, ordinary engineering writes/transitions
+   * remain blocked until the same root scan used by Agent mutation is clear. */
+  readonly assertEngineeringRecoveryAllowed?: () => Promise<Result<void, UnifiedError>>;
   readonly agentNetworkSettingsSession?: AgentNetworkSettingsSession;
   readonly agentMcpSettingsSession?: McpSettingsSession;
   readonly agentTaskCatalogPort?: {
@@ -601,12 +604,14 @@ export function createApplicationIpcHandlers(
   return {
     "application:get-shell-state": () => Promise.resolve(application.getShellState()),
     "application:list-commands": () => Promise.resolve(application.listCommands()),
-    "application:execute-command": (commandId: unknown) => {
+    "application:execute-command": async (commandId: unknown) => {
       if (typeof commandId !== "string") {
         return Promise.resolve(application.executeCommand(""));
       }
 
       if (commandId === "workspace.close-current") {
+        const recovery = await assertEngineeringRecovery(options);
+        if (!recovery.ok) return recovery;
         return (
           options.workspaceActivationCoordinator?.closeCurrentWorkspace() ??
           Promise.resolve(application.executeCommand(""))
@@ -626,6 +631,8 @@ export function createApplicationIpcHandlers(
         .refreshActiveProjectWorkspace()
         .then((result) => projectSnapshotResultToDto(result)),
     "application:project:open-creative-project": async (selectionId: unknown) => {
+      const recovery = await assertEngineeringRecovery(options);
+      if (!recovery.ok) return recovery;
       const selection = resolveDirectorySelection(selectionId, "creative-open");
       if (!selection.ok) return selection;
       if (options.workspaceActivationCoordinator === undefined) {
@@ -647,6 +654,8 @@ export function createApplicationIpcHandlers(
       });
     },
     "application:project:create-creative-project": async (input: unknown) => {
+      const recovery = await assertEngineeringRecovery(options);
+      if (!recovery.ok) return recovery;
       const request = toCreateCreativeProjectRequest(input);
       if (request === undefined) return invalidWorkspaceRequest<WorkspaceActivationDto>();
       const selection = resolveDirectorySelection(
@@ -673,6 +682,8 @@ export function createApplicationIpcHandlers(
       chooseDirectory("engineering-open", options.chooseEngineeringDirectory),
     "application:workspace:choose-text-file": () => chooseProjectTextFile(),
     "application:workspace:open-engineering-workspace": async (selectionId: unknown) => {
+      const recovery = await assertEngineeringRecovery(options);
+      if (!recovery.ok) return recovery;
       const selection = resolveDirectorySelection(selectionId, "engineering-open");
       if (!selection.ok) return selection;
       if (options.workspaceActivationCoordinator === undefined) {
@@ -683,11 +694,14 @@ export function createApplicationIpcHandlers(
         options.getActiveEngineeringEditorRootBindingId?.()
       );
     },
-    "application:workspace:attach-active-creative-project": async () =>
-      withActiveEngineeringRootBindingSnapshot(
+    "application:workspace:attach-active-creative-project": async () => {
+      const recovery = await assertEngineeringRecovery(options);
+      if (!recovery.ok) return recovery;
+      return withActiveEngineeringRootBindingSnapshot(
         await application.attachActiveCreativeProjectEngineeringWorkspace(),
         options.getActiveEngineeringEditorRootBindingId?.()
-      ),
+      );
+    },
     "application:workspace:refresh-engineering-tree": async () =>
       withActiveEngineeringRootBindingSnapshot(
         await application.refreshEngineeringTree(),
@@ -705,7 +719,8 @@ export function createApplicationIpcHandlers(
             application,
             options.agentWriteSaveCoordinator,
             options.getActiveEngineeringEditorRootBindingId,
-            request
+            request,
+            options.assertEngineeringRecoveryAllowed
           );
     },
     "application:workspace:complete-engineering-mutation-sync": (input: unknown) =>
@@ -3253,7 +3268,8 @@ async function saveEngineeringTextFileWithCoordinator(
   application: DesktopApplication,
   coordinator: AgentWriteSaveCoordinator | undefined,
   getActiveRootBindingId: (() => string | undefined) | undefined,
-  request: { readonly path: string; readonly content: string; readonly expectedChecksum: string }
+  request: { readonly path: string; readonly content: string; readonly expectedChecksum: string },
+  assertRecoveryAllowed: (() => Promise<Result<void, UnifiedError>>) | undefined
 ): Promise<unknown> {
   const readActiveRootBindingId = getActiveRootBindingId;
   if (coordinator === undefined || readActiveRootBindingId === undefined) {
@@ -3263,6 +3279,9 @@ async function saveEngineeringTextFileWithCoordinator(
   if (rootBindingId === undefined) {
     return engineeringSaveCoordinatorUnavailable();
   }
+  if (assertRecoveryAllowed === undefined) return engineeringRecoveryGateUnavailable();
+  const recovery = await safelyAssertEngineeringRecovery(assertRecoveryAllowed);
+  if (!recovery.ok) return recovery;
   const permit = coordinator.beginEngineeringSave(rootBindingId, request.path);
   if (!permit.ok) return engineeringSavePausedForAgentWrite();
   try {
@@ -3273,6 +3292,46 @@ async function saveEngineeringTextFileWithCoordinator(
   } finally {
     permit.release();
   }
+}
+
+async function assertEngineeringRecovery(
+  options: ApplicationIpcHandlerOptions
+): Promise<Result<void, UnifiedError>> {
+  // Creative and standalone lifecycle remains governed by their existing coordinators. The
+  // recovery gate is required only while the active Main runtime is an engineering workspace.
+  const manager = options.agentRuntimeManager;
+  const active = manager?.active();
+  if (active?.scope !== "workspace" || active.binding.kind !== "engineeringWorkspace") {
+    return ok(undefined);
+  }
+  const assertAllowed = options.assertEngineeringRecoveryAllowed;
+  if (assertAllowed !== undefined) return safelyAssertEngineeringRecovery(assertAllowed);
+  return options.getActiveEngineeringEditorRootBindingId?.() === undefined
+    ? ok(undefined)
+    : engineeringRecoveryGateUnavailable();
+}
+
+async function safelyAssertEngineeringRecovery(
+  assertAllowed: () => Promise<Result<void, UnifiedError>>
+): Promise<Result<void, UnifiedError>> {
+  try {
+    return await assertAllowed();
+  } catch {
+    return engineeringRecoveryGateUnavailable();
+  }
+}
+
+function engineeringRecoveryGateUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "ENGINEERING_RECOVERY_GATE_UNAVAILABLE",
+      category: "StorageError",
+      message: "Engineering workspace changes are blocked until recovery is complete.",
+      recoverability: "user-action",
+      suggestedAction: "Review the recovery state before saving or changing this workspace.",
+      traceId: "desktop-engineering-recovery-gate-ipc"
+    })
+  );
 }
 
 function engineeringSaveCoordinatorUnavailable<T>(): Result<T, UnifiedError> {

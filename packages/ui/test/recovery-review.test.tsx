@@ -5,7 +5,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { RecoveryReview } from "../src/recovery-review.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("RecoveryReview", () => {
   afterEach(() => document.body.replaceChildren());
@@ -22,7 +24,9 @@ describe("RecoveryReview", () => {
         <RecoveryReview
           source="chapter_autosave"
           recovery={{
-            availableItems: [{ sessionId: "session-01", chapterId: "chapter-01", updatedAt: "10:00" }],
+            availableItems: [
+              { sessionId: "session-01", chapterId: "chapter-01", updatedAt: "10:00" }
+            ],
             review: {
               status: "previewing",
               selectedDraft: {
@@ -76,6 +80,14 @@ describe("RecoveryReview", () => {
           errorCode="AGENT_RECOVERY_REQUIRED"
           message="部分写入需要恢复审阅"
           failedHooks={["syncSavedEditor"]}
+          recoveryGate={{
+            status: "review_required",
+            scope: "volume_local_quarantine",
+            storageLabel: "Workspace recovery storage",
+            authorityStatus: "qualified",
+            capacityLabel: "4 GB available",
+            retentionLabel: "30 days"
+          }}
           onOpenRollback={onOpenRollback}
           onRetry={onRetry}
         />
@@ -86,6 +98,9 @@ describe("RecoveryReview", () => {
     expect(review).not.toBeNull();
     expect(review?.textContent).toContain("recovery_required");
     expect(review?.textContent).toContain("version-group-recovery");
+    expect(review?.textContent).toContain("Workspace recovery storage");
+    expect(review?.textContent).toContain("4 GB available");
+    expect(review?.textContent).toContain("30 days");
     expect(review?.textContent).not.toContain("恢复成功");
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="打开撤销审阅"]')?.click());
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="重试 Agent 运行"]')?.click());

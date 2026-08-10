@@ -44,10 +44,24 @@ describe("desktop Engineering recovery runtime V2", () => {
 
     expect(runtime).toMatchObject({ ok: true, value: { status: "blocked" } });
   });
+
+  test("forwards the volume-local recovery scan into the startup gate", async () => {
+    const runtime = await createDesktopEngineeringRecoveryRuntimeV2(
+      recoveryOptions({ volumeRecoveryBlocked: true })
+    );
+
+    expect(runtime).toMatchObject({ ok: true, value: { status: "blocked" } });
+    if (!runtime.ok) return;
+    expect(runtime.value.transactionGate.snapshot("root_01")?.status).toBe("blocked");
+  });
 });
 
 function recoveryOptions(
-  input: { readonly nativeUnknown?: boolean; readonly rootUnavailable?: boolean } = {}
+  input: {
+    readonly nativeUnknown?: boolean;
+    readonly rootUnavailable?: boolean;
+    readonly volumeRecoveryBlocked?: boolean;
+  } = {}
 ) {
   return {
     contentRootBindingId: "root_01",
@@ -81,6 +95,10 @@ function recoveryOptions(
         unknownRecordCount: 0,
         authenticationFailureCount: 0
       }),
+    scanVolumeLocalRecovery: async () =>
+      input.volumeRecoveryBlocked
+        ? ok({ status: "blocked" as const, reasons: ["binding_invalid" as const] })
+        : ok({ status: "clear" as const, reasons: [] as const }),
     now: () => NOW
   };
 }

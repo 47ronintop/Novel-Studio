@@ -298,6 +298,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     }
   });
   const engineeringRootBindingIdByRuntime = new WeakMap<DesktopAgentRuntime, string>();
+  const engineeringRecoveryGateByRuntime = new WeakMap<
+    DesktopAgentRuntime,
+    () => Promise<Result<void, UnifiedError>>
+  >();
   let activeEngineeringEditorRootBindingId: string | undefined;
   const workspaceContextPolicyStore = createDesktopWorkspaceContextPolicyStore({ userDataRoot });
   const creativeGeneralActiveResourceProof = createCreativeGeneralActiveResourceProof();
@@ -835,6 +839,15 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           engineeringWorkspaceAccessSession.binding.rootBindingId
         );
       }
+      if (engineeringMutationComposition !== undefined) {
+        const contentRootBindingId = engineeringMutationRootBinding?.contentRootBindingId;
+        if (contentRootBindingId === undefined) throw new Error("Engineering root binding missing");
+        engineeringRecoveryGateByRuntime.set(runtime, () =>
+          engineeringMutationComposition.recoveryRuntime.startupGate.assertMutationAllowed(
+            contentRootBindingId
+          )
+        );
+      }
       return runtime;
     },
     createStandaloneRuntime: async () => {
@@ -1008,6 +1021,26 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     },
     engineeringEditorStateRegistry,
     getActiveEngineeringEditorRootBindingId: () => activeEngineeringEditorRootBindingId,
+    assertEngineeringRecoveryAllowed: async () => {
+      const active = agentRuntimeManager.active();
+      if (active?.scope !== "workspace" || active.binding.kind !== "engineeringWorkspace") {
+        return ok(undefined);
+      }
+      const assertAllowed = engineeringRecoveryGateByRuntime.get(active.runtime);
+      if (assertAllowed === undefined) {
+        return err(
+          createUnifiedError({
+            code: "ENGINEERING_RECOVERY_GATE_UNAVAILABLE",
+            category: "StorageError",
+            message: "Engineering recovery has not completed for this workspace.",
+            recoverability: "user-action",
+            suggestedAction: "Keep engineering writes and lifecycle changes disabled.",
+            traceId: "desktop-engineering-recovery-gate-main"
+          })
+        );
+      }
+      return assertAllowed();
+    },
     engineeringMutationRendererSync,
     agentNetworkSettingsSession,
     agentMcpSettingsSession,

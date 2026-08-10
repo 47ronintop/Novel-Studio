@@ -359,11 +359,18 @@ function assertAddon(
     throw new Error("ENGINEERING_FILE_ACCESS_FRESH_PROBE_INVALID_ADDON");
   }
   const info = addon.adapterInfo?.();
+  const addonBatch =
+    info !== null && typeof info === "object"
+      ? (info as Record<string, unknown>)["batch"]
+      : undefined;
   if (
     info === null ||
     typeof info !== "object" ||
     (info as Record<string, unknown>)["target"] !== "win32-x64" ||
-    (info as Record<string, unknown>)["batch"] !== batch ||
+    // A B8 addon is a strict native superset of the B7 probe surface. A signed B7 eligibility
+    // manifest may retain its B7 operation set on that artifact, but B8 operations never inherit
+    // authorization from this compatibility observation.
+    (batch === "6" ? addonBatch !== "6" : addonBatch !== "7" && addonBatch !== "8") ||
     (info as Record<string, unknown>)["accessEligible"] !== "available" ||
     (info as Record<string, unknown>)["mutation"] !==
       (batch === "7" ? "available" : "unavailable") ||

@@ -42,6 +42,9 @@ export async function createDesktopEngineeringRecoveryRuntimeV2(
     scanLegacyRecovery: options.scanLegacyRecovery,
     scanStaging: options.scanStaging,
     scanReservations: options.scanReservations,
+    ...(options.scanVolumeLocalRecovery === undefined
+      ? {}
+      : { scanVolumeLocalRecovery: options.scanVolumeLocalRecovery }),
     ...(options.now === undefined ? {} : { now: options.now }),
     traceId: options.traceId ?? "desktop-engineering-recovery-gate-v2"
   });

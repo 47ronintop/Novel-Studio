@@ -80,6 +80,16 @@ describe("engineering file access production evidence", () => {
           createRace: "canary_exposed",
           faultRecoveryRequired: "canary_exposed"
         }
+      },
+      lifecycleEvidence: {
+        positiveProtections: {
+          createDirectory: "passed",
+          move: "passed",
+          quarantine: "passed",
+          restore: "passed",
+          purge: "passed"
+        },
+        negativeControls: {}
       }
     });
     expect(new Set(Object.values(evidence.canaryArtifacts).map((item) => item.sha256)).size).toBe(
@@ -103,6 +113,24 @@ describe("engineering file access production evidence", () => {
         now: fixture.now
       })
     ).rejects.toThrow("executed mutation/recovery negative controls");
+  });
+
+  test("rejects incomplete B8 lifecycle evidence from the executed native probe", async () => {
+    const fixture = await createFixture();
+    const development = JSON.parse(await readFile(fixture.request.developmentReportPath, "utf8"));
+    development.mutationV2Probe.lifecycleRestore = "not_executed";
+    await writeFile(
+      fixture.request.developmentReportPath,
+      `${JSON.stringify(development, null, 2)}\n`,
+      "utf8"
+    );
+
+    await expect(
+      composeEngineeringFileAccessProductionEvidence({
+        ...fixture.request,
+        now: fixture.now
+      })
+    ).rejects.toThrow("executed B8 lifecycle positive protections");
   });
 
   test("rejects a disabled-protection report detached from its build identity sidecar", async () => {
@@ -297,6 +325,11 @@ async function createFixture() {
     objectReceiptBinding: "passed",
     walPreparation: "passed",
     recoveryScan: "passed",
+    lifecycleCreateDirectory: "passed",
+    lifecycleMove: "passed",
+    lifecycleQuarantine: "passed",
+    lifecycleRestore: "passed",
+    lifecyclePurge: "passed",
     negativeCanaries: {
       objectV2RawByteManifestMismatch: "canary_exposed",
       objectV2StaleBase: "canary_exposed",

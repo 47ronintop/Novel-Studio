@@ -110,6 +110,11 @@ interface PendingApply {
   readonly transactionInput: EngineeringWriteTransactionInputV2;
 }
 
+type EngineeringRawMutationProposalRecordV2 = Extract<
+  EngineeringMutationProposalRecordV2,
+  { readonly operationKind: "replace_file" | "create_file" }
+>;
+
 type ReservedChangeSetApprovalV2 = ChangeSetApprovalV2 & {
   readonly authorizationId: string;
   readonly reservationTransactionId: string;
@@ -582,6 +587,11 @@ export function createDesktopEngineeringFileMutationSessionV2(
     record: EngineeringMutationProposalRecordV2,
     approval: ReservedChangeSetApprovalV2
   ): Promise<Result<EngineeringWriteTransactionInputV2, UnifiedError>> {
+    // B8 lifecycle records use the separate lifecycle WAL/native ABI. Keep this B7 session
+    // fail-closed until the production composition supplies that coordinator.
+    if (!isRawMutationProposalRecord(record)) {
+      return unavailable("ENGINEERING_LIFECYCLE_TRANSACTION_UNAVAILABLE");
+    }
     const candidate = await options.blobStore.get(record.candidate.blob);
     if (!candidate.ok) return candidate;
     let transactionBefore: EngineeringWriteTransactionInputV2["operations"][number]["before"];
@@ -672,6 +682,8 @@ async function preparedProjection(
       }
     });
   }
+  if (record.operationKind !== "create_file")
+    return unavailable("ENGINEERING_LIFECYCLE_SESSION_UNAVAILABLE");
   const candidate = readString(args, "candidate");
   if (candidate === undefined) return invalid();
   return ok({
@@ -698,6 +710,7 @@ async function preparedProjection(
 function proofInput(
   record: EngineeringMutationProposalRecordV2
 ): EngineeringApprovalProofInputV2 | undefined {
+  if (!isRawMutationProposalRecord(record)) return undefined;
   const changeSetBinding = record.changeSetBinding;
   if (changeSetBinding === null) return undefined;
   return Object.freeze({
@@ -727,6 +740,7 @@ function factsFor(
   changeSet: ChangeSetV2,
   proof: MainOnlyApprovalDecisionProofV1
 ): EngineeringApprovalBindingFactsV2 | undefined {
+  if (!isRawMutationProposalRecord(record)) return undefined;
   const binding = record.changeSetBinding;
   if (binding === null) return undefined;
   const proofFacts = proofInput(record);
@@ -827,6 +841,9 @@ function requestFor(
   record: EngineeringMutationProposalRecordV2,
   transactionId: string
 ): EngineeringFileMutationRequestV2 {
+  if (!isRawMutationProposalRecord(record)) {
+    throw new Error("ENGINEERING_LIFECYCLE_TRANSACTION_UNAVAILABLE");
+  }
   return {
     schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
     operationKind: record.operationKind,
@@ -839,6 +856,12 @@ function requestFor(
     candidate: record.candidate,
     stagingObjectId: record.stagingObjectId
   };
+}
+
+function isRawMutationProposalRecord(
+  record: EngineeringMutationProposalRecordV2
+): record is EngineeringRawMutationProposalRecordV2 {
+  return record.operationKind === "replace_file" || record.operationKind === "create_file";
 }
 
 function spliceCandidate(

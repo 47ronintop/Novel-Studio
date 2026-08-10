@@ -30,7 +30,8 @@ function ChapterAutosaveRecoveryReview({
       <div className="ns-recovery-review-items">
         {props.recovery.availableItems.map((item) => {
           const title =
-            props.chapters.find((chapter) => chapter.id === item.chapterId)?.title ?? item.chapterId;
+            props.chapters.find((chapter) => chapter.id === item.chapterId)?.title ??
+            item.chapterId;
           return (
             <article className="ns-recovery-review-item" key={item.sessionId}>
               <div>
@@ -86,7 +87,10 @@ function AgentTransactionRecoveryReview({
   readonly props: Extract<RecoveryReviewProps, { readonly source: "agent_transaction" }>;
 }) {
   return (
-    <section className="ns-recovery-review ns-agent-transaction-recovery" aria-label="Agent 事务恢复审阅">
+    <section
+      className="ns-recovery-review ns-agent-transaction-recovery"
+      aria-label="Agent 事务恢复审阅"
+    >
       <header className="ns-recovery-review-header">
         <div>
           <span className="ns-review-kicker">Agent transaction</span>
@@ -94,7 +98,9 @@ function AgentTransactionRecoveryReview({
         </div>
         <span className="ns-review-state">需要恢复审阅</span>
       </header>
-      <p className="ns-recovery-review-summary">部分事务已经落盘，但同步钩子失败。请使用既有撤销或重试路径。</p>
+      <p className="ns-recovery-review-summary">
+        部分事务已经落盘，但同步钩子失败。请使用既有撤销或重试路径。
+      </p>
       <dl className="ns-recovery-facts">
         <div>
           <dt>运行</dt>
@@ -114,6 +120,42 @@ function AgentTransactionRecoveryReview({
           <dt>说明</dt>
           <dd>{props.message}</dd>
         </div>
+        {props.recoveryGate === undefined ? null : (
+          <>
+            <div>
+              <dt>恢复门禁</dt>
+              <dd>{props.recoveryGate.status}</dd>
+            </div>
+            <div>
+              <dt>范围</dt>
+              <dd>{props.recoveryGate.scope}</dd>
+            </div>
+            {props.recoveryGate.storageLabel === undefined ? null : (
+              <div>
+                <dt>恢复存储</dt>
+                <dd>{props.recoveryGate.storageLabel}</dd>
+              </div>
+            )}
+            {props.recoveryGate.authorityStatus === undefined ? null : (
+              <div>
+                <dt>授权状态</dt>
+                <dd>{props.recoveryGate.authorityStatus}</dd>
+              </div>
+            )}
+            {props.recoveryGate.capacityLabel === undefined ? null : (
+              <div>
+                <dt>容量</dt>
+                <dd>{props.recoveryGate.capacityLabel}</dd>
+              </div>
+            )}
+            {props.recoveryGate.retentionLabel === undefined ? null : (
+              <div>
+                <dt>保留期</dt>
+                <dd>{props.recoveryGate.retentionLabel}</dd>
+              </div>
+            )}
+          </>
+        )}
       </dl>
       {props.failedHooks.length === 0 ? null : (
         <ul className="ns-recovery-failed-hooks" aria-label="失败钩子">

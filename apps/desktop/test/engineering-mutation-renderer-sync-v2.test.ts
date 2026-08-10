@@ -55,4 +55,19 @@ describe("Engineering mutation Renderer synchronization V2", () => {
       vi.useRealTimers();
     }
   });
+
+  test.each(["move_file", "delete_file", "create_directory"] as const)(
+    "accepts %s synchronization requests through the same one-shot coordinator",
+    async (operationKind) => {
+      let payload: unknown;
+      const coordinator = createEngineeringMutationRendererSyncCoordinatorV2({
+        resolveTarget: () => ({ send: (_channel, value) => (payload = value) }),
+        createRequestId: () => REQUEST_ID
+      });
+      const requested = coordinator.request({ operationKind, relativePaths: ["notes/a.md"] });
+      expect(payload).toMatchObject({ operationKind });
+      coordinator.complete({ schemaVersion: "2.0", requestId: REQUEST_ID, status: "synchronized" });
+      await expect(requested).resolves.toMatchObject({ ok: true });
+    }
+  );
 });

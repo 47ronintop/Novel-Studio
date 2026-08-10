@@ -892,6 +892,9 @@ function toAgentRecoveryReview(
   );
   const rollback = agentRun.rollbackReview?.onOpen;
   const retryTarget = diagnostic?.retryTargets[0];
+  const recoveryGate = toRecoveryGateSummary(
+    recoveryJournal?.["recoveryGate"] ?? diagnostic?.redactedDetail["recoveryGate"]
+  );
   return {
     source: "agent_transaction",
     runId: agentRun.runId,
@@ -899,10 +902,47 @@ function toAgentRecoveryReview(
     errorCode: diagnostic?.code ?? "AGENT_POST_COMMIT_SYNC_FAILED",
     message: diagnostic?.message ?? "事务已提交，但工作区同步需要恢复审阅。",
     failedHooks,
+    ...(recoveryGate === undefined ? {} : { recoveryGate }),
     ...(rollback === undefined ? {} : { onOpenRollback: rollback }),
     ...(retryTarget === undefined || agentRun.onRetryTarget === undefined
       ? {}
       : { onRetry: () => agentRun.onRetryTarget?.(retryTarget) })
+  };
+}
+
+function toRecoveryGateSummary(value: unknown):
+  | {
+      readonly status: "blocked" | "review_required";
+      readonly scope: "workspace_root" | "volume_local_quarantine";
+      readonly storageLabel?: string;
+      readonly authorityStatus?: "qualified" | "revoked" | "unavailable";
+      readonly capacityLabel?: string;
+      readonly retentionLabel?: string;
+    }
+  | undefined {
+  const record = readObject(value);
+  if (
+    record === undefined ||
+    (record["status"] !== "blocked" && record["status"] !== "review_required") ||
+    (record["scope"] !== "workspace_root" && record["scope"] !== "volume_local_quarantine")
+  ) {
+    return undefined;
+  }
+  const authorityStatus = readString(record["authorityStatus"]);
+  const storageLabel = readString(record["storageLabel"]);
+  const capacityLabel = readString(record["capacityLabel"]);
+  const retentionLabel = readString(record["retentionLabel"]);
+  return {
+    status: record["status"],
+    scope: record["scope"],
+    ...(storageLabel === undefined ? {} : { storageLabel }),
+    ...(authorityStatus === "qualified" ||
+    authorityStatus === "revoked" ||
+    authorityStatus === "unavailable"
+      ? { authorityStatus }
+      : {}),
+    ...(capacityLabel === undefined ? {} : { capacityLabel }),
+    ...(retentionLabel === undefined ? {} : { retentionLabel })
   };
 }
 

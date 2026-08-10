@@ -58,6 +58,7 @@ const mutationNegativeKeys = [
   "createRace",
   "faultRecoveryRequired"
 ];
+const lifecyclePositiveKeys = ["createDirectory", "move", "quarantine", "restore", "purge"];
 const developmentMutationNegativeKeys = ["rawByteManifestMismatch", "staleBase", "createRace"];
 const sourceIdentityPaths = [
   "native/engineering-file-access-win32/CMakeLists.txt",
@@ -78,6 +79,7 @@ const evidenceKeys = [
   "disabledProtectionReportSha256",
   "evidenceChecksum",
   "generatedAt",
+  "lifecycleEvidence",
   "mutationRecoveryEvidence",
   "negativeControls",
   "positiveProtections",
@@ -226,6 +228,18 @@ export async function composeEngineeringFileAccessProductionEvidence(input) {
           ? "canary_exposed"
           : undefined
       }
+    },
+    // B8 lifecycle primitives are recorded as diagnostic evidence, but are deliberately not
+    // folded into the B7 qualification capability set until the versioned Main contract exists.
+    lifecycleEvidence: {
+      positiveProtections: {
+        createDirectory: developmentReport.mutationV2Probe.lifecycleCreateDirectory,
+        move: developmentReport.mutationV2Probe.lifecycleMove,
+        quarantine: developmentReport.mutationV2Probe.lifecycleQuarantine,
+        restore: developmentReport.mutationV2Probe.lifecycleRestore,
+        purge: developmentReport.mutationV2Probe.lifecyclePurge
+      },
+      negativeControls: {}
     },
     generatedAt: now.toISOString()
   };
@@ -380,6 +394,18 @@ function validateDevelopmentReport(input) {
     developmentMutationNegativeKeys,
     "canary_exposed",
     "executed mutation/recovery negative controls"
+  );
+  validateExactStatusMap(
+    {
+      createDirectory: report.mutationV2Probe.lifecycleCreateDirectory,
+      move: report.mutationV2Probe.lifecycleMove,
+      quarantine: report.mutationV2Probe.lifecycleQuarantine,
+      restore: report.mutationV2Probe.lifecycleRestore,
+      purge: report.mutationV2Probe.lifecyclePurge
+    },
+    lifecyclePositiveKeys,
+    "passed",
+    "executed B8 lifecycle positive protections"
   );
 }
 

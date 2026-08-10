@@ -592,6 +592,159 @@ describe("useWorkspaceFileEditorRuntime", () => {
     });
     expect(completions.at(-1)).toMatchObject({ status: "failed" });
   });
+
+  test("clears a deleted active engineering editor after tree refresh", async () => {
+    let listener: ((request: EngineeringMutationRendererSyncRequestV2) => void) | undefined;
+    const completions: unknown[] = [];
+    const api = {
+      workspace: {
+        onEngineeringMutationSync(
+          next: (request: EngineeringMutationRendererSyncRequestV2) => void
+        ) {
+          listener = next;
+          return () => undefined;
+        },
+        async completeEngineeringMutationSync(completion: unknown) {
+          completions.push(completion);
+          return ok(undefined);
+        },
+        async readTextFile(path: string) {
+          return ok({ path, content: "Before\n", checksum: "sha256:before" });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    let runtime: WorkspaceFileEditorRuntime | undefined;
+    function Harness() {
+      runtime = useWorkspaceFileEditorRuntime({
+        api,
+        engineeringWorkspaceBridge: {
+          async refreshEngineeringTree() {
+            return {
+              status: "ready" as const,
+              workspace: { tree: { nodes: [], truncated: false } }
+            };
+          }
+        },
+        activeCreativeProjectId: undefined,
+        activeCreativeWorkspaceId: undefined,
+        creativeExpandedPathIds: [],
+        creativeWorkspaceActive: false,
+        chapterBridge: undefined,
+        projectWorkflowBridge: undefined,
+        persistUserPreferences: () => undefined,
+        setChapterEditor: () => undefined
+      });
+      return null;
+    }
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<Harness />);
+      await flushMicrotasks();
+    });
+    const editorBridge = runtime?.plainFileBridge;
+    if (editorBridge === undefined || listener === undefined) throw new Error("Expected editor");
+    await act(async () => {
+      runtime?.setEngineeringFileEditor(await editorBridge.openFile("notes/deleted.md"));
+      listener?.({
+        schemaVersion: "2.0",
+        requestId: engineeringMutationSyncRequest().requestId,
+        operationKind: "delete_file",
+        relativePaths: ["notes/deleted.md"]
+      });
+      await flushMicrotasks();
+    });
+    expect(runtime?.fileEditor).toBeUndefined();
+    expect(runtime?.fileEditorScope).toBeUndefined();
+    expect(completions.at(-1)).toMatchObject({ status: "synchronized" });
+  });
+
+  test("follows a moved active engineering editor to the target path after tree refresh", async () => {
+    let listener: ((request: EngineeringMutationRendererSyncRequestV2) => void) | undefined;
+    const completions: unknown[] = [];
+    const diskPath = "notes/renamed.md";
+    const api = {
+      workspace: {
+        onEngineeringMutationSync(
+          next: (request: EngineeringMutationRendererSyncRequestV2) => void
+        ) {
+          listener = next;
+          return () => undefined;
+        },
+        async completeEngineeringMutationSync(completion: unknown) {
+          completions.push(completion);
+          return ok(undefined);
+        },
+        async readTextFile(path: string) {
+          return ok({ path, content: "Moved\n", checksum: `sha256:${path}` });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    let runtime: WorkspaceFileEditorRuntime | undefined;
+
+    function Harness() {
+      runtime = useWorkspaceFileEditorRuntime({
+        api,
+        engineeringWorkspaceBridge: {
+          async refreshEngineeringTree() {
+            return {
+              status: "ready" as const,
+              workspace: {
+                tree: {
+                  nodes: [
+                    {
+                      kind: "file" as const,
+                      path: diskPath,
+                      name: diskPath.split("/").at(-1) ?? diskPath
+                    }
+                  ],
+                  truncated: false
+                }
+              }
+            };
+          }
+        },
+        activeCreativeProjectId: undefined,
+        activeCreativeWorkspaceId: undefined,
+        creativeExpandedPathIds: [],
+        creativeWorkspaceActive: false,
+        chapterBridge: undefined,
+        projectWorkflowBridge: undefined,
+        persistUserPreferences: () => undefined,
+        setChapterEditor: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<Harness />);
+      await flushMicrotasks();
+    });
+
+    const editorBridge = runtime?.plainFileBridge;
+    if (editorBridge === undefined || listener === undefined) throw new Error("Expected editor");
+    await act(async () => {
+      runtime?.setEngineeringFileEditor(await editorBridge.openFile("notes/scene.md"));
+      await flushMicrotasks();
+    });
+    await act(async () => {
+      listener?.({
+        schemaVersion: "2.0",
+        requestId: engineeringMutationSyncRequest().requestId,
+        operationKind: "move_file",
+        relativePaths: ["notes/scene.md", "notes/renamed.md"]
+      });
+      await flushMicrotasks();
+    });
+
+    expect(runtime?.fileEditor).toMatchObject({ path: "notes/renamed.md", content: "Moved\n" });
+    expect(runtime?.fileEditorScope).toBe("engineeringWorkspaceFile");
+    expect(completions.at(-1)).toMatchObject({ status: "synchronized" });
+  });
 });
 
 async function flushMicrotasks(count = 6): Promise<void> {

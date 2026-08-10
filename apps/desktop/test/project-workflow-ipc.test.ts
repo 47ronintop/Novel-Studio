@@ -96,7 +96,7 @@ describe("Task 5 explicit workspace IPC", () => {
     listener?.({
       schemaVersion: "2.0",
       requestId: `engineering_sync_${"a".repeat(48)}`,
-      operationKind: "replace_file",
+      operationKind: "move_file",
       relativePaths: ["notes/scene.md"]
     });
     unsubscribe();
@@ -105,7 +105,7 @@ describe("Task 5 explicit workspace IPC", () => {
       {
         schemaVersion: "2.0",
         requestId: `engineering_sync_${"a".repeat(48)}`,
-        operationKind: "replace_file",
+        operationKind: "move_file",
         relativePaths: ["notes/scene.md"]
       }
     ]);

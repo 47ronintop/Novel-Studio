@@ -16,6 +16,14 @@ describe("engineering file access addon loader", () => {
       mutationV2Probe: "available",
       recoveryScanProbe: "available",
       stateDurabilityProbe: "available"
+    },
+    {
+      batch: "8",
+      mutation: "available",
+      recovery: "available",
+      mutationV2Probe: "available",
+      recoveryScanProbe: "available",
+      stateDurabilityProbe: "available"
     }
   ] as const)("accepts the signed Batch $batch addon declaration", (capability) => {
     const loader = createEngineeringFileAccessAddonLoader({
@@ -34,12 +42,12 @@ describe("engineering file access addon loader", () => {
     });
   });
 
-  test("rejects a mixed B7 declaration", () => {
+  test.each(["7", "8"] as const)("rejects a mixed B%s declaration", (batch) => {
     const loader = createEngineeringFileAccessAddonLoader({
       addonPath: "C:\\fixture\\engineering_file_access.node",
       loadModule: () =>
         addonWithMetadata({
-          batch: "7",
+          batch,
           mutation: "unavailable",
           recovery: "unavailable",
           mutationV2Probe: "available",
@@ -79,6 +87,17 @@ describe("engineering file access addon loader", () => {
         recovery: "available",
         mutationV2Probe: "unavailable",
         recoveryScanProbe: "available",
+        stateDurabilityProbe: "available"
+      }
+    },
+    {
+      name: "a B8 declaration with an unavailable recovery-scan probe",
+      capability: {
+        batch: "8",
+        mutation: "available",
+        recovery: "available",
+        mutationV2Probe: "available",
+        recoveryScanProbe: "unavailable",
         stateDurabilityProbe: "available"
       }
     },

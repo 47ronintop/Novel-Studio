@@ -126,7 +126,8 @@ describe("engineering workspace save IPC", () => {
     const saveEngineeringTextFile = async () => ok({ kind: "saved" as const });
     const handlers = createApplicationIpcHandlers({ saveEngineeringTextFile } as never, {
       agentWriteSaveCoordinator: coordinator,
-      getActiveEngineeringEditorRootBindingId: () => "root-a"
+      getActiveEngineeringEditorRootBindingId: () => "root-a",
+      assertEngineeringRecoveryAllowed: async () => ok(undefined)
     }) as unknown as Record<string, (input: unknown) => Promise<unknown>>;
 
     await expect(
@@ -164,7 +165,8 @@ describe("engineering workspace save IPC", () => {
     let rootReads = 0;
     const changed = createApplicationIpcHandlers(application as never, {
       agentWriteSaveCoordinator: coordinator,
-      getActiveEngineeringEditorRootBindingId: () => (rootReads++ === 0 ? "root-a" : "root-b")
+      getActiveEngineeringEditorRootBindingId: () => (rootReads++ === 0 ? "root-a" : "root-b"),
+      assertEngineeringRecoveryAllowed: async () => ok(undefined)
     }) as unknown as Record<string, (input: unknown) => Promise<unknown>>;
     await expect(
       changed["application:workspace:save-text-file"](saveRequest())
@@ -173,6 +175,76 @@ describe("engineering workspace save IPC", () => {
       error: { code: "ENGINEERING_SAVE_ROOT_BINDING_CHANGED" }
     });
     expect(saveCalls).toBe(0);
+  });
+
+  test("blocks save when startup recovery is blocked or unavailable", async () => {
+    const application = {
+      saveEngineeringTextFile: vi.fn(async () => ok({ kind: "saved" as const }))
+    };
+    for (const assertEngineeringRecoveryAllowed of [
+      async () => ({
+        ok: false as const,
+        error: { code: "ENGINEERING_STARTUP_RECOVERY_GATE_BLOCKED" }
+      }),
+      async () => {
+        throw new Error("scan unavailable");
+      }
+    ]) {
+      const handlers = createApplicationIpcHandlers(application as never, {
+        agentWriteSaveCoordinator: createAgentWriteSaveCoordinator(),
+        getActiveEngineeringEditorRootBindingId: () => "root-a",
+        assertEngineeringRecoveryAllowed: assertEngineeringRecoveryAllowed as never
+      }) as unknown as Record<string, (input: unknown) => Promise<unknown>>;
+      await expect(
+        handlers["application:workspace:save-text-file"](saveRequest())
+      ).resolves.toMatchObject({
+        ok: false
+      });
+    }
+    expect(application.saveEngineeringTextFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("engineering workspace recovery lifecycle gate", () => {
+  test("blocks workspace replacement and close while recovery remains pending", async () => {
+    const workspaceActivationCoordinator = {
+      openCreativeProject: vi.fn(),
+      openEngineeringWorkspace: vi.fn(),
+      closeCurrentWorkspace: vi.fn()
+    };
+    const handlers = createApplicationIpcHandlers({ executeCommand: vi.fn() } as never, {
+      workspaceActivationCoordinator: workspaceActivationCoordinator as never,
+      agentRuntimeManager: {
+        active: () => ({ scope: "workspace", binding: { kind: "engineeringWorkspace" } }),
+        subscribeAgentRunEvents: () => () => undefined
+      } as never,
+      getActiveEngineeringEditorRootBindingId: () => "root-a",
+      assertEngineeringRecoveryAllowed: async () =>
+        ({
+          ok: false as const,
+          error: { code: "ENGINEERING_STARTUP_RECOVERY_GATE_BLOCKED" }
+        }) as never
+    }) as unknown as Record<string, (...args: readonly unknown[]) => Promise<unknown>>;
+
+    await expect(
+      handlers["application:execute-command"]("workspace.close-current")
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_STARTUP_RECOVERY_GATE_BLOCKED" }
+    });
+    await expect(
+      handlers["application:project:open-creative-project"]("selection_01")
+    ).resolves.toMatchObject({
+      ok: false
+    });
+    await expect(
+      handlers["application:workspace:open-engineering-workspace"]("selection_01")
+    ).resolves.toMatchObject({
+      ok: false
+    });
+    expect(workspaceActivationCoordinator.closeCurrentWorkspace).not.toHaveBeenCalled();
+    expect(workspaceActivationCoordinator.openCreativeProject).not.toHaveBeenCalled();
+    expect(workspaceActivationCoordinator.openEngineeringWorkspace).not.toHaveBeenCalled();
   });
 });
 

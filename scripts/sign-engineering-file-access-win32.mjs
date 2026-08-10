@@ -104,6 +104,7 @@ document.qualification = {
     positiveProtections: probeEvidence.mutationRecoveryEvidence.positiveProtections,
     negativeControls: probeEvidence.mutationRecoveryEvidence.negativeControls
   },
+  lifecycleEvidence: probeEvidence.lifecycleEvidence,
   productionEvidence: probeEvidence
 };
 await writeFile(manifest, `${JSON.stringify(document, null, 2)}\n`, "utf8");

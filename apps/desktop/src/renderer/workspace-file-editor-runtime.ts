@@ -443,13 +443,28 @@ export function useWorkspaceFileEditorRuntime(
             return;
           }
 
-          const reloaded = await plainFileBridge.openFile(editor.path);
+          // A move may remove the old path while introducing the new one in the same
+          // consistency group. Delete clears the editor; move follows the refreshed tree
+          // to the one changed path that now exists. Replace/create retain the old path.
+          const operationKind = request.operationKind;
+          if (operationKind === "delete_file" && !engineeringTreeHasPath(refreshed, editor.path)) {
+            plainFileBridge.clear();
+            clearFileEditor();
+            status = "synchronized";
+            return;
+          }
+          const reloadPath =
+            operationKind === "move_file" && !engineeringTreeHasPath(refreshed, editor.path)
+              ? request.relativePaths.find((path) => engineeringTreeHasPath(refreshed, path))
+              : editor.path;
+          if (reloadPath === undefined) return;
+          const reloaded = await plainFileBridge.openFile(reloadPath);
           if (
             !active ||
             sync !== engineeringMutationSyncRef.current ||
-            plainFileBridge.getProps()?.path !== editor.path ||
+            plainFileBridge.getProps()?.path !== reloadPath ||
             plainFileBridge.isDirty() ||
-            reloaded.path !== editor.path
+            (operationKind !== "move_file" && reloaded.path !== editor.path)
           ) {
             return;
           }
@@ -472,7 +487,13 @@ export function useWorkspaceFileEditorRuntime(
       active = false;
       unsubscribe();
     };
-  }, [api, options.engineeringWorkspaceBridge, plainFileBridge, updateVisibleFileEditor]);
+  }, [
+    api,
+    clearFileEditor,
+    options.engineeringWorkspaceBridge,
+    plainFileBridge,
+    updateVisibleFileEditor
+  ]);
 
   const activeCreativeFileRef = useMemo<Extract<
     ContextDraftRef,
@@ -629,6 +650,17 @@ export function useWorkspaceFileEditorRuntime(
     guardCreativeFile,
     guardWorkspaceFileEditors
   };
+}
+
+function engineeringTreeHasPath(
+  refreshed: Awaited<ReturnType<EngineeringWorkspaceBridge["refreshEngineeringTree"]>>,
+  path: string
+): boolean {
+  const nodes = refreshed.workspace?.tree.nodes;
+  if (nodes === undefined) return false;
+  const visit = (node: (typeof nodes)[number]): boolean =>
+    (node.path === path && node.kind === "file") || (node.children?.some(visit) ?? false);
+  return nodes.some(visit);
 }
 
 function projectFilePathAffected(activePath: string, changedPath: string): boolean {
