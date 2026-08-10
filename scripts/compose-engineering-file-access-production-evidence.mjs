@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { Buffer } from "node:buffer";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
