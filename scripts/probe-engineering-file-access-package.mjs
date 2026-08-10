@@ -353,12 +353,12 @@ export function mutationV2ProbeAvailabilityFor(manifest) {
   const declaration = manifest?.developmentMutationV2Probe;
   if (declaration === undefined) return "unavailable";
   if (!declaration || typeof declaration !== "object" || Array.isArray(declaration)) {
-    throw new Error("native manifest Batch 8 mutation probe declaration must be an object");
+    throw new Error("native manifest mutation probe declaration must be an object");
   }
-  if (declaration.schemaVersion !== "1.1" || declaration.batch !== "8") {
-    throw new Error(
-      "native manifest Batch 8 mutation probe declaration has an unsupported version"
-    );
+  const isBatch7 = declaration.schemaVersion === "1.0" && declaration.batch === "7";
+  const isBatch8 = declaration.schemaVersion === "1.1" && declaration.batch === "8";
+  if (!isBatch7 && !isBatch8) {
+    throw new Error("native manifest mutation probe declaration has an unsupported version");
   }
   if (
     declaration.productCapability !== "unavailable" ||
@@ -368,9 +368,9 @@ export function mutationV2ProbeAvailabilityFor(manifest) {
       hardLinkPolicy: "reject_multiple_links",
       copyOnReplace: "not_enabled"
     }) ||
-    !hasExactMap(declaration.lifecyclePrimitives, lifecycleV2Primitives, "available")
+    (isBatch8 && !hasExactMap(declaration.lifecyclePrimitives, lifecycleV2Primitives, "available"))
   ) {
-    throw new Error("native manifest Batch 8 mutation probe declaration is incomplete or unsafe");
+    throw new Error("native manifest mutation probe declaration is incomplete or unsafe");
   }
   if (
     manifest.sourceIdentity?.sha256 !== declaration.sourceIdentitySha256 ||
@@ -581,7 +581,7 @@ export async function probeEngineeringStateDurabilityAbi(addon) {
  * product mutation and recovery as unavailable until Main accepts signed qualification evidence.
  */
 export async function probeMutationV2Abi(addon) {
-  for (const name of [
+  const baseExports = [
     "mutationV2ProbeInfo",
     "inspectEngineeringFileSnapshotV2",
     "inspectEngineeringFileMutationTargetV2",
@@ -592,7 +592,9 @@ export async function probeMutationV2Abi(addon) {
     "replaceFileV2",
     "createFileV2",
     "scanMutationRecovery",
-    "mutationV2FaultProbe",
+    "mutationV2FaultProbe"
+  ];
+  const lifecycleExports = [
     "openEngineeringRecoveryRootV2",
     "closeEngineeringRecoveryRootV2",
     "moveEngineeringPathV2",
@@ -600,24 +602,23 @@ export async function probeMutationV2Abi(addon) {
     "restoreEngineeringFileV2",
     "purgeEngineeringQuarantineObjectV2",
     "createEngineeringDirectoryV2"
-  ]) {
+  ];
+  const hasLifecycleExports = lifecycleExports.every((name) => typeof addon?.[name] === "function");
+  const hasPartialLifecycleExports = lifecycleExports.some(
+    (name) => typeof addon?.[name] === "function"
+  );
+  for (const name of baseExports) {
     if (typeof addon?.[name] !== "function") {
       throw new Error(`available Batch 7 native probe must expose ${name}`);
     }
   }
-  assertMutationV2ProbeInfo(addon.mutationV2ProbeInfo());
-  assertMutationV2FaultProbe(addon.mutationV2FaultProbe());
-  const lifecycleInfo = addon.mutationV2ProbeInfo();
-  if (
-    lifecycleInfo.batch !== "8" ||
-    lifecycleInfo.move !== "development_probe_only" ||
-    lifecycleInfo.delete !== "development_probe_only" ||
-    lifecycleInfo.createDirectory !== "development_probe_only" ||
-    lifecycleInfo.caseOnlyRenameWal !== "available" ||
-    lifecycleInfo.volumeLocalQuarantine !== "available"
-  ) {
-    throw new Error("Batch 8 lifecycle primitive declaration was not fail-closed");
+  if (hasPartialLifecycleExports && !hasLifecycleExports) {
+    throw new Error("Batch 8 lifecycle addon export surface is incomplete");
   }
+  const probeInfo = addon.mutationV2ProbeInfo();
+  assertMutationV2ProbeInfo(probeInfo);
+  assertMutationV2FaultProbe(addon.mutationV2FaultProbe(), probeInfo.batch);
+  const isBatch8 = probeInfo.batch === "8";
 
   const fixtureParent = await mkdtemp(join(tmpdir(), "engineering-file-mutation-v2-probe-"));
   const workspace = join(fixtureParent, "workspace");
@@ -656,128 +657,130 @@ export async function probeMutationV2Abi(addon) {
     const rootId = openedRoot.rootId;
     const initialRecovery = addon.scanMutationRecovery(rootId);
     assertRecoveryScan(initialRecovery, "clear");
-    const lifecycleBytes = Buffer.from("B8 lifecycle bytes\n", "utf8");
-    await writeFile(join(docs, "move-source.txt"), lifecycleBytes, { flush: true });
-    const lifecycleSnapshot = addon.inspectEngineeringFileSnapshotV2(
-      rootId,
-      "docs/move-source.txt"
-    );
-    const lifecycleBase = {
-      schemaVersion: "3.0",
-      transactionId: "tx-b8-lifecycle",
-      operationId: "op-b8-lifecycle",
-      contentRootBindingId: "root:probe-v2",
-      sourceFileIdentity: lifecycleSnapshot.manifest.fileIdentity,
-      sourceSha256: lifecycleSnapshot.manifest.sha256,
-      recoveryRootBindingId: "recovery:probe-v2",
-      recoveryGrantRevision: "grant:probe-v2",
-      recoverySideEffectChecksum: "b".repeat(64),
-      recoveryObjectId: "quarantine-probe-v2",
-      stagingObjectId: "stage-b8-lifecycle",
-      expectedState: "wal_prepared"
-    };
-    addon.createEngineeringDirectoryV2(rootId, {
-      ...lifecycleBase,
-      operationKind: "create_directory",
-      relativeSource: "",
-      relativeTarget: "docs/lifecycle",
-      sourceFileIdentity: "",
-      sourceSha256: "0".repeat(64),
-      targetProof: "absent"
-    });
-    addon.moveEngineeringPathV2(rootId, {
-      ...lifecycleBase,
-      operationKind: "move_file",
-      relativeSource: "docs/move-source.txt",
-      relativeTarget: "docs/lifecycle/moved.txt",
-      targetProof: "absent"
-    });
-    assertExactNativeBytes(
-      addon.readFile(rootId, "docs/lifecycle/moved.txt"),
-      lifecycleBytes,
-      "B8 move"
-    );
-    const movedSnapshot = addon.inspectEngineeringFileSnapshotV2(
-      rootId,
-      "docs/lifecycle/moved.txt"
-    );
-    addon.moveEngineeringPathV2(rootId, {
-      ...lifecycleBase,
-      operationId: "op-b8-case-only",
-      stagingObjectId: "stage-b8-case-only",
-      operationKind: "move_file",
-      relativeSource: "docs/lifecycle/moved.txt",
-      relativeTarget: "docs/lifecycle/Moved.txt",
-      sourceFileIdentity: movedSnapshot.manifest.fileIdentity,
-      sourceSha256: movedSnapshot.manifest.sha256,
-      targetProof: "same_object_case_only"
-    });
-    assertExactNativeBytes(
-      addon.readFile(rootId, "docs/lifecycle/Moved.txt"),
-      lifecycleBytes,
-      "B8 case-only move"
-    );
-    assertRecoveryScan(addon.scanMutationRecovery(rootId), "clear");
-    const caseOnlySnapshot = addon.inspectEngineeringFileSnapshotV2(
-      rootId,
-      "docs/lifecycle/Moved.txt"
-    );
-    await expectMutationFailure(
-      () =>
-        addon.openEngineeringRecoveryRootV2(
-          rootId,
-          recoveryRoot,
-          lifecycleBase.recoveryRootBindingId,
-          lifecycleBase.recoveryGrantRevision,
-          "d".repeat(64)
-        ),
-      "recovery ownership marker mismatch"
-    );
-    const recoveryBinding = addon.openEngineeringRecoveryRootV2(
-      rootId,
-      recoveryRoot,
-      lifecycleBase.recoveryRootBindingId,
-      lifecycleBase.recoveryGrantRevision,
-      recoveryMarkerChecksum
-    );
-    try {
-      addon.quarantineEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
+    if (isBatch8) {
+      const lifecycleBytes = Buffer.from("B8 lifecycle bytes\n", "utf8");
+      await writeFile(join(docs, "move-source.txt"), lifecycleBytes, { flush: true });
+      const lifecycleSnapshot = addon.inspectEngineeringFileSnapshotV2(
+        rootId,
+        "docs/move-source.txt"
+      );
+      const lifecycleBase = {
+        schemaVersion: "3.0",
+        transactionId: "tx-b8-lifecycle",
+        operationId: "op-b8-lifecycle",
+        contentRootBindingId: "root:probe-v2",
+        sourceFileIdentity: lifecycleSnapshot.manifest.fileIdentity,
+        sourceSha256: lifecycleSnapshot.manifest.sha256,
+        recoveryRootBindingId: "recovery:probe-v2",
+        recoveryGrantRevision: "grant:probe-v2",
+        recoverySideEffectChecksum: "b".repeat(64),
+        recoveryObjectId: "quarantine-probe-v2",
+        stagingObjectId: "stage-b8-lifecycle",
+        expectedState: "wal_prepared"
+      };
+      addon.createEngineeringDirectoryV2(rootId, {
         ...lifecycleBase,
-        operationKind: "delete_file",
-        relativeSource: "docs/lifecycle/Moved.txt",
-        relativeTarget: "",
-        sourceFileIdentity: caseOnlySnapshot.manifest.fileIdentity,
-        sourceSha256: caseOnlySnapshot.manifest.sha256,
+        operationKind: "create_directory",
+        relativeSource: "",
+        relativeTarget: "docs/lifecycle",
+        sourceFileIdentity: "",
+        sourceSha256: "0".repeat(64),
         targetProof: "absent"
       });
-      addon.restoreEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
+      addon.moveEngineeringPathV2(rootId, {
         ...lifecycleBase,
-        operationKind: "restore_file",
-        relativeSource: "",
-        relativeTarget: "docs/lifecycle/Moved.txt",
+        operationKind: "move_file",
+        relativeSource: "docs/move-source.txt",
+        relativeTarget: "docs/lifecycle/moved.txt",
         targetProof: "absent"
+      });
+      assertExactNativeBytes(
+        addon.readFile(rootId, "docs/lifecycle/moved.txt"),
+        lifecycleBytes,
+        "B8 move"
+      );
+      const movedSnapshot = addon.inspectEngineeringFileSnapshotV2(
+        rootId,
+        "docs/lifecycle/moved.txt"
+      );
+      addon.moveEngineeringPathV2(rootId, {
+        ...lifecycleBase,
+        operationId: "op-b8-case-only",
+        stagingObjectId: "stage-b8-case-only",
+        operationKind: "move_file",
+        relativeSource: "docs/lifecycle/moved.txt",
+        relativeTarget: "docs/lifecycle/Moved.txt",
+        sourceFileIdentity: movedSnapshot.manifest.fileIdentity,
+        sourceSha256: movedSnapshot.manifest.sha256,
+        targetProof: "same_object_case_only"
       });
       assertExactNativeBytes(
         addon.readFile(rootId, "docs/lifecycle/Moved.txt"),
         lifecycleBytes,
-        "B8 restore"
+        "B8 case-only move"
       );
-      const restored = addon.inspectEngineeringFileSnapshotV2(rootId, "docs/lifecycle/Moved.txt");
-      addon.quarantineEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
-        ...lifecycleBase,
-        operationKind: "delete_file",
-        relativeSource: "docs/lifecycle/Moved.txt",
-        relativeTarget: "",
-        sourceFileIdentity: restored.manifest.fileIdentity,
-        sourceSha256: restored.manifest.sha256,
-        targetProof: "absent"
-      });
-      addon.purgeEngineeringQuarantineObjectV2(
-        recoveryBinding.recoveryRootId,
-        lifecycleBase.recoveryObjectId
+      assertRecoveryScan(addon.scanMutationRecovery(rootId), "clear");
+      const caseOnlySnapshot = addon.inspectEngineeringFileSnapshotV2(
+        rootId,
+        "docs/lifecycle/Moved.txt"
       );
-    } finally {
-      addon.closeEngineeringRecoveryRootV2(recoveryBinding.recoveryRootId);
+      await expectMutationFailure(
+        () =>
+          addon.openEngineeringRecoveryRootV2(
+            rootId,
+            recoveryRoot,
+            lifecycleBase.recoveryRootBindingId,
+            lifecycleBase.recoveryGrantRevision,
+            "d".repeat(64)
+          ),
+        "recovery ownership marker mismatch"
+      );
+      const recoveryBinding = addon.openEngineeringRecoveryRootV2(
+        rootId,
+        recoveryRoot,
+        lifecycleBase.recoveryRootBindingId,
+        lifecycleBase.recoveryGrantRevision,
+        recoveryMarkerChecksum
+      );
+      try {
+        addon.quarantineEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
+          ...lifecycleBase,
+          operationKind: "delete_file",
+          relativeSource: "docs/lifecycle/Moved.txt",
+          relativeTarget: "",
+          sourceFileIdentity: caseOnlySnapshot.manifest.fileIdentity,
+          sourceSha256: caseOnlySnapshot.manifest.sha256,
+          targetProof: "absent"
+        });
+        addon.restoreEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
+          ...lifecycleBase,
+          operationKind: "restore_file",
+          relativeSource: "",
+          relativeTarget: "docs/lifecycle/Moved.txt",
+          targetProof: "absent"
+        });
+        assertExactNativeBytes(
+          addon.readFile(rootId, "docs/lifecycle/Moved.txt"),
+          lifecycleBytes,
+          "B8 restore"
+        );
+        const restored = addon.inspectEngineeringFileSnapshotV2(rootId, "docs/lifecycle/Moved.txt");
+        addon.quarantineEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
+          ...lifecycleBase,
+          operationKind: "delete_file",
+          relativeSource: "docs/lifecycle/Moved.txt",
+          relativeTarget: "",
+          sourceFileIdentity: restored.manifest.fileIdentity,
+          sourceSha256: restored.manifest.sha256,
+          targetProof: "absent"
+        });
+        addon.purgeEngineeringQuarantineObjectV2(
+          recoveryBinding.recoveryRootId,
+          lifecycleBase.recoveryObjectId
+        );
+      } finally {
+        addon.closeEngineeringRecoveryRootV2(recoveryBinding.recoveryRootId);
+      }
     }
 
     const replaceWal = addon.prepareMutationWalV2(
@@ -1220,12 +1223,16 @@ export async function probeMutationV2Abi(addon) {
       receiptDurability: "passed",
       stagingWalRecoveryScan: "passed",
       recoveryBeforeCleanup: "passed",
-      lifecycleCreateDirectory: "passed",
-      lifecycleMove: "passed",
-      lifecycleCaseOnlyMove: "passed",
-      lifecycleQuarantine: "passed",
-      lifecycleRestore: "passed",
-      lifecyclePurge: "passed",
+      ...(isBatch8
+        ? {
+            lifecycleCreateDirectory: "passed",
+            lifecycleMove: "passed",
+            lifecycleCaseOnlyMove: "passed",
+            lifecycleQuarantine: "passed",
+            lifecycleRestore: "passed",
+            lifecyclePurge: "passed"
+          }
+        : {}),
       negativeCanaries: {
         rawByteManifestMismatch: "canary_exposed",
         walBindingMismatch: "canary_exposed",
@@ -1675,15 +1682,9 @@ function assertRecoveryScan(value, expectedState) {
 function assertMutationV2ProbeInfo(value) {
   const expected = {
     schemaVersion: "engineering_file_mutation_probe_v1",
-    batch: "8",
     status: "available",
     replace: "development_probe_only",
     create: "development_probe_only",
-    move: "development_probe_only",
-    delete: "development_probe_only",
-    createDirectory: "development_probe_only",
-    caseOnlyRenameWal: "available",
-    volumeLocalQuarantine: "available",
     rawByteBlobs: "available",
     absenceProof: "available",
     absenceProofV2: "available",
@@ -1701,6 +1702,18 @@ function assertMutationV2ProbeInfo(value) {
     stateDurability: "available",
     productCapability: "unavailable"
   };
+  if (value?.batch !== "7" && value?.batch !== "8") {
+    throw new Error("native mutation probe info has an unsupported batch");
+  }
+  if (value.batch === "8") {
+    Object.assign(expected, {
+      move: "development_probe_only",
+      delete: "development_probe_only",
+      createDirectory: "development_probe_only",
+      caseOnlyRenameWal: "available",
+      volumeLocalQuarantine: "available"
+    });
+  }
   for (const [key, expectedValue] of Object.entries(expected)) {
     if (value?.[key] !== expectedValue) {
       throw new Error(`Batch 7 native probe info did not preserve ${key}`);
@@ -1708,7 +1721,7 @@ function assertMutationV2ProbeInfo(value) {
   }
 }
 
-function assertMutationV2FaultProbe(value) {
+function assertMutationV2FaultProbe(value, batch = "8") {
   const expectedPaths = [
     "raw_byte_manifest_mismatch",
     "stale_absence_proof",
@@ -1720,9 +1733,13 @@ function assertMutationV2FaultProbe(value) {
     "replace_after_original_handoff_recovery",
     "replace_before_candidate_handoff_recovery",
     "replace_after_candidate_handoff_recovery",
-    "case_only_after_first_rename_recovery_required",
-    "case_only_before_second_rename_recovery_required",
-    "case_only_after_second_rename_recovery_required"
+    ...(batch === "8"
+      ? [
+          "case_only_after_first_rename_recovery_required",
+          "case_only_before_second_rename_recovery_required",
+          "case_only_after_second_rename_recovery_required"
+        ]
+      : [])
   ];
   if (
     !value ||
