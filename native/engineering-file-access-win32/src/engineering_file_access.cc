@@ -4068,6 +4068,18 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
     }
     ScopedHandle sourceParentHandle(sourceParentRaw);
     ScopedHandle destinationParentHandle(destinationParentRaw);
+    BY_HANDLE_FILE_INFORMATION sourceParentIdentity{};
+    BY_HANDLE_FILE_INFORMATION destinationParentIdentity{};
+    if (result == AccessError::kOk) {
+      HANDLE initialSourceParent = sameParent ? destinationParentHandle.get() : sourceParentHandle.get();
+      if (!GetFileInformationByHandle(initialSourceParent, &sourceParentIdentity)) {
+        result = AccessError::kIo;
+      } else if (sameParent) {
+        destinationParentIdentity = sourceParentIdentity;
+      } else if (!GetFileInformationByHandle(destinationParentHandle.get(), &destinationParentIdentity)) {
+        result = AccessError::kIo;
+      }
+    }
     HANDLE sourceRaw = INVALID_HANDLE_VALUE;
     HANDLE sourceParent = sameParent ? destinationParentHandle.get() : sourceParentHandle.get();
     if (result == AccessError::kOk) {
@@ -4122,23 +4134,48 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
           : AccessError::kDurability;
     }
 
+    // The initial traversal handles intentionally use restrictive sharing. Reopen the exact
+    // parent(s) with delete sharing after the durable marker is installed so Windows permits the
+    // handle-relative rename while retaining the identity proof from the initial traversal.
+    HANDLE handoffSourceRaw = INVALID_HANDLE_VALUE;
+    HANDLE handoffDestinationRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk &&
+        (!sourceParentHandle.close() || !destinationParentHandle.close())) {
+      result = AccessError::kIo;
+    }
+    if (result == AccessError::kOk) {
+      result = openMutationHandoffDirectory(rootId, sourceParentPath, sourceParentIdentity, &handoffSourceRaw);
+      if (result == AccessError::kOk && sameParent) {
+        handoffDestinationRaw = handoffSourceRaw;
+        handoffSourceRaw = INVALID_HANDLE_VALUE;
+      }
+    }
+    if (result == AccessError::kOk && !sameParent) {
+      result = openMutationHandoffDirectory(rootId, destinationParentPath, destinationParentIdentity,
+                                             &handoffDestinationRaw);
+    }
+    ScopedHandle handoffSourceParent(handoffSourceRaw);
+    ScopedHandle handoffDestinationParent(handoffDestinationRaw);
+    const HANDLE moveSourceParent = sameParent ? handoffDestinationParent.get() : handoffSourceParent.get();
+    const HANDLE moveDestinationParent = handoffDestinationParent.get();
+
     bool namespaceChanged = false;
     if (result == AccessError::kOk && caseOnly) {
       const std::wstring temporaryLeaf = stagingLeafName("case-" + request.stagingObjectId);
-      result = checkRelativeLeafAbsent(destinationParentHandle.get(), temporaryLeaf);
+      result = checkRelativeLeafAbsent(moveDestinationParent, temporaryLeaf);
       if (result == AccessError::kOk) {
-        result = renameOpenedFileCreateOnly(sourceHandle.get(), destinationParentHandle.get(), temporaryLeaf);
+        result = renameOpenedFileCreateOnly(sourceHandle.get(), moveDestinationParent, temporaryLeaf);
         namespaceChanged = result == AccessError::kOk;
       }
-      if (result == AccessError::kOk) result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
+      if (result == AccessError::kOk) result = flushMoveDirectories(moveSourceParent, moveDestinationParent);
       if (result == AccessError::kOk) {
-        result = renameOpenedFileCreateOnly(sourceHandle.get(), destinationParentHandle.get(), destinationLeaf);
+        result = renameOpenedFileCreateOnly(sourceHandle.get(), moveDestinationParent, destinationLeaf);
         namespaceChanged = result == AccessError::kOk;
       }
-      if (result == AccessError::kOk) result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
+      if (result == AccessError::kOk) result = flushMoveDirectories(moveSourceParent, moveDestinationParent);
       if (result == AccessError::kOk) {
         HANDLE finalRaw = INVALID_HANDLE_VALUE;
-        result = openMutationLeaf(destinationParentHandle.get(), destinationLeaf, &finalRaw);
+        result = openMutationLeaf(moveDestinationParent, destinationLeaf, &finalRaw);
         ScopedHandle finalHandle(finalRaw);
         BY_HANDLE_FILE_INFORMATION finalIdentity{};
         if (result == AccessError::kOk &&
@@ -4148,9 +4185,9 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
         }
       }
     } else if (result == AccessError::kOk) {
-      result = renameOpenedFileCreateOnly(sourceHandle.get(), destinationParentHandle.get(), destinationLeaf);
+      result = renameOpenedFileCreateOnly(sourceHandle.get(), moveDestinationParent, destinationLeaf);
       namespaceChanged = result == AccessError::kOk;
-      if (result == AccessError::kOk) result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
+      if (result == AccessError::kOk) result = flushMoveDirectories(moveSourceParent, moveDestinationParent);
     }
 
     if (result == AccessError::kOk) {
@@ -4160,7 +4197,7 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
         result = AccessError::kRecoveryRequired;
       }
       if (result == AccessError::kOk && !recoveryMarker.close()) result = AccessError::kRecoveryRequired;
-      if (result == AccessError::kOk) result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
+      if (result == AccessError::kOk) result = flushMoveDirectories(moveSourceParent, moveDestinationParent);
     }
     if (result != AccessError::kOk) {
       throwAccessError(env, namespaceChanged ? AccessError::kRecoveryRequired : result);
