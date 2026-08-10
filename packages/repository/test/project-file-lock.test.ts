@@ -22,7 +22,7 @@ describe("project file lock", () => {
       lockPath: join(projectRoot, ".novel-studio", "locks", "shared.lock"),
       pathGuard: createProjectPathGuard(projectRoot),
       waitTimeoutMs: 1_000,
-      retryDelayMs: 5
+      retryDelayMs: 25
     };
     let releaseFirst = (): void => undefined;
     let markFirstEntered = (): void => undefined;
