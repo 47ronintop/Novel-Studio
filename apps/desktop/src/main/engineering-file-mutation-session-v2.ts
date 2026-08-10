@@ -26,6 +26,10 @@ import {
   engineeringSideEffectSubjectChecksumV2,
   sha256EngineeringMutationTextV2,
   type EngineeringFileMutationProposalPortV2,
+  type EngineeringFileLifecycleRequestV2,
+  type EngineeringLifecycleWriteTransactionInputV2,
+  type EngineeringLifecycleWriteTransactionV2,
+  type EngineeringMutationLifecycleTargetProofV2,
   type EngineeringFileMutationRequestV2,
   type EngineeringMutationBlobStoreV2,
   type EngineeringMutationProposalRecordV2,
@@ -76,6 +80,24 @@ export interface DesktopEngineeringFileMutationSessionV2Options {
   readonly createRuntime: (
     proposalApproval: EngineeringMutationProposalApprovalPortV2
   ) => EngineeringMutationRuntimeV2;
+  /** B8 lifecycle coordinator. Omission keeps lifecycle apply fail closed. */
+  readonly lifecycleTransaction?: Pick<EngineeringLifecycleWriteTransactionV2, "apply">;
+  /** Main-owned qualified recovery facts for delete/quarantine proposals. */
+  readonly resolveLifecycleRecoveryBinding?: (input: {
+    readonly contentRootBindingId: string;
+    readonly relativeIdentity: string;
+    readonly sourceRef: string;
+  }) => Promise<
+    Result<
+      {
+        readonly recoveryRootBindingId: string;
+        readonly recoveryGrantRevision: string;
+        readonly recoverySideEffectChecksum: string;
+        readonly recoveryObjectId: string;
+      },
+      UnifiedError
+    >
+  >;
   /** Main-only bridge that distinguishes this live reserve→WAL handoff from a startup orphan. */
   readonly activateAuthorizationReservation?: (input: {
     readonly authorizationId: string;
@@ -107,12 +129,17 @@ interface PendingApply {
   readonly changeSet: ChangeSetV2;
   readonly approval: ReservedChangeSetApprovalV2;
   readonly facts: EngineeringApprovalBindingFactsV2;
-  readonly transactionInput: EngineeringWriteTransactionInputV2;
+  readonly transactionInput:
+    EngineeringWriteTransactionInputV2 | EngineeringLifecycleWriteTransactionInputV2;
 }
 
 type EngineeringRawMutationProposalRecordV2 = Extract<
   EngineeringMutationProposalRecordV2,
   { readonly operationKind: "replace_file" | "create_file" }
+>;
+type EngineeringLifecycleMutationProposalRecordV2 = Extract<
+  EngineeringMutationProposalRecordV2,
+  { readonly operationKind: "move_file" | "delete_file" | "create_directory" }
 >;
 
 type ReservedChangeSetApprovalV2 = ChangeSetApprovalV2 & {
@@ -173,7 +200,9 @@ export function createDesktopEngineeringFileMutationSessionV2(
       const prepared =
         input.toolName === "propose_file_write"
           ? await prepareReplace(input)
-          : await prepareCreate(input);
+          : input.toolName === "propose_file_create"
+            ? await prepareCreate(input)
+            : await prepareLifecycle(input);
       if (!prepared.ok) return prepared;
       const created = await options.proposalRepository.create(prepared.value.record);
       return created.ok
@@ -274,9 +303,24 @@ export function createDesktopEngineeringFileMutationSessionV2(
       }
       pendingByTransaction.set(approval.reservationTransactionId, pending.value);
       try {
-        let applied: Result<EngineeringMutationRuntimeResultV2, UnifiedError>;
+        let applied: Result<
+          | EngineeringMutationRuntimeResultV2
+          | { readonly prepared: { readonly transactionId: string } },
+          UnifiedError
+        >;
         try {
-          applied = await runtime.apply(runtimeRequest(pending.value));
+          if (isRawMutationProposalRecord(pending.value.record)) {
+            applied = await runtime.apply(runtimeRequest(pending.value));
+          } else {
+            if (options.lifecycleTransaction === undefined)
+              return unavailable("ENGINEERING_LIFECYCLE_TRANSACTION_UNAVAILABLE");
+            const lifecycle = await options.lifecycleTransaction.apply(
+              pending.value.transactionInput
+            );
+            applied = lifecycle.ok
+              ? ok({ prepared: { transactionId: lifecycle.value.prepared.transactionId } })
+              : lifecycle;
+          }
         } catch {
           const reconciled = await reconcileFailedAuthorizationReservation(pending.value);
           return reconciled.ok
@@ -305,9 +349,11 @@ export function createDesktopEngineeringFileMutationSessionV2(
         } catch {
           return postCommitRecoveryRequired("consume_authorization");
         }
-        const versionGroupId = `engineering-version-group-${sha256EngineeringMutationTextV2(
-          applied.value.transactionId
-        )}`;
+        const transactionId =
+          "transactionId" in applied.value
+            ? applied.value.transactionId
+            : applied.value.prepared.transactionId;
+        const versionGroupId = `engineering-version-group-${sha256EngineeringMutationTextV2(transactionId)}`;
         return ok({
           schemaVersion: "2.0",
           status: "committed",
@@ -520,6 +566,231 @@ export function createDesktopEngineeringFileMutationSessionV2(
     });
   }
 
+  async function prepareLifecycle(
+    input: Parameters<EngineeringFileMutationSessionV2["prepare"]>[0]
+  ) {
+    if (input.toolName === "propose_directory_create") {
+      const parentRef = readString(input.arguments, "parentRef");
+      const name = readString(input.arguments, "name");
+      if (parentRef === undefined || name === undefined) return invalid();
+      const parent = resolveDirectoryRef(parentRef);
+      if (parent === undefined) return stale();
+      const relativeIdentity = joinRelative(parent.relativeIdentity, name);
+      const absence = await options.proposalPort.observeCreateAbsence({
+        relativeIdentity,
+        observedAt: now()
+      });
+      if (!absence.ok) return absence;
+      if (
+        absence.value.rootBindingId !== options.contentRootBindingId ||
+        absence.value.relativeIdentity !== relativeIdentity
+      ) {
+        return stale();
+      }
+      const targetProof = lifecycleTargetProof(
+        "absent",
+        relativeIdentity,
+        absence.value.parentDirectoryIdentity
+      );
+      return ok({
+        record: lifecycleRecord({
+          input,
+          operationKind: "create_directory",
+          relativeIdentity,
+          sourceRef: parentRef,
+          targetRef: `engineering_directory_ref:${randomBytes(32).toString("hex")}`,
+          before: {
+            schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+            kind: "absent" as const,
+            absenceProof: absence.value
+          },
+          targetRelativeIdentity: relativeIdentity,
+          targetProof,
+          recovery: null
+        })
+      });
+    }
+
+    const sourceRef = readString(
+      input.arguments,
+      input.toolName === "propose_file_move" ? "sourceRef" : "fileRef"
+    );
+    if (sourceRef === undefined) return invalid();
+    const source = resolveFileRef(sourceRef);
+    if (source === undefined) return stale();
+    const snapshot = await options.proposalPort.inspectProposalSnapshot({
+      relativeIdentity: source.relativeIdentity
+    });
+    if (!snapshot.ok) return snapshot;
+    if (
+      snapshot.value.state !== "present" ||
+      snapshot.value.rootBindingId !== options.contentRootBindingId ||
+      textSnapshotRefChecksum(
+        snapshot.value,
+        options.contentRootBindingId,
+        options.pathPolicyRevision
+      ) !== source.sourceNativeRefChecksum
+    ) {
+      return stale();
+    }
+    if (
+      input.toolName === "propose_file_delete" &&
+      options.resolveLifecycleRecoveryBinding === undefined
+    ) {
+      return unavailable("ENGINEERING_LIFECYCLE_RECOVERY_BINDING_UNAVAILABLE");
+    }
+    const beforeBlob = await options.blobStore.put({
+      contentRootBindingId: options.contentRootBindingId,
+      bytes: snapshot.value.bytes
+    });
+    if (!beforeBlob.ok) return beforeBlob;
+    const before = {
+      schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+      kind: "present" as const,
+      manifest: snapshot.value.manifest,
+      blob: beforeBlob.value
+    };
+
+    if (input.toolName === "propose_file_delete") {
+      const resolveRecovery = options.resolveLifecycleRecoveryBinding;
+      if (resolveRecovery === undefined)
+        return unavailable("ENGINEERING_LIFECYCLE_RECOVERY_BINDING_UNAVAILABLE");
+      const recovery = await resolveRecovery({
+        contentRootBindingId: options.contentRootBindingId,
+        relativeIdentity: source.relativeIdentity,
+        sourceRef
+      });
+      if (!recovery.ok) return recovery;
+      return ok({
+        record: lifecycleRecord({
+          input,
+          operationKind: "delete_file",
+          relativeIdentity: source.relativeIdentity,
+          sourceRef,
+          targetRef: sourceRef,
+          before,
+          targetRelativeIdentity: "",
+          targetProof: null,
+          recovery: recovery.value
+        })
+      });
+    }
+
+    const targetParentRef = readString(input.arguments, "targetParentRef");
+    const targetName = readString(input.arguments, "targetName");
+    if (targetParentRef === undefined || targetName === undefined) return invalid();
+    const targetParent = resolveDirectoryRef(targetParentRef);
+    if (targetParent === undefined) return stale();
+    const targetRelativeIdentity = joinRelative(targetParent.relativeIdentity, targetName);
+    const targetSnapshot = await options.proposalPort.inspectProposalSnapshot({
+      relativeIdentity: targetRelativeIdentity
+    });
+    if (!targetSnapshot.ok) return targetSnapshot;
+    if (targetSnapshot.value.rootBindingId !== options.contentRootBindingId) return stale();
+    let targetProof: EngineeringMutationLifecycleTargetProofV2;
+    if (targetSnapshot.value.state === "present") {
+      if (
+        targetSnapshot.value.manifest.identity.kind !== "observed_file" ||
+        snapshot.value.manifest.identity.kind !== "observed_file" ||
+        targetSnapshot.value.manifest.identity.fileIdentity !==
+          snapshot.value.manifest.identity.fileIdentity ||
+        !isCaseOnlyMove(source.relativeIdentity, targetRelativeIdentity)
+      ) {
+        return stale();
+      }
+      targetProof = lifecycleTargetProof(
+        "same_object_case_only",
+        targetRelativeIdentity,
+        targetParent.sourceNativeRefChecksum
+      );
+    } else {
+      targetProof = lifecycleTargetProof(
+        "absent",
+        targetRelativeIdentity,
+        targetParent.sourceNativeRefChecksum
+      );
+    }
+    return ok({
+      record: lifecycleRecord({
+        input,
+        operationKind: "move_file",
+        relativeIdentity: source.relativeIdentity,
+        sourceRef,
+        targetRef: targetParentRef,
+        before,
+        targetRelativeIdentity,
+        targetProof,
+        recovery: null
+      })
+    });
+  }
+
+  function resolveFileRef(opaqueRef: string) {
+    return refRegistry.resolveCurrentBoundary({
+      opaqueRef,
+      expectedKind: "file",
+      expectedRootBindingId: options.contentRootBindingId,
+      expectedPathPolicyRevision: options.pathPolicyRevision,
+      expectedCapabilityRevision: options.refCapabilityRevision
+    });
+  }
+
+  function resolveDirectoryRef(opaqueRef: string) {
+    return refRegistry.resolveCurrentBoundary({
+      opaqueRef,
+      expectedKind: "directory",
+      expectedRootBindingId: options.contentRootBindingId,
+      expectedPathPolicyRevision: options.pathPolicyRevision,
+      expectedCapabilityRevision: options.refCapabilityRevision
+    });
+  }
+
+  function lifecycleRecord(input: {
+    readonly input: Parameters<EngineeringFileMutationSessionV2["prepare"]>[0];
+    readonly operationKind: "move_file" | "delete_file" | "create_directory";
+    readonly relativeIdentity: string;
+    readonly sourceRef: string;
+    readonly targetRef: string;
+    readonly before: EngineeringMutationProposalRecordV2["before"];
+    readonly targetRelativeIdentity: string;
+    readonly targetProof: EngineeringMutationLifecycleTargetProofV2 | null;
+    readonly recovery: {
+      readonly recoveryRootBindingId: string;
+      readonly recoveryGrantRevision: string;
+      readonly recoverySideEffectChecksum: string;
+      readonly recoveryObjectId: string;
+    } | null;
+  }) {
+    return {
+      schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+      proposalId: `engineering-proposal-${randomId()}`,
+      runId: input.input.runId,
+      projectId: input.input.projectId,
+      toolCallId: input.input.toolCallId,
+      canonicalPayloadChecksum: input.input.canonicalPayloadChecksum,
+      operationKind: input.operationKind,
+      contentRootBindingId: options.contentRootBindingId,
+      pathPolicyRevision: options.pathPolicyRevision,
+      policyRevision: input.input.boundary.policyRevision,
+      capabilityRevision: input.input.boundary.capabilityRevision,
+      providerSemanticVersionSetChecksum: input.input.boundary.providerSemanticVersionSetChecksum,
+      approvalRuleSetVersion: input.input.boundary.approvalRuleSetVersion,
+      approvalRuleSetChecksum: input.input.boundary.approvalRuleSetChecksum,
+      relativeIdentity: input.relativeIdentity,
+      sourceRef: input.sourceRef,
+      targetRef: input.targetRef,
+      before: input.before,
+      targetRelativeIdentity: input.targetRelativeIdentity,
+      targetProof: input.targetProof,
+      recoveryRootBindingId: input.recovery?.recoveryRootBindingId ?? null,
+      recoveryGrantRevision: input.recovery?.recoveryGrantRevision ?? null,
+      recoverySideEffectChecksum: input.recovery?.recoverySideEffectChecksum ?? null,
+      recoveryObjectId: input.recovery?.recoveryObjectId ?? null,
+      operationId: `engineering-lifecycle-${randomId()}`,
+      stagingObjectId: `engineering-stage-${randomId()}`
+    };
+  }
+
   async function currentRecord(
     changeSet: ChangeSetV2
   ): Promise<Result<EngineeringMutationProposalRecordV2, UnifiedError>> {
@@ -586,11 +857,14 @@ export function createDesktopEngineeringFileMutationSessionV2(
   async function transactionInputFor(
     record: EngineeringMutationProposalRecordV2,
     approval: ReservedChangeSetApprovalV2
-  ): Promise<Result<EngineeringWriteTransactionInputV2, UnifiedError>> {
-    // B8 lifecycle records use the separate lifecycle WAL/native ABI. Keep this B7 session
-    // fail-closed until the production composition supplies that coordinator.
+  ): Promise<
+    Result<
+      EngineeringWriteTransactionInputV2 | EngineeringLifecycleWriteTransactionInputV2,
+      UnifiedError
+    >
+  > {
     if (!isRawMutationProposalRecord(record)) {
-      return unavailable("ENGINEERING_LIFECYCLE_TRANSACTION_UNAVAILABLE");
+      return lifecycleTransactionInputFor(record, approval);
     }
     const candidate = await options.blobStore.get(record.candidate.blob);
     if (!candidate.ok) return candidate;
@@ -645,6 +919,138 @@ export function createDesktopEngineeringFileMutationSessionV2(
     };
     return ok(input);
   }
+
+  function lifecycleTransactionInputFor(
+    record: EngineeringLifecycleMutationProposalRecordV2,
+    approval: ReservedChangeSetApprovalV2
+  ): Result<EngineeringLifecycleWriteTransactionInputV2, UnifiedError> {
+    const transactionId = approval.reservationTransactionId;
+    const sourceManifest = record.before.kind === "present" ? record.before.manifest : undefined;
+    if (
+      (record.operationKind === "move_file" || record.operationKind === "delete_file") &&
+      (sourceManifest === undefined || sourceManifest.identity.kind !== "observed_file")
+    ) {
+      return stale();
+    }
+    if (
+      record.operationKind === "delete_file" &&
+      (record.recoveryRootBindingId === null ||
+        record.recoveryGrantRevision === null ||
+        record.recoverySideEffectChecksum === null ||
+        record.recoveryObjectId === null)
+    ) {
+      return unavailable("ENGINEERING_LIFECYCLE_RECOVERY_BINDING_UNAVAILABLE");
+    }
+    const request: EngineeringFileLifecycleRequestV2 = {
+      schemaVersion: "3.0",
+      operationKind: record.operationKind,
+      transactionId,
+      operationId: record.operationId,
+      contentRootBindingId: record.contentRootBindingId,
+      relativeSource: record.operationKind === "create_directory" ? "" : record.relativeIdentity,
+      relativeTarget: record.targetRelativeIdentity,
+      sourceFileIdentity:
+        sourceManifest?.identity.kind === "observed_file"
+          ? sourceManifest.identity.fileIdentity
+          : "",
+      sourceSha256: sourceManifest?.sha256 ?? "0".repeat(64),
+      targetProof: record.targetProof?.kind ?? "absent",
+      recoveryRootBindingId: record.recoveryRootBindingId ?? "",
+      recoveryGrantRevision: record.recoveryGrantRevision ?? "",
+      recoverySideEffectChecksum: record.recoverySideEffectChecksum ?? "",
+      recoveryObjectId: record.recoveryObjectId ?? "",
+      stagingObjectId: record.stagingObjectId,
+      expectedState: "wal_prepared"
+    };
+    const approvalChecksum = approvalBindingV2Checksum(approval.binding);
+    return ok({
+      schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+      transactionId,
+      contentRootBindingId: record.contentRootBindingId,
+      providerSemanticVersionSetChecksum: record.providerSemanticVersionSetChecksum,
+      authorization: {
+        authorizationId: approval.authorizationId,
+        approvalBindingId: approval.binding.bindingId,
+        approvalBindingChecksum: approvalChecksum,
+        sideEffectSubjectChecksum: lifecycleSideEffectSubjectChecksum({
+          transactionId,
+          contentRootBindingId: record.contentRootBindingId,
+          providerSemanticVersionSetChecksum: record.providerSemanticVersionSetChecksum,
+          operations: [request]
+        }),
+        changeSetId: approval.binding.changeSetId,
+        changeSetRevision: approval.binding.changeSetRevision,
+        changeSetChecksum: approval.binding.changeSetChecksum
+      },
+      operations: [
+        {
+          request,
+          recoveryBinding:
+            record.operationKind === "delete_file"
+              ? {
+                  recoveryRootBindingId: record.recoveryRootBindingId as string,
+                  grantRevision: record.recoveryGrantRevision as string,
+                  sideEffectChecksum: record.recoverySideEffectChecksum as string
+                }
+              : null
+        }
+      ],
+      preparedAt: record.createdAt
+    });
+  }
+}
+
+function lifecycleSideEffectSubjectChecksum(input: {
+  readonly transactionId: string;
+  readonly contentRootBindingId: string;
+  readonly providerSemanticVersionSetChecksum: string;
+  readonly operations: readonly EngineeringFileLifecycleRequestV2[];
+}): string {
+  return sha256EngineeringMutationTextV2(
+    canonicalizeEngineeringMutationV2Json({
+      schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+      transactionId: input.transactionId,
+      contentRootBindingId: input.contentRootBindingId,
+      providerSemanticVersionSetChecksum: input.providerSemanticVersionSetChecksum,
+      operationRequestChecksums: input.operations.map((operation) =>
+        sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(operation))
+      )
+    })
+  );
+}
+
+function joinRelative(parent: string, leaf: string): string {
+  return parent.length === 0 ? leaf : `${parent}/${leaf}`;
+}
+
+function parentOf(relativeIdentity: string): string {
+  const separator = relativeIdentity.lastIndexOf("/");
+  return separator < 0 ? "" : relativeIdentity.slice(0, separator);
+}
+
+function isCaseOnlyMove(source: string, target: string): boolean {
+  return (
+    source !== target &&
+    parentOf(source) === parentOf(target) &&
+    source.toLocaleLowerCase("en-US") === target.toLocaleLowerCase("en-US")
+  );
+}
+
+function lifecycleTargetProof(
+  kind: "absent" | "same_object_case_only",
+  relativeIdentity: string,
+  parentDirectoryIdentity: string
+): EngineeringMutationLifecycleTargetProofV2 {
+  const proof = {
+    schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
+    kind,
+    relativeIdentity,
+    parentDirectoryIdentity
+  } as const;
+  return {
+    ...proof,
+    proofChecksum: sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(proof))
+  };
 }
 
 async function preparedProjection(
@@ -682,10 +1088,58 @@ async function preparedProjection(
       }
     });
   }
-  if (record.operationKind !== "create_file")
-    return unavailable("ENGINEERING_LIFECYCLE_SESSION_UNAVAILABLE");
-  const candidate = readString(args, "candidate");
-  if (candidate === undefined) return invalid();
+  if (record.operationKind === "create_file") {
+    const candidate = readString(args, "candidate");
+    if (candidate === undefined) return invalid();
+    return ok({
+      schemaVersion: ENGINEERING_FILE_MUTATION_SESSION_V2_SCHEMA_VERSION,
+      proposalId: record.proposalId,
+      toolCallId: record.toolCallId,
+      canonicalPayloadChecksum: record.canonicalPayloadChecksum,
+      operationKind: record.operationKind,
+      relativeIdentity: record.relativeIdentity,
+      changeSetMutation: {
+        kind: "create_file",
+        operation: {
+          operationId: record.operationId,
+          kind: "create_file",
+          relativePath: record.relativeIdentity,
+          content: candidate,
+          toolCallIdempotencyKey: record.toolCallId,
+          selected: true
+        }
+      }
+    });
+  }
+  const operation =
+    record.operationKind === "move_file"
+      ? {
+          operationId: record.operationId,
+          kind: "move_file" as const,
+          sourcePath: record.relativeIdentity,
+          targetPath: record.targetRelativeIdentity,
+          sourceChecksum:
+            record.before.kind === "present" ? record.before.manifest.sha256 : "not_applicable",
+          toolCallIdempotencyKey: record.toolCallId,
+          selected: true as const
+        }
+      : record.operationKind === "delete_file"
+        ? {
+            operationId: record.operationId,
+            kind: "delete_file" as const,
+            relativePath: record.relativeIdentity,
+            baseChecksum:
+              record.before.kind === "present" ? record.before.manifest.sha256 : "not_applicable",
+            toolCallIdempotencyKey: record.toolCallId,
+            selected: true as const
+          }
+        : {
+            operationId: record.operationId,
+            kind: "create_directory" as const,
+            relativePath: record.relativeIdentity,
+            toolCallIdempotencyKey: record.toolCallId,
+            selected: true as const
+          };
   return ok({
     schemaVersion: ENGINEERING_FILE_MUTATION_SESSION_V2_SCHEMA_VERSION,
     proposalId: record.proposalId,
@@ -693,26 +1147,45 @@ async function preparedProjection(
     canonicalPayloadChecksum: record.canonicalPayloadChecksum,
     operationKind: record.operationKind,
     relativeIdentity: record.relativeIdentity,
-    changeSetMutation: {
-      kind: "create_file",
-      operation: {
-        operationId: record.operationId,
-        kind: "create_file",
-        relativePath: record.relativeIdentity,
-        content: candidate,
-        toolCallIdempotencyKey: record.toolCallId,
-        selected: true
-      }
-    }
+    changeSetMutation: { kind: record.operationKind, operation }
   });
 }
 
 function proofInput(
   record: EngineeringMutationProposalRecordV2
 ): EngineeringApprovalProofInputV2 | undefined {
-  if (!isRawMutationProposalRecord(record)) return undefined;
   const changeSetBinding = record.changeSetBinding;
   if (changeSetBinding === null) return undefined;
+  if (!isRawMutationProposalRecord(record)) {
+    const baseManifestChecksum =
+      record.before.kind === "present"
+        ? engineeringRawByteManifestChecksumV2(record.before.manifest)
+        : record.before.absenceProof.absenceProofChecksum;
+    return Object.freeze({
+      schemaVersion: ENGINEERING_FILE_MUTATION_SESSION_V2_SCHEMA_VERSION,
+      operationKind: record.operationKind,
+      rootBindingId: record.contentRootBindingId,
+      selectionChecksum: changeSetBinding.selectionChecksum,
+      proposalPayloadChecksum: record.proposalPayloadChecksum,
+      baseManifestChecksum,
+      candidateManifestChecksum: record.targetProof?.proofChecksum ?? "not_applicable",
+      ...(record.operationKind === "delete_file" && record.recoveryRootBindingId !== null
+        ? {
+            recoveryRootBindingId: record.recoveryRootBindingId,
+            recoveryGrantRevision: record.recoveryGrantRevision as string,
+            recoverySideEffectChecksum: record.recoverySideEffectChecksum as string
+          }
+        : {}),
+      evidence: Object.freeze({
+        pathClass: "ordinary",
+        targetFreshness: "clean_stable",
+        createOnly: record.operationKind === "create_directory" ? "proven" : "not_applicable",
+        referenceImpact: "not_applicable",
+        limits: "within",
+        stateBoundary: "ordinary"
+      }) as EngineeringApprovalProofInputV2["evidence"]
+    });
+  }
   return Object.freeze({
     schemaVersion: ENGINEERING_FILE_MUTATION_SESSION_V2_SCHEMA_VERSION,
     operationKind: record.operationKind,
@@ -740,7 +1213,6 @@ function factsFor(
   changeSet: ChangeSetV2,
   proof: MainOnlyApprovalDecisionProofV1
 ): EngineeringApprovalBindingFactsV2 | undefined {
-  if (!isRawMutationProposalRecord(record)) return undefined;
   const binding = record.changeSetBinding;
   if (binding === null) return undefined;
   const proofFacts = proofInput(record);
@@ -752,6 +1224,44 @@ function factsFor(
     proof.binding.candidateManifestChecksum !== proofFacts.candidateManifestChecksum
   ) {
     return undefined;
+  }
+  if (!isRawMutationProposalRecord(record)) {
+    const before = record.before.kind === "present" ? record.before.manifest : undefined;
+    return Object.freeze({
+      schemaVersion: ENGINEERING_FILE_APPROVAL_V2_SCHEMA_VERSION,
+      workspaceBindingId: proof.binding.workspaceBindingId,
+      rootBindingId: record.contentRootBindingId,
+      operationKind: record.operationKind,
+      relativeIdentity: record.relativeIdentity,
+      selectedOperationIds: binding.selectedOperationIds,
+      selectionChecksum: binding.selectionChecksum,
+      operationOrderChecksum: binding.operationOrderChecksum,
+      sourceRef: record.sourceRef,
+      targetRef: record.targetRef,
+      beforeKind: record.before.kind,
+      baseChecksum: before?.sha256 ?? "not_applicable",
+      candidateChecksum: "not_applicable",
+      baseManifestChecksum: proofFacts.baseManifestChecksum,
+      candidateManifestChecksum: proofFacts.candidateManifestChecksum,
+      encoding: "not_applicable",
+      bom: "not_applicable",
+      eol: "not_applicable",
+      approvalRuleSetVersion: record.approvalRuleSetVersion,
+      approvalRuleSetChecksum: record.approvalRuleSetChecksum,
+      proof,
+      proposalPayloadChecksum: record.proposalPayloadChecksum,
+      executionWritePolicy: changeSet.writePolicy ?? "write_before_confirmation",
+      policyRevision: record.policyRevision,
+      capabilityRevision: record.capabilityRevision,
+      providerSemanticVersionSetChecksum: record.providerSemanticVersionSetChecksum,
+      ...(record.operationKind === "delete_file" && record.recoveryRootBindingId !== null
+        ? {
+            recoveryRootBindingId: record.recoveryRootBindingId,
+            recoveryGrantRevision: record.recoveryGrantRevision as string,
+            recoverySideEffectChecksum: record.recoverySideEffectChecksum as string
+          }
+        : {})
+    });
   }
   const before = record.before.kind === "present" ? record.before.manifest : undefined;
   return Object.freeze({

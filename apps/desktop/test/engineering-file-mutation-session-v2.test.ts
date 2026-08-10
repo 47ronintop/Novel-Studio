@@ -206,6 +206,67 @@ describe("DesktopEngineeringFileMutationSessionV2", () => {
     expect(expectOk(await staleHarness.proposalRepository.scan()).proposals).toHaveLength(0);
   });
 
+  test("prepares a durable single-level directory lifecycle proposal", async () => {
+    const harness = createHarness(presentSnapshot(encodeText("ignored\n", false)));
+    const parentRef = issueDirectoryRef(harness, "src");
+
+    const prepared = expectOk(
+      await harness.bundle.session.prepare({
+        runId: "run_01",
+        projectId: "project_01",
+        toolCallId: "directory_call_01",
+        toolName: "propose_directory_create",
+        arguments: { parentRef, name: "new-directory" },
+        canonicalPayloadChecksum: checksum("directory-payload"),
+        writePolicy: "write_before_confirmation",
+        boundary: proposalBoundary()
+      })
+    );
+
+    expect(prepared).toMatchObject({
+      operationKind: "create_directory",
+      relativeIdentity: "src/new-directory",
+      changeSetMutation: {
+        kind: "create_directory",
+        operation: {
+          kind: "create_directory",
+          relativePath: "src/new-directory",
+          selected: true
+        }
+      }
+    });
+    expect(await onlyRecord(harness)).toMatchObject({
+      operationKind: "create_directory",
+      relativeIdentity: "src/new-directory",
+      targetRelativeIdentity: "src/new-directory",
+      targetProof: { kind: "absent", relativeIdentity: "src/new-directory" },
+      recoveryRootBindingId: null
+    });
+  });
+
+  test("keeps delete fail closed without a qualified recovery binding", async () => {
+    const snapshot = presentSnapshot(encodeText("delete me\n", false));
+    const harness = createHarness(snapshot);
+
+    await expect(
+      harness.bundle.session.prepare({
+        runId: "run_01",
+        projectId: "project_01",
+        toolCallId: "delete_call_01",
+        toolName: "propose_file_delete",
+        arguments: { fileRef: issueFileRef(harness, snapshot) },
+        canonicalPayloadChecksum: checksum("delete-payload"),
+        writePolicy: "write_before_confirmation",
+        boundary: proposalBoundary()
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_LIFECYCLE_RECOVERY_BINDING_UNAVAILABLE" }
+    });
+    expect(expectOk(await harness.proposalRepository.scan()).proposals).toHaveLength(0);
+    expect(expectOk(await harness.blobStore.listRoot(ROOT_BINDING_ID))).toHaveLength(0);
+  });
+
   test("keeps same-toolCallId preparation idempotent and rejects a changed canonical payload", async () => {
     const snapshot = presentSnapshot(encodeText("const value = OLD;\n", false));
     const harness = createHarness(snapshot);
