@@ -135,13 +135,20 @@ jobs:
             $manifest.developmentMutationV2Probe.toolchainIdentitySha256 -ne $manifest.toolchain.sha256 -or
             $manifest.developmentMutationV2Probe.productCapability -ne "unavailable" -or
             $manifest.developmentMutationV2Probe.primitives.stateDurability -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.move -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.caseOnlyTwoStepWal -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.volumeLocalRecoveryRoot -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.quarantineDelete -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.restoreNoOverwrite -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.localPurge -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.singleLevelCreateDirectory -ne "available" -or
             $manifest.eligibility.batch -ne "6" -or
             $manifest.eligibility.mutation -ne "unavailable" -or
             $manifest.eligibility.recovery -ne "unavailable"
-          ) { throw "Manifest does not preserve the single-chain B6 product / B7 development identity boundary" }
+          ) { throw "Manifest does not preserve the single-chain B6 product / B8 development identity boundary" }
       - name: Record unsigned development positive, negative, and fault probe result
         run: node scripts/probe-engineering-file-access-package.mjs
-      - name: Verify B7 probe evidence is complete and diagnostic only
+      - name: Verify B8 probe evidence is complete and diagnostic only
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -176,7 +183,13 @@ jobs:
             "fixedCreateMetadata",
             "receiptDurability",
             "stagingWalRecoveryScan",
-            "recoveryBeforeCleanup"
+            "recoveryBeforeCleanup",
+            "lifecycleCreateDirectory",
+            "lifecycleMove",
+            "lifecycleCaseOnlyMove",
+            "lifecycleQuarantine",
+            "lifecycleRestore",
+            "lifecyclePurge"
           )) {
             if ($mutation.$name -ne "passed") { throw "Missing positive mutation probe: $name" }
           }

@@ -266,8 +266,8 @@ if (buildDisabledProtectionCanaries) {
       recovery: "unavailable"
     },
     developmentMutationV2Probe: {
-      schemaVersion: "1.0",
-      batch: "7",
+      schemaVersion: "1.1",
+      batch: "8",
       sourceIdentitySha256: sourceIdentity.sha256,
       toolchainIdentitySha256: toolchainIdentity.sha256,
       primitives: {
@@ -286,6 +286,15 @@ if (buildDisabledProtectionCanaries) {
         stagingWalRecoveryScan: "available",
         faultProbe: "available",
         stateDurability: "available"
+      },
+      lifecyclePrimitives: {
+        move: "available",
+        caseOnlyTwoStepWal: "available",
+        volumeLocalRecoveryRoot: "available",
+        quarantineDelete: "available",
+        restoreNoOverwrite: "available",
+        localPurge: "available",
+        singleLevelCreateDirectory: "available"
       },
       productCapability: "unavailable"
     },

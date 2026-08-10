@@ -142,6 +142,16 @@ struct StateFileSession {
   uint64_t stateRootId;
 };
 
+struct RecoveryRootSession {
+  HANDLE handle;
+  std::wstring path;
+  BY_HANDLE_FILE_INFORMATION identity;
+  uint64_t contentRootId;
+  std::string recoveryRootBindingId;
+  std::string grantRevision;
+  std::string ownershipMarkerChecksum;
+};
+
 struct BlobManifest {
   uint64_t byteLength;
   std::string sha256;
@@ -228,6 +238,25 @@ struct V2MutationRequest {
   std::string stagingObjectId;
 };
 
+struct LifecycleRequest {
+  std::string schemaVersion;
+  std::string operationKind;
+  std::string transactionId;
+  std::string operationId;
+  std::string contentRootBindingId;
+  std::string relativeSource;
+  std::string relativeTarget;
+  std::string sourceFileIdentity;
+  std::string sourceSha256;
+  std::string targetProof;
+  std::string recoveryRootBindingId;
+  std::string recoveryGrantRevision;
+  std::string recoverySideEffectChecksum;
+  std::string recoveryObjectId;
+  std::string stagingObjectId;
+  std::string expectedState;
+};
+
 class ScopedHandle {
  public:
   explicit ScopedHandle(HANDLE handle) : handle_(handle) {}
@@ -263,6 +292,9 @@ std::unordered_map<uint64_t, StateRootSession> g_stateRoots;
 std::unordered_map<uint64_t, StateFileSession> g_stateFiles;
 std::atomic<uint64_t> g_nextStateRoot{1};
 std::atomic<uint64_t> g_nextStateFile{1};
+std::mutex g_recoveryRootsMutex;
+std::unordered_map<uint64_t, RecoveryRootSession> g_recoveryRoots;
+std::atomic<uint64_t> g_nextRecoveryRoot{1};
 std::mutex g_mutationMutex;
 std::unordered_map<uint64_t, AbsenceProof> g_absenceProofs;
 std::unordered_map<uint64_t, MutationWalBinding> g_mutationWalBindings;
@@ -376,6 +408,14 @@ void closeRoots() {
       if (session.handle != INVALID_HANDLE_VALUE) CloseHandle(session.handle);
     }
     g_stateRoots.clear();
+  }
+  {
+    std::scoped_lock recoveryLock(g_recoveryRootsMutex);
+    for (const auto& [id, session] : g_recoveryRoots) {
+      (void)id;
+      if (session.handle != INVALID_HANDLE_VALUE) CloseHandle(session.handle);
+    }
+    g_recoveryRoots.clear();
   }
   {
     std::scoped_lock mutationLock(g_mutationMutex);
@@ -624,6 +664,16 @@ bool hasExactLeafName(HANDLE handle, const std::wstring& expected) {
   const std::wstring name(info->FileName, info->FileNameLength / sizeof(wchar_t));
   const size_t separator = name.find_last_of(L"\\/");
   return name.substr(separator == std::wstring::npos ? 0 : separator + 1) == expected;
+}
+
+bool utf8ToWide(const std::string& input, std::wstring* output) {
+  if (input.empty() || input.size() > kMaxPathUtf8Bytes) return false;
+  const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
+                                         static_cast<int>(input.size()), nullptr, 0);
+  if (length <= 0 || static_cast<size_t>(length) > kMaxRelativeUtf16Units) return false;
+  output->resize(static_cast<size_t>(length));
+  return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
+                             static_cast<int>(input.size()), output->data(), length) == length;
 }
 
 bool hasExpectedLeafName(HANDLE handle, const std::wstring& expected) {
@@ -1427,6 +1477,105 @@ AccessError openMutationFile(uint64_t rootId, const std::wstring& relative, HAND
                               output);
 }
 
+bool getNamedValue(napi_env env, napi_value object, const char* name, napi_value* output);
+bool readUtf8StringValue(napi_env env, napi_value value, size_t maximumLength, std::string* output);
+bool hasExactV2Keys(napi_env env, napi_value object, const std::vector<const char*>& expected);
+bool isV2StableIdentifier(const std::string& value, bool operationIdentifier);
+bool isV2Sha256(const std::string& value);
+
+AccessError recoveryRootSnapshot(uint64_t recoveryRootId, RecoveryRootSession* output) {
+  std::scoped_lock lock(g_recoveryRootsMutex);
+  const auto found = g_recoveryRoots.find(recoveryRootId);
+  if (found == g_recoveryRoots.end()) return AccessError::kRootUnavailable;
+  *output = found->second;
+  output->handle = INVALID_HANDLE_VALUE;
+  return AccessError::kOk;
+}
+
+bool sameVolume(const BY_HANDLE_FILE_INFORMATION& left, const BY_HANDLE_FILE_INFORMATION& right) {
+  return left.dwVolumeSerialNumber == right.dwVolumeSerialNumber;
+}
+
+bool isPathAncestorOrSame(const std::wstring& ancestor, const std::wstring& candidate) {
+  if (ancestor.size() > candidate.size() || _wcsnicmp(ancestor.c_str(), candidate.c_str(), ancestor.size()) != 0) return false;
+  return ancestor.size() == candidate.size() || candidate[ancestor.size()] == L'\\' || candidate[ancestor.size()] == L'/';
+}
+
+AccessError openRecoveryDirectory(uint64_t recoveryRootId, const std::wstring& relative, HANDLE* output) {
+  RecoveryRootSession session{};
+  const AccessError snapshot = recoveryRootSnapshot(recoveryRootId, &session);
+  if (snapshot != AccessError::kOk) return snapshot;
+  std::vector<std::wstring> segments;
+  if (!parseRelativePath(relative, true, &segments)) return AccessError::kUnsafePath;
+  HANDLE current = INVALID_HANDLE_VALUE;
+  ScopedHandle root(CreateFileW(session.path.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
+      FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (root.get() == INVALID_HANDLE_VALUE || verifyDirectory(root.get()) != AccessError::kOk) return AccessError::kRootChanged;
+  current = root.release();
+  if (segments.empty()) { *output = current; return AccessError::kOk; }
+  const NtCreateFileFn create = ntCreateFile();
+  if (create == nullptr) { CloseHandle(current); return AccessError::kUnavailable; }
+  for (size_t index = 0; index < segments.size(); ++index) {
+    UNICODE_STRING name{};
+    name.Buffer = const_cast<PWSTR>(segments[index].data());
+    name.Length = static_cast<USHORT>(segments[index].size() * sizeof(wchar_t));
+    name.MaximumLength = name.Length;
+    OBJECT_ATTRIBUTES attributes{};
+    InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, current, nullptr);
+    IO_STATUS_BLOCK statusBlock{};
+    HANDLE next = INVALID_HANDLE_VALUE;
+    const NTSTATUS status = create(&next, FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
+        FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE, &attributes, &statusBlock, nullptr, 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, kFileOpen,
+        kFileDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption(), nullptr, 0);
+    CloseHandle(current);
+    if (!isSuccess(status) || next == INVALID_HANDLE_VALUE) return status == kStatusObjectNameNotFound ? AccessError::kNotFound : AccessError::kUnsafeObject;
+    current = next;
+    if (verifyDirectory(current) != AccessError::kOk || !hasExpectedLeafName(current, segments[index])) { CloseHandle(current); return AccessError::kUnsafeObject; }
+  }
+  *output = current;
+  return AccessError::kOk;
+}
+
+bool readLifecycleString(napi_env env, napi_value object, const char* name, size_t max, std::string* out, bool required = true) {
+  napi_value value;
+  if (!getNamedValue(env, object, name, &value)) return !required;
+  return readUtf8StringValue(env, value, max, out);
+}
+
+bool parseLifecycleRequest(napi_env env, napi_value value, LifecycleRequest* request) {
+  const std::vector<const char*> keys = {
+      "schemaVersion", "operationKind", "transactionId", "operationId", "contentRootBindingId",
+      "relativeSource", "relativeTarget", "sourceFileIdentity", "sourceSha256", "targetProof",
+      "recoveryRootBindingId", "recoveryGrantRevision", "recoverySideEffectChecksum", "recoveryObjectId",
+      "stagingObjectId", "expectedState"};
+  if (!hasExactV2Keys(env, value, keys) ||
+      !readLifecycleString(env, value, "schemaVersion", 16, &request->schemaVersion) ||
+      !readLifecycleString(env, value, "operationKind", 32, &request->operationKind) ||
+      !readLifecycleString(env, value, "transactionId", 128, &request->transactionId) ||
+      !readLifecycleString(env, value, "operationId", 128, &request->operationId) ||
+      !readLifecycleString(env, value, "contentRootBindingId", 128, &request->contentRootBindingId) ||
+      !readLifecycleString(env, value, "relativeSource", kMaxRelativeUtf16Units, &request->relativeSource) ||
+      !readLifecycleString(env, value, "relativeTarget", kMaxRelativeUtf16Units, &request->relativeTarget) ||
+      !readLifecycleString(env, value, "sourceFileIdentity", 128, &request->sourceFileIdentity) ||
+      !readLifecycleString(env, value, "sourceSha256", 64, &request->sourceSha256) ||
+      !readLifecycleString(env, value, "targetProof", 32, &request->targetProof) ||
+      !readLifecycleString(env, value, "recoveryRootBindingId", 128, &request->recoveryRootBindingId, false) ||
+      !readLifecycleString(env, value, "recoveryGrantRevision", 128, &request->recoveryGrantRevision, false) ||
+      !readLifecycleString(env, value, "recoverySideEffectChecksum", 64, &request->recoverySideEffectChecksum, false) ||
+      !readLifecycleString(env, value, "recoveryObjectId", 128, &request->recoveryObjectId, false) ||
+      !readLifecycleString(env, value, "stagingObjectId", 128, &request->stagingObjectId) ||
+      !readLifecycleString(env, value, "expectedState", 32, &request->expectedState)) return false;
+  if (request->schemaVersion != "3.0" || !isV2StableIdentifier(request->transactionId, false) ||
+      !isV2StableIdentifier(request->operationId, true) || !isV2StableIdentifier(request->contentRootBindingId, false) ||
+      !isV2Sha256(request->sourceSha256) ||
+      (!request->sourceFileIdentity.empty() && !isV2StableIdentifier(request->sourceFileIdentity, false)) ||
+      !isV2StableIdentifier(request->stagingObjectId, false) || request->operationKind.empty()) return false;
+  return true;
+}
+
 AccessError checkRelativeLeafAbsent(HANDLE parent, const std::wstring& leaf) {
   const NtCreateFileFn create = ntCreateFile();
   if (create == nullptr) return AccessError::kUnavailable;
@@ -1488,6 +1637,41 @@ AccessError openMutationLeafWithAccess(HANDLE parent, const std::wstring& leaf, 
 
 AccessError openMutationLeaf(HANDLE parent, const std::wstring& leaf, HANDLE* output) {
   return openMutationLeafWithAccess(parent, leaf, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, output);
+}
+
+// Case-only rename proof must open the requested destination spelling separately.  Windows
+// resolves that lookup case-insensitively, so this helper deliberately does not require its
+// exact spelling to match the current directory entry; the caller compares the opened handle
+// identity with the already-opened source before treating it as the same-object proof.
+AccessError openMutationLeafForCaseProof(HANDLE parent, const std::wstring& leaf, HANDLE* output) {
+  const NtCreateFileFn create = ntCreateFile();
+  if (create == nullptr) return AccessError::kUnavailable;
+  UNICODE_STRING name{};
+  name.Buffer = const_cast<PWSTR>(leaf.data());
+  name.Length = static_cast<USHORT>(leaf.size() * sizeof(wchar_t));
+  name.MaximumLength = name.Length;
+  OBJECT_ATTRIBUTES attributes{};
+  InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, parent, nullptr);
+  IO_STATUS_BLOCK statusBlock{};
+  HANDLE file = INVALID_HANDLE_VALUE;
+  const NTSTATUS status = create(
+      &file, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attributes, &statusBlock, nullptr, 0,
+      FILE_SHARE_READ | FILE_SHARE_DELETE, kFileOpen,
+      kFileNonDirectoryFile | kFileSynchronousIoNonAlert | kFileOpenReparsePoint, nullptr, 0);
+  if (!isSuccess(status) || file == INVALID_HANDLE_VALUE) {
+    return status == kStatusObjectNameNotFound ? AccessError::kNotFound : AccessError::kUnsafeObject;
+  }
+  BY_HANDLE_FILE_INFORMATION identity{};
+  uint64_t ignoredSize = 0;
+  const AccessError checked = GetFileInformationByHandle(file, &identity) && identity.nNumberOfLinks == 1
+      ? verifyRegularFile(file, &ignoredSize)
+      : AccessError::kHardLink;
+  if (checked != AccessError::kOk) {
+    CloseHandle(file);
+    return checked;
+  }
+  *output = file;
+  return AccessError::kOk;
 }
 
 // A replace handoff renames this exact handle, so it must have DELETE access.  The permissive
@@ -1559,6 +1743,15 @@ bool flushDurably(HANDLE handle, DurableFlushKind kind) {
   (void)kind;
   return FlushFileBuffers(handle) != FALSE;
 #endif
+}
+
+AccessError flushMoveDirectories(HANDLE sourceParent, HANDLE destinationParent) {
+  if (!flushDurably(sourceParent, DurableFlushKind::kDirectory)) return AccessError::kDurability;
+  if (sourceParent != destinationParent &&
+      !flushDurably(destinationParent, DurableFlushKind::kDirectory)) {
+    return AccessError::kDurability;
+  }
+  return AccessError::kOk;
 }
 
 AccessError writeAndFlush(HANDLE handle, const std::string& bytes) {
@@ -2719,6 +2912,31 @@ AccessError readOpenedV2File(HANDLE handle, std::string* bytes) {
   return isValidUtf8V2(*bytes) ? AccessError::kOk : AccessError::kNotText;
 }
 
+// The global Engineering V2 Journal stores the binding revision, but the volume-local root
+// must also prove that it is the app-owned quarantine root every time it is used.  A caller-
+// supplied checksum alone is not proof: it has to match a no-follow marker stored in the opened
+// root and the root's directory identity must still be the identity that was granted.
+AccessError validateRecoveryRootOwnership(HANDLE root, const RecoveryRootSession& session) {
+  BY_HANDLE_FILE_INFORMATION actual{};
+  if (!GetFileInformationByHandle(root, &actual) || !sameObjectKey(actual, session.identity)) {
+    return AccessError::kRootChanged;
+  }
+  constexpr wchar_t kMarkerLeaf[] = L".novel-studio-recovery-owner-v1";
+  HANDLE marker = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationLeafWithAccess(
+      root, kMarkerLeaf, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &marker);
+  ScopedHandle markerHandle(marker);
+  if (result != AccessError::kOk) return AccessError::kPrecondition;
+  std::string bytes;
+  result = readOpenedV2File(markerHandle.get(), &bytes);
+  std::string checksum;
+  if (result != AccessError::kOk || !sha256Hex(bytes, &checksum) ||
+      checksum != session.ownershipMarkerChecksum) {
+    return AccessError::kPrecondition;
+  }
+  return AccessError::kOk;
+}
+
 AccessError observeOpenedV2File(HANDLE handle, const std::string& rootBindingId,
                                 const std::string& relativeIdentity, FileObservation* observation,
                                 V2RawManifest* manifest, std::string* bytes) {
@@ -2974,7 +3192,7 @@ napi_value adapterInfo(napi_env env, napi_callback_info) {
       "unsupported"
 #endif
   ));
-  napi_set_named_property(env, result, "batch", makeString(env, "7"));
+  napi_set_named_property(env, result, "batch", makeString(env, "8"));
   napi_set_named_property(env, result, "accessEligible", makeString(env, "available"));
   // Mutation primitives are deliberately visible only to the fixed Main-owned development
   // probe. Main still owns whether this B7-capable ABI is authorized for product mutation through
@@ -3675,15 +3893,308 @@ napi_value unlinkEngineeringStateFileNoFollow(napi_env env, napi_callback_info i
 #endif
 }
 
+napi_value openEngineeringRecoveryRootV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    size_t argc = 5; napi_value argv[5]; bool lossless = false; uint64_t contentRootId = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 5 ||
+        napi_get_value_bigint_uint64(env, argv[0], &contentRootId, &lossless) != napi_ok || !lossless) {
+      throwAccessError(env, AccessError::kInvalidArgument); return nullptr;
+    }
+    std::wstring path; std::string binding, grant, marker;
+    if (!readUtf16String(env, argv[1], kMaxRootUtf16Units, &path) || !isSafeRootPath(path) ||
+        !readUtf8StringValue(env, argv[2], 128, &binding) || !readUtf8StringValue(env, argv[3], 128, &grant) ||
+        !readUtf8StringValue(env, argv[4], 64, &marker) || binding.empty() || grant.empty() || !isV2Sha256(marker)) {
+      throwAccessError(env, AccessError::kInvalidArgument); return nullptr;
+    }
+    RootSession content{}; if (rootSessionSnapshot(contentRootId, &content) != AccessError::kOk) { throwAccessError(env, AccessError::kRootUnavailable); return nullptr; }
+    ScopedHandle handle(CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
+        FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    BY_HANDLE_FILE_INFORMATION identity{};
+    if (handle.get() == INVALID_HANDLE_VALUE || verifyDirectory(handle.get()) != AccessError::kOk ||
+        !GetFileInformationByHandle(handle.get(), &identity) || !sameVolume(content.identity, identity) ||
+        identity.dwVolumeSerialNumber == 0 || sameObjectKey(content.identity, identity) ||
+        isPathAncestorOrSame(content.path, path) || isPathAncestorOrSame(path, content.path)) {
+      throwAccessError(env, AccessError::kPrecondition); return nullptr;
+    }
+    const RecoveryRootSession candidate{handle.get(), path, identity, contentRootId, binding, grant, marker};
+    if (validateRecoveryRootOwnership(handle.get(), candidate) != AccessError::kOk) {
+      throwAccessError(env, AccessError::kPrecondition); return nullptr;
+    }
+    const uint64_t id = g_nextRecoveryRoot.fetch_add(1);
+    { std::scoped_lock lock(g_recoveryRootsMutex); g_recoveryRoots.emplace(id, RecoveryRootSession{handle.get(), path, identity, contentRootId, binding, grant, marker}); }
+    handle.release();
+    napi_value out, idValue, volume, directory;
+    napi_create_object(env, &out); napi_create_bigint_uint64(env, id, &idValue);
+    napi_create_string_utf8(env, fixedWidthHex(identity.dwVolumeSerialNumber, 8).c_str(), NAPI_AUTO_LENGTH, &volume);
+    const uint64_t index = (static_cast<uint64_t>(identity.nFileIndexHigh) << 32) | identity.nFileIndexLow;
+    napi_create_string_utf8(env, fixedWidthHex(index, 16).c_str(), NAPI_AUTO_LENGTH, &directory);
+    napi_set_named_property(env, out, "recoveryRootId", idValue); napi_set_named_property(env, out, "volumeIdentity", volume);
+    napi_set_named_property(env, out, "directoryIdentity", directory); napi_set_named_property(env, out, "recoveryRootBindingId", makeString(env, binding.c_str()));
+    napi_set_named_property(env, out, "grantRevision", makeString(env, grant.c_str())); napi_set_named_property(env, out, "ownershipMarkerChecksum", makeString(env, marker.c_str()));
+    return out;
+  } catch (...) { throwAccessError(env, AccessError::kIo); return nullptr; }
+#else
+  (void)info; throwAccessError(env, AccessError::kUnavailable); return nullptr;
+#endif
+}
+
+napi_value closeEngineeringRecoveryRootV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  size_t argc = 1; napi_value argv[1]; bool lossless = false; uint64_t id = 0;
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 1 || napi_get_value_bigint_uint64(env, argv[0], &id, &lossless) != napi_ok || !lossless) { throwAccessError(env, AccessError::kInvalidArgument); return nullptr; }
+  { std::scoped_lock lock(g_recoveryRootsMutex); auto it = g_recoveryRoots.find(id); if (it == g_recoveryRoots.end()) { throwAccessError(env, AccessError::kRootUnavailable); return nullptr; } CloseHandle(it->second.handle); g_recoveryRoots.erase(it); }
+  napi_value out; napi_get_undefined(env, &out); return out;
+#else
+  (void)info; throwAccessError(env, AccessError::kUnavailable); return nullptr;
+#endif
+}
+
+bool makeLifecycleReceipt(napi_env env, const LifecycleRequest& request, const char* state, const std::string& recoveryObject, napi_value* output) {
+  napi_value out; if (napi_create_object(env, &out) != napi_ok) return false;
+  napi_set_named_property(env, out, "schemaVersion", makeString(env, "3.0"));
+  napi_set_named_property(env, out, "kind", makeString(env, "engineering_file_lifecycle_receipt"));
+  napi_set_named_property(env, out, "operationKind", makeString(env, request.operationKind.c_str()));
+  napi_set_named_property(env, out, "transactionId", makeString(env, request.transactionId.c_str()));
+  napi_set_named_property(env, out, "operationId", makeString(env, request.operationId.c_str()));
+  napi_set_named_property(env, out, "contentRootBindingId", makeString(env, request.contentRootBindingId.c_str()));
+  napi_set_named_property(env, out, "relativeSource", makeString(env, request.relativeSource.c_str()));
+  napi_set_named_property(env, out, "relativeTarget", makeString(env, request.relativeTarget.c_str()));
+  napi_set_named_property(env, out, "state", makeString(env, state));
+  napi_set_named_property(env, out, "recoveryObjectId", recoveryObject.empty() ? makeString(env, "") : makeString(env, recoveryObject.c_str()));
+  napi_set_named_property(env, out, "durability", makeString(env, "data_and_directory_flushed"));
+  *output = out; return true;
+}
+
+napi_value createEngineeringDirectoryV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try { size_t argc=2; napi_value argv[2]; bool lossless=false; uint64_t rootId=0; if(napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr)!=napi_ok||argc!=2||napi_get_value_bigint_uint64(env,argv[0],&rootId,&lossless)!=napi_ok||!lossless){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;} LifecycleRequest request{}; if(!parseLifecycleRequest(env,argv[1],&request)||request.operationKind!="create_directory"||request.relativeSource!=""||request.targetProof!="absent"){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;} std::wstring target; std::vector<std::wstring> segments; if(!utf8ToWide(request.relativeTarget,&target)||!parseRelativePath(target,false,&segments)){throwAccessError(env,AccessError::kUnsafePath);return nullptr;} const std::wstring leaf=segments.back();segments.pop_back();std::wstring parent;for(size_t i=0;i<segments.size();++i){if(i)parent+=L'/';parent+=segments[i];} HANDLE parentHandle=INVALID_HANDLE_VALUE; AccessError result=openMutationDirectory(rootId,parent,&parentHandle); if(result==AccessError::kOk) result=checkRelativeLeafAbsent(parentHandle,leaf); if(result==AccessError::kOk){const NtCreateFileFn create=ntCreateFile(); if(create==nullptr) result=AccessError::kUnavailable; else {UNICODE_STRING name{}; name.Buffer=const_cast<PWSTR>(leaf.data()); name.Length=static_cast<USHORT>(leaf.size()*sizeof(wchar_t)); name.MaximumLength=name.Length; OBJECT_ATTRIBUTES attrs{}; InitializeObjectAttributes(&attrs,&name,OBJ_CASE_INSENSITIVE,parentHandle,nullptr); IO_STATUS_BLOCK sb{}; HANDLE dir=INVALID_HANDLE_VALUE; const NTSTATUS status=create(&dir,FILE_LIST_DIRECTORY|FILE_TRAVERSE|FILE_READ_ATTRIBUTES|FILE_WRITE_ATTRIBUTES|FILE_ADD_FILE|FILE_DELETE_CHILD|SYNCHRONIZE,&attrs,&sb,nullptr,FILE_ATTRIBUTE_DIRECTORY,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,kFileCreate,kFileDirectoryFile|kFileSynchronousIoNonAlert|noFollowOpenOption(),nullptr,0); if(!isSuccess(status)||dir==INVALID_HANDLE_VALUE) result=status==kStatusObjectNameCollision?AccessError::kAlreadyExists:AccessError::kIo; else {ScopedHandle d(dir); if(!flushDurably(d.get(),DurableFlushKind::kDirectory)||!flushDurably(parentHandle,DurableFlushKind::kDirectory)) result=AccessError::kDurability;}}} if(parentHandle!=INVALID_HANDLE_VALUE)CloseHandle(parentHandle); if(result!=AccessError::kOk){throwAccessError(env,result);return nullptr;} napi_value out;if(!makeLifecycleReceipt(env,request,"committed",{},&out)){throwAccessError(env,AccessError::kIo);return nullptr;}return out; } catch(...){throwAccessError(env,AccessError::kIo);return nullptr;}
+#else
+  (void)info; throwAccessError(env,AccessError::kUnavailable); return nullptr;
+#endif
+}
+
+napi_value quarantineEngineeringFileV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    size_t argc=3; napi_value argv[3]; bool a=false,b=false; uint64_t rootId=0,recoveryId=0;
+    if(napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr)!=napi_ok||argc!=3||
+       napi_get_value_bigint_uint64(env,argv[0],&rootId,&a)!=napi_ok||!a||
+       napi_get_value_bigint_uint64(env,argv[1],&recoveryId,&b)!=napi_ok||!b){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}
+    LifecycleRequest request{}; if(!parseLifecycleRequest(env,argv[2],&request)||request.operationKind!="delete_file"||request.relativeTarget!=""||request.recoveryObjectId.empty()){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}
+    RecoveryRootSession recovery{}; RootSession content{}; AccessError result=recoveryRootSnapshot(recoveryId,&recovery); if(result==AccessError::kOk)result=rootSessionSnapshot(rootId,&content);
+    if(result==AccessError::kOk && (recovery.contentRootId!=rootId||recovery.recoveryRootBindingId!=request.recoveryRootBindingId||recovery.grantRevision!=request.recoveryGrantRevision||!isV2Sha256(request.recoverySideEffectChecksum)||!sameVolume(recovery.identity,content.identity)))result=AccessError::kPrecondition;
+    std::vector<std::wstring> segments; std::wstring sourcePath; if(!utf8ToWide(request.relativeSource,&sourcePath)||!parseRelativePath(sourcePath,false,&segments)){throwAccessError(env,AccessError::kUnsafePath);return nullptr;} std::wstring parent; const std::wstring leaf=segments.back();segments.pop_back();for(size_t i=0;i<segments.size();++i){if(i)parent+=L'/';parent+=segments[i];}
+    HANDLE parentRaw=INVALID_HANDLE_VALUE,recoveryRaw=INVALID_HANDLE_VALUE,sourceRaw=INVALID_HANDLE_VALUE; if(result==AccessError::kOk)result=openMutationDirectory(rootId,parent,&parentRaw); if(result==AccessError::kOk)result=openRecoveryDirectory(recoveryId,L"",&recoveryRaw); ScopedHandle parentHandle(parentRaw),recoveryHandle(recoveryRaw); if(result==AccessError::kOk) result=validateRecoveryRootOwnership(recoveryHandle.get(),recovery);
+    if(result==AccessError::kOk)result=checkRelativeLeafAbsent(recoveryHandle.get(),std::wstring(request.recoveryObjectId.begin(),request.recoveryObjectId.end())); if(result==AccessError::kOk)result=openMutationLeafWithAccess(parentHandle.get(),leaf,FILE_READ_DATA|FILE_READ_ATTRIBUTES|DELETE|SYNCHRONIZE,&sourceRaw); ScopedHandle sourceHandle(sourceRaw);
+    if(result==AccessError::kOk){FileObservation obs{};std::string bytes;result=observeOpenedFile(sourceHandle.get(),&obs,&bytes);if(result==AccessError::kOk&&(obs.manifest.sha256!=request.sourceSha256||v2FileIdentity(obs.identity)!=request.sourceFileIdentity))result=AccessError::kPrecondition;}
+    const std::wstring objectLeaf(request.recoveryObjectId.begin(),request.recoveryObjectId.end()); if(result==AccessError::kOk)result=renameOpenedFileCreateOnly(sourceHandle.get(),recoveryHandle.get(),objectLeaf); if(result==AccessError::kOk&&!flushDurably(parentHandle.get(),DurableFlushKind::kDirectory))result=AccessError::kDurability; if(result==AccessError::kOk&&!flushDurably(recoveryHandle.get(),DurableFlushKind::kDirectory))result=AccessError::kDurability;
+    if(result!=AccessError::kOk){throwAccessError(env,result==AccessError::kPrecondition?AccessError::kRecoveryRequired:result);return nullptr;} napi_value out;if(!makeLifecycleReceipt(env,request,"quarantined",request.recoveryObjectId,&out)){throwAccessError(env,AccessError::kIo);return nullptr;}return out;
+  } catch(...){throwAccessError(env,AccessError::kIo);return nullptr;}
+#else
+  (void)info; throwAccessError(env,AccessError::kUnavailable); return nullptr;
+#endif
+}
+
+napi_value restoreEngineeringFileV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try { size_t argc=3;napi_value argv[3];bool a=false,b=false;uint64_t rootId=0,recoveryId=0;if(napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr)!=napi_ok||argc!=3||napi_get_value_bigint_uint64(env,argv[0],&rootId,&a)!=napi_ok||!a||napi_get_value_bigint_uint64(env,argv[1],&recoveryId,&b)!=napi_ok||!b){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}LifecycleRequest request{};if(!parseLifecycleRequest(env,argv[2],&request)||request.operationKind!="restore_file"||request.recoveryObjectId.empty()||request.targetProof!="absent"){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}RecoveryRootSession recovery{};RootSession content{};AccessError result=recoveryRootSnapshot(recoveryId,&recovery);if(result==AccessError::kOk)result=rootSessionSnapshot(rootId,&content);if(result==AccessError::kOk&&(recovery.contentRootId!=rootId||recovery.recoveryRootBindingId!=request.recoveryRootBindingId||recovery.grantRevision!=request.recoveryGrantRevision||!sameVolume(recovery.identity,content.identity)))result=AccessError::kPrecondition;std::wstring target;std::vector<std::wstring> seg;if(!utf8ToWide(request.relativeTarget,&target)||!parseRelativePath(target,false,&seg)){throwAccessError(env,AccessError::kUnsafePath);return nullptr;}const std::wstring leaf=seg.back();seg.pop_back();std::wstring parent;for(size_t i=0;i<seg.size();++i){if(i)parent+=L'/';parent+=seg[i];}HANDLE pr=INVALID_HANDLE_VALUE,rr=INVALID_HANDLE_VALUE,obj=INVALID_HANDLE_VALUE;if(result==AccessError::kOk)result=openMutationDirectory(rootId,parent,&pr);if(result==AccessError::kOk)result=openRecoveryDirectory(recoveryId,L"",&rr);ScopedHandle ph(pr),rh(rr);if(result==AccessError::kOk)result=validateRecoveryRootOwnership(rh.get(),recovery);if(result==AccessError::kOk)result=checkRelativeLeafAbsent(ph.get(),leaf);const std::wstring objectLeaf(request.recoveryObjectId.begin(),request.recoveryObjectId.end());if(result==AccessError::kOk)result=openMutationLeafWithAccess(rh.get(),objectLeaf,FILE_READ_DATA|FILE_READ_ATTRIBUTES|DELETE|SYNCHRONIZE,&obj);ScopedHandle oh(obj);if(result==AccessError::kOk)result=renameOpenedFileCreateOnly(oh.get(),ph.get(),leaf);if(result==AccessError::kOk&&(!flushDurably(rh.get(),DurableFlushKind::kDirectory)||!flushDurably(ph.get(),DurableFlushKind::kDirectory)))result=AccessError::kDurability;if(result!=AccessError::kOk){throwAccessError(env,result==AccessError::kPrecondition?AccessError::kRecoveryRequired:result);return nullptr;}napi_value out;if(!makeLifecycleReceipt(env,request,"restored",request.recoveryObjectId,&out)){throwAccessError(env,AccessError::kIo);return nullptr;}return out;}catch(...){throwAccessError(env,AccessError::kIo);return nullptr;}
+#else
+  (void)info;throwAccessError(env,AccessError::kUnavailable);return nullptr;
+#endif
+}
+
+napi_value purgeEngineeringQuarantineObjectV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {size_t argc=2;napi_value argv[2];bool lossless=false;uint64_t recoveryId=0;if(napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr)!=napi_ok||argc!=2||napi_get_value_bigint_uint64(env,argv[0],&recoveryId,&lossless)!=napi_ok||!lossless){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}std::string objectId;if(!readUtf8StringValue(env,argv[1],128,&objectId)||!isV2StableIdentifier(objectId,false)){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}RecoveryRootSession recovery{};HANDLE root=INVALID_HANDLE_VALUE,file=INVALID_HANDLE_VALUE;AccessError result=recoveryRootSnapshot(recoveryId,&recovery);if(result==AccessError::kOk)result=openRecoveryDirectory(recoveryId,L"",&root);ScopedHandle rh(root);if(result==AccessError::kOk)result=validateRecoveryRootOwnership(rh.get(),recovery);const std::wstring leaf(objectId.begin(),objectId.end());if(result==AccessError::kOk)result=openMutationLeafWithAccess(rh.get(),leaf,DELETE|FILE_READ_ATTRIBUTES|SYNCHRONIZE,&file);ScopedHandle fh(file);if(result==AccessError::kOk){FILE_DISPOSITION_INFO disposition{};disposition.DeleteFile=TRUE;if(!SetFileInformationByHandle(fh.get(),FileDispositionInfo,&disposition,sizeof(disposition)))result=AccessError::kRecoveryRequired;}if(result==AccessError::kOk&&!flushDurably(rh.get(),DurableFlushKind::kDirectory))result=AccessError::kDurability;if(result!=AccessError::kOk){throwAccessError(env,result==AccessError::kPrecondition?AccessError::kRecoveryRequired:result);return nullptr;}napi_value out;napi_get_undefined(env,&out);return out;}catch(...){throwAccessError(env,AccessError::kIo);return nullptr;}
+#else
+  (void)info;throwAccessError(env,AccessError::kUnavailable);return nullptr;
+#endif
+}
+
+napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    size_t argc = 2;
+    napi_value argv[2];
+    bool lossless = false;
+    uint64_t rootId = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 2 ||
+        napi_get_value_bigint_uint64(env, argv[0], &rootId, &lossless) != napi_ok || !lossless) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    LifecycleRequest request{};
+    if (!parseLifecycleRequest(env, argv[1], &request) || request.operationKind != "move_file" ||
+        request.expectedState != "wal_prepared") {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    std::vector<std::wstring> sourceSegments;
+    std::vector<std::wstring> destinationSegments;
+    std::wstring sourcePath;
+    std::wstring destinationPath;
+    if (!utf8ToWide(request.relativeSource, &sourcePath) || !utf8ToWide(request.relativeTarget, &destinationPath) ||
+        !parseRelativePath(sourcePath, false, &sourceSegments) ||
+        !parseRelativePath(destinationPath, false, &destinationSegments)) {
+      throwAccessError(env, AccessError::kUnsafePath);
+      return nullptr;
+    }
+    const std::wstring sourceLeaf = sourceSegments.back();
+    const std::wstring destinationLeaf = destinationSegments.back();
+    sourceSegments.pop_back();
+    destinationSegments.pop_back();
+    std::wstring sourceParentPath;
+    std::wstring destinationParentPath;
+    for (size_t index = 0; index < sourceSegments.size(); ++index) {
+      if (index != 0) sourceParentPath += L'/';
+      sourceParentPath += sourceSegments[index];
+    }
+    for (size_t index = 0; index < destinationSegments.size(); ++index) {
+      if (index != 0) destinationParentPath += L'/';
+      destinationParentPath += destinationSegments[index];
+    }
+    const bool sameParent = sourceParentPath == destinationParentPath;
+    HANDLE sourceParentRaw = INVALID_HANDLE_VALUE;
+    HANDLE destinationParentRaw = INVALID_HANDLE_VALUE;
+    AccessError result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
+    if (result == AccessError::kOk && sameParent) {
+      destinationParentRaw = sourceParentRaw;
+      sourceParentRaw = INVALID_HANDLE_VALUE;
+    } else if (result == AccessError::kOk) {
+      result = openMutationDirectory(rootId, destinationParentPath, &destinationParentRaw);
+    }
+    ScopedHandle sourceParentHandle(sourceParentRaw);
+    ScopedHandle destinationParentHandle(destinationParentRaw);
+    HANDLE sourceRaw = INVALID_HANDLE_VALUE;
+    HANDLE sourceParent = sameParent ? destinationParentHandle.get() : sourceParentHandle.get();
+    if (result == AccessError::kOk) {
+      result = openMutationLeafWithAccess(
+          sourceParent, sourceLeaf, FILE_READ_DATA | FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE, &sourceRaw);
+    }
+    ScopedHandle sourceHandle(sourceRaw);
+    FileObservation sourceObservation{};
+    std::string sourceBytes;
+    if (result == AccessError::kOk) {
+      result = observeOpenedFile(sourceHandle.get(), &sourceObservation, &sourceBytes);
+      if (result == AccessError::kOk &&
+          (sourceObservation.manifest.sha256 != request.sourceSha256 ||
+           v2FileIdentity(sourceObservation.identity) != request.sourceFileIdentity)) {
+        result = AccessError::kPrecondition;
+      }
+    }
+
+    const bool caseOnly = request.targetProof == "same_object_case_only";
+    if (result == AccessError::kOk && caseOnly) {
+      if (!sameParent || _wcsicmp(sourceLeaf.c_str(), destinationLeaf.c_str()) != 0 ||
+          sourceLeaf == destinationLeaf) {
+        result = AccessError::kPrecondition;
+      } else {
+        HANDLE destinationProofRaw = INVALID_HANDLE_VALUE;
+        result = openMutationLeafForCaseProof(destinationParentHandle.get(), destinationLeaf,
+                                              &destinationProofRaw);
+        ScopedHandle destinationProof(destinationProofRaw);
+        BY_HANDLE_FILE_INFORMATION destinationIdentity{};
+        if (result == AccessError::kOk &&
+            (!GetFileInformationByHandle(destinationProof.get(), &destinationIdentity) ||
+             !sameObjectKey(sourceObservation.identity, destinationIdentity))) {
+          result = AccessError::kPrecondition;
+        }
+      }
+    } else if (result == AccessError::kOk && request.targetProof == "absent") {
+      result = checkRelativeLeafAbsent(destinationParentHandle.get(), destinationLeaf);
+    } else if (result == AccessError::kOk) {
+      result = AccessError::kInvalidArgument;
+    }
+
+    // A durable marker is created before either rename.  It stays discoverable by the existing
+    // root recovery scan until the final spelling and both parent directory flushes are proven.
+    HANDLE recoveryMarkerRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) {
+      result = createStagingFile(sourceParent, "move-" + request.stagingObjectId, &recoveryMarkerRaw);
+    }
+    ScopedHandle recoveryMarker(recoveryMarkerRaw);
+    if (result == AccessError::kOk) {
+      result = flushDurably(recoveryMarker.get(), DurableFlushKind::kData)
+          ? flushMoveDirectories(sourceParent, destinationParentHandle.get())
+          : AccessError::kDurability;
+    }
+
+    bool namespaceChanged = false;
+    if (result == AccessError::kOk && caseOnly) {
+      const std::wstring temporaryLeaf = stagingLeafName("case-" + request.stagingObjectId);
+      result = checkRelativeLeafAbsent(destinationParentHandle.get(), temporaryLeaf);
+      if (result == AccessError::kOk) {
+        result = renameOpenedFileCreateOnly(sourceHandle.get(), destinationParentHandle.get(), temporaryLeaf);
+        namespaceChanged = result == AccessError::kOk;
+      }
+      if (result == AccessError::kOk) result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
+      if (result == AccessError::kOk) {
+        result = renameOpenedFileCreateOnly(sourceHandle.get(), destinationParentHandle.get(), destinationLeaf);
+        namespaceChanged = result == AccessError::kOk;
+      }
+      if (result == AccessError::kOk) result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
+      if (result == AccessError::kOk) {
+        HANDLE finalRaw = INVALID_HANDLE_VALUE;
+        result = openMutationLeaf(destinationParentHandle.get(), destinationLeaf, &finalRaw);
+        ScopedHandle finalHandle(finalRaw);
+        BY_HANDLE_FILE_INFORMATION finalIdentity{};
+        if (result == AccessError::kOk &&
+            (!GetFileInformationByHandle(finalHandle.get(), &finalIdentity) ||
+             !sameObjectKey(sourceObservation.identity, finalIdentity))) {
+          result = AccessError::kRecoveryRequired;
+        }
+      }
+    } else if (result == AccessError::kOk) {
+      result = renameOpenedFileCreateOnly(sourceHandle.get(), destinationParentHandle.get(), destinationLeaf);
+      namespaceChanged = result == AccessError::kOk;
+      if (result == AccessError::kOk) result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
+    }
+
+    if (result == AccessError::kOk) {
+      FILE_DISPOSITION_INFO disposition{};
+      disposition.DeleteFile = TRUE;
+      if (!SetFileInformationByHandle(recoveryMarker.get(), FileDispositionInfo, &disposition, sizeof(disposition))) {
+        result = AccessError::kRecoveryRequired;
+      }
+      if (result == AccessError::kOk && !recoveryMarker.close()) result = AccessError::kRecoveryRequired;
+      if (result == AccessError::kOk) result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
+    }
+    if (result != AccessError::kOk) {
+      throwAccessError(env, namespaceChanged ? AccessError::kRecoveryRequired : result);
+      return nullptr;
+    }
+    napi_value output;
+    if (!makeLifecycleReceipt(env, request, "committed", {}, &output)) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
+#else
+  (void)info; throwAccessError(env,AccessError::kUnavailable); return nullptr;
+#endif
+}
+
 napi_value mutationV2ProbeInfo(napi_env env, napi_callback_info) {
   napi_value result;
   napi_create_object(env, &result);
   napi_set_named_property(env, result, "schemaVersion", makeString(env, "engineering_file_mutation_probe_v1"));
-  napi_set_named_property(env, result, "batch", makeString(env, "7"));
+  napi_set_named_property(env, result, "batch", makeString(env, "8"));
 #ifdef _WIN32
   napi_set_named_property(env, result, "status", makeString(env, "available"));
   napi_set_named_property(env, result, "replace", makeString(env, "development_probe_only"));
   napi_set_named_property(env, result, "create", makeString(env, "development_probe_only"));
+  napi_set_named_property(env, result, "move", makeString(env, "development_probe_only"));
+  napi_set_named_property(env, result, "delete", makeString(env, "development_probe_only"));
+  napi_set_named_property(env, result, "createDirectory", makeString(env, "development_probe_only"));
+  napi_set_named_property(env, result, "caseOnlyRenameWal", makeString(env, "available"));
+  napi_set_named_property(env, result, "volumeLocalQuarantine", makeString(env, "available"));
   napi_set_named_property(env, result, "rawByteBlobs", makeString(env, "available"));
   napi_set_named_property(env, result, "absenceProof", makeString(env, "available"));
   napi_set_named_property(env, result, "absenceProofV2", makeString(env, "available"));
@@ -3703,6 +4214,9 @@ napi_value mutationV2ProbeInfo(napi_env env, napi_callback_info) {
 #else
   napi_set_named_property(env, result, "replace", makeString(env, "unsupported"));
   napi_set_named_property(env, result, "create", makeString(env, "unsupported"));
+  napi_set_named_property(env, result, "move", makeString(env, "unsupported"));
+  napi_set_named_property(env, result, "delete", makeString(env, "unsupported"));
+  napi_set_named_property(env, result, "createDirectory", makeString(env, "unsupported"));
   napi_set_named_property(env, result, "productCapability", makeString(env, "unavailable"));
 #endif
   return result;
@@ -4968,7 +5482,7 @@ napi_value mutationV2FaultProbe(napi_env env, napi_callback_info) {
 #ifdef _WIN32
   napi_create_string_utf8(env, "available", NAPI_AUTO_LENGTH, &status);
   napi_create_string_utf8(env, "invalid_inputs_only_no_protection_switches", NAPI_AUTO_LENGTH, &safety);
-  napi_create_array_with_length(env, 10, &paths);
+  napi_create_array_with_length(env, 13, &paths);
   napi_set_element(env, paths, 0, makeString(env, "raw_byte_manifest_mismatch"));
   napi_set_element(env, paths, 1, makeString(env, "stale_absence_proof"));
   napi_set_element(env, paths, 2, makeString(env, "wal_binding_mismatch"));
@@ -4979,6 +5493,9 @@ napi_value mutationV2FaultProbe(napi_env env, napi_callback_info) {
   napi_set_element(env, paths, 7, makeString(env, "replace_after_original_handoff_recovery"));
   napi_set_element(env, paths, 8, makeString(env, "replace_before_candidate_handoff_recovery"));
   napi_set_element(env, paths, 9, makeString(env, "replace_after_candidate_handoff_recovery"));
+  napi_set_element(env, paths, 10, makeString(env, "case_only_after_first_rename_recovery_required"));
+  napi_set_element(env, paths, 11, makeString(env, "case_only_before_second_rename_recovery_required"));
+  napi_set_element(env, paths, 12, makeString(env, "case_only_after_second_rename_recovery_required"));
 #else
   napi_create_string_utf8(env, "unsupported", NAPI_AUTO_LENGTH, &status);
   napi_create_string_utf8(env, "not_available", NAPI_AUTO_LENGTH, &safety);
@@ -5012,6 +5529,13 @@ napi_value Init(napi_env env, napi_value exports) {
     {"linkEngineeringStateFileNoFollow", nullptr, linkEngineeringStateFileNoFollow, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"renameReplaceEngineeringStateFileNoFollow", nullptr, renameReplaceEngineeringStateFileNoFollow, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"unlinkEngineeringStateFileNoFollow", nullptr, unlinkEngineeringStateFileNoFollow, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"openEngineeringRecoveryRootV2", nullptr, openEngineeringRecoveryRootV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"closeEngineeringRecoveryRootV2", nullptr, closeEngineeringRecoveryRootV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"moveEngineeringPathV2", nullptr, moveEngineeringPathV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"quarantineEngineeringFileV2", nullptr, quarantineEngineeringFileV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"restoreEngineeringFileV2", nullptr, restoreEngineeringFileV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"purgeEngineeringQuarantineObjectV2", nullptr, purgeEngineeringQuarantineObjectV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"createEngineeringDirectoryV2", nullptr, createEngineeringDirectoryV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"mutationV2ProbeInfo", nullptr, mutationV2ProbeInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"inspectEngineeringFileSnapshotV2", nullptr, inspectEngineeringFileSnapshotV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"inspectEngineeringFileMutationTargetV2", nullptr, inspectEngineeringFileMutationTargetV2, nullptr, nullptr, nullptr, napi_default, nullptr},
