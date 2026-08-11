@@ -183,6 +183,26 @@ describe("engineering file access development probe contract", () => {
     );
   });
 
+  test("reuses the lifecycle marker parent while classifying create, move, and delete operations", async () => {
+    const nativeSource = await readFile(
+      "native/engineering-file-access-win32/src/engineering_file_access.cc",
+      "utf8"
+    );
+    const classifyStart = nativeSource.indexOf("AccessError classifyLifecycleOperation");
+    const classifyEnd = nativeSource.indexOf("AccessError removeLifecycleMarker", classifyStart);
+
+    expect(classifyStart).toBeGreaterThanOrEqual(0);
+    expect(classifyEnd).toBeGreaterThan(classifyStart);
+
+    const classifySource = nativeSource.slice(classifyStart, classifyEnd);
+    expect(classifySource).toContain("HANDLE parentRaw = markerParent.release();");
+    expect(classifySource).toContain("HANDLE sourceParentRaw = markerParent.release();");
+    expect(classifySource).not.toContain("openMutationDirectory(rootId, parentPath, &parentRaw)");
+    expect(classifySource).not.toContain(
+      "openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw)"
+    );
+  });
+
   test("retains lifecycle markers until durable WAL finalize and exposes bounded recovery primitives", async () => {
     const nativeSource = await readFile(
       "native/engineering-file-access-win32/src/engineering_file_access.cc",

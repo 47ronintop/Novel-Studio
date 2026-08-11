@@ -5105,10 +5105,11 @@ AccessError classifyLifecycleOperation(uint64_t rootId, uint64_t recoveryId,
   if (request.operationKind == "create_directory") {
     std::wstring parentPath;
     std::wstring leaf;
-    if (!splitLifecyclePath(request.relativeTarget, &parentPath, &leaf)) return AccessError::kUnsafePath;
-    HANDLE parentRaw = INVALID_HANDLE_VALUE;
-    result = openMutationDirectory(rootId, parentPath, &parentRaw);
-    if (result != AccessError::kOk) return result;
+    if (!splitLifecyclePath(request.relativeTarget, &parentPath, &leaf) ||
+        parentPath != markerParentPath) {
+      return AccessError::kUnsafePath;
+    }
+    HANDLE parentRaw = markerParent.release();
     ScopedHandle parent(parentRaw);
     const LifecycleObjectMatch target = markerMissing
         ? observeLifecycleDirectory(parent.get(), leaf, LifecycleMarker{}, 0)
@@ -5139,9 +5140,8 @@ AccessError classifyLifecycleOperation(uint64_t rootId, uint64_t recoveryId,
   if (!splitLifecyclePath(request.relativeSource, &sourceParentPath, &sourceLeaf)) {
     return AccessError::kUnsafePath;
   }
-  HANDLE sourceParentRaw = INVALID_HANDLE_VALUE;
-  result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
-  if (result != AccessError::kOk) return result;
+  if (sourceParentPath != markerParentPath) return AccessError::kUnsafePath;
+  HANDLE sourceParentRaw = markerParent.release();
   ScopedHandle sourceParent(sourceParentRaw);
   const LifecycleObjectMatch source = observeLifecycleFile(sourceParent.get(), sourceLeaf, request, 0);
 
