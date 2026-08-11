@@ -748,7 +748,13 @@ function validateLoadedMutationFaultArtifact(observation) {
     info.schemaVersion !== "engineering_mutation_fault_injection_v1" ||
     info.buildKind !== "test_only_compile_time_diagnostic" ||
     stable(info.faultPoints) !==
-      stable(["after_staging_flush", "after_original_handoff", "after_candidate_handoff"])
+      stable([
+        "after_staging_flush",
+        "after_original_handoff",
+        "after_candidate_handoff",
+        "after_case_intermediate",
+        "after_directory_staged"
+      ])
   ) {
     throw new Error("loaded mutation fault artifact did not prove its compile-time identity");
   }

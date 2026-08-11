@@ -6,6 +6,7 @@ import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import {
   ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
   canonicalizeEngineeringMutationV2Json,
+  engineeringFileLifecycleRequestChecksumV2,
   inspectEngineeringRawBytesV2,
   sha256EngineeringMutationTextV2,
   validateEngineeringAbsenceProofV2,
@@ -16,6 +17,8 @@ import {
   type EngineeringFileMutationApplyInputV2,
   type EngineeringFileMutationPortV2,
   type EngineeringFileLifecycleReceiptV2,
+  type EngineeringFileLifecycleOperationStateV2,
+  type EngineeringFileLifecycleRecoveryInputV2,
   type EngineeringFileLifecycleRequestV2,
   type EngineeringLifecycleRecoveryRootBindingV2,
   type EngineeringFileMutationOperationKindV2,
@@ -168,6 +171,7 @@ export interface EngineeringLifecycleWriteAheadLogV2 {
   readonly preparedChecksum: string;
   readonly receipts: readonly EngineeringFileLifecycleReceiptV2[];
   readonly committedAt: string | null;
+  readonly rolledBackAt: string | null;
   readonly journalChecksum: string;
 }
 
@@ -190,6 +194,11 @@ export interface EngineeringLifecycleWalRepositoryV2 {
     readonly transactionId: string;
     readonly committedAt: string;
   }): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>>;
+  rollback(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly rolledBackAt: string;
+  }): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>>;
 }
 
 export interface EngineeringLifecycleWriteTransactionV2Options {
@@ -197,6 +206,9 @@ export interface EngineeringLifecycleWriteTransactionV2Options {
   readonly mutationPort: EngineeringFileMutationPortV2;
   readonly recoveryGate: EngineeringMutationRecoveryGatePortV2;
   readonly validateReservedAuthorization: (
+    prepared: EngineeringLifecycleWriteTransactionInputV2
+  ) => Promise<Result<void, UnifiedError>>;
+  readonly validateTerminalAuthorization?: (
     prepared: EngineeringLifecycleWriteTransactionInputV2
   ) => Promise<Result<void, UnifiedError>>;
   readonly resolveRecoveryBinding?: (
@@ -261,7 +273,7 @@ export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifec
         return sameCanonicalJson(current.value.prepared, parsed.value)
           ? ok(current.value)
           : conflict(this.traceId);
-      const journal = createLifecycleWal(parsed.value, [], null);
+      const journal = createLifecycleWal(parsed.value, [], null, null);
       const persisted = await this.persist(journal, "create");
       return persisted.ok ? ok(journal) : persisted;
     });
@@ -279,7 +291,7 @@ export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifec
       const current = await this.read(input);
       if (!current.ok) return current;
       if (current.value === undefined) return missing(this.traceId);
-      if (current.value.committedAt !== null)
+      if (current.value.committedAt !== null || current.value.rolledBackAt !== null)
         return invalid("ENGINEERING_LIFECYCLE_WAL_V2_PROGRESS_AFTER_COMMIT", this.traceId);
       const index = current.value.receipts.length;
       const request = current.value.prepared.operations[index]?.request;
@@ -290,7 +302,8 @@ export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifec
       const next = createLifecycleWal(
         current.value.prepared,
         [...current.value.receipts, bound.value],
-        current.value.committedAt
+        current.value.committedAt,
+        current.value.rolledBackAt
       );
       const persisted = await this.persist(next, "replace");
       return persisted.ok ? ok(next) : persisted;
@@ -308,12 +321,40 @@ export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifec
       const current = await this.read(input);
       if (!current.ok) return current;
       if (current.value === undefined) return missing(this.traceId);
+      if (current.value.rolledBackAt !== null)
+        return invalid("ENGINEERING_LIFECYCLE_WAL_V2_COMMIT_AFTER_ROLLBACK", this.traceId);
       if (current.value.receipts.length !== current.value.prepared.operations.length)
         return invalid("ENGINEERING_LIFECYCLE_WAL_V2_COMMIT_INCOMPLETE", this.traceId);
       const next = createLifecycleWal(
         current.value.prepared,
         current.value.receipts,
-        input.committedAt
+        input.committedAt,
+        current.value.rolledBackAt
+      );
+      const persisted = await this.persist(next, "replace");
+      return persisted.ok ? ok(next) : persisted;
+    });
+  }
+
+  public async rollback(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly rolledBackAt: string;
+  }) {
+    if (!isCanonicalUtcTimestamp(input.rolledBackAt))
+      return invalid("ENGINEERING_LIFECYCLE_WAL_V2_ROLLBACK_INVALID", this.traceId);
+    return this.serialized(async () => {
+      const current = await this.read(input);
+      if (!current.ok) return current;
+      if (current.value === undefined) return missing(this.traceId);
+      if (current.value.committedAt !== null)
+        return invalid("ENGINEERING_LIFECYCLE_WAL_V2_ROLLBACK_AFTER_COMMIT", this.traceId);
+      if (current.value.rolledBackAt !== null) return ok(current.value);
+      const next = createLifecycleWal(
+        current.value.prepared,
+        current.value.receipts,
+        current.value.committedAt,
+        input.rolledBackAt
       );
       const persisted = await this.persist(next, "replace");
       return persisted.ok ? ok(next) : persisted;
@@ -469,6 +510,8 @@ export class EngineeringLifecycleWriteTransactionV2 {
     return this.serialized(async () => {
       const prepared = validateEngineeringLifecycleWriteTransactionInputV2(input, this.traceId);
       if (!prepared.ok) return prepared;
+      if (this.options.mutationPort.finalizeLifecycle === undefined)
+        return lifecycleUnavailable(this.traceId);
       const existing = await this.options.walRepository.read({
         contentRootBindingId: prepared.value.contentRootBindingId,
         transactionId: prepared.value.transactionId
@@ -493,7 +536,12 @@ export class EngineeringLifecycleWriteTransactionV2 {
       ) {
         return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_CONFLICT", this.traceId);
       }
-      if (journal.committedAt !== null) return ok(journal);
+      if (journal.committedAt !== null) {
+        const finalized = await this.finalizeTerminal(journal);
+        return finalized.ok ? ok(journal) : finalized;
+      }
+      if (journal.rolledBackAt !== null)
+        return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_ROLLED_BACK", this.traceId);
       // A lifecycle mutation has no pathname fallback and cannot be safely replayed after a
       // process crash between the native mutation and its durable progress receipt.  A normal
       // apply may proceed only from the WAL it created in this attempt; recovery must classify
@@ -557,15 +605,275 @@ export class EngineeringLifecycleWriteTransactionV2 {
           if (!advanced.ok) return advanced;
           journal = advanced.value;
         }
-        return this.options.walRepository.commit({
+        const committed = await this.options.walRepository.commit({
           contentRootBindingId: prepared.value.contentRootBindingId,
           transactionId: prepared.value.transactionId,
           committedAt: this.now()
         });
+        if (!committed.ok) return committed;
+        const finalized = await this.finalizeTerminal(committed.value);
+        return finalized.ok ? committed : finalized;
       } finally {
         await releaseLease(lease.value);
       }
     });
+  }
+
+  /** Resolves one authenticated incomplete lifecycle WAL without reopening the ordinary gate. */
+  public async recover(
+    input: unknown
+  ): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>> {
+    return this.serialized(async () => {
+      const locator = parseLocator(input);
+      if (locator === undefined)
+        return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_LOCATOR_INVALID", this.traceId);
+      const current = await this.options.walRepository.read(locator);
+      if (!current.ok) return current;
+      if (current.value === undefined) return missing(this.traceId);
+      if (current.value.committedAt !== null || current.value.rolledBackAt !== null) {
+        const finalized = await this.finalizeTerminal(current.value);
+        return finalized.ok ? ok(current.value) : finalized;
+      }
+      const lease = await this.options.recoveryGate.acquireRecoveryLease({
+        ...locator,
+        preparedChecksum: current.value.preparedChecksum
+      });
+      if (!lease.ok) return lease;
+      try {
+        return await this.resolveIncomplete(current.value, lease.value);
+      } finally {
+        await releaseLease(lease.value);
+      }
+    });
+  }
+
+  private async resolveIncomplete(
+    journal: EngineeringLifecycleWriteAheadLogV2,
+    lease: EngineeringRecoveryMutationLeaseV2
+  ): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>> {
+    if (
+      this.options.mutationPort.reconcileLifecycle === undefined ||
+      this.options.mutationPort.compensateLifecycle === undefined ||
+      this.options.mutationPort.resumeLifecycle === undefined ||
+      this.options.mutationPort.finalizeLifecycle === undefined
+    )
+      return lifecycleUnavailable(this.traceId);
+    const active = await lease.assertCurrent();
+    if (!active.ok) return active;
+    const authorized = await this.options.validateReservedAuthorization(journal.prepared);
+    if (!authorized.ok) return authorized;
+
+    const recoveryInputs: EngineeringFileLifecycleRecoveryInputV2[] = [];
+    for (const operation of journal.prepared.operations) {
+      const recoveryInput = await this.recoveryInputFor(operation);
+      if (!recoveryInput.ok) return recoveryInput;
+      recoveryInputs.push(recoveryInput.value);
+    }
+
+    const states: EngineeringFileLifecycleOperationStateV2[] = [];
+    for (let index = 0; index < journal.prepared.operations.length; index += 1) {
+      const operation = journal.prepared.operations[index];
+      const recoveryInput = recoveryInputs[index];
+      if (operation === undefined || recoveryInput === undefined)
+        return lifecycleRecoveryReviewRequired(this.traceId);
+      const state = await this.options.mutationPort.reconcileLifecycle(recoveryInput);
+      if (!state.ok) return state;
+      const bound = bindLifecycleOperationState(state.value, operation.request);
+      if (!bound.ok) return bound;
+      states.push(bound.value);
+    }
+
+    const intermediateIndexes = states.flatMap((state, index) =>
+      state.state === "intermediate" ? [index] : []
+    );
+    const intermediateIndex = intermediateIndexes[0] ?? -1;
+    const completedAfterCount =
+      intermediateIndex < 0
+        ? states.findIndex((state) => state.state === "before")
+        : intermediateIndex;
+    const initialAfterCount = completedAfterCount < 0 ? states.length : completedAfterCount;
+    if (
+      intermediateIndexes.length > 1 ||
+      states.some((state) => state.state === "neither" || state.state === "unknown") ||
+      states.slice(0, initialAfterCount).some((state) => state.state !== "after") ||
+      (intermediateIndex >= 0 &&
+        states.slice(intermediateIndex + 1).some((state) => state.state !== "before")) ||
+      (intermediateIndex < 0 &&
+        states.slice(initialAfterCount).some((state) => state.state !== "before"))
+    ) {
+      return lifecycleRecoveryReviewRequired(this.traceId);
+    }
+
+    if (journal.receipts.length > initialAfterCount)
+      return lifecycleRecoveryReviewRequired(this.traceId);
+    for (let index = 0; index < journal.receipts.length; index += 1) {
+      const state = states[index];
+      const receipt = journal.receipts[index];
+      if (
+        state?.state !== "after" ||
+        receipt === undefined ||
+        !sameCanonicalJson(state.receipt, receipt)
+      )
+        return lifecycleRecoveryReviewRequired(this.traceId);
+    }
+
+    if (intermediateIndex >= 0) {
+      const recoveryInput = recoveryInputs[intermediateIndex];
+      if (recoveryInput === undefined) return lifecycleRecoveryReviewRequired(this.traceId);
+      const stillActive = await lease.assertCurrent();
+      if (!stillActive.ok) return stillActive;
+      const stillAuthorized = await this.options.validateReservedAuthorization(journal.prepared);
+      if (!stillAuthorized.ok) return stillAuthorized;
+      const resumed = await this.options.mutationPort.resumeLifecycle(recoveryInput);
+      if (!resumed.ok) return resumed;
+      const resumedState = bindLifecycleOperationState(
+        resumed.value,
+        journal.prepared.operations[intermediateIndex]?.request
+      );
+      if (!resumedState.ok || resumedState.value.state !== "after")
+        return lifecycleRecoveryReviewRequired(this.traceId);
+
+      for (let index = 0; index < journal.prepared.operations.length; index += 1) {
+        const operation = journal.prepared.operations[index];
+        const input = recoveryInputs[index];
+        if (operation === undefined || input === undefined)
+          return lifecycleRecoveryReviewRequired(this.traceId);
+        const state = await this.options.mutationPort.reconcileLifecycle(input);
+        if (!state.ok) return state;
+        const bound = bindLifecycleOperationState(state.value, operation.request);
+        if (!bound.ok) return bound;
+        states[index] = bound.value;
+      }
+    }
+
+    const firstBefore = states.findIndex((state) => state.state === "before");
+    const afterCount = firstBefore < 0 ? states.length : firstBefore;
+    if (
+      states.some(
+        (state, index) =>
+          state.state === "intermediate" ||
+          state.state === "neither" ||
+          state.state === "unknown" ||
+          (index < afterCount ? state.state !== "after" : state.state !== "before")
+      )
+    )
+      return lifecycleRecoveryReviewRequired(this.traceId);
+    for (let index = 0; index < journal.receipts.length; index += 1) {
+      const state = states[index];
+      const receipt = journal.receipts[index];
+      if (
+        state?.state !== "after" ||
+        receipt === undefined ||
+        !sameCanonicalJson(state.receipt, receipt)
+      )
+        return lifecycleRecoveryReviewRequired(this.traceId);
+    }
+
+    let durable = journal;
+    for (let index = durable.receipts.length; index < afterCount; index += 1) {
+      const state = states[index];
+      if (state?.state !== "after") return lifecycleRecoveryReviewRequired(this.traceId);
+      const advanced = await this.options.walRepository.appendProgress({
+        contentRootBindingId: durable.prepared.contentRootBindingId,
+        transactionId: durable.prepared.transactionId,
+        receipt: state.receipt,
+        recordedAt: this.now()
+      });
+      if (!advanced.ok) return advanced;
+      durable = advanced.value;
+    }
+
+    for (let index = afterCount - 1; index >= 0; index -= 1) {
+      const recoveryInput = recoveryInputs[index];
+      if (recoveryInput === undefined) return lifecycleRecoveryReviewRequired(this.traceId);
+      const current = await this.options.mutationPort.reconcileLifecycle(recoveryInput);
+      if (!current.ok) return current;
+      const rebound = bindLifecycleOperationState(
+        current.value,
+        durable.prepared.operations[index]?.request
+      );
+      const expectedReceipt = durable.receipts[index];
+      if (
+        !rebound.ok ||
+        rebound.value.state !== "after" ||
+        expectedReceipt === undefined ||
+        !sameCanonicalJson(rebound.value.receipt, expectedReceipt)
+      )
+        return lifecycleRecoveryReviewRequired(this.traceId);
+      const stillActive = await lease.assertCurrent();
+      if (!stillActive.ok) return stillActive;
+      const stillAuthorized = await this.options.validateReservedAuthorization(durable.prepared);
+      if (!stillAuthorized.ok) return stillAuthorized;
+      const compensated = await this.options.mutationPort.compensateLifecycle({
+        ...recoveryInput,
+        expectedReceipt
+      });
+      if (!compensated.ok) return compensated;
+      const compensatedState = bindLifecycleOperationState(
+        compensated.value,
+        durable.prepared.operations[index]?.request
+      );
+      if (!compensatedState.ok || compensatedState.value.state !== "before")
+        return lifecycleRecoveryReviewRequired(this.traceId);
+    }
+
+    const rolledBack = await this.options.walRepository.rollback({
+      contentRootBindingId: durable.prepared.contentRootBindingId,
+      transactionId: durable.prepared.transactionId,
+      rolledBackAt: this.now()
+    });
+    if (!rolledBack.ok) return rolledBack;
+    const finalized = await this.finalizeTerminal(rolledBack.value);
+    return finalized.ok ? rolledBack : finalized;
+  }
+
+  private async finalizeTerminal(
+    journal: EngineeringLifecycleWriteAheadLogV2
+  ): Promise<Result<void, UnifiedError>> {
+    const finalize = this.options.mutationPort.finalizeLifecycle;
+    if (
+      finalize === undefined ||
+      (journal.committedAt === null && journal.rolledBackAt === null) ||
+      (journal.committedAt !== null && journal.rolledBackAt !== null)
+    ) {
+      return lifecycleUnavailable(this.traceId);
+    }
+    const validateTerminalAuthorization =
+      this.options.validateTerminalAuthorization ?? this.options.validateReservedAuthorization;
+    const authorized = await validateTerminalAuthorization(journal.prepared);
+    if (!authorized.ok) return authorized;
+    for (const operation of journal.prepared.operations) {
+      const recoveryInput = await this.recoveryInputFor(operation);
+      if (!recoveryInput.ok) return recoveryInput;
+      const finalized = await finalize({
+        ...recoveryInput.value,
+        expectedState: journal.committedAt === null ? "before" : "after"
+      });
+      if (!finalized.ok) return finalized;
+    }
+    return ok(undefined);
+  }
+
+  private async recoveryInputFor(
+    operation: EngineeringLifecycleWriteOperationV2
+  ): Promise<Result<EngineeringFileLifecycleRecoveryInputV2, UnifiedError>> {
+    if (operation.request.operationKind !== "delete_file") {
+      return ok({ request: operation.request, recoveryBinding: null });
+    }
+    if (this.options.resolveRecoveryBinding === undefined || operation.recoveryBinding === null)
+      return lifecycleUnavailable(this.traceId);
+    const resolved = await this.options.resolveRecoveryBinding(operation);
+    if (!resolved.ok) return resolved;
+    if (
+      resolved.value.recoveryRootBindingId !== operation.recoveryBinding.recoveryRootBindingId ||
+      resolved.value.grantRevision !== operation.recoveryBinding.grantRevision ||
+      resolved.value.sideEffectChecksum !== operation.recoveryBinding.sideEffectChecksum
+    )
+      return invalid(
+        "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_BINDING_STALE",
+        this.traceId
+      );
+    return ok({ request: operation.request, recoveryBinding: resolved.value });
   }
 
   private async invoke(
@@ -1204,6 +1512,51 @@ function afterManifestMatchesReceipts(
   });
 }
 
+function bindLifecycleOperationState(
+  value: unknown,
+  request: EngineeringFileLifecycleRequestV2 | undefined
+): Result<EngineeringFileLifecycleOperationStateV2, UnifiedError> {
+  if (
+    request === undefined ||
+    !hasExactKeys(value, lifecycleOperationStateKeys) ||
+    value["schemaVersion"] !== "3.0" ||
+    value["kind"] !== "engineering_file_lifecycle_operation_state" ||
+    (value["state"] !== "before" &&
+      value["state"] !== "after" &&
+      value["state"] !== "intermediate" &&
+      value["state"] !== "neither" &&
+      value["state"] !== "unknown") ||
+    value["requestChecksum"] !== engineeringFileLifecycleRequestChecksumV2(request)
+  ) {
+    return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_STATE_INVALID");
+  }
+  if (value["state"] === "after") {
+    const receipt = verifyEngineeringFileLifecycleReceiptBindingV2(value["receipt"], request);
+    return receipt.ok
+      ? ok(
+          freeze({
+            schemaVersion: "3.0" as const,
+            kind: "engineering_file_lifecycle_operation_state" as const,
+            state: "after" as const,
+            requestChecksum: value["requestChecksum"] as string,
+            receipt: receipt.value
+          })
+        )
+      : receipt;
+  }
+  if (value["receipt"] !== null)
+    return invalid("ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_STATE_INVALID");
+  return ok(
+    freeze({
+      schemaVersion: "3.0" as const,
+      kind: "engineering_file_lifecycle_operation_state" as const,
+      state: value["state"] as "before" | "intermediate" | "neither" | "unknown",
+      requestChecksum: value["requestChecksum"] as string,
+      receipt: null
+    })
+  );
+}
+
 function leaseInput(
   prepared: EngineeringWriteTransactionPreparedV2
 ): Readonly<{ contentRootBindingId: string; transactionId: string; preparedChecksum: string }> {
@@ -1392,7 +1745,8 @@ function lifecycleUnavailable<T = never>(traceId: string): Result<T, UnifiedErro
 function createLifecycleWal(
   prepared: EngineeringLifecycleWriteTransactionInputV2,
   receipts: readonly EngineeringFileLifecycleReceiptV2[],
-  committedAt: string | null
+  committedAt: string | null,
+  rolledBackAt: string | null
 ): EngineeringLifecycleWriteAheadLogV2 {
   const preparedChecksum = sha256EngineeringMutationTextV2(
     canonicalizeEngineeringMutationV2Json(prepared)
@@ -1403,7 +1757,8 @@ function createLifecycleWal(
     prepared,
     preparedChecksum,
     receipts,
-    committedAt
+    committedAt,
+    rolledBackAt
   };
   return freeze({
     ...unsigned,
@@ -1425,6 +1780,7 @@ function validateLifecycleWal(
     !isSha256(value["preparedChecksum"]) ||
     !Array.isArray(value["receipts"]) ||
     (value["committedAt"] !== null && !isCanonicalUtcTimestamp(value["committedAt"])) ||
+    (value["rolledBackAt"] !== null && !isCanonicalUtcTimestamp(value["rolledBackAt"])) ||
     !isSha256(value["journalChecksum"])
   )
     return invalid("ENGINEERING_LIFECYCLE_WAL_V2_RECORD_INVALID", traceId);
@@ -1453,14 +1809,18 @@ function validateLifecycleWal(
     prepared: prepared.value,
     preparedChecksum: expectedPreparedChecksum,
     receipts,
-    committedAt: value["committedAt"] as string | null
+    committedAt: value["committedAt"] as string | null,
+    rolledBackAt: value["rolledBackAt"] as string | null
   };
   if (
     value["journalChecksum"] !==
     sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(unsigned))
   )
     return invalid("ENGINEERING_LIFECYCLE_WAL_V2_AUTHENTICATION_FAILED", traceId);
-  if (value["committedAt"] !== null && receipts.length !== prepared.value.operations.length)
+  if (
+    (value["committedAt"] !== null && value["rolledBackAt"] !== null) ||
+    (value["committedAt"] !== null && receipts.length !== prepared.value.operations.length)
+  )
     return invalid("ENGINEERING_LIFECYCLE_WAL_V2_COMMIT_INCOMPLETE", traceId);
   return ok(freeze({ ...unsigned, journalChecksum: value["journalChecksum"] as string }));
 }
@@ -1529,6 +1889,17 @@ function lifecycleRecoveryRequired<T = never>(traceId: string): Result<T, Unifie
   );
 }
 
+function lifecycleRecoveryReviewRequired<T = never>(traceId: string): Result<T, UnifiedError> {
+  return err(
+    storageError({
+      code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_REVIEW_REQUIRED",
+      message: "The lifecycle operation is neither a deterministic before-state nor after-state.",
+      suggestedAction: "Keep the content root closed and require Main-owned recovery review.",
+      traceId
+    })
+  );
+}
+
 const transactionInputKeys = [
   "authorization",
   "contentRootBindingId",
@@ -1550,6 +1921,13 @@ const beforePresentInputKeys = ["bytes", "kind", "manifest"] as const;
 const beforeAbsentInputKeys = ["absenceProof", "kind"] as const;
 const candidateInputKeys = ["bytes", "manifest"] as const;
 const locatorKeys = ["contentRootBindingId", "transactionId"] as const;
+const lifecycleOperationStateKeys = [
+  "kind",
+  "receipt",
+  "requestChecksum",
+  "schemaVersion",
+  "state"
+] as const;
 const authorizationKeys = [
   "approvalBindingChecksum",
   "approvalBindingId",
@@ -1581,5 +1959,6 @@ const lifecycleWalKeys = [
   "prepared",
   "preparedChecksum",
   "receipts",
+  "rolledBackAt",
   "schemaVersion"
 ] as const;

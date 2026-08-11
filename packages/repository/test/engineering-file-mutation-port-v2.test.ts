@@ -6,6 +6,7 @@ import {
   createEngineeringAbsenceProofV2,
   createEngineeringFileMutationPortV2,
   createEngineeringRawByteManifestV2,
+  engineeringFileLifecycleRequestChecksumV2,
   engineeringFileMutationRequestChecksumV2,
   engineeringMutationBlobIdForSha256V2,
   sha256EngineeringMutationTextV2,
@@ -19,6 +20,108 @@ import { createEngineeringMutationReceiptV2 } from "../src/engineering-mutation-
 const hash = (value: string) => sha256EngineeringMutationTextV2(value);
 
 describe("EngineeringFileMutationPortV2", () => {
+  test("binds lifecycle reconcile, compensation, and finalize to the same root session", async () => {
+    const request = lifecycleRequest("move_file");
+    const receipt = lifecycleReceipt(request);
+    const addon = {
+      ...nativeAddon((rawRequest) => receiptFor(rawRequest)),
+      moveEngineeringPathV2: vi.fn(),
+      quarantineEngineeringFileV2: vi.fn(),
+      restoreEngineeringFileV2: vi.fn(),
+      purgeEngineeringQuarantineObjectV2: vi.fn(),
+      createEngineeringDirectoryV2: vi.fn(),
+      inspectEngineeringFileLifecycleOperationV2: vi.fn(() => ({
+        schemaVersion: "3.0",
+        kind: "engineering_file_lifecycle_operation_state",
+        state: "after",
+        requestChecksum: engineeringFileLifecycleRequestChecksumV2(request),
+        receipt
+      })),
+      resumeEngineeringFileLifecycleOperationV2: vi.fn(() => ({
+        schemaVersion: "3.0",
+        kind: "engineering_file_lifecycle_operation_state",
+        state: "after",
+        requestChecksum: engineeringFileLifecycleRequestChecksumV2(request),
+        receipt
+      })),
+      compensateEngineeringFileLifecycleOperationV2: vi.fn(() => ({
+        schemaVersion: "3.0",
+        kind: "engineering_file_lifecycle_operation_state",
+        state: "before",
+        requestChecksum: engineeringFileLifecycleRequestChecksumV2(request),
+        receipt: null
+      })),
+      finalizeEngineeringFileLifecycleOperationV2: vi.fn(),
+      inspectEngineeringQuarantineV2: vi.fn(() => ({
+        schemaVersion: "3.0",
+        kind: "engineering_quarantine_inventory",
+        recoveryRootBindingId: "recovery_01",
+        grantRevision: "grant_01",
+        objects: [
+          {
+            recoveryObjectId: "object_01",
+            fileIdentity: "file_01",
+            sha256: hash("quarantined"),
+            byteLength: 12n
+          }
+        ]
+      }))
+    };
+    const port = createEngineeringFileMutationPortV2({
+      addon,
+      rootBinding: { contentRootBindingId: "root_01", rootId: 7n }
+    });
+    const recoveryInput = { request, recoveryBinding: null };
+    if (
+      port.reconcileLifecycle === undefined ||
+      port.resumeLifecycle === undefined ||
+      port.compensateLifecycle === undefined ||
+      port.finalizeLifecycle === undefined ||
+      port.inspectQuarantine === undefined
+    )
+      throw new Error("qualified lifecycle recovery methods are unavailable");
+
+    await expect(port.reconcileLifecycle(recoveryInput)).resolves.toMatchObject({
+      ok: true,
+      value: { state: "after" }
+    });
+    await expect(port.resumeLifecycle(recoveryInput)).resolves.toMatchObject({
+      ok: true,
+      value: { state: "after" }
+    });
+    await expect(
+      port.compensateLifecycle({ ...recoveryInput, expectedReceipt: receipt })
+    ).resolves.toMatchObject({ ok: true, value: { state: "before" } });
+    await expect(
+      port.finalizeLifecycle({ ...recoveryInput, expectedState: "after" })
+    ).resolves.toMatchObject({ ok: true });
+    const inventoryBinding = {
+      recoveryRootBindingId: "recovery_01",
+      recoveryRootId: 8n,
+      grantRevision: "grant_01",
+      sideEffectChecksum: hash("recovery-side-effect")
+    };
+    await expect(port.inspectQuarantine(inventoryBinding)).resolves.toMatchObject({
+      ok: true,
+      value: { objects: [{ recoveryObjectId: "object_01", byteLength: 12n }] }
+    });
+    expect(addon.inspectEngineeringFileLifecycleOperationV2).toHaveBeenCalledWith(7n, 0n, request);
+    expect(addon.resumeEngineeringFileLifecycleOperationV2).toHaveBeenCalledWith(7n, 0n, request);
+    expect(addon.compensateEngineeringFileLifecycleOperationV2).toHaveBeenCalledWith(
+      7n,
+      0n,
+      request,
+      receipt
+    );
+    expect(addon.finalizeEngineeringFileLifecycleOperationV2).toHaveBeenCalledWith(
+      7n,
+      0n,
+      request,
+      "after"
+    );
+    expect(addon.inspectEngineeringQuarantineV2).toHaveBeenCalledWith(8n);
+  });
+
   test("binds B8 move/delete/create-directory to the same native addon and fails closed when partial", async () => {
     const receipt = (request: ReturnType<typeof lifecycleRequest>) => ({
       schemaVersion: "3.0",
@@ -39,7 +142,8 @@ describe("EngineeringFileMutationPortV2", () => {
       quarantineEngineeringFileV2: vi.fn((_root, _recovery, request) => receipt(request)),
       restoreEngineeringFileV2: vi.fn(),
       purgeEngineeringQuarantineObjectV2: vi.fn(),
-      createEngineeringDirectoryV2: vi.fn((_root, request) => receipt(request))
+      createEngineeringDirectoryV2: vi.fn((_root, request) => receipt(request)),
+      ...lifecycleRecoveryAddon()
     };
     const port = createEngineeringFileMutationPortV2({
       addon,
@@ -96,7 +200,8 @@ describe("EngineeringFileMutationPortV2", () => {
       quarantineEngineeringFileV2: vi.fn(),
       restoreEngineeringFileV2: vi.fn(() => restoredReceipt),
       purgeEngineeringQuarantineObjectV2: vi.fn(),
-      createEngineeringDirectoryV2: vi.fn()
+      createEngineeringDirectoryV2: vi.fn(),
+      ...lifecycleRecoveryAddon()
     };
     const port = createEngineeringFileMutationPortV2({
       addon,
@@ -109,23 +214,25 @@ describe("EngineeringFileMutationPortV2", () => {
       grantRevision: restore.recoveryGrantRevision,
       sideEffectChecksum: restore.recoverySideEffectChecksum
     };
+    if (port.restore === undefined || port.purge === undefined)
+      throw new Error("qualified recovery methods are unavailable");
 
-    await expect(port.restore!({ request: restore, recoveryBinding })).resolves.toMatchObject({
+    await expect(port.restore({ request: restore, recoveryBinding })).resolves.toMatchObject({
       ok: true,
       value: { state: "restored" }
     });
-    await expect(port.purge!(purgeInput(recoveryBinding))).resolves.toMatchObject({ ok: true });
+    await expect(port.purge(purgeInput(recoveryBinding))).resolves.toMatchObject({ ok: true });
     expect(addon.restoreEngineeringFileV2).toHaveBeenCalledWith(7n, 8n, restore);
     expect(addon.purgeEngineeringQuarantineObjectV2).toHaveBeenCalledWith(8n, "object_02");
 
     await expect(
-      port.restore!({
+      port.restore({
         request: { ...restore, recoveryGrantRevision: "grant_changed" },
         recoveryBinding
       })
     ).resolves.toMatchObject({ ok: false });
     await expect(
-      port.purge!({
+      port.purge({
         ...purgeInput(recoveryBinding),
         retentionDecision: {
           ...purgeInput(recoveryBinding).retentionDecision,
@@ -145,7 +252,8 @@ describe("EngineeringFileMutationPortV2", () => {
       quarantineEngineeringFileV2: vi.fn(),
       restoreEngineeringFileV2: vi.fn(),
       purgeEngineeringQuarantineObjectV2: vi.fn(),
-      createEngineeringDirectoryV2: vi.fn()
+      createEngineeringDirectoryV2: vi.fn(),
+      ...lifecycleRecoveryAddon()
     };
     const port = createEngineeringFileMutationPortV2({
       addon,
@@ -157,11 +265,13 @@ describe("EngineeringFileMutationPortV2", () => {
       grantRevision: restore.recoveryGrantRevision,
       sideEffectChecksum: restore.recoverySideEffectChecksum
     };
+    if (port.restore === undefined || port.purge === undefined)
+      throw new Error("qualified recovery methods are unavailable");
 
-    await expect(port.restore!({ request: restore, recoveryBinding })).resolves.toMatchObject({
+    await expect(port.restore({ request: restore, recoveryBinding })).resolves.toMatchObject({
       ok: false
     });
-    await expect(port.purge!(purgeInput(recoveryBinding))).resolves.toMatchObject({ ok: false });
+    await expect(port.purge(purgeInput(recoveryBinding))).resolves.toMatchObject({ ok: false });
     expect(addon.restoreEngineeringFileV2).not.toHaveBeenCalled();
     expect(addon.purgeEngineeringQuarantineObjectV2).not.toHaveBeenCalled();
   });
@@ -510,6 +620,23 @@ function lifecycleRequest(kind: "move_file" | "delete_file" | "create_directory"
   };
 }
 
+function lifecycleReceipt(request: ReturnType<typeof lifecycleRequest>) {
+  return {
+    schemaVersion: "3.0" as const,
+    kind: "engineering_file_lifecycle_receipt" as const,
+    operationKind: request.operationKind,
+    transactionId: request.transactionId,
+    operationId: request.operationId,
+    contentRootBindingId: request.contentRootBindingId,
+    relativeSource: request.relativeSource,
+    relativeTarget: request.relativeTarget,
+    state:
+      request.operationKind === "delete_file" ? ("quarantined" as const) : ("committed" as const),
+    recoveryObjectId: request.operationKind === "delete_file" ? request.recoveryObjectId : "",
+    durability: "data_and_directory_flushed" as const
+  };
+}
+
 function restoreRequest() {
   return {
     schemaVersion: "3.0" as const,
@@ -758,5 +885,15 @@ function operationState(
     state,
     requestChecksum: engineeringFileMutationRequestChecksumV2(request),
     receipt: state === "after" ? receiptFor(request) : null
+  };
+}
+
+function lifecycleRecoveryAddon() {
+  return {
+    inspectEngineeringFileLifecycleOperationV2: vi.fn(),
+    resumeEngineeringFileLifecycleOperationV2: vi.fn(),
+    compensateEngineeringFileLifecycleOperationV2: vi.fn(),
+    finalizeEngineeringFileLifecycleOperationV2: vi.fn(),
+    inspectEngineeringQuarantineV2: vi.fn()
   };
 }

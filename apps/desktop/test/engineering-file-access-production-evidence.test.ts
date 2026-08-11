@@ -504,7 +504,9 @@ async function createFixture() {
               faultPoints: [
                 "after_staging_flush",
                 "after_original_handoff",
-                "after_candidate_handoff"
+                "after_candidate_handoff",
+                "after_case_intermediate",
+                "after_directory_staged"
               ]
             }
           };

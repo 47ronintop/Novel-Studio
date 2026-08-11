@@ -66,6 +66,42 @@ export interface EngineeringFileLifecycleReceiptV2 {
   readonly durability: "data_and_directory_flushed";
 }
 
+export function engineeringFileLifecycleRequestChecksumV2(
+  request: EngineeringFileLifecycleRequestV2
+): string {
+  return sha256EngineeringMutationTextV2(canonicalizeEngineeringMutationV2Json(request));
+}
+
+export type EngineeringFileLifecycleOperationStateV2 =
+  | Readonly<{
+      readonly schemaVersion: typeof ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION;
+      readonly kind: "engineering_file_lifecycle_operation_state";
+      readonly state: "before" | "intermediate" | "neither" | "unknown";
+      readonly requestChecksum: string;
+      readonly receipt: null;
+    }>
+  | Readonly<{
+      readonly schemaVersion: typeof ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION;
+      readonly kind: "engineering_file_lifecycle_operation_state";
+      readonly state: "after";
+      readonly requestChecksum: string;
+      readonly receipt: EngineeringFileLifecycleReceiptV2;
+    }>;
+
+export interface EngineeringFileLifecycleRecoveryInputV2 {
+  readonly request: EngineeringFileLifecycleRequestV2;
+  readonly recoveryBinding: EngineeringLifecycleRecoveryRootBindingV2 | null;
+}
+
+export interface EngineeringFileLifecycleCompensationInputV2 extends EngineeringFileLifecycleRecoveryInputV2 {
+  /** Native compensation must compare this exact durable after-state before changing anything. */
+  readonly expectedReceipt: EngineeringFileLifecycleReceiptV2;
+}
+
+export interface EngineeringFileLifecycleFinalizeInputV2 extends EngineeringFileLifecycleRecoveryInputV2 {
+  readonly expectedState: "before" | "after";
+}
+
 /** Restore is Main-only recovery work, not an Agent lifecycle operation. */
 export interface EngineeringFileRestoreRequestV2 {
   readonly schemaVersion: typeof ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION;
@@ -105,6 +141,19 @@ export interface EngineeringLifecycleRecoveryRootBindingV2 {
   readonly recoveryRootId: string | bigint;
   readonly grantRevision: string;
   readonly sideEffectChecksum: string;
+}
+
+export interface EngineeringQuarantineInventoryV2 {
+  readonly schemaVersion: typeof ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION;
+  readonly kind: "engineering_quarantine_inventory";
+  readonly recoveryRootBindingId: string;
+  readonly grantRevision: string;
+  readonly objects: readonly Readonly<{
+    readonly recoveryObjectId: string;
+    readonly fileIdentity: string;
+    readonly sha256: string;
+    readonly byteLength: bigint;
+  }>[];
 }
 
 /**
@@ -347,6 +396,29 @@ export interface EngineeringFileLifecycleNativeAddonV2 {
     rootId: string | bigint,
     request: EngineeringFileLifecycleRequestV2
   ): unknown;
+  inspectEngineeringFileLifecycleOperationV2(
+    rootId: string | bigint,
+    recoveryRootId: string | bigint,
+    request: EngineeringFileLifecycleRequestV2
+  ): unknown;
+  resumeEngineeringFileLifecycleOperationV2(
+    rootId: string | bigint,
+    recoveryRootId: string | bigint,
+    request: EngineeringFileLifecycleRequestV2
+  ): unknown;
+  compensateEngineeringFileLifecycleOperationV2(
+    rootId: string | bigint,
+    recoveryRootId: string | bigint,
+    request: EngineeringFileLifecycleRequestV2,
+    expectedReceipt: EngineeringFileLifecycleReceiptV2
+  ): unknown;
+  finalizeEngineeringFileLifecycleOperationV2(
+    rootId: string | bigint,
+    recoveryRootId: string | bigint,
+    request: EngineeringFileLifecycleRequestV2,
+    expectedState: "before" | "after"
+  ): unknown;
+  inspectEngineeringQuarantineV2(recoveryRootId: string | bigint): unknown;
 }
 
 /**
@@ -388,6 +460,26 @@ export interface EngineeringFileMutationPortV2 {
   readonly createDirectory?: (
     input: unknown
   ) => Promise<Result<EngineeringFileLifecycleReceiptV2, UnifiedError>>;
+  /** Main-only classification for an already-durable lifecycle WAL operation. */
+  readonly reconcileLifecycle?: (
+    input: EngineeringFileLifecycleRecoveryInputV2
+  ) => Promise<Result<EngineeringFileLifecycleOperationStateV2, UnifiedError>>;
+  /** Completes one exact durable intermediate handoff while retaining its native marker. */
+  readonly resumeLifecycle?: (
+    input: EngineeringFileLifecycleRecoveryInputV2
+  ) => Promise<Result<EngineeringFileLifecycleOperationStateV2, UnifiedError>>;
+  /** Main-only inverse that succeeds only while the exact lifecycle after-state remains current. */
+  readonly compensateLifecycle?: (
+    input: EngineeringFileLifecycleCompensationInputV2
+  ) => Promise<Result<EngineeringFileLifecycleOperationStateV2, UnifiedError>>;
+  /** Removes the durable native marker only after Main has persisted WAL progress or rollback. */
+  readonly finalizeLifecycle?: (
+    input: EngineeringFileLifecycleFinalizeInputV2
+  ) => Promise<Result<void, UnifiedError>>;
+  /** Main-only physical inventory used to detect objects missing from both durable record stores. */
+  readonly inspectQuarantine?: (
+    input: EngineeringLifecycleRecoveryRootBindingV2
+  ) => Promise<Result<EngineeringQuarantineInventoryV2, UnifiedError>>;
   /** Main-only recovery action. It is intentionally not part of the Provider lifecycle surface. */
   readonly restore?: (
     input: unknown
@@ -515,6 +607,114 @@ export function createEngineeringFileMutationPortV2(
         return lifecycleNativeFailure(cause, traceId);
       }
       return validateEngineeringFileLifecycleReceiptV2(raw, request.value);
+    },
+    async reconcileLifecycle(
+      input: EngineeringFileLifecycleRecoveryInputV2
+    ): Promise<Result<EngineeringFileLifecycleOperationStateV2, UnifiedError>> {
+      const parsed = validateEngineeringFileLifecycleRecoveryInputV2(
+        input,
+        options.rootBinding,
+        options.pathPolicy
+      );
+      if (!parsed.ok) return parsed;
+      if (lifecycleAddon === undefined || options.rootBinding === undefined)
+        return unavailable(traceId);
+      let raw: unknown;
+      try {
+        raw = await lifecycleAddon.inspectEngineeringFileLifecycleOperationV2(
+          options.rootBinding.rootId,
+          parsed.value.recoveryBinding?.recoveryRootId ?? 0n,
+          parsed.value.request
+        );
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      return validateEngineeringFileLifecycleOperationStateV2(raw, parsed.value.request);
+    },
+    async resumeLifecycle(
+      input: EngineeringFileLifecycleRecoveryInputV2
+    ): Promise<Result<EngineeringFileLifecycleOperationStateV2, UnifiedError>> {
+      const parsed = validateEngineeringFileLifecycleRecoveryInputV2(
+        input,
+        options.rootBinding,
+        options.pathPolicy
+      );
+      if (!parsed.ok) return parsed;
+      if (lifecycleAddon === undefined || options.rootBinding === undefined)
+        return unavailable(traceId);
+      let raw: unknown;
+      try {
+        raw = await lifecycleAddon.resumeEngineeringFileLifecycleOperationV2(
+          options.rootBinding.rootId,
+          parsed.value.recoveryBinding?.recoveryRootId ?? 0n,
+          parsed.value.request
+        );
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      const state = validateEngineeringFileLifecycleOperationStateV2(raw, parsed.value.request);
+      return state.ok && state.value.state === "after" ? state : lifecycleInvalid(traceId);
+    },
+    async compensateLifecycle(
+      input: EngineeringFileLifecycleCompensationInputV2
+    ): Promise<Result<EngineeringFileLifecycleOperationStateV2, UnifiedError>> {
+      const parsed = validateEngineeringFileLifecycleCompensationInputV2(
+        input,
+        options.rootBinding,
+        options.pathPolicy
+      );
+      if (!parsed.ok) return parsed;
+      if (lifecycleAddon === undefined || options.rootBinding === undefined)
+        return unavailable(traceId);
+      let raw: unknown;
+      try {
+        raw = await lifecycleAddon.compensateEngineeringFileLifecycleOperationV2(
+          options.rootBinding.rootId,
+          parsed.value.recoveryBinding?.recoveryRootId ?? 0n,
+          parsed.value.request,
+          parsed.value.expectedReceipt
+        );
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      const state = validateEngineeringFileLifecycleOperationStateV2(raw, parsed.value.request);
+      return state.ok && state.value.state === "before" ? state : lifecycleInvalid(traceId);
+    },
+    async finalizeLifecycle(
+      input: EngineeringFileLifecycleFinalizeInputV2
+    ): Promise<Result<void, UnifiedError>> {
+      const parsed = validateEngineeringFileLifecycleFinalizeInputV2(
+        input,
+        options.rootBinding,
+        options.pathPolicy
+      );
+      if (!parsed.ok) return parsed;
+      if (lifecycleAddon === undefined || options.rootBinding === undefined)
+        return unavailable(traceId);
+      try {
+        await lifecycleAddon.finalizeEngineeringFileLifecycleOperationV2(
+          options.rootBinding.rootId,
+          parsed.value.recoveryBinding?.recoveryRootId ?? 0n,
+          parsed.value.request,
+          parsed.value.expectedState
+        );
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      return ok(undefined);
+    },
+    async inspectQuarantine(
+      input: EngineeringLifecycleRecoveryRootBindingV2
+    ): Promise<Result<EngineeringQuarantineInventoryV2, UnifiedError>> {
+      const recovery = parseLifecycleRecoveryBinding(input);
+      if (recovery === undefined || lifecycleAddon === undefined) return unavailable(traceId);
+      let raw: unknown;
+      try {
+        raw = await lifecycleAddon.inspectEngineeringQuarantineV2(recovery.recoveryRootId);
+      } catch (cause) {
+        return lifecycleNativeFailure(cause, traceId);
+      }
+      return validateEngineeringQuarantineInventoryV2(raw, recovery);
     },
     async restore(input: unknown): Promise<Result<EngineeringFileRestoreReceiptV2, UnifiedError>> {
       if (!hasExactKeys(input, lifecycleRestoreInputKeys)) return lifecycleInvalid(traceId);
@@ -856,6 +1056,159 @@ export function validateEngineeringFileLifecycleReceiptV2(
   )
     return lifecycleInvalid();
   return ok(freeze(value as unknown as EngineeringFileLifecycleReceiptV2));
+}
+
+export function validateEngineeringFileLifecycleOperationStateV2(
+  value: unknown,
+  request: EngineeringFileLifecycleRequestV2
+): Result<EngineeringFileLifecycleOperationStateV2, UnifiedError> {
+  if (
+    !hasExactKeys(value, lifecycleOperationStateKeys) ||
+    value["schemaVersion"] !== ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION ||
+    value["kind"] !== "engineering_file_lifecycle_operation_state" ||
+    !["before", "after", "intermediate", "neither", "unknown"].includes(value["state"] as string) ||
+    value["requestChecksum"] !== engineeringFileLifecycleRequestChecksumV2(request)
+  )
+    return lifecycleInvalid();
+  if (value["state"] === "after") {
+    const receipt = validateEngineeringFileLifecycleReceiptV2(value["receipt"], request);
+    if (!receipt.ok) return receipt;
+    return ok(
+      freeze({
+        schemaVersion: ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION,
+        kind: "engineering_file_lifecycle_operation_state" as const,
+        state: "after" as const,
+        requestChecksum: value["requestChecksum"] as string,
+        receipt: receipt.value
+      })
+    );
+  }
+  if (value["receipt"] !== null) return lifecycleInvalid();
+  return ok(
+    freeze({
+      schemaVersion: ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION,
+      kind: "engineering_file_lifecycle_operation_state" as const,
+      state: value["state"] as "before" | "intermediate" | "neither" | "unknown",
+      requestChecksum: value["requestChecksum"] as string,
+      receipt: null
+    })
+  );
+}
+
+export function validateEngineeringFileLifecycleRecoveryInputV2(
+  value: unknown,
+  rootBinding?: EngineeringFileMutationRootBindingV2,
+  pathPolicy?: EngineeringPathPolicy
+): Result<EngineeringFileLifecycleRecoveryInputV2, UnifiedError> {
+  if (!hasExactKeys(value, lifecycleRecoveryInputKeys)) return lifecycleInvalid();
+  const request = validateEngineeringFileLifecycleRequestV2(
+    value["request"],
+    undefined,
+    pathPolicy
+  );
+  if (!request.ok) return request;
+  if (
+    rootBinding === undefined ||
+    request.value.contentRootBindingId !== rootBinding.contentRootBindingId
+  )
+    return lifecycleInvalid();
+  if (request.value.operationKind === "delete_file") {
+    const recovery = parseLifecycleRecoveryBinding(value["recoveryBinding"]);
+    if (
+      recovery === undefined ||
+      recovery.recoveryRootBindingId !== request.value.recoveryRootBindingId ||
+      recovery.grantRevision !== request.value.recoveryGrantRevision ||
+      recovery.sideEffectChecksum !== request.value.recoverySideEffectChecksum
+    )
+      return lifecycleInvalid();
+    return ok(freeze({ request: request.value, recoveryBinding: recovery }));
+  }
+  if (value["recoveryBinding"] !== null) return lifecycleInvalid();
+  return ok(freeze({ request: request.value, recoveryBinding: null }));
+}
+
+export function validateEngineeringFileLifecycleCompensationInputV2(
+  value: unknown,
+  rootBinding?: EngineeringFileMutationRootBindingV2,
+  pathPolicy?: EngineeringPathPolicy
+): Result<EngineeringFileLifecycleCompensationInputV2, UnifiedError> {
+  if (!hasExactKeys(value, lifecycleCompensationInputKeys)) return lifecycleInvalid();
+  const recovery = validateEngineeringFileLifecycleRecoveryInputV2(
+    { request: value["request"], recoveryBinding: value["recoveryBinding"] },
+    rootBinding,
+    pathPolicy
+  );
+  if (!recovery.ok) return recovery;
+  const receipt = validateEngineeringFileLifecycleReceiptV2(
+    value["expectedReceipt"],
+    recovery.value.request
+  );
+  if (!receipt.ok) return receipt;
+  return ok(freeze({ ...recovery.value, expectedReceipt: receipt.value }));
+}
+
+export function validateEngineeringFileLifecycleFinalizeInputV2(
+  value: unknown,
+  rootBinding?: EngineeringFileMutationRootBindingV2,
+  pathPolicy?: EngineeringPathPolicy
+): Result<EngineeringFileLifecycleFinalizeInputV2, UnifiedError> {
+  if (!hasExactKeys(value, lifecycleFinalizeInputKeys)) return lifecycleInvalid();
+  const recovery = validateEngineeringFileLifecycleRecoveryInputV2(
+    { request: value["request"], recoveryBinding: value["recoveryBinding"] },
+    rootBinding,
+    pathPolicy
+  );
+  if (!recovery.ok) return recovery;
+  if (value["expectedState"] !== "before" && value["expectedState"] !== "after")
+    return lifecycleInvalid();
+  return ok(freeze({ ...recovery.value, expectedState: value["expectedState"] }));
+}
+
+export function validateEngineeringQuarantineInventoryV2(
+  value: unknown,
+  recoveryBinding: EngineeringLifecycleRecoveryRootBindingV2
+): Result<EngineeringQuarantineInventoryV2, UnifiedError> {
+  if (
+    !hasExactKeys(value, quarantineInventoryKeys) ||
+    value["schemaVersion"] !== ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION ||
+    value["kind"] !== "engineering_quarantine_inventory" ||
+    value["recoveryRootBindingId"] !== recoveryBinding.recoveryRootBindingId ||
+    value["grantRevision"] !== recoveryBinding.grantRevision ||
+    !Array.isArray(value["objects"])
+  )
+    return lifecycleInvalid();
+  const objects: EngineeringQuarantineInventoryV2["objects"][number][] = [];
+  const ids = new Set<string>();
+  for (const candidate of value["objects"]) {
+    if (
+      !hasExactKeys(candidate, quarantineInventoryObjectKeys) ||
+      !isStableId(candidate["recoveryObjectId"]) ||
+      ids.has(candidate["recoveryObjectId"]) ||
+      !isStableId(candidate["fileIdentity"]) ||
+      !isSha256(candidate["sha256"]) ||
+      typeof candidate["byteLength"] !== "bigint" ||
+      candidate["byteLength"] < 0n
+    )
+      return lifecycleInvalid();
+    ids.add(candidate["recoveryObjectId"]);
+    objects.push(
+      freeze({
+        recoveryObjectId: candidate["recoveryObjectId"],
+        fileIdentity: candidate["fileIdentity"],
+        sha256: candidate["sha256"],
+        byteLength: candidate["byteLength"]
+      })
+    );
+  }
+  return ok(
+    freeze({
+      schemaVersion: ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION,
+      kind: "engineering_quarantine_inventory" as const,
+      recoveryRootBindingId: recoveryBinding.recoveryRootBindingId,
+      grantRevision: recoveryBinding.grantRevision,
+      objects: freeze(objects)
+    })
+  );
 }
 
 export function validateEngineeringFileRestoreRequestV2(
@@ -1467,7 +1820,12 @@ function parseLifecycleNativeAddon(
     typeof value["quarantineEngineeringFileV2"] === "function" &&
     typeof value["restoreEngineeringFileV2"] === "function" &&
     typeof value["purgeEngineeringQuarantineObjectV2"] === "function" &&
-    typeof value["createEngineeringDirectoryV2"] === "function"
+    typeof value["createEngineeringDirectoryV2"] === "function" &&
+    typeof value["inspectEngineeringFileLifecycleOperationV2"] === "function" &&
+    typeof value["resumeEngineeringFileLifecycleOperationV2"] === "function" &&
+    typeof value["compensateEngineeringFileLifecycleOperationV2"] === "function" &&
+    typeof value["finalizeEngineeringFileLifecycleOperationV2"] === "function" &&
+    typeof value["inspectEngineeringQuarantineV2"] === "function"
     ? (value as unknown as EngineeringFileLifecycleNativeAddonV2)
     : undefined;
 }
@@ -2177,6 +2535,29 @@ const lifecycleReceiptKeys = [
   "schemaVersion",
   "state",
   "transactionId"
+] as const;
+const lifecycleOperationStateKeys = [
+  "kind",
+  "receipt",
+  "requestChecksum",
+  "schemaVersion",
+  "state"
+] as const;
+const lifecycleRecoveryInputKeys = ["recoveryBinding", "request"] as const;
+const lifecycleCompensationInputKeys = ["expectedReceipt", "recoveryBinding", "request"] as const;
+const lifecycleFinalizeInputKeys = ["expectedState", "recoveryBinding", "request"] as const;
+const quarantineInventoryKeys = [
+  "grantRevision",
+  "kind",
+  "objects",
+  "recoveryRootBindingId",
+  "schemaVersion"
+] as const;
+const quarantineInventoryObjectKeys = [
+  "byteLength",
+  "fileIdentity",
+  "recoveryObjectId",
+  "sha256"
 ] as const;
 const lifecycleQuarantineInputKeys = ["recoveryBinding", "request"] as const;
 const lifecycleRestoreInputKeys = ["recoveryBinding", "request"] as const;

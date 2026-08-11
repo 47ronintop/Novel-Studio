@@ -183,6 +183,69 @@ describe("engineering file access development probe contract", () => {
     );
   });
 
+  test("retains lifecycle markers until durable WAL finalize and exposes bounded recovery primitives", async () => {
+    const nativeSource = await readFile(
+      "native/engineering-file-access-win32/src/engineering_file_access.cc",
+      "utf8"
+    );
+
+    expect(nativeSource).toContain("engineering_lifecycle_marker_v1");
+    expect(nativeSource).toContain('LifecycleMarker{requestChecksum, "case_intermediate"');
+    expect(nativeSource).toContain('LifecycleMarker{requestChecksum, "after"');
+    expect(nativeSource).toContain("napi_value inspectEngineeringFileLifecycleOperationV2");
+    expect(nativeSource).toContain("napi_value resumeEngineeringFileLifecycleOperationV2");
+    expect(nativeSource).toContain("napi_value compensateEngineeringFileLifecycleOperationV2");
+    expect(nativeSource).toContain("napi_value finalizeEngineeringFileLifecycleOperationV2");
+    expect(nativeSource).toContain("napi_value inspectEngineeringQuarantineV2");
+    expect(nativeSource).toContain("napi_value openEngineeringStateRootBoundToRecoveryV2");
+    expect(nativeSource).toContain('makeString(env, "engineering_quarantine_inventory")');
+    expect(nativeSource).toContain('name == L".novel-studio-engineering-v2"');
+    expect(nativeSource).toContain("DuplicateHandle(GetCurrentProcess(), found->second.handle");
+    const recoveryOpenStart = nativeSource.indexOf("AccessError openRecoveryDirectory");
+    const lifecycleParserStart = nativeSource.indexOf("bool readLifecycleString", recoveryOpenStart);
+    expect(nativeSource.slice(recoveryOpenStart, lifecycleParserStart)).not.toContain(
+      "CreateFileW(session.path.c_str()"
+    );
+    expect(nativeSource).toContain("classification != LifecycleClassification::kAfter");
+    expect(nativeSource).toContain("directoryIsEmpty(directory.get(), &empty)");
+    expect(nativeSource).toContain(
+      "renameOpenedFileCreateOnly(object.get(), parent.get(), sourceLeaf)"
+    );
+    const inspectStart = nativeSource.indexOf(
+      "napi_value inspectEngineeringFileLifecycleOperationV2"
+    );
+    const resumeStart = nativeSource.indexOf(
+      "napi_value resumeEngineeringFileLifecycleOperationV2"
+    );
+    const inspectSource = nativeSource.slice(inspectStart, resumeStart);
+    expect(inspectSource).not.toContain("completeCaseIntermediate(rootId, request)");
+    expect(inspectSource).not.toContain("completeDirectoryIntermediate(rootId, request)");
+    const compensateStart = nativeSource.indexOf(
+      "napi_value compensateEngineeringFileLifecycleOperationV2"
+    );
+    const resumeSource = nativeSource.slice(resumeStart, compensateStart);
+    expect(resumeSource).toContain("completeCaseIntermediate(rootId, request)");
+    expect(resumeSource).toContain("completeDirectoryIntermediate(rootId, request)");
+    expect(nativeSource).toContain("validateExpectedLifecycleReceipt(env, argv[3], *request)");
+    expect(nativeSource).toContain('expectedState == "after"');
+    expect(nativeSource).toContain("if (result == AccessError::kOk && !markerPresent)");
+    expect(nativeSource).toContain(
+      '{"inspectEngineeringFileLifecycleOperationV2", nullptr, inspectEngineeringFileLifecycleOperationV2'
+    );
+    expect(nativeSource).toContain(
+      '{"openEngineeringStateRootBoundToRecoveryV2", nullptr, openEngineeringStateRootBoundToRecoveryV2'
+    );
+    expect(nativeSource).toContain(
+      '{"resumeEngineeringFileLifecycleOperationV2", nullptr, resumeEngineeringFileLifecycleOperationV2'
+    );
+    expect(nativeSource).toContain(
+      '{"compensateEngineeringFileLifecycleOperationV2", nullptr, compensateEngineeringFileLifecycleOperationV2'
+    );
+    expect(nativeSource).toContain(
+      '{"finalizeEngineeringFileLifecycleOperationV2", nullptr, finalizeEngineeringFileLifecycleOperationV2'
+    );
+  });
+
   test("requires Main to provide absolute installed inputs and a distinct output path", () => {
     const request = createEngineeringFileAccessPackageProbeRequest({
       artifactPath: "C:\\Program Files\\Novel Studio\\engineering_file_access.node",

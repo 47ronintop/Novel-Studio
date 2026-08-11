@@ -98,6 +98,7 @@ const mutationFaultIdentity = assertMutationFaultIdentity(
   mutationFaultAddon.mutationFaultInjectionInfo?.()
 );
 const mutationFaultEvidence = await exposeMutationFaultControls(mutationFaultAddon);
+const lifecycleFaultRecovery = await exposeLifecycleFaultRecovery(mutationFaultAddon);
 const mutationFaultControls = Object.fromEntries(
   Object.entries(mutationFaultEvidence).map(([name, value]) => [name, value.status])
 );
@@ -160,7 +161,8 @@ const reportBody = {
   mutationFaultArtifact: {
     fileName: artifacts.mutationFault.fileName,
     sha256: artifacts.mutationFault.sha256,
-    buildKind: mutationFaultIdentity.buildKind
+    buildKind: mutationFaultIdentity.buildKind,
+    lifecycleFaultRecovery
   },
   mutationFaultControls,
   mutationFaultEvidence,
@@ -416,7 +418,13 @@ function assertMutationFaultIdentity(info) {
     info.schemaVersion !== "engineering_mutation_fault_injection_v1" ||
     info.buildKind !== "test_only_compile_time_diagnostic" ||
     stable(info.faultPoints) !==
-      stable(["after_staging_flush", "after_original_handoff", "after_candidate_handoff"])
+      stable([
+        "after_staging_flush",
+        "after_original_handoff",
+        "after_candidate_handoff",
+        "after_case_intermediate",
+        "after_directory_staged"
+      ])
   ) {
     throw new Error("native mutation fault identity mismatch");
   }
@@ -577,6 +585,151 @@ async function exposeMutationFault(addon, control) {
       addon.closeWorkspaceRoot(opened.rootId);
     }
   });
+}
+
+async function exposeLifecycleFaultRecovery(addon) {
+  return withWorkspace(async ({ workspace }) => {
+    const bytes = Buffer.from("lifecycle fault recovery\n", "utf8");
+    const sourceName = "Case-Fault.txt";
+    await writeFile(join(workspace, sourceName), bytes, { flush: true });
+    const opened = addon.openWorkspaceRoot(workspace);
+    try {
+      const snapshot = addon.inspectEngineeringFileSnapshotV2(opened.rootId, sourceName);
+      const base = {
+        schemaVersion: "3.0",
+        transactionId: "tx_lifecycle_fault",
+        contentRootBindingId: "root_lifecycle_fault",
+        recoveryRootBindingId: "recovery_lifecycle_fault",
+        recoveryGrantRevision: "grant_lifecycle_fault",
+        recoverySideEffectChecksum: "b".repeat(64),
+        recoveryObjectId: "object_lifecycle_fault",
+        expectedState: "wal_prepared"
+      };
+      const caseRequest = {
+        ...base,
+        operationKind: "move_file",
+        operationId: "op_case_fault",
+        relativeSource: sourceName,
+        relativeTarget: "case-fault.txt",
+        sourceFileIdentity: snapshot.manifest.fileIdentity,
+        sourceSha256: snapshot.manifest.sha256,
+        targetProof: "same_object_case_only",
+        stagingObjectId: "stage_case_fault"
+      };
+      await expectLifecycleFault(() =>
+        addon.moveEngineeringPathV2(opened.rootId, caseRequest, "after_case_intermediate")
+      );
+      assertLifecycleFaultState(
+        addon.inspectEngineeringFileLifecycleOperationV2(opened.rootId, 0n, caseRequest),
+        caseRequest,
+        "intermediate"
+      );
+      const resumedCase = addon.resumeEngineeringFileLifecycleOperationV2(
+        opened.rootId,
+        0n,
+        caseRequest
+      );
+      assertLifecycleFaultState(resumedCase, caseRequest, "after");
+      assertLifecycleFaultState(
+        addon.resumeEngineeringFileLifecycleOperationV2(opened.rootId, 0n, caseRequest),
+        caseRequest,
+        "after"
+      );
+      assertLifecycleFaultState(
+        addon.compensateEngineeringFileLifecycleOperationV2(
+          opened.rootId,
+          0n,
+          caseRequest,
+          resumedCase.receipt
+        ),
+        caseRequest,
+        "before"
+      );
+
+      const directoryRequest = {
+        ...base,
+        operationKind: "create_directory",
+        operationId: "op_directory_fault",
+        relativeSource: "",
+        relativeTarget: "directory-fault",
+        sourceFileIdentity: "",
+        sourceSha256: "0".repeat(64),
+        targetProof: "absent",
+        stagingObjectId: "stage_directory_fault"
+      };
+      await expectLifecycleFault(() =>
+        addon.createEngineeringDirectoryV2(
+          opened.rootId,
+          directoryRequest,
+          "after_directory_staged"
+        )
+      );
+      assertLifecycleFaultState(
+        addon.inspectEngineeringFileLifecycleOperationV2(opened.rootId, 0n, directoryRequest),
+        directoryRequest,
+        "intermediate"
+      );
+      const resumedDirectory = addon.resumeEngineeringFileLifecycleOperationV2(
+        opened.rootId,
+        0n,
+        directoryRequest
+      );
+      assertLifecycleFaultState(resumedDirectory, directoryRequest, "after");
+      assertLifecycleFaultState(
+        addon.compensateEngineeringFileLifecycleOperationV2(
+          opened.rootId,
+          0n,
+          directoryRequest,
+          resumedDirectory.receipt
+        ),
+        directoryRequest,
+        "before"
+      );
+      const scan = addon.scanMutationRecovery(opened.rootId);
+      if (scan.state !== "clear" || scan.pendingStagingCount !== 0n) {
+        throw new Error("lifecycle intermediate recovery left native staging state");
+      }
+      return {
+        caseOnlyIntermediate: "passed",
+        directoryIntermediate: "passed",
+        markerRetainedUntilCompensation: "passed",
+        resumeIdempotent: "passed"
+      };
+    } finally {
+      addon.closeWorkspaceRoot(opened.rootId);
+    }
+  });
+}
+
+async function expectLifecycleFault(invoke) {
+  let failure;
+  try {
+    await Promise.resolve(invoke());
+  } catch (error) {
+    failure = error;
+  }
+  if (failure?.code !== "ENGINEERING_MUTATION_RECOVERY_REQUIRED") {
+    throw new Error("lifecycle fault did not raise recovery-required");
+  }
+}
+
+function assertLifecycleFaultState(value, request, expectedState) {
+  assertExactKeys(
+    value,
+    ["kind", "receipt", "requestChecksum", "schemaVersion", "state"],
+    `${expectedState} lifecycle fault state`
+  );
+  if (
+    value.schemaVersion !== "3.0" ||
+    value.kind !== "engineering_file_lifecycle_operation_state" ||
+    value.state !== expectedState ||
+    value.requestChecksum !== sha256(stable(request)) ||
+    (expectedState === "after"
+      ? value.receipt?.operationId !== request.operationId
+      : value.receipt !== null)
+  ) {
+    throw new Error(`invalid ${expectedState} lifecycle fault state`);
+  }
 }
 
 function observedV2ManifestFromSnapshot(

@@ -257,6 +257,12 @@ struct LifecycleRequest {
   std::string expectedState;
 };
 
+struct LifecycleMarker {
+  std::string requestChecksum;
+  std::string phase;
+  std::string objectIdentity;
+};
+
 class ScopedHandle {
  public:
   explicit ScopedHandle(HANDLE handle) : handle_(handle) {}
@@ -1482,6 +1488,8 @@ bool readUtf8StringValue(napi_env env, napi_value value, size_t maximumLength, s
 bool hasExactV2Keys(napi_env env, napi_value object, const std::vector<const char*>& expected);
 bool isV2StableIdentifier(const std::string& value, bool operationIdentifier);
 bool isV2Sha256(const std::string& value);
+bool makeLifecycleReceipt(napi_env env, const LifecycleRequest& request, const char* state,
+                          const std::string& recoveryObject, napi_value* output);
 
 AccessError recoveryRootSnapshot(uint64_t recoveryRootId, RecoveryRootSession* output) {
   std::scoped_lock lock(g_recoveryRootsMutex);
@@ -1503,17 +1511,26 @@ bool isPathAncestorOrSame(const std::wstring& ancestor, const std::wstring& cand
 
 AccessError openRecoveryDirectory(uint64_t recoveryRootId, const std::wstring& relative, HANDLE* output) {
   RecoveryRootSession session{};
-  const AccessError snapshot = recoveryRootSnapshot(recoveryRootId, &session);
-  if (snapshot != AccessError::kOk) return snapshot;
+  HANDLE rootRaw = INVALID_HANDLE_VALUE;
+  {
+    std::scoped_lock lock(g_recoveryRootsMutex);
+    const auto found = g_recoveryRoots.find(recoveryRootId);
+    if (found == g_recoveryRoots.end()) return AccessError::kRootUnavailable;
+    session = found->second;
+    if (!DuplicateHandle(GetCurrentProcess(), found->second.handle, GetCurrentProcess(), &rootRaw, 0,
+                         FALSE, DUPLICATE_SAME_ACCESS)) {
+      return AccessError::kIo;
+    }
+  }
+  ScopedHandle root(rootRaw);
   std::vector<std::wstring> segments;
   if (!parseRelativePath(relative, true, &segments)) return AccessError::kUnsafePath;
-  HANDLE current = INVALID_HANDLE_VALUE;
-  ScopedHandle root(CreateFileW(session.path.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
-      FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-  if (root.get() == INVALID_HANDLE_VALUE || verifyDirectory(root.get()) != AccessError::kOk) return AccessError::kRootChanged;
-  current = root.release();
+  BY_HANDLE_FILE_INFORMATION identity{};
+  if (verifyDirectory(root.get()) != AccessError::kOk ||
+      !GetFileInformationByHandle(root.get(), &identity) || !sameObjectKey(identity, session.identity)) {
+    return AccessError::kRootChanged;
+  }
+  HANDLE current = root.release();
   if (segments.empty()) { *output = current; return AccessError::kOk; }
   const NtCreateFileFn create = ntCreateFile();
   if (create == nullptr) { CloseHandle(current); return AccessError::kUnavailable; }
@@ -1527,7 +1544,8 @@ AccessError openRecoveryDirectory(uint64_t recoveryRootId, const std::wstring& r
     IO_STATUS_BLOCK statusBlock{};
     HANDLE next = INVALID_HANDLE_VALUE;
     const NTSTATUS status = create(&next, FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
-        FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE, &attributes, &statusBlock, nullptr, 0,
+        FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD | SYNCHRONIZE,
+        &attributes, &statusBlock, nullptr, 0,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, kFileOpen,
         kFileDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption(), nullptr, 0);
     CloseHandle(current);
@@ -2647,6 +2665,261 @@ bool v2MutationRequestChecksum(const V2MutationRequest& request, std::string* ou
   return canonicalV2MutationRequestJson(request, &canonical) && sha256Hex(canonical, output);
 }
 
+bool canonicalLifecycleRequestJson(const LifecycleRequest& request, std::string* output) {
+  output->clear();
+  output->push_back('{');
+  bool first = true;
+  if (!appendV2CanonicalStringField(output, "contentRootBindingId", request.contentRootBindingId, &first) ||
+      !appendV2CanonicalStringField(output, "expectedState", request.expectedState, &first) ||
+      !appendV2CanonicalStringField(output, "operationId", request.operationId, &first) ||
+      !appendV2CanonicalStringField(output, "operationKind", request.operationKind, &first) ||
+      !appendV2CanonicalStringField(output, "recoveryGrantRevision", request.recoveryGrantRevision, &first) ||
+      !appendV2CanonicalStringField(output, "recoveryObjectId", request.recoveryObjectId, &first) ||
+      !appendV2CanonicalStringField(output, "recoveryRootBindingId", request.recoveryRootBindingId, &first) ||
+      !appendV2CanonicalStringField(output, "recoverySideEffectChecksum", request.recoverySideEffectChecksum,
+                                    &first) ||
+      !appendV2CanonicalStringField(output, "relativeSource", request.relativeSource, &first) ||
+      !appendV2CanonicalStringField(output, "relativeTarget", request.relativeTarget, &first) ||
+      !appendV2CanonicalStringField(output, "schemaVersion", request.schemaVersion, &first) ||
+      !appendV2CanonicalStringField(output, "sourceFileIdentity", request.sourceFileIdentity, &first) ||
+      !appendV2CanonicalStringField(output, "sourceSha256", request.sourceSha256, &first) ||
+      !appendV2CanonicalStringField(output, "stagingObjectId", request.stagingObjectId, &first) ||
+      !appendV2CanonicalStringField(output, "targetProof", request.targetProof, &first) ||
+      !appendV2CanonicalStringField(output, "transactionId", request.transactionId, &first)) {
+    return false;
+  }
+  output->push_back('}');
+  return true;
+}
+
+bool lifecycleRequestChecksum(const LifecycleRequest& request, std::string* output) {
+  std::string canonical;
+  return canonicalLifecycleRequestJson(request, &canonical) && sha256Hex(canonical, output);
+}
+
+std::wstring lifecycleMarkerLeafName(const LifecycleRequest& request) {
+  return stagingLeafName("lifecycle-" + request.stagingObjectId);
+}
+
+std::string lifecycleMarkerBytes(const LifecycleMarker& marker) {
+  return "engineering_lifecycle_marker_v1\n" + marker.requestChecksum + "\n" + marker.phase + "\n" +
+      marker.objectIdentity + "\n";
+}
+
+bool parseLifecycleMarkerBytes(const std::string& bytes, LifecycleMarker* output) {
+  constexpr const char* prefix = "engineering_lifecycle_marker_v1\n";
+  if (bytes.rfind(prefix, 0) != 0 || bytes.empty() || bytes.back() != '\n') return false;
+  const size_t checksumStart = std::strlen(prefix);
+  const size_t checksumEnd = bytes.find('\n', checksumStart);
+  const size_t phaseEnd = checksumEnd == std::string::npos ? std::string::npos : bytes.find('\n', checksumEnd + 1);
+  const size_t identityEnd = phaseEnd == std::string::npos ? std::string::npos : bytes.find('\n', phaseEnd + 1);
+  if (checksumEnd == std::string::npos || phaseEnd == std::string::npos || identityEnd != bytes.size() - 1) {
+    return false;
+  }
+  output->requestChecksum = bytes.substr(checksumStart, checksumEnd - checksumStart);
+  output->phase = bytes.substr(checksumEnd + 1, phaseEnd - checksumEnd - 1);
+  output->objectIdentity = bytes.substr(phaseEnd + 1, identityEnd - phaseEnd - 1);
+  return isV2Sha256(output->requestChecksum) &&
+      (output->phase == "prepared" || output->phase == "case_intermediate" ||
+       output->phase == "directory_staged" || output->phase == "after") &&
+      (output->objectIdentity.empty() || isV2StableIdentifier(output->objectIdentity, false));
+}
+
+AccessError rewriteLifecycleMarker(HANDLE markerHandle, const LifecycleMarker& marker) {
+  if (!resetFilePointer(markerHandle) || !SetEndOfFile(markerHandle)) return AccessError::kIo;
+  return writeAndFlush(markerHandle, lifecycleMarkerBytes(marker));
+}
+
+AccessError createLifecycleMarker(HANDLE parent, const LifecycleRequest& request, HANDLE* output) {
+  std::string checksum;
+  if (!lifecycleRequestChecksum(request, &checksum)) return AccessError::kInvalidArgument;
+  HANDLE marker = INVALID_HANDLE_VALUE;
+  AccessError result = createStagingFile(parent, "lifecycle-" + request.stagingObjectId, &marker);
+  if (result != AccessError::kOk) return result;
+  result = rewriteLifecycleMarker(marker, LifecycleMarker{checksum, "prepared", {}});
+  if (result != AccessError::kOk) {
+    CloseHandle(marker);
+    return result;
+  }
+  *output = marker;
+  return AccessError::kOk;
+}
+
+AccessError openLifecycleMarker(HANDLE parent, const LifecycleRequest& request, HANDLE* output,
+                                LifecycleMarker* marker) {
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationLeafWithAccess(
+      parent, lifecycleMarkerLeafName(request),
+      FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE, &handle);
+  if (result != AccessError::kOk) return result;
+  ScopedHandle scoped(handle);
+  FileObservation observation{};
+  std::string bytes;
+  result = observeOpenedFile(scoped.get(), &observation, &bytes);
+  std::string checksum;
+  if (result == AccessError::kOk &&
+      (!parseLifecycleMarkerBytes(bytes, marker) || !lifecycleRequestChecksum(request, &checksum) ||
+       marker->requestChecksum != checksum)) {
+    result = AccessError::kRecoveryRequired;
+  }
+  if (result != AccessError::kOk) return result;
+  *output = scoped.release();
+  return AccessError::kOk;
+}
+
+bool splitLifecyclePath(const std::string& utf8Path, std::wstring* parent, std::wstring* leaf) {
+  std::wstring path;
+  std::vector<std::wstring> segments;
+  if (!utf8ToWide(utf8Path, &path) || !parseRelativePath(path, false, &segments)) return false;
+  *leaf = segments.back();
+  segments.pop_back();
+  parent->clear();
+  for (size_t index = 0; index < segments.size(); ++index) {
+    if (index != 0) parent->push_back(L'/');
+    parent->append(segments[index]);
+  }
+  return true;
+}
+
+AccessError openMutationDirectoryLeafWithAccess(HANDLE parent, const std::wstring& leaf,
+                                                ACCESS_MASK desiredAccess, HANDLE* output) {
+  const NtCreateFileFn create = ntCreateFile();
+  if (create == nullptr) return AccessError::kUnavailable;
+  UNICODE_STRING name{};
+  name.Buffer = const_cast<PWSTR>(leaf.data());
+  name.Length = static_cast<USHORT>(leaf.size() * sizeof(wchar_t));
+  name.MaximumLength = name.Length;
+  OBJECT_ATTRIBUTES attributes{};
+  InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, parent, nullptr);
+  IO_STATUS_BLOCK statusBlock{};
+  HANDLE directory = INVALID_HANDLE_VALUE;
+  const NTSTATUS status = create(
+      &directory, desiredAccess, &attributes, &statusBlock, nullptr, 0,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, kFileOpen,
+      kFileDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption(), nullptr, 0);
+  if (!isSuccess(status) || directory == INVALID_HANDLE_VALUE) {
+    return status == kStatusObjectNameNotFound ? AccessError::kNotFound : AccessError::kUnsafeObject;
+  }
+  const AccessError checked = verifyDirectory(directory);
+  if (checked != AccessError::kOk || !hasExactLeafName(directory, leaf)) {
+    CloseHandle(directory);
+    return checked == AccessError::kOk ? AccessError::kUnsafePath : checked;
+  }
+  *output = directory;
+  return AccessError::kOk;
+}
+
+AccessError directoryIsEmpty(HANDLE directory, bool* empty) {
+  const NtQueryDirectoryFileFn query = ntQueryDirectoryFile();
+  if (query == nullptr) return AccessError::kUnavailable;
+  std::vector<unsigned char> buffer(16 * 1024);
+  bool restart = true;
+  for (;;) {
+    IO_STATUS_BLOCK statusBlock{};
+    const NTSTATUS status = query(directory, nullptr, nullptr, nullptr, &statusBlock, buffer.data(),
+                                  static_cast<ULONG>(buffer.size()), kFileBothDirectoryInformation, FALSE,
+                                  nullptr, restart ? TRUE : FALSE);
+    restart = false;
+    if (status == kStatusNoMoreFiles) {
+      *empty = true;
+      return AccessError::kOk;
+    }
+    if (!isSuccess(status)) return AccessError::kIo;
+    size_t offset = 0;
+    const size_t received = static_cast<size_t>(statusBlock.Information);
+    while (offset < received) {
+      if (received - offset < offsetof(NativeFileBothDirectoryInformation, fileName)) return AccessError::kIo;
+      const auto* information =
+          reinterpret_cast<const NativeFileBothDirectoryInformation*>(buffer.data() + offset);
+      if (information->fileNameLength % sizeof(wchar_t) != 0 ||
+          offsetof(NativeFileBothDirectoryInformation, fileName) + information->fileNameLength >
+              received - offset) {
+        return AccessError::kIo;
+      }
+      const std::wstring name(information->fileName, information->fileNameLength / sizeof(wchar_t));
+      if (name != L"." && name != L"..") {
+        *empty = false;
+        return AccessError::kOk;
+      }
+      if (information->nextEntryOffset == 0) break;
+      if (information->nextEntryOffset > received - offset) return AccessError::kIo;
+      offset += information->nextEntryOffset;
+    }
+  }
+}
+
+enum class LifecycleObjectMatch { kAbsent, kMatch, kMismatch, kUnknown };
+
+LifecycleObjectMatch observeLifecycleFile(HANDLE parent, const std::wstring& leaf,
+                                          const LifecycleRequest& request, DWORD extraAccess,
+                                          HANDLE* matchedHandle = nullptr) {
+  HANDLE raw = INVALID_HANDLE_VALUE;
+  const AccessError opened = openMutationLeafWithAccess(
+      parent, leaf, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE | extraAccess, &raw);
+  if (opened == AccessError::kNotFound || opened == AccessError::kUnsafePath) return LifecycleObjectMatch::kAbsent;
+  if (opened != AccessError::kOk) return LifecycleObjectMatch::kUnknown;
+  ScopedHandle handle(raw);
+  FileObservation observation{};
+  std::string bytes;
+  if (observeOpenedFile(handle.get(), &observation, &bytes) != AccessError::kOk) {
+    return LifecycleObjectMatch::kUnknown;
+  }
+  if (v2FileIdentity(observation.identity) != request.sourceFileIdentity ||
+      observation.manifest.sha256 != request.sourceSha256) {
+    return LifecycleObjectMatch::kMismatch;
+  }
+  if (matchedHandle != nullptr) *matchedHandle = handle.release();
+  return LifecycleObjectMatch::kMatch;
+}
+
+LifecycleObjectMatch observeLifecycleDirectory(HANDLE parent, const std::wstring& leaf,
+                                               const LifecycleMarker& marker, DWORD extraAccess,
+                                               HANDLE* matchedHandle = nullptr) {
+  HANDLE raw = INVALID_HANDLE_VALUE;
+  const AccessError opened = openMutationDirectoryLeafWithAccess(
+      parent, leaf, FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE | extraAccess,
+      &raw);
+  if (opened == AccessError::kNotFound || opened == AccessError::kUnsafePath) return LifecycleObjectMatch::kAbsent;
+  if (opened != AccessError::kOk) return LifecycleObjectMatch::kUnknown;
+  ScopedHandle handle(raw);
+  BY_HANDLE_FILE_INFORMATION identity{};
+  if (!GetFileInformationByHandle(handle.get(), &identity)) return LifecycleObjectMatch::kUnknown;
+  if (marker.objectIdentity.empty() || v2FileIdentity(identity) != marker.objectIdentity) {
+    return LifecycleObjectMatch::kMismatch;
+  }
+  if (matchedHandle != nullptr) *matchedHandle = handle.release();
+  return LifecycleObjectMatch::kMatch;
+}
+
+bool makeLifecycleOperationState(napi_env env, const LifecycleRequest& request, const char* state,
+                                 napi_value* output) {
+  std::string requestChecksum;
+  if (!lifecycleRequestChecksum(request, &requestChecksum)) return false;
+  napi_value value;
+  napi_value receipt;
+  if (napi_create_object(env, &value) != napi_ok ||
+      napi_set_named_property(env, value, "schemaVersion", makeString(env, "3.0")) != napi_ok ||
+      napi_set_named_property(env, value, "kind",
+                              makeString(env, "engineering_file_lifecycle_operation_state")) != napi_ok ||
+      napi_set_named_property(env, value, "state", makeString(env, state)) != napi_ok ||
+      napi_set_named_property(env, value, "requestChecksum", makeString(env, requestChecksum.c_str())) != napi_ok) {
+    return false;
+  }
+  if (std::strcmp(state, "after") == 0) {
+    const char* receiptState = request.operationKind == "delete_file" ? "quarantined" : "committed";
+    if (!makeLifecycleReceipt(env, request, receiptState,
+                              request.operationKind == "delete_file" ? request.recoveryObjectId : std::string(),
+                              &receipt)) {
+      return false;
+    }
+  } else if (napi_get_null(env, &receipt) != napi_ok) {
+    return false;
+  }
+  if (napi_set_named_property(env, value, "receipt", receipt) != napi_ok) return false;
+  *output = value;
+  return true;
+}
+
 bool v2MutationReceiptChecksum(const V2MutationRequest& request,
                                const std::string& requestChecksum,
                                const V2RawManifest& observedAfter, std::string* output) {
@@ -3479,6 +3752,70 @@ napi_value openEngineeringStateRoot(napi_env env, napi_callback_info info) {
 #endif
 }
 
+napi_value openEngineeringStateRootBoundToRecoveryV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    size_t argc = 1;
+    napi_value argv[1];
+    bool lossless = false;
+    uint64_t recoveryRootId = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 1 ||
+        napi_get_value_bigint_uint64(env, argv[0], &recoveryRootId, &lossless) != napi_ok ||
+        !lossless) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    RecoveryRootSession recovery{};
+    HANDLE duplicate = INVALID_HANDLE_VALUE;
+    {
+      std::scoped_lock lock(g_recoveryRootsMutex);
+      const auto found = g_recoveryRoots.find(recoveryRootId);
+      if (found == g_recoveryRoots.end()) {
+        throwAccessError(env, AccessError::kRootUnavailable);
+        return nullptr;
+      }
+      recovery = found->second;
+      if (!DuplicateHandle(GetCurrentProcess(), found->second.handle, GetCurrentProcess(), &duplicate, 0,
+                           FALSE, DUPLICATE_SAME_ACCESS)) {
+        throwAccessError(env, AccessError::kIo);
+        return nullptr;
+      }
+    }
+    ScopedHandle handle(duplicate);
+    BY_HANDLE_FILE_INFORMATION identity{};
+    if (verifyDirectory(handle.get()) != AccessError::kOk ||
+        !GetFileInformationByHandle(handle.get(), &identity) ||
+        !sameObjectKey(identity, recovery.identity) ||
+        validateRecoveryRootOwnership(handle.get(), recovery) != AccessError::kOk) {
+      throwAccessError(env, AccessError::kRootChanged);
+      return nullptr;
+    }
+    const uint64_t stateRootId = g_nextStateRoot.fetch_add(1);
+    {
+      std::scoped_lock lock(g_stateRootsMutex);
+      if (!g_stateRoots.emplace(stateRootId, StateRootSession{handle.get()}).second) {
+        throwAccessError(env, AccessError::kIo);
+        return nullptr;
+      }
+    }
+    handle.release();
+    napi_value output;
+    napi_create_bigint_uint64(env, stateRootId, &output);
+    return output;
+  } catch (const std::bad_alloc&) {
+    throwAccessError(env, AccessError::kResourceLimit);
+    return nullptr;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
+#else
+  (void)info;
+  throwAccessError(env, AccessError::kUnavailable);
+  return nullptr;
+#endif
+}
+
 napi_value closeEngineeringStateRoot(napi_env env, napi_callback_info info) {
 #ifdef _WIN32
   try {
@@ -3909,7 +4246,7 @@ napi_value openEngineeringRecoveryRootV2(napi_env env, napi_callback_info info) 
     }
     RootSession content{}; if (rootSessionSnapshot(contentRootId, &content) != AccessError::kOk) { throwAccessError(env, AccessError::kRootUnavailable); return nullptr; }
     ScopedHandle handle(CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
-        FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE,
+        FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
     BY_HANDLE_FILE_INFORMATION identity{};
@@ -3952,6 +4289,140 @@ napi_value closeEngineeringRecoveryRootV2(napi_env env, napi_callback_info info)
 #endif
 }
 
+napi_value inspectEngineeringQuarantineV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    size_t argc = 1;
+    napi_value argv[1];
+    bool lossless = false;
+    uint64_t recoveryId = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 1 ||
+        napi_get_value_bigint_uint64(env, argv[0], &recoveryId, &lossless) != napi_ok || !lossless) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    RecoveryRootSession recovery{};
+    HANDLE rootRaw = INVALID_HANDLE_VALUE;
+    AccessError result = recoveryRootSnapshot(recoveryId, &recovery);
+    if (result == AccessError::kOk) result = openRecoveryDirectory(recoveryId, L"", &rootRaw);
+    ScopedHandle root(rootRaw);
+    if (result == AccessError::kOk) result = validateRecoveryRootOwnership(root.get(), recovery);
+    const NtQueryDirectoryFileFn query = ntQueryDirectoryFile();
+    if (result == AccessError::kOk && query == nullptr) result = AccessError::kUnavailable;
+    napi_value objects;
+    if (result == AccessError::kOk && napi_create_array(env, &objects) != napi_ok) result = AccessError::kIo;
+    std::vector<unsigned char> buffer(64 * 1024);
+    bool restart = true;
+    uint32_t objectIndex = 0;
+    while (result == AccessError::kOk) {
+      IO_STATUS_BLOCK statusBlock{};
+      const NTSTATUS status = query(
+          root.get(), nullptr, nullptr, nullptr, &statusBlock, buffer.data(),
+          static_cast<ULONG>(buffer.size()), kFileBothDirectoryInformation, FALSE, nullptr,
+          restart ? TRUE : FALSE);
+      restart = false;
+      if (status == kStatusNoMoreFiles) break;
+      if (!isSuccess(status)) {
+        result = AccessError::kIo;
+        break;
+      }
+      size_t offset = 0;
+      const size_t received = static_cast<size_t>(statusBlock.Information);
+      while (result == AccessError::kOk && offset < received) {
+        if (received - offset < offsetof(NativeFileBothDirectoryInformation, fileName)) {
+          result = AccessError::kIo;
+          break;
+        }
+        const auto* information =
+            reinterpret_cast<const NativeFileBothDirectoryInformation*>(buffer.data() + offset);
+        if (information->fileNameLength % sizeof(wchar_t) != 0 ||
+            offsetof(NativeFileBothDirectoryInformation, fileName) + information->fileNameLength >
+                received - offset) {
+          result = AccessError::kIo;
+          break;
+        }
+        const std::wstring name(information->fileName, information->fileNameLength / sizeof(wchar_t));
+        if (name == L".novel-studio-engineering-v2") {
+          HANDLE metadataRaw = INVALID_HANDLE_VALUE;
+          if ((information->fileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+              openMutationDirectoryLeafWithAccess(
+                  root.get(), name, FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
+                                        SYNCHRONIZE,
+                  &metadataRaw) != AccessError::kOk) {
+            result = AccessError::kRecoveryRequired;
+            break;
+          }
+          ScopedHandle metadata(metadataRaw);
+        } else if (name != L"." && name != L".." &&
+                   name != L".novel-studio-recovery-owner-v1") {
+          if (objectIndex >= kMaxDirectoryEntries ||
+              (information->fileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            result = AccessError::kRecoveryRequired;
+            break;
+          }
+          std::string objectId;
+          if (!wideToUtf8(name, &objectId) || !isV2StableIdentifier(objectId, false)) {
+            result = AccessError::kRecoveryRequired;
+            break;
+          }
+          HANDLE objectRaw = INVALID_HANDLE_VALUE;
+          result = openMutationLeafWithAccess(
+              root.get(), name, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &objectRaw);
+          ScopedHandle objectHandle(objectRaw);
+          FileObservation observation{};
+          std::string bytes;
+          if (result == AccessError::kOk) {
+            result = observeOpenedFile(objectHandle.get(), &observation, &bytes);
+          }
+          napi_value object;
+          napi_value byteLength;
+          if (result == AccessError::kOk &&
+              (napi_create_object(env, &object) != napi_ok ||
+               napi_create_bigint_uint64(env, observation.manifest.byteLength, &byteLength) != napi_ok ||
+               napi_set_named_property(env, object, "recoveryObjectId", makeString(env, objectId.c_str())) !=
+                   napi_ok ||
+               napi_set_named_property(env, object, "fileIdentity",
+                                       makeString(env, v2FileIdentity(observation.identity).c_str())) != napi_ok ||
+               napi_set_named_property(env, object, "sha256",
+                                       makeString(env, observation.manifest.sha256.c_str())) != napi_ok ||
+               napi_set_named_property(env, object, "byteLength", byteLength) != napi_ok ||
+               napi_set_element(env, objects, objectIndex, object) != napi_ok)) {
+            result = AccessError::kIo;
+          }
+          ++objectIndex;
+        }
+        if (information->nextEntryOffset == 0) break;
+        if (information->nextEntryOffset > received - offset) {
+          result = AccessError::kIo;
+          break;
+        }
+        offset += information->nextEntryOffset;
+      }
+    }
+    if (result != AccessError::kOk) {
+      throwAccessError(env, result);
+      return nullptr;
+    }
+    napi_value output;
+    napi_create_object(env, &output);
+    napi_set_named_property(env, output, "schemaVersion", makeString(env, "3.0"));
+    napi_set_named_property(env, output, "kind", makeString(env, "engineering_quarantine_inventory"));
+    napi_set_named_property(env, output, "recoveryRootBindingId",
+                            makeString(env, recovery.recoveryRootBindingId.c_str()));
+    napi_set_named_property(env, output, "grantRevision", makeString(env, recovery.grantRevision.c_str()));
+    napi_set_named_property(env, output, "objects", objects);
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
+#else
+  (void)info;
+  throwAccessError(env, AccessError::kUnavailable);
+  return nullptr;
+#endif
+}
+
 bool makeLifecycleReceipt(napi_env env, const LifecycleRequest& request, const char* state, const std::string& recoveryObject, napi_value* output) {
   napi_value out; if (napi_create_object(env, &out) != napi_ok) return false;
   napi_set_named_property(env, out, "schemaVersion", makeString(env, "3.0"));
@@ -3970,7 +4441,153 @@ bool makeLifecycleReceipt(napi_env env, const LifecycleRequest& request, const c
 
 napi_value createEngineeringDirectoryV2(napi_env env, napi_callback_info info) {
 #ifdef _WIN32
-  try { size_t argc=2; napi_value argv[2]; bool lossless=false; uint64_t rootId=0; if(napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr)!=napi_ok||argc!=2||napi_get_value_bigint_uint64(env,argv[0],&rootId,&lossless)!=napi_ok||!lossless){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;} LifecycleRequest request{}; if(!parseLifecycleRequest(env,argv[1],&request)||request.operationKind!="create_directory"||request.relativeSource!=""||request.targetProof!="absent"){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;} std::wstring target; std::vector<std::wstring> segments; if(!utf8ToWide(request.relativeTarget,&target)||!parseRelativePath(target,false,&segments)){throwAccessError(env,AccessError::kUnsafePath);return nullptr;} const std::wstring leaf=segments.back();segments.pop_back();std::wstring parent;for(size_t i=0;i<segments.size();++i){if(i)parent+=L'/';parent+=segments[i];} HANDLE parentHandle=INVALID_HANDLE_VALUE; AccessError result=openMutationDirectory(rootId,parent,&parentHandle); if(result==AccessError::kOk) result=checkRelativeLeafAbsent(parentHandle,leaf); if(result==AccessError::kOk){const NtCreateFileFn create=ntCreateFile(); if(create==nullptr) result=AccessError::kUnavailable; else {UNICODE_STRING name{}; name.Buffer=const_cast<PWSTR>(leaf.data()); name.Length=static_cast<USHORT>(leaf.size()*sizeof(wchar_t)); name.MaximumLength=name.Length; OBJECT_ATTRIBUTES attrs{}; InitializeObjectAttributes(&attrs,&name,OBJ_CASE_INSENSITIVE,parentHandle,nullptr); IO_STATUS_BLOCK sb{}; HANDLE dir=INVALID_HANDLE_VALUE; const NTSTATUS status=create(&dir,FILE_LIST_DIRECTORY|FILE_TRAVERSE|FILE_READ_ATTRIBUTES|FILE_WRITE_ATTRIBUTES|FILE_ADD_FILE|FILE_DELETE_CHILD|SYNCHRONIZE,&attrs,&sb,nullptr,FILE_ATTRIBUTE_DIRECTORY,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,kFileCreate,kFileDirectoryFile|kFileSynchronousIoNonAlert|noFollowOpenOption(),nullptr,0); if(!isSuccess(status)||dir==INVALID_HANDLE_VALUE) result=status==kStatusObjectNameCollision?AccessError::kAlreadyExists:AccessError::kIo; else {ScopedHandle d(dir); if(!flushDurably(d.get(),DurableFlushKind::kDirectory)||!flushDurably(parentHandle,DurableFlushKind::kDirectory)) result=AccessError::kDurability;}}} if(parentHandle!=INVALID_HANDLE_VALUE)CloseHandle(parentHandle); if(result!=AccessError::kOk){throwAccessError(env,result);return nullptr;} napi_value out;if(!makeLifecycleReceipt(env,request,"committed",{},&out)){throwAccessError(env,AccessError::kIo);return nullptr;}return out; } catch(...){throwAccessError(env,AccessError::kIo);return nullptr;}
+  try {
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    size_t argc = 3;
+    napi_value argv[3];
+#else
+    size_t argc = 2;
+    napi_value argv[2];
+#endif
+    bool lossless = false;
+    uint64_t rootId = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+        (argc != 2 && argc != 3) ||
+#else
+        argc != 2 ||
+#endif
+        napi_get_value_bigint_uint64(env, argv[0], &rootId, &lossless) != napi_ok || !lossless) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    LifecycleRequest request{};
+    if (!parseLifecycleRequest(env, argv[1], &request) || request.operationKind != "create_directory" ||
+        !request.relativeSource.empty() || request.targetProof != "absent" ||
+        request.expectedState != "wal_prepared") {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    bool injectDirectoryIntermediate = false;
+    if (argc == 3) {
+      std::string faultPoint;
+      if (!readUtf8StringValue(env, argv[2], 64, &faultPoint) ||
+          faultPoint != "after_directory_staged") {
+        throwAccessError(env, AccessError::kInvalidArgument);
+        return nullptr;
+      }
+      injectDirectoryIntermediate = true;
+    }
+#endif
+    std::wstring parentPath;
+    std::wstring leaf;
+    if (!splitLifecyclePath(request.relativeTarget, &parentPath, &leaf)) {
+      throwAccessError(env, AccessError::kUnsafePath);
+      return nullptr;
+    }
+    HANDLE parentRaw = INVALID_HANDLE_VALUE;
+    AccessError result = openMutationDirectory(rootId, parentPath, &parentRaw);
+    ScopedHandle parent(parentRaw);
+    if (result == AccessError::kOk) result = checkRelativeLeafAbsent(parent.get(), leaf);
+    const std::wstring stagedLeaf = stagingLeafName("directory-" + request.stagingObjectId);
+    if (result == AccessError::kOk) result = checkRelativeLeafAbsent(parent.get(), stagedLeaf);
+    BY_HANDLE_FILE_INFORMATION parentIdentity{};
+    if (result == AccessError::kOk && !GetFileInformationByHandle(parent.get(), &parentIdentity)) {
+      result = AccessError::kIo;
+    }
+    HANDLE markerRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) result = createLifecycleMarker(parent.get(), request, &markerRaw);
+    ScopedHandle marker(markerRaw);
+    HANDLE directoryRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) {
+      const NtCreateFileFn create = ntCreateFile();
+      if (create == nullptr) {
+        result = AccessError::kUnavailable;
+      } else {
+        UNICODE_STRING name{};
+        name.Buffer = const_cast<PWSTR>(stagedLeaf.data());
+        name.Length = static_cast<USHORT>(stagedLeaf.size() * sizeof(wchar_t));
+        name.MaximumLength = name.Length;
+        OBJECT_ATTRIBUTES attributes{};
+        InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, parent.get(), nullptr);
+        IO_STATUS_BLOCK statusBlock{};
+        const NTSTATUS status = create(
+            &directoryRaw,
+            FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES |
+                FILE_ADD_FILE | FILE_DELETE_CHILD | DELETE | SYNCHRONIZE,
+            &attributes, &statusBlock, nullptr, FILE_ATTRIBUTE_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, kFileCreate,
+            kFileDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption(), nullptr, 0);
+        if (!isSuccess(status) || directoryRaw == INVALID_HANDLE_VALUE) {
+          result = status == kStatusObjectNameCollision ? AccessError::kAlreadyExists : AccessError::kIo;
+        }
+      }
+    }
+    ScopedHandle directory(directoryRaw);
+    BY_HANDLE_FILE_INFORMATION directoryIdentity{};
+    if (result == AccessError::kOk &&
+         (!GetFileInformationByHandle(directory.get(), &directoryIdentity) ||
+          verifyDirectory(directory.get()) != AccessError::kOk ||
+          !hasExactLeafName(directory.get(), stagedLeaf))) {
+      result = AccessError::kRecoveryRequired;
+    }
+    if (result == AccessError::kOk &&
+        (!flushDurably(directory.get(), DurableFlushKind::kDirectory) ||
+         !flushDurably(parent.get(), DurableFlushKind::kDirectory))) {
+      result = AccessError::kDurability;
+    }
+    std::string requestChecksum;
+    if (result == AccessError::kOk && !lifecycleRequestChecksum(request, &requestChecksum)) {
+      result = AccessError::kIo;
+    }
+    if (result == AccessError::kOk) {
+      result = rewriteLifecycleMarker(
+          marker.get(),
+          LifecycleMarker{requestChecksum, "directory_staged", v2FileIdentity(directoryIdentity)});
+    }
+    if (result == AccessError::kOk && !flushDurably(parent.get(), DurableFlushKind::kDirectory)) {
+      result = AccessError::kDurability;
+    }
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    if (result == AccessError::kOk && injectDirectoryIntermediate) {
+      throwAccessError(env, AccessError::kRecoveryRequired);
+      return nullptr;
+    }
+#endif
+    if (result == AccessError::kOk && !parent.close()) result = AccessError::kIo;
+    HANDLE handoffRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) {
+      result = openMutationHandoffDirectory(rootId, parentPath, parentIdentity, &handoffRaw);
+    }
+    ScopedHandle handoff(handoffRaw);
+    if (result == AccessError::kOk) {
+      result = renameOpenedFileCreateOnly(directory.get(), handoff.get(), leaf);
+    }
+    if (result == AccessError::kOk && !flushDurably(handoff.get(), DurableFlushKind::kDirectory)) {
+      result = AccessError::kDurability;
+    }
+    if (result == AccessError::kOk) {
+      result = rewriteLifecycleMarker(
+          marker.get(), LifecycleMarker{requestChecksum, "after", v2FileIdentity(directoryIdentity)});
+    }
+    if (result == AccessError::kOk && !flushDurably(handoff.get(), DurableFlushKind::kDirectory)) {
+      result = AccessError::kDurability;
+    }
+    if (result != AccessError::kOk) {
+      throwAccessError(env, result);
+      return nullptr;
+    }
+    napi_value output;
+    if (!makeLifecycleReceipt(env, request, "committed", {}, &output)) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
 #else
   (void)info; throwAccessError(env,AccessError::kUnavailable); return nullptr;
 #endif
@@ -3979,20 +4596,109 @@ napi_value createEngineeringDirectoryV2(napi_env env, napi_callback_info info) {
 napi_value quarantineEngineeringFileV2(napi_env env, napi_callback_info info) {
 #ifdef _WIN32
   try {
-    size_t argc=3; napi_value argv[3]; bool a=false,b=false; uint64_t rootId=0,recoveryId=0;
-    if(napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr)!=napi_ok||argc!=3||
-       napi_get_value_bigint_uint64(env,argv[0],&rootId,&a)!=napi_ok||!a||
-       napi_get_value_bigint_uint64(env,argv[1],&recoveryId,&b)!=napi_ok||!b){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}
-    LifecycleRequest request{}; if(!parseLifecycleRequest(env,argv[2],&request)||request.operationKind!="delete_file"||request.relativeTarget!=""||request.recoveryObjectId.empty()){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}
-    RecoveryRootSession recovery{}; RootSession content{}; AccessError result=recoveryRootSnapshot(recoveryId,&recovery); if(result==AccessError::kOk)result=rootSessionSnapshot(rootId,&content);
-    if(result==AccessError::kOk && (recovery.contentRootId!=rootId||recovery.recoveryRootBindingId!=request.recoveryRootBindingId||recovery.grantRevision!=request.recoveryGrantRevision||!isV2Sha256(request.recoverySideEffectChecksum)||!sameVolume(recovery.identity,content.identity)))result=AccessError::kPrecondition;
-    std::vector<std::wstring> segments; std::wstring sourcePath; if(!utf8ToWide(request.relativeSource,&sourcePath)||!parseRelativePath(sourcePath,false,&segments)){throwAccessError(env,AccessError::kUnsafePath);return nullptr;} std::wstring parent; const std::wstring leaf=segments.back();segments.pop_back();for(size_t i=0;i<segments.size();++i){if(i)parent+=L'/';parent+=segments[i];}
-    HANDLE parentRaw=INVALID_HANDLE_VALUE,recoveryRaw=INVALID_HANDLE_VALUE,sourceRaw=INVALID_HANDLE_VALUE; if(result==AccessError::kOk)result=openMutationDirectory(rootId,parent,&parentRaw); if(result==AccessError::kOk)result=openRecoveryDirectory(recoveryId,L"",&recoveryRaw); ScopedHandle parentHandle(parentRaw),recoveryHandle(recoveryRaw); if(result==AccessError::kOk) result=validateRecoveryRootOwnership(recoveryHandle.get(),recovery);
-    if(result==AccessError::kOk)result=checkRelativeLeafAbsent(recoveryHandle.get(),std::wstring(request.recoveryObjectId.begin(),request.recoveryObjectId.end())); if(result==AccessError::kOk)result=openMutationLeafWithAccess(parentHandle.get(),leaf,FILE_READ_DATA|FILE_READ_ATTRIBUTES|DELETE|SYNCHRONIZE,&sourceRaw); ScopedHandle sourceHandle(sourceRaw);
-    if(result==AccessError::kOk){FileObservation obs{};std::string bytes;result=observeOpenedFile(sourceHandle.get(),&obs,&bytes);if(result==AccessError::kOk&&(obs.manifest.sha256!=request.sourceSha256||v2FileIdentity(obs.identity)!=request.sourceFileIdentity))result=AccessError::kPrecondition;}
-    const std::wstring objectLeaf(request.recoveryObjectId.begin(),request.recoveryObjectId.end()); if(result==AccessError::kOk)result=renameOpenedFileCreateOnly(sourceHandle.get(),recoveryHandle.get(),objectLeaf); if(result==AccessError::kOk&&!flushDurably(parentHandle.get(),DurableFlushKind::kDirectory))result=AccessError::kDurability; if(result==AccessError::kOk&&!flushDurably(recoveryHandle.get(),DurableFlushKind::kDirectory))result=AccessError::kDurability;
-    if(result!=AccessError::kOk){throwAccessError(env,result==AccessError::kPrecondition?AccessError::kRecoveryRequired:result);return nullptr;} napi_value out;if(!makeLifecycleReceipt(env,request,"quarantined",request.recoveryObjectId,&out)){throwAccessError(env,AccessError::kIo);return nullptr;}return out;
-  } catch(...){throwAccessError(env,AccessError::kIo);return nullptr;}
+    size_t argc = 3;
+    napi_value argv[3];
+    bool rootLossless = false;
+    bool recoveryLossless = false;
+    uint64_t rootId = 0;
+    uint64_t recoveryId = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 3 ||
+        napi_get_value_bigint_uint64(env, argv[0], &rootId, &rootLossless) != napi_ok || !rootLossless ||
+        napi_get_value_bigint_uint64(env, argv[1], &recoveryId, &recoveryLossless) != napi_ok ||
+        !recoveryLossless) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    LifecycleRequest request{};
+    if (!parseLifecycleRequest(env, argv[2], &request) || request.operationKind != "delete_file" ||
+        !request.relativeTarget.empty() || request.recoveryObjectId.empty() ||
+        request.expectedState != "wal_prepared") {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    RecoveryRootSession recovery{};
+    RootSession content{};
+    AccessError result = recoveryRootSnapshot(recoveryId, &recovery);
+    if (result == AccessError::kOk) result = rootSessionSnapshot(rootId, &content);
+    if (result == AccessError::kOk &&
+        (recovery.contentRootId != rootId ||
+         recovery.recoveryRootBindingId != request.recoveryRootBindingId ||
+         recovery.grantRevision != request.recoveryGrantRevision ||
+         !isV2Sha256(request.recoverySideEffectChecksum) || !sameVolume(recovery.identity, content.identity))) {
+      result = AccessError::kPrecondition;
+    }
+    std::wstring parentPath;
+    std::wstring leaf;
+    if (!splitLifecyclePath(request.relativeSource, &parentPath, &leaf)) {
+      throwAccessError(env, AccessError::kUnsafePath);
+      return nullptr;
+    }
+    HANDLE parentRaw = INVALID_HANDLE_VALUE;
+    HANDLE recoveryRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) result = openMutationDirectory(rootId, parentPath, &parentRaw);
+    if (result == AccessError::kOk) result = openRecoveryDirectory(recoveryId, L"", &recoveryRaw);
+    ScopedHandle parent(parentRaw);
+    ScopedHandle recoveryHandle(recoveryRaw);
+    if (result == AccessError::kOk) result = validateRecoveryRootOwnership(recoveryHandle.get(), recovery);
+    const std::wstring objectLeaf(request.recoveryObjectId.begin(), request.recoveryObjectId.end());
+    if (result == AccessError::kOk) result = checkRelativeLeafAbsent(recoveryHandle.get(), objectLeaf);
+    HANDLE sourceRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) {
+      result = openMutationLeafWithAccess(
+          parent.get(), leaf, FILE_READ_DATA | FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE, &sourceRaw);
+    }
+    ScopedHandle source(sourceRaw);
+    FileObservation observation{};
+    std::string bytes;
+    if (result == AccessError::kOk) {
+      result = observeOpenedFile(source.get(), &observation, &bytes);
+      if (result == AccessError::kOk &&
+          (observation.manifest.sha256 != request.sourceSha256 ||
+           v2FileIdentity(observation.identity) != request.sourceFileIdentity)) {
+        result = AccessError::kPrecondition;
+      }
+    }
+    HANDLE markerRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) result = createLifecycleMarker(parent.get(), request, &markerRaw);
+    ScopedHandle marker(markerRaw);
+    if (result == AccessError::kOk) {
+      result = flushDurably(parent.get(), DurableFlushKind::kDirectory)
+          ? AccessError::kOk
+          : AccessError::kDurability;
+    }
+    if (result == AccessError::kOk) {
+      result = renameOpenedFileCreateOnly(source.get(), recoveryHandle.get(), objectLeaf);
+    }
+    if (result == AccessError::kOk &&
+        (!flushDurably(parent.get(), DurableFlushKind::kDirectory) ||
+         !flushDurably(recoveryHandle.get(), DurableFlushKind::kDirectory))) {
+      result = AccessError::kDurability;
+    }
+    std::string requestChecksum;
+    if (result == AccessError::kOk && !lifecycleRequestChecksum(request, &requestChecksum)) {
+      result = AccessError::kIo;
+    }
+    if (result == AccessError::kOk) {
+      result = rewriteLifecycleMarker(
+          marker.get(), LifecycleMarker{requestChecksum, "after", v2FileIdentity(observation.identity)});
+    }
+    if (result == AccessError::kOk && !flushDurably(parent.get(), DurableFlushKind::kDirectory)) {
+      result = AccessError::kDurability;
+    }
+    if (result != AccessError::kOk) {
+      throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
+      return nullptr;
+    }
+    napi_value output;
+    if (!makeLifecycleReceipt(env, request, "quarantined", request.recoveryObjectId, &output)) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
 #else
   (void)info; throwAccessError(env,AccessError::kUnavailable); return nullptr;
 #endif
@@ -4017,11 +4723,21 @@ napi_value purgeEngineeringQuarantineObjectV2(napi_env env, napi_callback_info i
 napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
 #ifdef _WIN32
   try {
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    size_t argc = 3;
+    napi_value argv[3];
+#else
     size_t argc = 2;
     napi_value argv[2];
+#endif
     bool lossless = false;
     uint64_t rootId = 0;
-    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 2 ||
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+        (argc != 2 && argc != 3) ||
+#else
+        argc != 2 ||
+#endif
         napi_get_value_bigint_uint64(env, argv[0], &rootId, &lossless) != napi_ok || !lossless) {
       throwAccessError(env, AccessError::kInvalidArgument);
       return nullptr;
@@ -4032,6 +4748,18 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
       throwAccessError(env, AccessError::kInvalidArgument);
       return nullptr;
     }
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+    bool injectCaseIntermediate = false;
+    if (argc == 3) {
+      std::string faultPoint;
+      if (!readUtf8StringValue(env, argv[2], 64, &faultPoint) ||
+          faultPoint != "after_case_intermediate") {
+        throwAccessError(env, AccessError::kInvalidArgument);
+        return nullptr;
+      }
+      injectCaseIntermediate = true;
+    }
+#endif
     std::vector<std::wstring> sourceSegments;
     std::vector<std::wstring> destinationSegments;
     std::wstring sourcePath;
@@ -4121,17 +4849,16 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
       result = AccessError::kInvalidArgument;
     }
 
-    // A durable marker is created before either rename.  It stays discoverable by the existing
-    // root recovery scan until the final spelling and both parent directory flushes are proven.
+    // The marker remains until Main has durably persisted the receipt and explicitly finalizes
+    // this operation. A process crash after the native return therefore cannot lose recovery
+    // authority in the gap before the Engineering V2 WAL advances.
     HANDLE recoveryMarkerRaw = INVALID_HANDLE_VALUE;
     if (result == AccessError::kOk) {
-      result = createStagingFile(sourceParent, "move-" + request.stagingObjectId, &recoveryMarkerRaw);
+      result = createLifecycleMarker(sourceParent, request, &recoveryMarkerRaw);
     }
     ScopedHandle recoveryMarker(recoveryMarkerRaw);
     if (result == AccessError::kOk) {
-      result = flushDurably(recoveryMarker.get(), DurableFlushKind::kData)
-          ? flushMoveDirectories(sourceParent, destinationParentHandle.get())
-          : AccessError::kDurability;
+      result = flushMoveDirectories(sourceParent, destinationParentHandle.get());
     }
 
     // The initial traversal handles intentionally use restrictive sharing. Reopen the exact
@@ -4168,6 +4895,21 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
         namespaceChanged = result == AccessError::kOk;
       }
       if (result == AccessError::kOk) result = flushMoveDirectories(moveSourceParent, moveDestinationParent);
+      std::string requestChecksum;
+      if (result == AccessError::kOk && !lifecycleRequestChecksum(request, &requestChecksum)) {
+        result = AccessError::kIo;
+      }
+      if (result == AccessError::kOk) {
+        result = rewriteLifecycleMarker(
+            recoveryMarker.get(),
+            LifecycleMarker{requestChecksum, "case_intermediate", v2FileIdentity(sourceObservation.identity)});
+      }
+#ifdef ENGINEERING_MUTATION_FAULT_INJECTION_BUILD
+      if (result == AccessError::kOk && injectCaseIntermediate) {
+        throwAccessError(env, AccessError::kRecoveryRequired);
+        return nullptr;
+      }
+#endif
       if (result == AccessError::kOk) {
         result = renameOpenedFileCreateOnly(sourceHandle.get(), moveDestinationParent, destinationLeaf);
         namespaceChanged = result == AccessError::kOk;
@@ -4190,14 +4932,16 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
       if (result == AccessError::kOk) result = flushMoveDirectories(moveSourceParent, moveDestinationParent);
     }
 
+    std::string requestChecksum;
+    if (result == AccessError::kOk && !lifecycleRequestChecksum(request, &requestChecksum)) {
+      result = AccessError::kIo;
+    }
     if (result == AccessError::kOk) {
-      FILE_DISPOSITION_INFO disposition{};
-      disposition.DeleteFile = TRUE;
-      if (!SetFileInformationByHandle(recoveryMarker.get(), FileDispositionInfo, &disposition, sizeof(disposition))) {
-        result = AccessError::kRecoveryRequired;
-      }
-      if (result == AccessError::kOk && !recoveryMarker.close()) result = AccessError::kRecoveryRequired;
-      if (result == AccessError::kOk) result = flushMoveDirectories(moveSourceParent, moveDestinationParent);
+      result = rewriteLifecycleMarker(
+          recoveryMarker.get(), LifecycleMarker{requestChecksum, "after", v2FileIdentity(sourceObservation.identity)});
+    }
+    if (result == AccessError::kOk) {
+      result = flushMoveDirectories(moveSourceParent, moveDestinationParent);
     }
     if (result != AccessError::kOk) {
       throwAccessError(env, namespaceChanged ? AccessError::kRecoveryRequired : result);
@@ -4218,6 +4962,738 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
 #endif
 }
 
+enum class LifecycleClassification {
+  kBefore,
+  kAfter,
+  kCaseIntermediate,
+  kDirectoryIntermediate,
+  kNeither,
+  kUnknown
+};
+
+AccessError validateLifecycleRecoveryRoot(uint64_t rootId, uint64_t recoveryId,
+                                          const LifecycleRequest& request,
+                                          RecoveryRootSession* recovery) {
+  if (request.operationKind != "delete_file") {
+    return recoveryId == 0 ? AccessError::kOk : AccessError::kPrecondition;
+  }
+  RootSession content{};
+  AccessError result = recoveryRootSnapshot(recoveryId, recovery);
+  if (result == AccessError::kOk) result = rootSessionSnapshot(rootId, &content);
+  if (result != AccessError::kOk) return result;
+  if (recovery->contentRootId != rootId ||
+      recovery->recoveryRootBindingId != request.recoveryRootBindingId ||
+      recovery->grantRevision != request.recoveryGrantRevision ||
+      !isV2Sha256(request.recoverySideEffectChecksum) || !sameVolume(recovery->identity, content.identity)) {
+    return AccessError::kPrecondition;
+  }
+  return AccessError::kOk;
+}
+
+AccessError classifyLifecycleOperation(uint64_t rootId, uint64_t recoveryId,
+                                       const LifecycleRequest& request,
+                                       LifecycleClassification* classification) {
+  RecoveryRootSession recovery{};
+  AccessError result = validateLifecycleRecoveryRoot(rootId, recoveryId, request, &recovery);
+  if (result != AccessError::kOk) return result;
+  const std::string& markerPath = request.operationKind == "create_directory"
+      ? request.relativeTarget
+      : request.relativeSource;
+  std::wstring markerParentPath;
+  std::wstring ignoredLeaf;
+  if (!splitLifecyclePath(markerPath, &markerParentPath, &ignoredLeaf)) return AccessError::kUnsafePath;
+  HANDLE markerParentRaw = INVALID_HANDLE_VALUE;
+  result = openMutationDirectory(rootId, markerParentPath, &markerParentRaw);
+  if (result != AccessError::kOk) return result;
+  ScopedHandle markerParent(markerParentRaw);
+  HANDLE markerRaw = INVALID_HANDLE_VALUE;
+  LifecycleMarker marker{};
+  const AccessError markerResult = openLifecycleMarker(markerParent.get(), request, &markerRaw, &marker);
+  ScopedHandle markerHandle(markerRaw);
+  const bool markerMissing = markerResult == AccessError::kNotFound;
+  if (markerResult != AccessError::kOk && !markerMissing) {
+    *classification = LifecycleClassification::kUnknown;
+    return AccessError::kOk;
+  }
+
+  if (request.operationKind == "create_directory") {
+    std::wstring parentPath;
+    std::wstring leaf;
+    if (!splitLifecyclePath(request.relativeTarget, &parentPath, &leaf)) return AccessError::kUnsafePath;
+    HANDLE parentRaw = INVALID_HANDLE_VALUE;
+    result = openMutationDirectory(rootId, parentPath, &parentRaw);
+    if (result != AccessError::kOk) return result;
+    ScopedHandle parent(parentRaw);
+    const LifecycleObjectMatch target = markerMissing
+        ? observeLifecycleDirectory(parent.get(), leaf, LifecycleMarker{}, 0)
+        : observeLifecycleDirectory(parent.get(), leaf, marker, 0);
+    const LifecycleObjectMatch staged = markerMissing
+        ? LifecycleObjectMatch::kAbsent
+        : observeLifecycleDirectory(
+              parent.get(), stagingLeafName("directory-" + request.stagingObjectId), marker, 0);
+    if (target == LifecycleObjectMatch::kAbsent && staged == LifecycleObjectMatch::kAbsent) {
+      *classification = LifecycleClassification::kBefore;
+    } else if (!markerMissing &&
+               (marker.phase == "after" || marker.phase == "directory_staged") &&
+               target == LifecycleObjectMatch::kMatch && staged == LifecycleObjectMatch::kAbsent) {
+      *classification = LifecycleClassification::kAfter;
+    } else if (!markerMissing && marker.phase == "directory_staged" &&
+               target == LifecycleObjectMatch::kAbsent && staged == LifecycleObjectMatch::kMatch) {
+      *classification = LifecycleClassification::kDirectoryIntermediate;
+    } else if (target == LifecycleObjectMatch::kUnknown || staged == LifecycleObjectMatch::kUnknown) {
+      *classification = LifecycleClassification::kUnknown;
+    } else {
+      *classification = LifecycleClassification::kNeither;
+    }
+    return AccessError::kOk;
+  }
+
+  std::wstring sourceParentPath;
+  std::wstring sourceLeaf;
+  if (!splitLifecyclePath(request.relativeSource, &sourceParentPath, &sourceLeaf)) {
+    return AccessError::kUnsafePath;
+  }
+  HANDLE sourceParentRaw = INVALID_HANDLE_VALUE;
+  result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
+  if (result != AccessError::kOk) return result;
+  ScopedHandle sourceParent(sourceParentRaw);
+  const LifecycleObjectMatch source = observeLifecycleFile(sourceParent.get(), sourceLeaf, request, 0);
+
+  if (request.operationKind == "delete_file") {
+    HANDLE recoveryRaw = INVALID_HANDLE_VALUE;
+    result = openRecoveryDirectory(recoveryId, L"", &recoveryRaw);
+    if (result != AccessError::kOk) return result;
+    ScopedHandle recoveryHandle(recoveryRaw);
+    result = validateRecoveryRootOwnership(recoveryHandle.get(), recovery);
+    if (result != AccessError::kOk) return result;
+    const std::wstring recoveryLeaf(request.recoveryObjectId.begin(), request.recoveryObjectId.end());
+    const LifecycleObjectMatch quarantined =
+        observeLifecycleFile(recoveryHandle.get(), recoveryLeaf, request, 0);
+    if (source == LifecycleObjectMatch::kMatch && quarantined == LifecycleObjectMatch::kAbsent) {
+      *classification = LifecycleClassification::kBefore;
+    } else if (!markerMissing && source == LifecycleObjectMatch::kAbsent &&
+               quarantined == LifecycleObjectMatch::kMatch) {
+      *classification = LifecycleClassification::kAfter;
+    } else if (source == LifecycleObjectMatch::kUnknown || quarantined == LifecycleObjectMatch::kUnknown) {
+      *classification = LifecycleClassification::kUnknown;
+    } else {
+      *classification = LifecycleClassification::kNeither;
+    }
+    return AccessError::kOk;
+  }
+
+  std::wstring targetParentPath;
+  std::wstring targetLeaf;
+  if (!splitLifecyclePath(request.relativeTarget, &targetParentPath, &targetLeaf)) {
+    return AccessError::kUnsafePath;
+  }
+  HANDLE targetParentRaw = INVALID_HANDLE_VALUE;
+  if (targetParentPath == sourceParentPath) {
+    targetParentRaw = sourceParent.release();
+  } else {
+    result = openMutationDirectory(rootId, targetParentPath, &targetParentRaw);
+    if (result != AccessError::kOk) return result;
+  }
+  ScopedHandle targetParent(targetParentRaw);
+  const LifecycleObjectMatch target = observeLifecycleFile(targetParent.get(), targetLeaf, request, 0);
+  LifecycleObjectMatch intermediate = LifecycleObjectMatch::kAbsent;
+  if (request.targetProof == "same_object_case_only") {
+    intermediate = observeLifecycleFile(
+        targetParent.get(), stagingLeafName("case-" + request.stagingObjectId), request, 0);
+  }
+  if (source == LifecycleObjectMatch::kMatch && target == LifecycleObjectMatch::kAbsent &&
+      intermediate == LifecycleObjectMatch::kAbsent) {
+    *classification = LifecycleClassification::kBefore;
+  } else if (!markerMissing && source == LifecycleObjectMatch::kAbsent &&
+             target == LifecycleObjectMatch::kMatch && intermediate == LifecycleObjectMatch::kAbsent) {
+    *classification = LifecycleClassification::kAfter;
+  } else if (!markerMissing && source == LifecycleObjectMatch::kAbsent &&
+             target == LifecycleObjectMatch::kAbsent &&
+             intermediate == LifecycleObjectMatch::kMatch) {
+    *classification = LifecycleClassification::kCaseIntermediate;
+  } else if (source == LifecycleObjectMatch::kUnknown || target == LifecycleObjectMatch::kUnknown ||
+             intermediate == LifecycleObjectMatch::kUnknown) {
+    *classification = LifecycleClassification::kUnknown;
+  } else {
+    *classification = LifecycleClassification::kNeither;
+  }
+  return AccessError::kOk;
+}
+
+AccessError removeLifecycleMarker(uint64_t rootId, const LifecycleRequest& request) {
+  const std::string& path = request.operationKind == "create_directory"
+      ? request.relativeTarget
+      : request.relativeSource;
+  std::wstring parentPath;
+  std::wstring ignoredLeaf;
+  if (!splitLifecyclePath(path, &parentPath, &ignoredLeaf)) return AccessError::kUnsafePath;
+  HANDLE parentRaw = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationDirectory(rootId, parentPath, &parentRaw);
+  if (result != AccessError::kOk) return result;
+  ScopedHandle parent(parentRaw);
+  HANDLE markerRaw = INVALID_HANDLE_VALUE;
+  LifecycleMarker marker{};
+  result = openLifecycleMarker(parent.get(), request, &markerRaw, &marker);
+  ScopedHandle markerHandle(markerRaw);
+  if (result == AccessError::kNotFound) return AccessError::kOk;
+  if (result != AccessError::kOk) return result;
+  FILE_DISPOSITION_INFO disposition{};
+  disposition.DeleteFile = TRUE;
+  if (!SetFileInformationByHandle(markerHandle.get(), FileDispositionInfo, &disposition, sizeof(disposition)) ||
+      !markerHandle.close() || !flushDurably(parent.get(), DurableFlushKind::kDirectory)) {
+    return AccessError::kDurability;
+  }
+  return AccessError::kOk;
+}
+
+AccessError lifecycleMarkerIsPresent(uint64_t rootId, const LifecycleRequest& request, bool* present) {
+  const std::string& path = request.operationKind == "create_directory"
+      ? request.relativeTarget
+      : request.relativeSource;
+  std::wstring parentPath;
+  std::wstring ignoredLeaf;
+  if (!splitLifecyclePath(path, &parentPath, &ignoredLeaf)) return AccessError::kUnsafePath;
+  HANDLE parentRaw = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationDirectory(rootId, parentPath, &parentRaw);
+  if (result != AccessError::kOk) return result;
+  ScopedHandle parent(parentRaw);
+  HANDLE markerRaw = INVALID_HANDLE_VALUE;
+  LifecycleMarker marker{};
+  result = openLifecycleMarker(parent.get(), request, &markerRaw, &marker);
+  ScopedHandle markerHandle(markerRaw);
+  if (result == AccessError::kNotFound) {
+    *present = false;
+    return AccessError::kOk;
+  }
+  if (result != AccessError::kOk) return result;
+  *present = true;
+  return AccessError::kOk;
+}
+
+bool parseLifecycleRecoveryCall(napi_env env, napi_callback_info info, uint64_t* rootId,
+                                uint64_t* recoveryId, LifecycleRequest* request) {
+  size_t argc = 3;
+  napi_value argv[3];
+  bool rootLossless = false;
+  bool recoveryLossless = false;
+  return napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) == napi_ok && argc == 3 &&
+      napi_get_value_bigint_uint64(env, argv[0], rootId, &rootLossless) == napi_ok && rootLossless &&
+      napi_get_value_bigint_uint64(env, argv[1], recoveryId, &recoveryLossless) == napi_ok &&
+      recoveryLossless && parseLifecycleRequest(env, argv[2], request);
+}
+
+bool validateExpectedLifecycleReceipt(napi_env env, napi_value value,
+                                      const LifecycleRequest& request) {
+  const std::vector<const char*> keys = {
+      "schemaVersion", "kind", "operationKind", "transactionId", "operationId",
+      "contentRootBindingId", "relativeSource", "relativeTarget", "state", "recoveryObjectId",
+      "durability"};
+  if (!hasExactV2Keys(env, value, keys)) return false;
+  std::string schemaVersion;
+  std::string kind;
+  std::string operationKind;
+  std::string transactionId;
+  std::string operationId;
+  std::string contentRootBindingId;
+  std::string relativeSource;
+  std::string relativeTarget;
+  std::string state;
+  std::string recoveryObjectId;
+  std::string durability;
+  if (!readLifecycleString(env, value, "schemaVersion", 16, &schemaVersion) ||
+      !readLifecycleString(env, value, "kind", 64, &kind) ||
+      !readLifecycleString(env, value, "operationKind", 32, &operationKind) ||
+      !readLifecycleString(env, value, "transactionId", 128, &transactionId) ||
+      !readLifecycleString(env, value, "operationId", 128, &operationId) ||
+      !readLifecycleString(env, value, "contentRootBindingId", 128, &contentRootBindingId) ||
+      !readLifecycleString(env, value, "relativeSource", kMaxRelativeUtf16Units, &relativeSource) ||
+      !readLifecycleString(env, value, "relativeTarget", kMaxRelativeUtf16Units, &relativeTarget) ||
+      !readLifecycleString(env, value, "state", 32, &state) ||
+      !readLifecycleString(env, value, "recoveryObjectId", 128, &recoveryObjectId) ||
+      !readLifecycleString(env, value, "durability", 64, &durability)) {
+    return false;
+  }
+  return schemaVersion == "3.0" && kind == "engineering_file_lifecycle_receipt" &&
+      operationKind == request.operationKind && transactionId == request.transactionId &&
+      operationId == request.operationId && contentRootBindingId == request.contentRootBindingId &&
+      relativeSource == request.relativeSource && relativeTarget == request.relativeTarget &&
+      durability == "data_and_directory_flushed" &&
+      (request.operationKind == "delete_file"
+           ? state == "quarantined" && recoveryObjectId == request.recoveryObjectId
+           : state == "committed" && recoveryObjectId.empty());
+}
+
+bool parseLifecycleCompensationCall(napi_env env, napi_callback_info info, uint64_t* rootId,
+                                    uint64_t* recoveryId, LifecycleRequest* request) {
+  size_t argc = 4;
+  napi_value argv[4];
+  bool rootLossless = false;
+  bool recoveryLossless = false;
+  return napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) == napi_ok && argc == 4 &&
+      napi_get_value_bigint_uint64(env, argv[0], rootId, &rootLossless) == napi_ok && rootLossless &&
+      napi_get_value_bigint_uint64(env, argv[1], recoveryId, &recoveryLossless) == napi_ok &&
+      recoveryLossless && parseLifecycleRequest(env, argv[2], request) &&
+      validateExpectedLifecycleReceipt(env, argv[3], *request);
+}
+
+bool parseLifecycleFinalizeCall(napi_env env, napi_callback_info info, uint64_t* rootId,
+                                uint64_t* recoveryId, LifecycleRequest* request,
+                                std::string* expectedState) {
+  size_t argc = 4;
+  napi_value argv[4];
+  bool rootLossless = false;
+  bool recoveryLossless = false;
+  return napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) == napi_ok && argc == 4 &&
+      napi_get_value_bigint_uint64(env, argv[0], rootId, &rootLossless) == napi_ok && rootLossless &&
+      napi_get_value_bigint_uint64(env, argv[1], recoveryId, &recoveryLossless) == napi_ok &&
+      recoveryLossless && parseLifecycleRequest(env, argv[2], request) &&
+      readUtf8StringValue(env, argv[3], 16, expectedState) &&
+      (*expectedState == "before" || *expectedState == "after");
+}
+
+AccessError completeCaseIntermediate(uint64_t rootId, const LifecycleRequest& request) {
+  std::wstring parentPath;
+  std::wstring sourceLeaf;
+  std::wstring ignoredParent;
+  std::wstring targetLeaf;
+  if (!splitLifecyclePath(request.relativeSource, &parentPath, &sourceLeaf) ||
+      !splitLifecyclePath(request.relativeTarget, &ignoredParent, &targetLeaf) || parentPath != ignoredParent) {
+    return AccessError::kPrecondition;
+  }
+  HANDLE parentRaw = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationDirectory(rootId, parentPath, &parentRaw);
+  if (result != AccessError::kOk) return result;
+  ScopedHandle parent(parentRaw);
+  BY_HANDLE_FILE_INFORMATION parentIdentity{};
+  if (!GetFileInformationByHandle(parent.get(), &parentIdentity)) return AccessError::kIo;
+  HANDLE intermediateRaw = INVALID_HANDLE_VALUE;
+  const std::wstring intermediateLeaf = stagingLeafName("case-" + request.stagingObjectId);
+  if (result == AccessError::kOk) {
+    const LifecycleObjectMatch match = observeLifecycleFile(
+        parent.get(), intermediateLeaf, request, DELETE, &intermediateRaw);
+    result = match == LifecycleObjectMatch::kMatch ? AccessError::kOk : AccessError::kRecoveryRequired;
+  }
+  ScopedHandle intermediate(intermediateRaw);
+  if (result == AccessError::kOk) result = checkRelativeLeafAbsent(parent.get(), targetLeaf);
+  if (result == AccessError::kOk && !parent.close()) result = AccessError::kIo;
+  HANDLE handoffRaw = INVALID_HANDLE_VALUE;
+  if (result == AccessError::kOk) {
+    result = openMutationHandoffDirectory(rootId, parentPath, parentIdentity, &handoffRaw);
+  }
+  ScopedHandle handoff(handoffRaw);
+  if (result == AccessError::kOk) {
+    result = renameOpenedFileCreateOnly(intermediate.get(), handoff.get(), targetLeaf);
+  }
+  if (result == AccessError::kOk) result = flushMoveDirectories(handoff.get(), handoff.get());
+  HANDLE markerRaw = INVALID_HANDLE_VALUE;
+  LifecycleMarker marker{};
+  if (result == AccessError::kOk) result = openLifecycleMarker(handoff.get(), request, &markerRaw, &marker);
+  ScopedHandle markerHandle(markerRaw);
+  if (result == AccessError::kOk) {
+    result = rewriteLifecycleMarker(
+        markerHandle.get(), LifecycleMarker{marker.requestChecksum, "after", request.sourceFileIdentity});
+  }
+  if (result == AccessError::kOk && !flushDurably(handoff.get(), DurableFlushKind::kDirectory)) {
+    result = AccessError::kDurability;
+  }
+  return result;
+}
+
+AccessError completeDirectoryIntermediate(uint64_t rootId, const LifecycleRequest& request) {
+  std::wstring parentPath;
+  std::wstring targetLeaf;
+  if (!splitLifecyclePath(request.relativeTarget, &parentPath, &targetLeaf)) {
+    return AccessError::kUnsafePath;
+  }
+  HANDLE parentRaw = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationDirectory(rootId, parentPath, &parentRaw);
+  if (result != AccessError::kOk) return result;
+  ScopedHandle parent(parentRaw);
+  BY_HANDLE_FILE_INFORMATION parentIdentity{};
+  if (!GetFileInformationByHandle(parent.get(), &parentIdentity)) return AccessError::kIo;
+  HANDLE markerRaw = INVALID_HANDLE_VALUE;
+  LifecycleMarker marker{};
+  result = openLifecycleMarker(parent.get(), request, &markerRaw, &marker);
+  ScopedHandle markerHandle(markerRaw);
+  HANDLE stagedRaw = INVALID_HANDLE_VALUE;
+  if (result == AccessError::kOk) {
+    const LifecycleObjectMatch staged = observeLifecycleDirectory(
+        parent.get(), stagingLeafName("directory-" + request.stagingObjectId), marker, DELETE, &stagedRaw);
+    result = staged == LifecycleObjectMatch::kMatch ? AccessError::kOk : AccessError::kRecoveryRequired;
+  }
+  ScopedHandle staged(stagedRaw);
+  if (result == AccessError::kOk) result = checkRelativeLeafAbsent(parent.get(), targetLeaf);
+  if (result == AccessError::kOk && !parent.close()) result = AccessError::kIo;
+  HANDLE handoffRaw = INVALID_HANDLE_VALUE;
+  if (result == AccessError::kOk) {
+    result = openMutationHandoffDirectory(rootId, parentPath, parentIdentity, &handoffRaw);
+  }
+  ScopedHandle handoff(handoffRaw);
+  if (result == AccessError::kOk) {
+    result = renameOpenedFileCreateOnly(staged.get(), handoff.get(), targetLeaf);
+  }
+  if (result == AccessError::kOk && !flushDurably(handoff.get(), DurableFlushKind::kDirectory)) {
+    result = AccessError::kDurability;
+  }
+  if (result == AccessError::kOk) {
+    result = rewriteLifecycleMarker(
+        markerHandle.get(), LifecycleMarker{marker.requestChecksum, "after", marker.objectIdentity});
+  }
+  if (result == AccessError::kOk && !flushDurably(handoff.get(), DurableFlushKind::kDirectory)) {
+    result = AccessError::kDurability;
+  }
+  return result;
+}
+
+napi_value inspectEngineeringFileLifecycleOperationV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    uint64_t rootId = 0;
+    uint64_t recoveryId = 0;
+    LifecycleRequest request{};
+    if (!parseLifecycleRecoveryCall(env, info, &rootId, &recoveryId, &request)) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    LifecycleClassification classification = LifecycleClassification::kUnknown;
+    AccessError result = classifyLifecycleOperation(rootId, recoveryId, request, &classification);
+    if (result != AccessError::kOk) {
+      throwAccessError(env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
+      return nullptr;
+    }
+    const char* state = classification == LifecycleClassification::kBefore
+        ? "before"
+        : classification == LifecycleClassification::kAfter
+            ? "after"
+            : classification == LifecycleClassification::kCaseIntermediate ||
+                    classification == LifecycleClassification::kDirectoryIntermediate
+                ? "intermediate"
+                : classification == LifecycleClassification::kUnknown ? "unknown" : "neither";
+    napi_value output;
+    if (!makeLifecycleOperationState(env, request, state, &output)) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
+#else
+  (void)info;
+  throwAccessError(env, AccessError::kUnavailable);
+  return nullptr;
+#endif
+}
+
+napi_value resumeEngineeringFileLifecycleOperationV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    uint64_t rootId = 0;
+    uint64_t recoveryId = 0;
+    LifecycleRequest request{};
+    if (!parseLifecycleRecoveryCall(env, info, &rootId, &recoveryId, &request)) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    LifecycleClassification classification = LifecycleClassification::kUnknown;
+    AccessError result = classifyLifecycleOperation(rootId, recoveryId, request, &classification);
+    if (result == AccessError::kOk && classification == LifecycleClassification::kCaseIntermediate) {
+      result = completeCaseIntermediate(rootId, request);
+    } else if (result == AccessError::kOk &&
+               classification == LifecycleClassification::kDirectoryIntermediate) {
+      result = completeDirectoryIntermediate(rootId, request);
+    } else if (result == AccessError::kOk && classification != LifecycleClassification::kAfter) {
+      result = AccessError::kRecoveryRequired;
+    }
+    if (result == AccessError::kOk) {
+      result = classifyLifecycleOperation(rootId, recoveryId, request, &classification);
+    }
+    if (result == AccessError::kOk && classification != LifecycleClassification::kAfter) {
+      result = AccessError::kRecoveryRequired;
+    }
+    if (result != AccessError::kOk) {
+      throwAccessError(env, AccessError::kRecoveryRequired);
+      return nullptr;
+    }
+    napi_value output;
+    if (!makeLifecycleOperationState(env, request, "after", &output)) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
+#else
+  (void)info;
+  throwAccessError(env, AccessError::kUnavailable);
+  return nullptr;
+#endif
+}
+
+AccessError compensateLifecycleMove(uint64_t rootId, const LifecycleRequest& request) {
+  std::wstring sourceParentPath;
+  std::wstring sourceLeaf;
+  std::wstring targetParentPath;
+  std::wstring targetLeaf;
+  if (!splitLifecyclePath(request.relativeSource, &sourceParentPath, &sourceLeaf) ||
+      !splitLifecyclePath(request.relativeTarget, &targetParentPath, &targetLeaf)) {
+    return AccessError::kUnsafePath;
+  }
+  const bool sameParent = sourceParentPath == targetParentPath;
+  HANDLE sourceParentRaw = INVALID_HANDLE_VALUE;
+  HANDLE targetParentRaw = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
+  if (result == AccessError::kOk && sameParent) {
+    targetParentRaw = sourceParentRaw;
+    sourceParentRaw = INVALID_HANDLE_VALUE;
+  } else if (result == AccessError::kOk) {
+    result = openMutationDirectory(rootId, targetParentPath, &targetParentRaw);
+  }
+  ScopedHandle sourceParentHandle(sourceParentRaw);
+  ScopedHandle targetParentHandle(targetParentRaw);
+  HANDLE sourceParent = sameParent ? targetParentHandle.get() : sourceParentHandle.get();
+  BY_HANDLE_FILE_INFORMATION sourceParentIdentity{};
+  BY_HANDLE_FILE_INFORMATION targetParentIdentity{};
+  if (result == AccessError::kOk && !GetFileInformationByHandle(sourceParent, &sourceParentIdentity)) {
+    result = AccessError::kIo;
+  }
+  if (result == AccessError::kOk && sameParent) {
+    targetParentIdentity = sourceParentIdentity;
+  } else if (result == AccessError::kOk &&
+             !GetFileInformationByHandle(targetParentHandle.get(), &targetParentIdentity)) {
+    result = AccessError::kIo;
+  }
+  HANDLE targetRaw = INVALID_HANDLE_VALUE;
+  if (result == AccessError::kOk) {
+    const LifecycleObjectMatch target = observeLifecycleFile(
+        targetParentHandle.get(), targetLeaf, request, DELETE, &targetRaw);
+    result = target == LifecycleObjectMatch::kMatch ? AccessError::kOk : AccessError::kRecoveryRequired;
+  }
+  ScopedHandle target(targetRaw);
+  if (result == AccessError::kOk && request.targetProof != "same_object_case_only") {
+    result = checkRelativeLeafAbsent(sourceParent, sourceLeaf);
+  }
+  if (result == AccessError::kOk &&
+      (!sourceParentHandle.close() || !targetParentHandle.close())) {
+    result = AccessError::kIo;
+  }
+  HANDLE handoffSourceRaw = INVALID_HANDLE_VALUE;
+  HANDLE handoffTargetRaw = INVALID_HANDLE_VALUE;
+  if (result == AccessError::kOk) {
+    result = openMutationHandoffDirectory(
+        rootId, sourceParentPath, sourceParentIdentity, &handoffSourceRaw);
+    if (result == AccessError::kOk && sameParent) {
+      handoffTargetRaw = handoffSourceRaw;
+      handoffSourceRaw = INVALID_HANDLE_VALUE;
+    }
+  }
+  if (result == AccessError::kOk && !sameParent) {
+    result = openMutationHandoffDirectory(
+        rootId, targetParentPath, targetParentIdentity, &handoffTargetRaw);
+  }
+  ScopedHandle handoffSource(handoffSourceRaw);
+  ScopedHandle handoffTarget(handoffTargetRaw);
+  HANDLE inverseSourceParent = sameParent ? handoffTarget.get() : handoffSource.get();
+  if (result == AccessError::kOk && request.targetProof == "same_object_case_only") {
+    const std::wstring intermediateLeaf = stagingLeafName("case-rollback-" + request.stagingObjectId);
+    result = checkRelativeLeafAbsent(handoffTarget.get(), intermediateLeaf);
+    if (result == AccessError::kOk) {
+      result = renameOpenedFileCreateOnly(target.get(), handoffTarget.get(), intermediateLeaf);
+    }
+    if (result == AccessError::kOk) {
+      result = flushMoveDirectories(inverseSourceParent, handoffTarget.get());
+    }
+    if (result == AccessError::kOk) {
+      result = renameOpenedFileCreateOnly(target.get(), inverseSourceParent, sourceLeaf);
+    }
+  } else if (result == AccessError::kOk) {
+    result = renameOpenedFileCreateOnly(target.get(), inverseSourceParent, sourceLeaf);
+  }
+  if (result == AccessError::kOk) {
+    result = flushMoveDirectories(inverseSourceParent, handoffTarget.get());
+  }
+  return result;
+}
+
+AccessError compensateLifecycleDelete(uint64_t rootId, uint64_t recoveryId,
+                                      const LifecycleRequest& request) {
+  RecoveryRootSession recovery{};
+  AccessError result = validateLifecycleRecoveryRoot(rootId, recoveryId, request, &recovery);
+  std::wstring parentPath;
+  std::wstring sourceLeaf;
+  if (!splitLifecyclePath(request.relativeSource, &parentPath, &sourceLeaf)) {
+    return AccessError::kUnsafePath;
+  }
+  HANDLE parentRaw = INVALID_HANDLE_VALUE;
+  HANDLE recoveryRaw = INVALID_HANDLE_VALUE;
+  if (result == AccessError::kOk) result = openMutationDirectory(rootId, parentPath, &parentRaw);
+  if (result == AccessError::kOk) result = openRecoveryDirectory(recoveryId, L"", &recoveryRaw);
+  ScopedHandle parent(parentRaw);
+  ScopedHandle recoveryHandle(recoveryRaw);
+  if (result == AccessError::kOk) result = validateRecoveryRootOwnership(recoveryHandle.get(), recovery);
+  if (result == AccessError::kOk) result = checkRelativeLeafAbsent(parent.get(), sourceLeaf);
+  HANDLE objectRaw = INVALID_HANDLE_VALUE;
+  const std::wstring objectLeaf(request.recoveryObjectId.begin(), request.recoveryObjectId.end());
+  if (result == AccessError::kOk) {
+    const LifecycleObjectMatch object = observeLifecycleFile(
+        recoveryHandle.get(), objectLeaf, request, DELETE, &objectRaw);
+    result = object == LifecycleObjectMatch::kMatch ? AccessError::kOk : AccessError::kRecoveryRequired;
+  }
+  ScopedHandle object(objectRaw);
+  if (result == AccessError::kOk) {
+    result = renameOpenedFileCreateOnly(object.get(), parent.get(), sourceLeaf);
+  }
+  if (result == AccessError::kOk &&
+      (!flushDurably(parent.get(), DurableFlushKind::kDirectory) ||
+       !flushDurably(recoveryHandle.get(), DurableFlushKind::kDirectory))) {
+    result = AccessError::kDurability;
+  }
+  return result;
+}
+
+AccessError compensateLifecycleDirectory(uint64_t rootId, const LifecycleRequest& request) {
+  std::wstring parentPath;
+  std::wstring leaf;
+  if (!splitLifecyclePath(request.relativeTarget, &parentPath, &leaf)) return AccessError::kUnsafePath;
+  HANDLE parentRaw = INVALID_HANDLE_VALUE;
+  AccessError result = openMutationDirectory(rootId, parentPath, &parentRaw);
+  if (result != AccessError::kOk) return result;
+  ScopedHandle parent(parentRaw);
+  HANDLE markerRaw = INVALID_HANDLE_VALUE;
+  LifecycleMarker marker{};
+  result = openLifecycleMarker(parent.get(), request, &markerRaw, &marker);
+  ScopedHandle markerHandle(markerRaw);
+  HANDLE directoryRaw = INVALID_HANDLE_VALUE;
+  if (result == AccessError::kOk) {
+    const LifecycleObjectMatch directory = observeLifecycleDirectory(
+        parent.get(), leaf, marker, DELETE, &directoryRaw);
+    result = directory == LifecycleObjectMatch::kMatch ? AccessError::kOk : AccessError::kRecoveryRequired;
+  }
+  ScopedHandle directory(directoryRaw);
+  bool empty = false;
+  if (result == AccessError::kOk) result = directoryIsEmpty(directory.get(), &empty);
+  if (result == AccessError::kOk && !empty) result = AccessError::kRecoveryRequired;
+  if (result == AccessError::kOk) {
+    FILE_DISPOSITION_INFO disposition{};
+    disposition.DeleteFile = TRUE;
+    if (!SetFileInformationByHandle(directory.get(), FileDispositionInfo, &disposition, sizeof(disposition)) ||
+        !directory.close() || !flushDurably(parent.get(), DurableFlushKind::kDirectory)) {
+      result = AccessError::kDurability;
+    }
+  }
+  return result;
+}
+
+napi_value compensateEngineeringFileLifecycleOperationV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    uint64_t rootId = 0;
+    uint64_t recoveryId = 0;
+    LifecycleRequest request{};
+    if (!parseLifecycleCompensationCall(env, info, &rootId, &recoveryId, &request)) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    LifecycleClassification classification = LifecycleClassification::kUnknown;
+    AccessError result = classifyLifecycleOperation(rootId, recoveryId, request, &classification);
+    if (result == AccessError::kOk && classification != LifecycleClassification::kAfter) {
+      result = AccessError::kRecoveryRequired;
+    }
+    if (result == AccessError::kOk && request.operationKind == "move_file") {
+      result = compensateLifecycleMove(rootId, request);
+    } else if (result == AccessError::kOk && request.operationKind == "delete_file") {
+      result = compensateLifecycleDelete(rootId, recoveryId, request);
+    } else if (result == AccessError::kOk && request.operationKind == "create_directory") {
+      result = compensateLifecycleDirectory(rootId, request);
+    }
+    if (result == AccessError::kOk) result = removeLifecycleMarker(rootId, request);
+    if (result != AccessError::kOk) {
+      throwAccessError(env, AccessError::kRecoveryRequired);
+      return nullptr;
+    }
+    napi_value output;
+    if (!makeLifecycleOperationState(env, request, "before", &output)) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
+#else
+  (void)info;
+  throwAccessError(env, AccessError::kUnavailable);
+  return nullptr;
+#endif
+}
+
+napi_value finalizeEngineeringFileLifecycleOperationV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    uint64_t rootId = 0;
+    uint64_t recoveryId = 0;
+    LifecycleRequest request{};
+    std::string expectedState;
+    if (!parseLifecycleFinalizeCall(
+            env, info, &rootId, &recoveryId, &request, &expectedState)) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    RecoveryRootSession recovery{};
+    AccessError result = validateLifecycleRecoveryRoot(rootId, recoveryId, request, &recovery);
+    bool markerPresent = false;
+    if (result == AccessError::kOk) result = lifecycleMarkerIsPresent(rootId, request, &markerPresent);
+    if (result == AccessError::kOk && !markerPresent) {
+      napi_value output;
+      napi_get_undefined(env, &output);
+      return output;
+    }
+    LifecycleClassification classification = LifecycleClassification::kUnknown;
+    if (result == AccessError::kOk) {
+      result = classifyLifecycleOperation(rootId, recoveryId, request, &classification);
+    }
+    if (result == AccessError::kOk && expectedState == "after" &&
+        classification == LifecycleClassification::kCaseIntermediate) {
+      result = completeCaseIntermediate(rootId, request);
+      if (result == AccessError::kOk) {
+        result = classifyLifecycleOperation(rootId, recoveryId, request, &classification);
+      }
+    }
+    if (result == AccessError::kOk && expectedState == "after" &&
+        classification == LifecycleClassification::kDirectoryIntermediate) {
+      result = completeDirectoryIntermediate(rootId, request);
+      if (result == AccessError::kOk) {
+        result = classifyLifecycleOperation(rootId, recoveryId, request, &classification);
+      }
+    }
+    if (result == AccessError::kOk &&
+        ((expectedState == "after" && classification != LifecycleClassification::kAfter) ||
+         (expectedState == "before" && classification != LifecycleClassification::kBefore))) {
+      result = AccessError::kRecoveryRequired;
+    }
+    if (result == AccessError::kOk) result = removeLifecycleMarker(rootId, request);
+    if (result != AccessError::kOk) {
+      throwAccessError(env, AccessError::kRecoveryRequired);
+      return nullptr;
+    }
+    napi_value output;
+    napi_get_undefined(env, &output);
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
+#else
+  (void)info;
+  throwAccessError(env, AccessError::kUnavailable);
+  return nullptr;
+#endif
+}
+
 napi_value mutationV2ProbeInfo(napi_env env, napi_callback_info) {
   napi_value result;
   napi_create_object(env, &result);
@@ -4232,6 +5708,12 @@ napi_value mutationV2ProbeInfo(napi_env env, napi_callback_info) {
   napi_set_named_property(env, result, "createDirectory", makeString(env, "development_probe_only"));
   napi_set_named_property(env, result, "caseOnlyRenameWal", makeString(env, "available"));
   napi_set_named_property(env, result, "volumeLocalQuarantine", makeString(env, "available"));
+  napi_set_named_property(env, result, "quarantineInventory", makeString(env, "available"));
+  napi_set_named_property(env, result, "lifecycleRecoveryInspection", makeString(env, "available"));
+  napi_set_named_property(env, result, "lifecycleIntermediateResume", makeString(env, "available"));
+  napi_set_named_property(env, result, "lifecycleRecoveryBoundStateDurability", makeString(env, "available"));
+  napi_set_named_property(env, result, "lifecycleReverseCompensation", makeString(env, "available"));
+  napi_set_named_property(env, result, "lifecycleDurableFinalize", makeString(env, "available"));
   napi_set_named_property(env, result, "rawByteBlobs", makeString(env, "available"));
   napi_set_named_property(env, result, "absenceProof", makeString(env, "available"));
   napi_set_named_property(env, result, "absenceProofV2", makeString(env, "available"));
@@ -5497,10 +6979,12 @@ napi_value mutationFaultInjectionInfo(napi_env env, napi_callback_info) {
   napi_value output;
   napi_value faultPoints;
   napi_create_object(env, &output);
-  napi_create_array_with_length(env, 3, &faultPoints);
+  napi_create_array_with_length(env, 5, &faultPoints);
   napi_set_element(env, faultPoints, 0, makeString(env, "after_staging_flush"));
   napi_set_element(env, faultPoints, 1, makeString(env, "after_original_handoff"));
   napi_set_element(env, faultPoints, 2, makeString(env, "after_candidate_handoff"));
+  napi_set_element(env, faultPoints, 3, makeString(env, "after_case_intermediate"));
+  napi_set_element(env, faultPoints, 4, makeString(env, "after_directory_staged"));
   napi_set_named_property(env, output, "schemaVersion",
                           makeString(env, "engineering_mutation_fault_injection_v1"));
   napi_set_named_property(env, output, "buildKind",
@@ -5554,6 +7038,7 @@ napi_value Init(napi_env env, napi_value exports) {
     {"searchText", nullptr, searchText, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"buildIndex", nullptr, buildIndex, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"openEngineeringStateRoot", nullptr, openEngineeringStateRoot, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"openEngineeringStateRootBoundToRecoveryV2", nullptr, openEngineeringStateRootBoundToRecoveryV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"closeEngineeringStateRoot", nullptr, closeEngineeringStateRoot, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"ensureEngineeringStateDirectoryNoFollow", nullptr, ensureEngineeringStateDirectoryNoFollow, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"flushEngineeringStateDirectory", nullptr, flushEngineeringStateDirectory, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -5568,11 +7053,16 @@ napi_value Init(napi_env env, napi_value exports) {
     {"unlinkEngineeringStateFileNoFollow", nullptr, unlinkEngineeringStateFileNoFollow, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"openEngineeringRecoveryRootV2", nullptr, openEngineeringRecoveryRootV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"closeEngineeringRecoveryRootV2", nullptr, closeEngineeringRecoveryRootV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"inspectEngineeringQuarantineV2", nullptr, inspectEngineeringQuarantineV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"moveEngineeringPathV2", nullptr, moveEngineeringPathV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"quarantineEngineeringFileV2", nullptr, quarantineEngineeringFileV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"restoreEngineeringFileV2", nullptr, restoreEngineeringFileV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"purgeEngineeringQuarantineObjectV2", nullptr, purgeEngineeringQuarantineObjectV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"createEngineeringDirectoryV2", nullptr, createEngineeringDirectoryV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"inspectEngineeringFileLifecycleOperationV2", nullptr, inspectEngineeringFileLifecycleOperationV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"resumeEngineeringFileLifecycleOperationV2", nullptr, resumeEngineeringFileLifecycleOperationV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"compensateEngineeringFileLifecycleOperationV2", nullptr, compensateEngineeringFileLifecycleOperationV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"finalizeEngineeringFileLifecycleOperationV2", nullptr, finalizeEngineeringFileLifecycleOperationV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"mutationV2ProbeInfo", nullptr, mutationV2ProbeInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"inspectEngineeringFileSnapshotV2", nullptr, inspectEngineeringFileSnapshotV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"inspectEngineeringFileMutationTargetV2", nullptr, inspectEngineeringFileMutationTargetV2, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -294,7 +294,13 @@ if (buildDisabledProtectionCanaries) {
         quarantineDelete: "available",
         restoreNoOverwrite: "available",
         localPurge: "available",
-        singleLevelCreateDirectory: "available"
+        singleLevelCreateDirectory: "available",
+        quarantineInventory: "available",
+        lifecycleRecoveryInspection: "available",
+        lifecycleIntermediateResume: "available",
+        lifecycleRecoveryBoundStateDurability: "available",
+        lifecycleReverseCompensation: "available",
+        lifecycleDurableFinalize: "available"
       },
       productCapability: "unavailable"
     },

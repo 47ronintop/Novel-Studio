@@ -3,10 +3,14 @@ import { describe, expect, test, vi } from "vitest";
 import { ok } from "@novel-studio/shared";
 
 import {
+  engineeringFileLifecycleRequestChecksumV2,
   createEngineeringAbsenceProofV2,
   createEngineeringRawByteManifestV2,
   engineeringFileMutationRequestChecksumV2,
   sha256EngineeringMutationTextV2,
+  type EngineeringFileLifecycleOperationStateV2,
+  type EngineeringFileLifecycleReceiptV2,
+  type EngineeringFileLifecycleRequestV2,
   type EngineeringFileMutationApplyInputV2,
   type EngineeringFileMutationPortV2,
   type EngineeringFileMutationRequestV2,
@@ -23,9 +27,13 @@ import {
   InMemoryEngineeringWalRepositoryV2
 } from "../src/engineering-wal-repository.js";
 import {
+  EngineeringLifecycleWriteTransactionV2,
   EngineeringWriteTransactionV2,
   engineeringLifecycleSideEffectSubjectChecksumV2,
   validateEngineeringLifecycleWriteTransactionInputV2,
+  type EngineeringLifecycleWalRepositoryV2,
+  type EngineeringLifecycleWriteAheadLogV2,
+  type EngineeringLifecycleWriteTransactionInputV2,
   type EngineeringMutationRecoveryGatePortV2
 } from "../src/engineering-write-transaction-v2.js";
 
@@ -85,7 +93,7 @@ describe("EngineeringWriteTransactionV2", () => {
   });
   test("authorizes the full prepared record, re-reads bytes, reconciles, then applies", async () => {
     const events: string[] = [];
-    const mutationPort: EngineeringFileMutationPortV2 = {
+    const mutationPort = {
       reconcile: vi.fn(async (input: unknown) => {
         events.push("reconcile");
         return ok(operationState("before", (input as EngineeringFileMutationApplyInputV2).request));
@@ -95,7 +103,7 @@ describe("EngineeringWriteTransactionV2", () => {
         events.push(new TextDecoder().decode(value.candidateBytes));
         return ok(receiptFor(value.request));
       })
-    };
+    } satisfies Partial<EngineeringFileMutationPortV2>;
     const authorization = vi.fn(async (prepared) => {
       events.push(`authorization:${prepared.operations.length}`);
       return ok(undefined);
@@ -196,6 +204,335 @@ describe("EngineeringWriteTransactionV2", () => {
       error: { code: "ENGINEERING_WRITE_TRANSACTION_V2_STAGING_RESERVATION_UNQUALIFIED" }
     });
     await expect(blobStore.listRoot("root_01")).resolves.toMatchObject({ ok: true, value: [] });
+  });
+});
+
+describe("EngineeringLifecycleWriteTransactionV2 recovery", () => {
+  test("durably rolls back an all-before journal without compensation", async () => {
+    const input = lifecycleTransactionInput(["move_file", "create_directory"]);
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    const compensateLifecycle = vi.fn();
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async (value: unknown) =>
+          ok(lifecycleState("before", lifecycleRecoveryRequest(value))),
+        compensateLifecycle
+      }
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: true,
+      value: { committedAt: null, rolledBackAt: "2099-01-01T00:00:01.000Z" }
+    });
+    expect(compensateLifecycle).not.toHaveBeenCalled();
+    expect(wal.rollback).toHaveBeenCalledOnce();
+  });
+
+  test("reconstructs an after prefix and compensates it in exact reverse order", async () => {
+    const input = lifecycleTransactionInput(["move_file", "create_directory", "move_file"]);
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    const events: string[] = [];
+    let initialClassifications = input.operations.length;
+    const compensateLifecycle = vi.fn(async (value: unknown) => {
+      const recovery = value as {
+        request: EngineeringFileLifecycleRequestV2;
+        expectedReceipt: EngineeringFileLifecycleReceiptV2;
+      };
+      events.push(`compensate:${recovery.request.operationId}`);
+      expect(recovery.expectedReceipt).toEqual(lifecycleReceipt(recovery.request));
+      return ok(lifecycleState("before", recovery.request));
+    });
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async (value: unknown) => {
+          const request = lifecycleRecoveryRequest(value);
+          if (initialClassifications > 0) {
+            const index = input.operations.length - initialClassifications;
+            initialClassifications -= 1;
+            return ok(lifecycleState(index < 2 ? "after" : "before", request));
+          }
+          events.push(`recheck:${request.operationId}`);
+          return ok(lifecycleState("after", request));
+        },
+        compensateLifecycle
+      }
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: true,
+      value: { receipts: [{ operationId: "op_lifecycle_0" }, { operationId: "op_lifecycle_1" }] }
+    });
+    expect(events).toEqual([
+      "recheck:op_lifecycle_1",
+      "compensate:op_lifecycle_1",
+      "recheck:op_lifecycle_0",
+      "compensate:op_lifecycle_0"
+    ]);
+  });
+
+  test("rebuilds durable progress after native success preceded a failed WAL append", async () => {
+    const input = lifecycleTransactionInput(["move_file"]);
+    const wal = new TestLifecycleWalRepository();
+    wal.failNextAppend = true;
+    const request = lifecycleOperationAt(input, 0).request;
+    const mutationPort = {
+      move: vi.fn(async () => ok(lifecycleReceipt(request))),
+      reconcileLifecycle: vi.fn(async () => ok(lifecycleState("after", request))),
+      compensateLifecycle: vi.fn(async () => ok(lifecycleState("before", request)))
+    } satisfies Partial<EngineeringFileMutationPortV2>;
+    const transaction = createLifecycleTransaction({ wal, mutationPort });
+
+    await expect(transaction.apply(input)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TEST_WAL_APPEND_FAILED" }
+    });
+    expect(wal.current?.receipts).toHaveLength(0);
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: true,
+      value: { receipts: [{ operationId: request.operationId }], rolledBackAt: expect.any(String) }
+    });
+    expect(wal.appendProgress).toHaveBeenCalledTimes(2);
+    expect(mutationPort.compensateLifecycle).toHaveBeenCalledOnce();
+  });
+
+  test("resumes one validated intermediate state before reconstructing and compensating", async () => {
+    const input = lifecycleTransactionInput(["move_file", "create_directory", "move_file"]);
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    const events: string[] = [];
+    let resumed = false;
+    let initialInspections = input.operations.length;
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async (value: unknown) => {
+          const request = lifecycleRecoveryRequest(value);
+          const index = input.operations.findIndex(
+            (operation) => operation.request.operationId === request.operationId
+          );
+          if (initialInspections > 0) {
+            initialInspections -= 1;
+            events.push(`classify:${request.operationId}`);
+            return ok(
+              lifecycleState(
+                index === 0 ? "after" : index === 1 ? "intermediate" : "before",
+                request
+              )
+            );
+          }
+          events.push(`reinspect:${request.operationId}`);
+          return ok(lifecycleState(resumed && index < 2 ? "after" : "before", request));
+        },
+        resumeLifecycle: vi.fn(async (value: unknown) => {
+          const recovery = value as {
+            request: EngineeringFileLifecycleRequestV2;
+          };
+          events.push(`resume:${recovery.request.operationId}`);
+          resumed = true;
+          return ok(lifecycleState("after", recovery.request));
+        }),
+        finalizeLifecycle: vi.fn(async (value: unknown) => {
+          const recovery = value as {
+            request: EngineeringFileLifecycleRequestV2;
+            expectedState: "before" | "after";
+          };
+          events.push(`finalize:${recovery.request.operationId}:${recovery.expectedState}`);
+          return ok(undefined);
+        }),
+        compensateLifecycle: vi.fn(async (value: unknown) => {
+          const recovery = value as {
+            request: EngineeringFileLifecycleRequestV2;
+            expectedReceipt: EngineeringFileLifecycleReceiptV2;
+          };
+          events.push(`compensate:${recovery.request.operationId}`);
+          return ok(lifecycleState("before", recovery.request));
+        })
+      }
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: true,
+      value: {
+        receipts: [{ operationId: "op_lifecycle_0" }, { operationId: "op_lifecycle_1" }],
+        rolledBackAt: expect.any(String)
+      }
+    });
+    expect(events).toEqual([
+      "classify:op_lifecycle_0",
+      "classify:op_lifecycle_1",
+      "classify:op_lifecycle_2",
+      "resume:op_lifecycle_1",
+      "reinspect:op_lifecycle_0",
+      "reinspect:op_lifecycle_1",
+      "reinspect:op_lifecycle_2",
+      "reinspect:op_lifecycle_1",
+      "compensate:op_lifecycle_1",
+      "reinspect:op_lifecycle_0",
+      "compensate:op_lifecycle_0",
+      "finalize:op_lifecycle_0:before",
+      "finalize:op_lifecycle_1:before",
+      "finalize:op_lifecycle_2:before"
+    ]);
+  });
+
+  test("does not resume an intermediate state until the whole batch is a valid prefix", async () => {
+    const input = lifecycleTransactionInput(["move_file", "create_directory"]);
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    let call = 0;
+    const resumeLifecycle = vi.fn();
+    const compensateLifecycle = vi.fn();
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async (value: unknown) =>
+          ok(
+            lifecycleState(call++ === 0 ? "intermediate" : "after", lifecycleRecoveryRequest(value))
+          ),
+        resumeLifecycle,
+        compensateLifecycle
+      }
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_REVIEW_REQUIRED" }
+    });
+    expect(resumeLifecycle).not.toHaveBeenCalled();
+    expect(compensateLifecycle).not.toHaveBeenCalled();
+  });
+
+  test.each(["neither", "unknown"] as const)(
+    "requires review and performs zero compensation for %s state",
+    async (state) => {
+      const input = lifecycleTransactionInput(["move_file"]);
+      const wal = new TestLifecycleWalRepository();
+      await wal.prepare(input);
+      const request = lifecycleOperationAt(input, 0).request;
+      const compensateLifecycle = vi.fn();
+      const transaction = createLifecycleTransaction({
+        wal,
+        mutationPort: {
+          reconcileLifecycle: async () => ok(lifecycleState(state, request)),
+          compensateLifecycle
+        }
+      });
+
+      await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_REVIEW_REQUIRED"
+        }
+      });
+      expect(compensateLifecycle).not.toHaveBeenCalled();
+    }
+  );
+
+  test("requires review for a non-prefix state pattern with zero compensation", async () => {
+    const input = lifecycleTransactionInput(["move_file", "create_directory"]);
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    const compensateLifecycle = vi.fn();
+    let call = 0;
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async (value: unknown) =>
+          ok(lifecycleState(call++ === 0 ? "before" : "after", lifecycleRecoveryRequest(value))),
+        compensateLifecycle
+      }
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_REVIEW_REQUIRED" }
+    });
+    expect(compensateLifecycle).not.toHaveBeenCalled();
+  });
+
+  test("does not compensate when the exact after-state changes after classification", async () => {
+    const input = lifecycleTransactionInput(["move_file"]);
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    const request = lifecycleOperationAt(input, 0).request;
+    const compensateLifecycle = vi.fn();
+    let classification = 0;
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async () =>
+          ok(lifecycleState(classification++ === 0 ? "after" : "before", request)),
+        compensateLifecycle
+      }
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_REVIEW_REQUIRED" }
+    });
+    expect(compensateLifecycle).not.toHaveBeenCalled();
+  });
+
+  test("rejects delete recovery binding drift before any native recovery call", async () => {
+    const input = lifecycleTransactionInput(["move_file", "delete_file"]);
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    const reconcileLifecycle = vi.fn();
+    const compensateLifecycle = vi.fn();
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: { reconcileLifecycle, compensateLifecycle },
+      resolveRecoveryBinding: async () =>
+        ok({
+          recoveryRootBindingId: "recovery_01",
+          recoveryRootId: "recovery-root-handle-changed",
+          grantRevision: "grant_changed",
+          sideEffectChecksum: hash("side-effect")
+        })
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_RECOVERY_BINDING_STALE" }
+    });
+    expect(reconcileLifecycle).not.toHaveBeenCalled();
+    expect(compensateLifecycle).not.toHaveBeenCalled();
+  });
+
+  test("requires the observed after receipt to match an existing durable receipt", async () => {
+    const input = lifecycleTransactionInput(["move_file"]);
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    const request = lifecycleOperationAt(input, 0).request;
+    await wal.appendProgress({
+      ...lifecycleLocator(),
+      receipt: lifecycleReceipt(request),
+      recordedAt: "2099-01-01T00:00:00.500Z"
+    });
+    const compensateLifecycle = vi.fn();
+    const mismatched = {
+      ...lifecycleReceipt(request),
+      relativeTarget: "moved/other.ts"
+    };
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async () =>
+          ok({
+            ...lifecycleState("after", request),
+            receipt: mismatched
+          } as EngineeringFileLifecycleOperationStateV2),
+        compensateLifecycle
+      }
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({ ok: false });
+    expect(compensateLifecycle).not.toHaveBeenCalled();
   });
 });
 
@@ -461,5 +798,242 @@ function operationState(
     state,
     requestChecksum: engineeringFileMutationRequestChecksumV2(request),
     receipt: null
+  };
+}
+
+class TestLifecycleWalRepository implements EngineeringLifecycleWalRepositoryV2 {
+  public current: EngineeringLifecycleWriteAheadLogV2 | undefined;
+  public failNextAppend = false;
+
+  public readonly read = vi.fn(async () => ok(this.current));
+
+  public readonly prepare = vi.fn(async (input: EngineeringLifecycleWriteTransactionInputV2) => {
+    this.current = lifecycleJournal(input, [], null, null);
+    return ok(this.current);
+  });
+
+  public readonly appendProgress = vi.fn(
+    async (input: {
+      contentRootBindingId: string;
+      transactionId: string;
+      receipt: EngineeringFileLifecycleReceiptV2;
+      recordedAt: string;
+    }) => {
+      if (this.failNextAppend) {
+        this.failNextAppend = false;
+        return {
+          ok: false as const,
+          error: { code: "TEST_WAL_APPEND_FAILED" } as never
+        };
+      }
+      if (this.current === undefined) throw new Error("missing lifecycle WAL");
+      this.current = lifecycleJournal(
+        this.current.prepared,
+        [...this.current.receipts, input.receipt],
+        this.current.committedAt,
+        this.current.rolledBackAt
+      );
+      return ok(this.current);
+    }
+  );
+
+  public readonly commit = vi.fn(
+    async (input: { contentRootBindingId: string; transactionId: string; committedAt: string }) => {
+      if (this.current === undefined) throw new Error("missing lifecycle WAL");
+      this.current = lifecycleJournal(
+        this.current.prepared,
+        this.current.receipts,
+        input.committedAt,
+        null
+      );
+      return ok(this.current);
+    }
+  );
+
+  public readonly rollback = vi.fn(
+    async (input: {
+      contentRootBindingId: string;
+      transactionId: string;
+      rolledBackAt: string;
+    }) => {
+      if (this.current === undefined) throw new Error("missing lifecycle WAL");
+      this.current = lifecycleJournal(
+        this.current.prepared,
+        this.current.receipts,
+        null,
+        input.rolledBackAt
+      );
+      return ok(this.current);
+    }
+  );
+}
+
+function createLifecycleTransaction(input: {
+  wal: TestLifecycleWalRepository;
+  mutationPort: Partial<EngineeringFileMutationPortV2>;
+  resolveRecoveryBinding?: ConstructorParameters<
+    typeof EngineeringLifecycleWriteTransactionV2
+  >[0]["resolveRecoveryBinding"];
+}) {
+  return new EngineeringLifecycleWriteTransactionV2({
+    walRepository: input.wal,
+    mutationPort: {
+      apply: async () => {
+        throw new Error("raw apply is outside lifecycle recovery tests");
+      },
+      reconcile: async () => {
+        throw new Error("raw reconcile is outside lifecycle recovery tests");
+      },
+      resumeLifecycle: async () => {
+        throw new Error("resume is only expected for a durable intermediate lifecycle state");
+      },
+      finalizeLifecycle: async () => ok(undefined),
+      ...input.mutationPort
+    },
+    recoveryGate: gatePort([]),
+    validateReservedAuthorization: async () => ok(undefined),
+    resolveRecoveryBinding:
+      input.resolveRecoveryBinding ??
+      (async () =>
+        ok({
+          recoveryRootBindingId: "recovery_01",
+          recoveryRootId: "recovery-root-handle",
+          grantRevision: "grant_01",
+          sideEffectChecksum: hash("side-effect")
+        })),
+    now: () => "2099-01-01T00:00:01.000Z"
+  });
+}
+
+function lifecycleTransactionInput(
+  kinds: readonly ("move_file" | "delete_file" | "create_directory")[]
+): EngineeringLifecycleWriteTransactionInputV2 {
+  const requests = kinds.map((kind, index) => lifecycleRequestAt(kind, index));
+  return {
+    schemaVersion: "2.0",
+    transactionId: "tx_lifecycle",
+    contentRootBindingId: "root_01",
+    providerSemanticVersionSetChecksum: hash("provider-set"),
+    authorization: {
+      ...authorizationBinding(),
+      sideEffectSubjectChecksum: engineeringLifecycleSideEffectSubjectChecksumV2({
+        transactionId: "tx_lifecycle",
+        contentRootBindingId: "root_01",
+        providerSemanticVersionSetChecksum: hash("provider-set"),
+        operations: requests
+      })
+    },
+    operations: requests.map((request) => ({
+      request,
+      recoveryBinding:
+        request.operationKind === "delete_file"
+          ? {
+              recoveryRootBindingId: request.recoveryRootBindingId,
+              grantRevision: request.recoveryGrantRevision,
+              sideEffectChecksum: request.recoverySideEffectChecksum
+            }
+          : null
+    })),
+    preparedAt: "2099-01-01T00:00:00.000Z"
+  };
+}
+
+function lifecycleRequestAt(
+  kind: "move_file" | "delete_file" | "create_directory",
+  index: number
+): EngineeringFileLifecycleRequestV2 {
+  return {
+    schemaVersion: "3.0",
+    operationKind: kind,
+    transactionId: "tx_lifecycle",
+    operationId: `op_lifecycle_${index}`,
+    contentRootBindingId: "root_01",
+    relativeSource: kind === "create_directory" ? "" : `src/file-${index}.ts`,
+    relativeTarget:
+      kind === "delete_file"
+        ? ""
+        : kind === "create_directory"
+          ? `created-${index}`
+          : `moved/file-${index}.ts`,
+    sourceFileIdentity: kind === "create_directory" ? "" : `file_${index}`,
+    sourceSha256: kind === "create_directory" ? "0".repeat(64) : hash(`source-${index}`),
+    targetProof: "absent",
+    recoveryRootBindingId: kind === "delete_file" ? "recovery_01" : "",
+    recoveryGrantRevision: kind === "delete_file" ? "grant_01" : "",
+    recoverySideEffectChecksum: kind === "delete_file" ? hash("side-effect") : "",
+    recoveryObjectId: kind === "delete_file" ? `object_${index}` : "",
+    stagingObjectId: `staging_${index}`,
+    expectedState: "wal_prepared"
+  };
+}
+
+function lifecycleReceipt(
+  request: EngineeringFileLifecycleRequestV2
+): EngineeringFileLifecycleReceiptV2 {
+  return {
+    schemaVersion: "3.0",
+    kind: "engineering_file_lifecycle_receipt",
+    operationKind: request.operationKind,
+    transactionId: request.transactionId,
+    operationId: request.operationId,
+    contentRootBindingId: request.contentRootBindingId,
+    relativeSource: request.relativeSource,
+    relativeTarget: request.relativeTarget,
+    state: request.operationKind === "delete_file" ? "quarantined" : "committed",
+    recoveryObjectId: request.operationKind === "delete_file" ? request.recoveryObjectId : "",
+    durability: "data_and_directory_flushed"
+  };
+}
+
+function lifecycleState(
+  state: "before" | "after" | "intermediate" | "neither" | "unknown",
+  request: EngineeringFileLifecycleRequestV2
+): EngineeringFileLifecycleOperationStateV2 {
+  return state === "after"
+    ? {
+        schemaVersion: "3.0",
+        kind: "engineering_file_lifecycle_operation_state",
+        state,
+        requestChecksum: engineeringFileLifecycleRequestChecksumV2(request),
+        receipt: lifecycleReceipt(request)
+      }
+    : {
+        schemaVersion: "3.0",
+        kind: "engineering_file_lifecycle_operation_state",
+        state,
+        requestChecksum: engineeringFileLifecycleRequestChecksumV2(request),
+        receipt: null
+      };
+}
+
+function lifecycleRecoveryRequest(value: unknown): EngineeringFileLifecycleRequestV2 {
+  return (value as { request: EngineeringFileLifecycleRequestV2 }).request;
+}
+
+function lifecycleLocator() {
+  return { contentRootBindingId: "root_01", transactionId: "tx_lifecycle" };
+}
+
+function lifecycleOperationAt(input: EngineeringLifecycleWriteTransactionInputV2, index: number) {
+  const operation = input.operations[index];
+  if (operation === undefined) throw new Error(`missing lifecycle operation ${index}`);
+  return operation;
+}
+
+function lifecycleJournal(
+  prepared: EngineeringLifecycleWriteTransactionInputV2,
+  receipts: readonly EngineeringFileLifecycleReceiptV2[],
+  committedAt: string | null,
+  rolledBackAt: string | null
+): EngineeringLifecycleWriteAheadLogV2 {
+  return {
+    schemaVersion: "2.0",
+    kind: "engineering_lifecycle_write_ahead_log",
+    prepared,
+    preparedChecksum: hash(JSON.stringify(prepared)),
+    receipts,
+    committedAt,
+    rolledBackAt,
+    journalChecksum: hash(JSON.stringify({ prepared, receipts, committedAt, rolledBackAt }))
   };
 }

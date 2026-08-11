@@ -56,7 +56,13 @@ const lifecycleV2Primitives = [
   "quarantineDelete",
   "restoreNoOverwrite",
   "localPurge",
-  "singleLevelCreateDirectory"
+  "singleLevelCreateDirectory",
+  "quarantineInventory",
+  "lifecycleRecoveryInspection",
+  "lifecycleIntermediateResume",
+  "lifecycleRecoveryBoundStateDurability",
+  "lifecycleReverseCompensation",
+  "lifecycleDurableFinalize"
 ];
 const ordinaryRelativePath = "docs/ordinary-utf8.txt";
 const ordinaryUtf8Text =
@@ -597,11 +603,17 @@ export async function probeMutationV2Abi(addon) {
   const lifecycleExports = [
     "openEngineeringRecoveryRootV2",
     "closeEngineeringRecoveryRootV2",
+    "openEngineeringStateRootBoundToRecoveryV2",
+    "inspectEngineeringQuarantineV2",
     "moveEngineeringPathV2",
     "quarantineEngineeringFileV2",
     "restoreEngineeringFileV2",
     "purgeEngineeringQuarantineObjectV2",
-    "createEngineeringDirectoryV2"
+    "createEngineeringDirectoryV2",
+    "inspectEngineeringFileLifecycleOperationV2",
+    "resumeEngineeringFileLifecycleOperationV2",
+    "compensateEngineeringFileLifecycleOperationV2",
+    "finalizeEngineeringFileLifecycleOperationV2"
   ];
   const hasLifecycleExports = lifecycleExports.every((name) => typeof addon?.[name] === "function");
   const hasPartialLifecycleExports = lifecycleExports.some(
@@ -678,7 +690,7 @@ export async function probeMutationV2Abi(addon) {
         stagingObjectId: "stage-b8-lifecycle",
         expectedState: "wal_prepared"
       };
-      addon.createEngineeringDirectoryV2(rootId, {
+      const createDirectoryRequest = {
         ...lifecycleBase,
         operationKind: "create_directory",
         relativeSource: "",
@@ -686,14 +698,34 @@ export async function probeMutationV2Abi(addon) {
         sourceFileIdentity: "",
         sourceSha256: "0".repeat(64),
         targetProof: "absent"
-      });
-      addon.moveEngineeringPathV2(rootId, {
+      };
+      addon.createEngineeringDirectoryV2(rootId, createDirectoryRequest);
+      assertLifecycleOperationState(
+        addon.inspectEngineeringFileLifecycleOperationV2(rootId, 0n, createDirectoryRequest),
+        createDirectoryRequest,
+        "after"
+      );
+      addon.finalizeEngineeringFileLifecycleOperationV2(
+        rootId,
+        0n,
+        createDirectoryRequest,
+        "after"
+      );
+      const moveRequest = {
         ...lifecycleBase,
         operationKind: "move_file",
         relativeSource: "docs/move-source.txt",
         relativeTarget: "docs/lifecycle/moved.txt",
         targetProof: "absent"
-      });
+      };
+      addon.moveEngineeringPathV2(rootId, moveRequest);
+      assertLifecycleOperationState(
+        addon.inspectEngineeringFileLifecycleOperationV2(rootId, 0n, moveRequest),
+        moveRequest,
+        "after"
+      );
+      addon.finalizeEngineeringFileLifecycleOperationV2(rootId, 0n, moveRequest, "after");
+      addon.finalizeEngineeringFileLifecycleOperationV2(rootId, 0n, moveRequest, "after");
       assertExactNativeBytes(
         addon.readFile(rootId, "docs/lifecycle/moved.txt"),
         lifecycleBytes,
@@ -703,7 +735,7 @@ export async function probeMutationV2Abi(addon) {
         rootId,
         "docs/lifecycle/moved.txt"
       );
-      addon.moveEngineeringPathV2(rootId, {
+      const caseOnlyRequest = {
         ...lifecycleBase,
         operationId: "op-b8-case-only",
         stagingObjectId: "stage-b8-case-only",
@@ -713,7 +745,19 @@ export async function probeMutationV2Abi(addon) {
         sourceFileIdentity: movedSnapshot.manifest.fileIdentity,
         sourceSha256: movedSnapshot.manifest.sha256,
         targetProof: "same_object_case_only"
-      });
+      };
+      addon.moveEngineeringPathV2(rootId, caseOnlyRequest);
+      assertLifecycleOperationState(
+        addon.inspectEngineeringFileLifecycleOperationV2(rootId, 0n, caseOnlyRequest),
+        caseOnlyRequest,
+        "after"
+      );
+      assertLifecycleOperationState(
+        addon.resumeEngineeringFileLifecycleOperationV2(rootId, 0n, caseOnlyRequest),
+        caseOnlyRequest,
+        "after"
+      );
+      addon.finalizeEngineeringFileLifecycleOperationV2(rootId, 0n, caseOnlyRequest, "after");
       assertExactNativeBytes(
         addon.readFile(rootId, "docs/lifecycle/Moved.txt"),
         lifecycleBytes,
@@ -743,7 +787,28 @@ export async function probeMutationV2Abi(addon) {
         recoveryMarkerChecksum
       );
       try {
-        addon.quarantineEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
+        const recoveryStateRootId = addon.openEngineeringStateRootBoundToRecoveryV2(
+          recoveryBinding.recoveryRootId
+        );
+        try {
+          const manifestDirectory = ".novel-studio-engineering-v2/volume-local-manifests";
+          addon.ensureEngineeringStateDirectoryNoFollow(recoveryStateRootId, manifestDirectory);
+          const manifestFile = `${manifestDirectory}/probe.tmp`;
+          const manifestFileId = addon.openEngineeringStateExclusiveNoFollow(
+            recoveryStateRootId,
+            manifestFile
+          );
+          addon.writeEngineeringStateFile(
+            manifestFileId,
+            Buffer.from("volume-local manifest probe\n", "utf8")
+          );
+          addon.syncEngineeringStateFile(manifestFileId);
+          addon.closeEngineeringStateFile(manifestFileId);
+          addon.flushEngineeringStateDirectory(recoveryStateRootId, manifestDirectory);
+        } finally {
+          addon.closeEngineeringStateRoot(recoveryStateRootId);
+        }
+        const quarantineRequest = {
           ...lifecycleBase,
           operationKind: "delete_file",
           relativeSource: "docs/lifecycle/Moved.txt",
@@ -751,7 +816,34 @@ export async function probeMutationV2Abi(addon) {
           sourceFileIdentity: caseOnlySnapshot.manifest.fileIdentity,
           sourceSha256: caseOnlySnapshot.manifest.sha256,
           targetProof: "absent"
-        });
+        };
+        addon.quarantineEngineeringFileV2(
+          rootId,
+          recoveryBinding.recoveryRootId,
+          quarantineRequest,
+          "after"
+        );
+        assertLifecycleOperationState(
+          addon.inspectEngineeringFileLifecycleOperationV2(
+            rootId,
+            recoveryBinding.recoveryRootId,
+            quarantineRequest
+          ),
+          quarantineRequest,
+          "after"
+        );
+        assertQuarantineInventory(
+          addon.inspectEngineeringQuarantineV2(recoveryBinding.recoveryRootId),
+          lifecycleBase.recoveryRootBindingId,
+          lifecycleBase.recoveryGrantRevision,
+          [lifecycleBase.recoveryObjectId]
+        );
+        addon.finalizeEngineeringFileLifecycleOperationV2(
+          rootId,
+          recoveryBinding.recoveryRootId,
+          quarantineRequest,
+          "after"
+        );
         addon.restoreEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
           ...lifecycleBase,
           operationKind: "restore_file",
@@ -759,28 +851,91 @@ export async function probeMutationV2Abi(addon) {
           relativeTarget: "docs/lifecycle/Moved.txt",
           targetProof: "absent"
         });
+        assertQuarantineInventory(
+          addon.inspectEngineeringQuarantineV2(recoveryBinding.recoveryRootId),
+          lifecycleBase.recoveryRootBindingId,
+          lifecycleBase.recoveryGrantRevision,
+          []
+        );
         assertExactNativeBytes(
           addon.readFile(rootId, "docs/lifecycle/Moved.txt"),
           lifecycleBytes,
           "B8 restore"
         );
         const restored = addon.inspectEngineeringFileSnapshotV2(rootId, "docs/lifecycle/Moved.txt");
-        addon.quarantineEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
+        const purgeRequest = {
           ...lifecycleBase,
+          operationId: "op-b8-purge-source",
+          stagingObjectId: "stage-b8-purge-source",
           operationKind: "delete_file",
           relativeSource: "docs/lifecycle/Moved.txt",
           relativeTarget: "",
           sourceFileIdentity: restored.manifest.fileIdentity,
           sourceSha256: restored.manifest.sha256,
           targetProof: "absent"
-        });
+        };
+        addon.quarantineEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, purgeRequest);
+        assertLifecycleOperationState(
+          addon.inspectEngineeringFileLifecycleOperationV2(
+            rootId,
+            recoveryBinding.recoveryRootId,
+            purgeRequest
+          ),
+          purgeRequest,
+          "after"
+        );
+        addon.finalizeEngineeringFileLifecycleOperationV2(
+          rootId,
+          recoveryBinding.recoveryRootId,
+          purgeRequest,
+          "after"
+        );
         addon.purgeEngineeringQuarantineObjectV2(
           recoveryBinding.recoveryRootId,
           lifecycleBase.recoveryObjectId
         );
+        assertQuarantineInventory(
+          addon.inspectEngineeringQuarantineV2(recoveryBinding.recoveryRootId),
+          lifecycleBase.recoveryRootBindingId,
+          lifecycleBase.recoveryGrantRevision,
+          []
+        );
       } finally {
         addon.closeEngineeringRecoveryRootV2(recoveryBinding.recoveryRootId);
       }
+      await writeFile(join(docs, "compensate-source.txt"), lifecycleBytes, { flush: true });
+      const compensationSnapshot = addon.inspectEngineeringFileSnapshotV2(
+        rootId,
+        "docs/compensate-source.txt"
+      );
+      const compensationRequest = {
+        ...lifecycleBase,
+        operationId: "op-b8-compensate",
+        stagingObjectId: "stage-b8-compensate",
+        operationKind: "move_file",
+        relativeSource: "docs/compensate-source.txt",
+        relativeTarget: "docs/compensate-target.txt",
+        sourceFileIdentity: compensationSnapshot.manifest.fileIdentity,
+        sourceSha256: compensationSnapshot.manifest.sha256,
+        targetProof: "absent"
+      };
+      const compensationReceipt = addon.moveEngineeringPathV2(rootId, compensationRequest);
+      assertLifecycleOperationState(
+        addon.compensateEngineeringFileLifecycleOperationV2(
+          rootId,
+          0n,
+          compensationRequest,
+          compensationReceipt
+        ),
+        compensationRequest,
+        "before"
+      );
+      assertExactNativeBytes(
+        addon.readFile(rootId, "docs/compensate-source.txt"),
+        lifecycleBytes,
+        "B8 lifecycle compensation"
+      );
+      assertRecoveryScan(addon.scanMutationRecovery(rootId), "clear");
     }
 
     const replaceWal = addon.prepareMutationWalV2(
@@ -1230,7 +1385,13 @@ export async function probeMutationV2Abi(addon) {
             lifecycleCaseOnlyMove: "passed",
             lifecycleQuarantine: "passed",
             lifecycleRestore: "passed",
-            lifecyclePurge: "passed"
+            lifecyclePurge: "passed",
+            lifecycleRecoveryInspection: "passed",
+            lifecycleIntermediateResume: "passed",
+            lifecycleRecoveryBoundStateDurability: "passed",
+            lifecycleReverseCompensation: "passed",
+            lifecycleDurableFinalize: "passed",
+            lifecycleQuarantineInventory: "passed"
           }
         : {}),
       negativeCanaries: {
@@ -1679,6 +1840,47 @@ function assertRecoveryScan(value, expectedState) {
   }
 }
 
+function assertLifecycleOperationState(value, request, expectedState) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    value.schemaVersion !== "3.0" ||
+    value.kind !== "engineering_file_lifecycle_operation_state" ||
+    value.state !== expectedState ||
+    value.requestChecksum !== sha256(stable(request)) ||
+    (expectedState === "after"
+      ? !value.receipt ||
+        value.receipt.transactionId !== request.transactionId ||
+        value.receipt.operationId !== request.operationId ||
+        value.receipt.operationKind !== request.operationKind
+      : value.receipt !== null)
+  ) {
+    throw new Error(`Batch 8 lifecycle state did not bind ${expectedState}`);
+  }
+}
+
+function assertQuarantineInventory(value, bindingId, grantRevision, expectedObjectIds) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    value.schemaVersion !== "3.0" ||
+    value.kind !== "engineering_quarantine_inventory" ||
+    value.recoveryRootBindingId !== bindingId ||
+    value.grantRevision !== grantRevision ||
+    !Array.isArray(value.objects) ||
+    value.objects.length !== expectedObjectIds.length ||
+    !expectedObjectIds.every(
+      (objectId, index) =>
+        value.objects[index]?.recoveryObjectId === objectId &&
+        typeof value.objects[index]?.fileIdentity === "string" &&
+        typeof value.objects[index]?.sha256 === "string" &&
+        typeof value.objects[index]?.byteLength === "bigint"
+    )
+  ) {
+    throw new Error("Batch 8 quarantine inventory did not bind the physical recovery objects");
+  }
+}
+
 function assertMutationV2ProbeInfo(value) {
   const expected = {
     schemaVersion: "engineering_file_mutation_probe_v1",
@@ -1711,7 +1913,13 @@ function assertMutationV2ProbeInfo(value) {
       delete: "development_probe_only",
       createDirectory: "development_probe_only",
       caseOnlyRenameWal: "available",
-      volumeLocalQuarantine: "available"
+      volumeLocalQuarantine: "available",
+      quarantineInventory: "available",
+      lifecycleRecoveryInspection: "available",
+      lifecycleIntermediateResume: "available",
+      lifecycleRecoveryBoundStateDurability: "available",
+      lifecycleReverseCompensation: "available",
+      lifecycleDurableFinalize: "available"
     });
   }
   for (const [key, expectedValue] of Object.entries(expected)) {

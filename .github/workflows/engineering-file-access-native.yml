@@ -142,6 +142,12 @@ jobs:
             $manifest.developmentMutationV2Probe.lifecyclePrimitives.restoreNoOverwrite -ne "available" -or
             $manifest.developmentMutationV2Probe.lifecyclePrimitives.localPurge -ne "available" -or
             $manifest.developmentMutationV2Probe.lifecyclePrimitives.singleLevelCreateDirectory -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.quarantineInventory -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.lifecycleRecoveryInspection -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.lifecycleIntermediateResume -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.lifecycleRecoveryBoundStateDurability -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.lifecycleReverseCompensation -ne "available" -or
+            $manifest.developmentMutationV2Probe.lifecyclePrimitives.lifecycleDurableFinalize -ne "available" -or
             $manifest.eligibility.batch -ne "6" -or
             $manifest.eligibility.mutation -ne "unavailable" -or
             $manifest.eligibility.recovery -ne "unavailable"
@@ -189,7 +195,13 @@ jobs:
             "lifecycleCaseOnlyMove",
             "lifecycleQuarantine",
             "lifecycleRestore",
-            "lifecyclePurge"
+            "lifecyclePurge",
+            "lifecycleRecoveryInspection",
+            "lifecycleIntermediateResume",
+            "lifecycleRecoveryBoundStateDurability",
+            "lifecycleReverseCompensation",
+            "lifecycleDurableFinalize",
+            "lifecycleQuarantineInventory"
           )) {
             if ($mutation.$name -ne "passed") { throw "Missing positive mutation probe: $name" }
           }
