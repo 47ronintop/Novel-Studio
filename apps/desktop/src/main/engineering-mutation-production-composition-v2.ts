@@ -653,6 +653,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           editorState,
           proposalApproval,
           transaction,
+          lifecycleTransaction,
           synchronizer,
           syncRequired: syncRequiredStore,
           ...(options.onMutationUnavailable === undefined
@@ -661,7 +662,6 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           traceId: `${traceId}:runtime`,
           ...(options.now === undefined ? {} : { now: options.now })
         }),
-      lifecycleTransaction,
       ...(options.prepareLifecycleRecoveryBinding === undefined
         ? {}
         : { resolveLifecycleRecoveryBinding: options.prepareLifecycleRecoveryBinding }),

@@ -29,7 +29,6 @@ import {
   type EngineeringFileMutationProposalPortV2,
   type EngineeringFileLifecycleRequestV2,
   type EngineeringLifecycleWriteTransactionInputV2,
-  type EngineeringLifecycleWriteTransactionV2,
   type EngineeringMutationLifecycleTargetProofV2,
   type EngineeringFileMutationRequestV2,
   type EngineeringMutationBlobStoreV2,
@@ -81,8 +80,6 @@ export interface DesktopEngineeringFileMutationSessionV2Options {
   readonly createRuntime: (
     proposalApproval: EngineeringMutationProposalApprovalPortV2
   ) => EngineeringMutationRuntimeV2;
-  /** B8 lifecycle coordinator. Omission keeps lifecycle apply fail closed. */
-  readonly lifecycleTransaction?: Pick<EngineeringLifecycleWriteTransactionV2, "apply">;
   /** Main-owned qualified recovery facts for delete/quarantine proposals. */
   readonly resolveLifecycleRecoveryBinding?: (input: {
     readonly contentRootBindingId: string;
@@ -308,24 +305,9 @@ export function createDesktopEngineeringFileMutationSessionV2(
       }
       pendingByTransaction.set(approval.reservationTransactionId, pending.value);
       try {
-        let applied: Result<
-          | EngineeringMutationRuntimeResultV2
-          | { readonly prepared: { readonly transactionId: string } },
-          UnifiedError
-        >;
+        let applied: Result<EngineeringMutationRuntimeResultV2, UnifiedError>;
         try {
-          if (isRawMutationProposalRecord(pending.value.record)) {
-            applied = await runtime.apply(runtimeRequest(pending.value));
-          } else {
-            if (options.lifecycleTransaction === undefined)
-              return unavailable("ENGINEERING_LIFECYCLE_TRANSACTION_UNAVAILABLE");
-            const lifecycle = await options.lifecycleTransaction.apply(
-              pending.value.transactionInput
-            );
-            applied = lifecycle.ok
-              ? ok({ prepared: { transactionId: lifecycle.value.prepared.transactionId } })
-              : lifecycle;
-          }
+          applied = await runtime.apply(runtimeRequest(pending.value));
         } catch {
           const reconciled = await reconcileFailedAuthorizationReservation(pending.value);
           return reconciled.ok
@@ -354,10 +336,7 @@ export function createDesktopEngineeringFileMutationSessionV2(
         } catch {
           return postCommitRecoveryRequired("consume_authorization");
         }
-        const transactionId =
-          "transactionId" in applied.value
-            ? applied.value.transactionId
-            : applied.value.prepared.transactionId;
+        const transactionId = applied.value.transactionId;
         const versionGroupId = `engineering-version-group-${sha256EngineeringMutationTextV2(transactionId)}`;
         return ok({
           schemaVersion: "2.0",
@@ -393,11 +372,6 @@ export function createDesktopEngineeringFileMutationSessionV2(
   async function reconcileFailedAuthorizationReservation(
     pending: PendingApply
   ): Promise<Result<"revoked" | "prepared", UnifiedError>> {
-    // The injected B7 reconciler scans only the raw-byte WAL. It must never revoke a reservation
-    // that may already be owned by the separate lifecycle WAL.
-    if (!isRawMutationProposalRecord(pending.record)) {
-      return unavailable("ENGINEERING_LIFECYCLE_RESERVATION_RECONCILIATION_REQUIRED");
-    }
     try {
       return await options.reconcileFailedAuthorizationReservation({
         authorizationId: pending.approval.authorizationId,
@@ -1374,7 +1348,7 @@ function runtimeRequest(pending: PendingApply) {
     schemaVersion: "2.0" as const,
     operationKind: pending.record.operationKind,
     contentRootBindingId: pending.record.contentRootBindingId,
-    relativeIdentities: [pending.record.relativeIdentity],
+    relativeIdentities: affectedRelativeIdentities(pending.record),
     proposalRevision: `proposal:${pending.record.recordChecksum}`,
     proposalBindingChecksum: sha256EngineeringMutationTextV2(
       canonicalizeEngineeringMutationV2Json(pending.record.changeSetBinding)
@@ -1384,6 +1358,16 @@ function runtimeRequest(pending: PendingApply) {
     capabilityRevision: pending.record.capabilityRevision,
     transactionInput: pending.transactionInput
   };
+}
+
+function affectedRelativeIdentities(
+  record: EngineeringMutationProposalRecordV2
+): readonly string[] {
+  const identities =
+    record.operationKind === "move_file"
+      ? [record.relativeIdentity, record.targetRelativeIdentity]
+      : [record.relativeIdentity];
+  return Object.freeze([...new Set(identities)].sort((left, right) => left.localeCompare(right)));
 }
 
 function requestFor(

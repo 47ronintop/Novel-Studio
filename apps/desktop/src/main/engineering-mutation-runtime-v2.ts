@@ -126,6 +126,8 @@ export interface EngineeringMutationRuntimeV2Options {
   readonly editorState: EngineeringMutationEditorStatePortV2;
   readonly proposalApproval: EngineeringMutationProposalApprovalPortV2;
   readonly transaction: EngineeringWriteTransactionV2ApplyPort;
+  /** B8 lifecycle writes must cross the same root/save/editor/sync coordinator. */
+  readonly lifecycleTransaction?: EngineeringWriteTransactionV2ApplyPort;
   readonly synchronizer: EngineeringMutationSyncPortV2;
   readonly syncRequired: EngineeringMutationSyncRequiredPortV2;
   /** Main uses this to synchronously hide mutation tools while preserving qualified read access. */
@@ -259,8 +261,14 @@ async function applyRequest(
       if (!leaseBeforeApply.ok) return leaseBeforeApply;
 
       // 6. Repository V2 owns the durable blob/prepared/native/receipt/progress/commit sequence.
+      const transactionPort = isLifecycleOperation(request.operationKind)
+        ? options.lifecycleTransaction
+        : options.transaction;
+      if (transactionPort === undefined) {
+        return unavailable("ENGINEERING_LIFECYCLE_TRANSACTION_UNAVAILABLE", traceId);
+      }
       const transaction = await safely(
-        () => options.transaction.apply(validated.value.transactionInput),
+        () => transactionPort.apply(validated.value.transactionInput),
         traceId
       );
       if (!transaction.ok) {
@@ -385,14 +393,28 @@ function parseCommittedTransaction(
   value: unknown,
   request: EngineeringMutationRuntimeValidatedRequestV2
 ): Readonly<{ transactionId: string }> | undefined {
-  if (!isRecord(value) || !isRecord(value["prepared"]) || !isRecord(value["commit"]))
-    return undefined;
+  if (!isRecord(value) || !isRecord(value["prepared"])) return undefined;
   const prepared = value["prepared"];
+  if (
+    prepared["transactionId"] !== request.transactionId ||
+    prepared["contentRootBindingId"] !== request.contentRootBindingId
+  ) {
+    return undefined;
+  }
   const commit = value["commit"];
-  return prepared["transactionId"] === request.transactionId &&
-    prepared["contentRootBindingId"] === request.contentRootBindingId &&
+  if (
+    isRecord(commit) &&
     commit["transactionId"] === request.transactionId &&
     commit["contentRootBindingId"] === request.contentRootBindingId
+  ) {
+    return Object.freeze({ transactionId: request.transactionId });
+  }
+  return value["kind"] === "engineering_lifecycle_write_ahead_log" &&
+    isCanonicalTimestamp(value["committedAt"]) &&
+    value["rolledBackAt"] === null &&
+    Array.isArray(prepared["operations"]) &&
+    Array.isArray(value["receipts"]) &&
+    value["receipts"].length === prepared["operations"].length
     ? Object.freeze({ transactionId: request.transactionId })
     : undefined;
 }
@@ -445,8 +467,21 @@ function isOperationKind(value: unknown): value is EngineeringMutationRuntimeOpe
   );
 }
 
+function isLifecycleOperation(value: EngineeringMutationRuntimeOperationKindV2): boolean {
+  return value === "move_file" || value === "delete_file" || value === "create_directory";
+}
+
 function isStableId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value);
+}
+
+function isCanonicalTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value
+  );
 }
 
 function isSha256(value: unknown): value is string {

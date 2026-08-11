@@ -58,6 +58,64 @@ describe("Engineering mutation runtime V2", () => {
     ]);
   });
 
+  test.each(["move_file", "delete_file", "create_directory"] as const)(
+    "routes %s through the full coordinator and lifecycle transaction",
+    async (operationKind) => {
+      const harness = createRuntimeHarness();
+      const relativeIdentities =
+        operationKind === "move_file" ? ["src/after.ts", "src/before.ts"] : ["src/entry"];
+      const request = createRequest("root-alpha", operationKind, relativeIdentities);
+
+      const result = await harness.runtime.apply(request);
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: { transactionId: transactionIdFor("root-alpha") }
+      });
+      expect(harness.transactionInputs).toHaveLength(0);
+      expect(harness.lifecycleTransactionInputs).toEqual([request.transactionInput]);
+      expect(harness.calls).toEqual([
+        "gate",
+        "sync-required-check",
+        "lease",
+        "lease-current",
+        "save-pause-drain",
+        "editor",
+        "revalidate",
+        "gate",
+        "lease-current",
+        "lifecycle-transaction",
+        "sync",
+        "save-release",
+        "lease-release"
+      ]);
+      expect(harness.syncInputs).toEqual([
+        {
+          contentRootBindingId: "root-alpha",
+          operationKind,
+          relativeIdentities,
+          transactionId: transactionIdFor("root-alpha")
+        }
+      ]);
+    }
+  );
+
+  test("keeps lifecycle apply closed when no lifecycle transaction is wired", async () => {
+    const harness = createRuntimeHarness(false);
+
+    const result = await harness.runtime.apply(
+      createRequest("root-alpha", "move_file", ["src/after.ts", "src/before.ts"])
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_LIFECYCLE_TRANSACTION_UNAVAILABLE" }
+    });
+    expect(harness.transactionInputs).toHaveLength(0);
+    expect(harness.lifecycleTransactionInputs).toHaveLength(0);
+    expect(harness.calls).not.toContain("sync");
+  });
+
   test("does not write when an affected editor is dirty, unknown, or disconnected", async () => {
     for (const { status, expectedCode } of [
       { status: "dirty" as const, expectedCode: "ENGINEERING_MUTATION_RUNTIME_EDITOR_DIRTY" },
@@ -106,7 +164,7 @@ describe("Engineering mutation runtime V2", () => {
   test("persists sync_required after a committed sync failure and blocks another apply", async () => {
     const harness = createRuntimeHarness();
     harness.state.synchronizeResult = err(testError("SYNC_FAILED"));
-    const request = createRequest("root-alpha");
+    const request = createRequest("root-alpha", "move_file", ["src/after.ts", "src/before.ts"]);
 
     const first = await harness.runtime.apply(request);
 
@@ -114,15 +172,16 @@ describe("Engineering mutation runtime V2", () => {
       ok: false,
       error: { code: "ENGINEERING_MUTATION_RUNTIME_SYNC_REQUIRED" }
     });
-    expect(harness.transactionInputs).toHaveLength(1);
+    expect(harness.transactionInputs).toHaveLength(0);
+    expect(harness.lifecycleTransactionInputs).toHaveLength(1);
     expect(harness.syncRequiredRecords).toEqual([
       {
         schemaVersion: ENGINEERING_MUTATION_RUNTIME_V2_SCHEMA_VERSION,
         kind: "sync_required",
         contentRootBindingId: "root-alpha",
         transactionId: transactionIdFor("root-alpha"),
-        operationKind: "replace_file",
-        relativeIdentities: ["src/index.ts"],
+        operationKind: "move_file",
+        relativeIdentities: ["src/after.ts", "src/before.ts"],
         recordedAt: FIXED_NOW
       }
     ]);
@@ -134,7 +193,7 @@ describe("Engineering mutation runtime V2", () => {
       ok: false,
       error: { code: "ENGINEERING_MUTATION_RUNTIME_SYNC_REQUIRED" }
     });
-    expect(harness.transactionInputs).toHaveLength(1);
+    expect(harness.lifecycleTransactionInputs).toHaveLength(1);
     expect(harness.acquiredRoots).toEqual(["root-alpha"]);
   });
 
@@ -179,15 +238,17 @@ interface RuntimeHarness {
   readonly calls: string[];
   readonly acquiredRoots: string[];
   readonly transactionInputs: unknown[];
+  readonly lifecycleTransactionInputs: unknown[];
   readonly syncInputs: Parameters<EngineeringMutationSyncPortV2["synchronize"]>[0][];
   readonly syncRequiredRecords: EngineeringMutationSyncRequiredRecordV2[];
   readonly mutationUnavailableNotifications: string[];
 }
 
-function createRuntimeHarness(): RuntimeHarness {
+function createRuntimeHarness(includeLifecycleTransaction = true): RuntimeHarness {
   const calls: string[] = [];
   const acquiredRoots: string[] = [];
   const transactionInputs: unknown[] = [];
+  const lifecycleTransactionInputs: unknown[] = [];
   const syncInputs: Parameters<EngineeringMutationSyncPortV2["synchronize"]>[0][] = [];
   const syncRequiredRecords: EngineeringMutationSyncRequiredRecordV2[] = [];
   const mutationUnavailableNotifications: string[] = [];
@@ -275,6 +336,32 @@ function createRuntimeHarness(): RuntimeHarness {
         });
       }
     },
+    ...(includeLifecycleTransaction
+      ? {
+          lifecycleTransaction: {
+            async apply(input: unknown) {
+              calls.push("lifecycle-transaction");
+              lifecycleTransactionInputs.push(input);
+              const transactionInput = input as {
+                readonly contentRootBindingId: string;
+                readonly transactionId: string;
+              };
+              return ok({
+                schemaVersion: "3.0",
+                kind: "engineering_lifecycle_write_ahead_log",
+                prepared: {
+                  transactionId: transactionInput.transactionId,
+                  contentRootBindingId: transactionInput.contentRootBindingId,
+                  operations: [{}]
+                },
+                receipts: [{}],
+                committedAt: "2099-01-01T00:00:00.000Z",
+                rolledBackAt: null
+              });
+            }
+          }
+        }
+      : {}),
     synchronizer: {
       async synchronize(input) {
         calls.push("sync");
@@ -293,19 +380,24 @@ function createRuntimeHarness(): RuntimeHarness {
     calls,
     acquiredRoots,
     transactionInputs,
+    lifecycleTransactionInputs,
     syncInputs,
     syncRequiredRecords,
     mutationUnavailableNotifications
   };
 }
 
-function createRequest(contentRootBindingId: string): EngineeringMutationRuntimeApplyRequestV2 {
+function createRequest(
+  contentRootBindingId: string,
+  operationKind: EngineeringMutationRuntimeApplyRequestV2["operationKind"] = "replace_file",
+  relativeIdentities: readonly string[] = ["src/index.ts"]
+): EngineeringMutationRuntimeApplyRequestV2 {
   const transactionId = transactionIdFor(contentRootBindingId);
   return Object.freeze({
     schemaVersion: ENGINEERING_MUTATION_RUNTIME_V2_SCHEMA_VERSION,
-    operationKind: "replace_file",
+    operationKind,
     contentRootBindingId,
-    relativeIdentities: Object.freeze(["src/index.ts"]),
+    relativeIdentities: Object.freeze([...relativeIdentities]),
     proposalRevision: "proposal-revision-1",
     proposalBindingChecksum: CHECKSUM,
     approvalBindingId: "approval-binding-1",
