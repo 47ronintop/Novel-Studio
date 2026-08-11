@@ -36,9 +36,10 @@ describe("engineering workspace access runtime", () => {
 
   test("exposes no usable session when Main qualification is unavailable", async () => {
     const loader = { load: vi.fn() };
+    const issueRootBinding = vi.fn(() => binding());
     const runtime = createEngineeringWorkspaceAccessRuntime({
       qualificationService: qualificationService(),
-      issueRootBinding: () => binding(),
+      issueRootBinding,
       pathPolicy: defaultEngineeringPathPolicy,
       addonLoader: loader
     });
@@ -48,6 +49,7 @@ describe("engineering workspace access runtime", () => {
       reason: "qualification_unavailable"
     });
     expect(loader.load).not.toHaveBeenCalled();
+    expect(issueRootBinding).not.toHaveBeenCalled();
     expect(Object.keys(runtime)).toEqual(["operations", "openWorkspace"]);
   });
 

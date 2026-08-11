@@ -100,6 +100,7 @@ import {
   engineeringSideEffectSubjectChecksumV2,
   type EngineeringFileMutationRequestV2,
   type EngineeringLifecycleWriteTransactionInputV2,
+  type EngineeringWorkspaceNativeRootIdentity,
   type EngineeringWriteTransactionPreparedV2
 } from "@novel-studio/repository";
 import type {
@@ -123,7 +124,8 @@ import {
   MAX_EXTERNAL_TOOL_DESCRIPTORS,
   NO_AGENT_PROMPT_CACHE_CAPABILITY,
   defaultEngineeringPathPolicy,
-  validateExternalToolDescriptors
+  validateExternalToolDescriptors,
+  type EngineeringWorkspaceRootBindingV1
 } from "@novel-studio/agent-engine";
 import type { AgentToolDescriptor } from "@novel-studio/agent-engine";
 import {
@@ -160,6 +162,93 @@ const ENGINEERING_PATH_POLICY_REVISION = createHash("sha256")
     "utf8"
   )
   .digest("hex");
+
+const ENGINEERING_ROOT_BINDING_ID_DOMAIN = "novel-studio-engineering-content-root-binding-v2";
+
+export function issueStableEngineeringWorkspaceRootBindingV2(input: {
+  readonly workspaceId: string;
+  readonly nativeIdentity: EngineeringWorkspaceNativeRootIdentity | undefined;
+  readonly pathPolicyRevision: string;
+  readonly issuedAt?: string;
+}): EngineeringWorkspaceRootBindingV1 | undefined {
+  const { workspaceId, nativeIdentity, pathPolicyRevision } = input;
+  if (
+    nativeIdentity === undefined ||
+    !isRootBindingIdentityPart(workspaceId) ||
+    !isRootBindingIdentityPart(nativeIdentity.volumeIdentity) ||
+    !isRootBindingIdentityPart(nativeIdentity.directoryIdentity) ||
+    !isSha256(nativeIdentity.canonicalPathIdentityChecksum) ||
+    !isRootBindingIdentityPart(pathPolicyRevision)
+  ) {
+    return undefined;
+  }
+  const issuedAt = input.issuedAt ?? new Date().toISOString();
+  if (!isCanonicalUtcTimestamp(issuedAt)) return undefined;
+
+  const rootBindingId = `engineering_root_v2_${createHash("sha256")
+    .update(ENGINEERING_ROOT_BINDING_ID_DOMAIN, "utf8")
+    .update("\0", "utf8")
+    .update(
+      JSON.stringify([
+        workspaceId,
+        nativeIdentity.volumeIdentity,
+        nativeIdentity.directoryIdentity,
+        nativeIdentity.canonicalPathIdentityChecksum,
+        pathPolicyRevision
+      ]),
+      "utf8"
+    )
+    .digest("hex")}`;
+
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    rootBindingId,
+    workspaceId,
+    workspaceKind: "engineeringWorkspace" as const,
+    volumeIdentity: nativeIdentity.volumeIdentity,
+    directoryIdentity: nativeIdentity.directoryIdentity,
+    canonicalPathIdentityChecksum: nativeIdentity.canonicalPathIdentityChecksum,
+    pathPolicyRevision,
+    issuedAt
+  });
+}
+
+function isRootBindingIdentityPart(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 4_096 &&
+    !value.includes("\0") &&
+    isWellFormedUnicode(value)
+  );
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/iu.test(value);
+}
+
+function isCanonicalUtcTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value
+  );
+}
 
 const activeApprovalCoordinatorProxy = new Proxy(
   Object.create(
@@ -488,6 +577,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           );
         })();
       };
+      let issuedEngineeringContentRootNativeIdentity:
+        Readonly<EngineeringWorkspaceNativeRootIdentity> | undefined;
       const engineeringWorkspaceAccessResult =
         binding.kind !== "engineeringWorkspace"
           ? undefined
@@ -498,23 +589,30 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
               onRootChanged: ({ rootBindingId }) => revokeEngineeringRootBinding(rootBindingId),
               onQualificationRevoked: ({ rootBindingId }) =>
                 revokeEngineeringRootBinding(rootBindingId),
-              issueRootBinding: (nativeIdentity) =>
-                Object.freeze({
-                  schemaVersion: "1.0" as const,
-                  rootBindingId: `engineering_root_${randomUUID().replaceAll("-", "")}`,
+              issueRootBinding: (nativeIdentity) => {
+                const rootBinding = issueStableEngineeringWorkspaceRootBindingV2({
                   workspaceId: binding.workspaceId,
-                  workspaceKind: "engineeringWorkspace" as const,
-                  volumeIdentity: nativeIdentity.volumeIdentity,
-                  directoryIdentity: nativeIdentity.directoryIdentity,
-                  canonicalPathIdentityChecksum: nativeIdentity.canonicalPathIdentityChecksum,
-                  pathPolicyRevision: ENGINEERING_PATH_POLICY_REVISION,
-                  issuedAt: new Date().toISOString()
-                })
+                  nativeIdentity,
+                  pathPolicyRevision: ENGINEERING_PATH_POLICY_REVISION
+                });
+                if (rootBinding !== undefined) {
+                  issuedEngineeringContentRootNativeIdentity = Object.freeze({
+                    volumeIdentity: nativeIdentity.volumeIdentity,
+                    directoryIdentity: nativeIdentity.directoryIdentity,
+                    canonicalPathIdentityChecksum: nativeIdentity.canonicalPathIdentityChecksum
+                  });
+                }
+                return rootBinding;
+              }
             }).openWorkspace({ rootPath: binding.contentRoot });
       const engineeringWorkspaceAccessSession =
         engineeringWorkspaceAccessResult?.status === "available"
           ? engineeringWorkspaceAccessResult.session
           : undefined;
+      const engineeringContentRootNativeIdentity =
+        engineeringWorkspaceAccessSession === undefined
+          ? undefined
+          : issuedEngineeringContentRootNativeIdentity;
       const engineeringQualification =
         binding.kind === "engineeringWorkspace"
           ? await engineeringFileAccessQualification.readAttestation()
@@ -563,6 +661,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       const engineeringMutationComposition =
         binding.kind === "engineeringWorkspace" &&
         engineeringWorkspaceAccessSession !== undefined &&
+        engineeringContentRootNativeIdentity !== undefined &&
         engineeringMutationRefCapabilityRevision !== undefined &&
         changeSetApprovalV2 !== undefined
           ? await createDesktopEngineeringMutationProductionCompositionV2({
