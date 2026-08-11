@@ -279,7 +279,7 @@ describe("engineering file access development probe contract", () => {
     const quarantineCallStart = probeSource.indexOf("addon.quarantineEngineeringFileV2(");
     const quarantineCallEnd = probeSource.indexOf(");", quarantineCallStart) + 2;
     expect(quarantineCallStart).toBeGreaterThanOrEqual(0);
-    expect(probeSource.slice(quarantineCallStart, quarantineCallEnd)).toBe(
+    expect(probeSource.slice(quarantineCallStart, quarantineCallEnd).replace(/\r\n/gu, "\n")).toBe(
       `addon.quarantineEngineeringFileV2(
           rootId,
           recoveryBinding.recoveryRootId,
