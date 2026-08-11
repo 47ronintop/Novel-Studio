@@ -196,6 +196,8 @@ describe("engineering file access development probe contract", () => {
     expect(makeStringDeclaration).toBeGreaterThanOrEqual(0);
     expect(firstMakeStringCall).toBeGreaterThan(makeStringDeclaration);
 
+    expect(nativeSource).toContain("napi_value objects = nullptr;");
+
     expect(nativeSource).toContain("engineering_lifecycle_marker_v1");
     expect(nativeSource).toContain('LifecycleMarker{requestChecksum, "case_intermediate"');
     expect(nativeSource).toContain('LifecycleMarker{requestChecksum, "after"');

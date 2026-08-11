@@ -4395,7 +4395,7 @@ napi_value inspectEngineeringQuarantineV2(napi_env env, napi_callback_info info)
     if (result == AccessError::kOk) result = validateRecoveryRootOwnership(root.get(), recovery);
     const NtQueryDirectoryFileFn query = ntQueryDirectoryFile();
     if (result == AccessError::kOk && query == nullptr) result = AccessError::kUnavailable;
-    napi_value objects;
+    napi_value objects = nullptr;
     if (result == AccessError::kOk && napi_create_array(env, &objects) != napi_ok) result = AccessError::kIo;
     std::vector<unsigned char> buffer(64 * 1024);
     bool restart = true;
