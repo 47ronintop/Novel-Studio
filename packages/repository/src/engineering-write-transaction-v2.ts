@@ -172,6 +172,8 @@ export interface EngineeringLifecycleWriteAheadLogV2 {
   readonly receipts: readonly EngineeringFileLifecycleReceiptV2[];
   readonly committedAt: string | null;
   readonly rolledBackAt: string | null;
+  /** Durable proof that editor/tree/index synchronization completed for this terminal WAL. */
+  readonly synchronizedAt: string | null;
   readonly journalChecksum: string;
 }
 
@@ -198,6 +200,11 @@ export interface EngineeringLifecycleWalRepositoryV2 {
     readonly contentRootBindingId: string;
     readonly transactionId: string;
     readonly rolledBackAt: string;
+  }): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>>;
+  markSynchronized(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly synchronizedAt: string;
   }): Promise<Result<EngineeringLifecycleWriteAheadLogV2, UnifiedError>>;
 }
 
@@ -273,7 +280,7 @@ export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifec
         return sameCanonicalJson(current.value.prepared, parsed.value)
           ? ok(current.value)
           : conflict(this.traceId);
-      const journal = createLifecycleWal(parsed.value, [], null, null);
+      const journal = createLifecycleWal(parsed.value, [], null, null, null);
       const persisted = await this.persist(journal, "create");
       return persisted.ok ? ok(journal) : persisted;
     });
@@ -303,7 +310,8 @@ export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifec
         current.value.prepared,
         [...current.value.receipts, bound.value],
         current.value.committedAt,
-        current.value.rolledBackAt
+        current.value.rolledBackAt,
+        current.value.synchronizedAt
       );
       const persisted = await this.persist(next, "replace");
       return persisted.ok ? ok(next) : persisted;
@@ -329,7 +337,8 @@ export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifec
         current.value.prepared,
         current.value.receipts,
         input.committedAt,
-        current.value.rolledBackAt
+        current.value.rolledBackAt,
+        null
       );
       const persisted = await this.persist(next, "replace");
       return persisted.ok ? ok(next) : persisted;
@@ -354,7 +363,40 @@ export class FileEngineeringLifecycleWalRepositoryV2 implements EngineeringLifec
         current.value.prepared,
         current.value.receipts,
         current.value.committedAt,
-        input.rolledBackAt
+        input.rolledBackAt,
+        null
+      );
+      const persisted = await this.persist(next, "replace");
+      return persisted.ok ? ok(next) : persisted;
+    });
+  }
+
+  public async markSynchronized(input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly synchronizedAt: string;
+  }) {
+    if (!isCanonicalUtcTimestamp(input.synchronizedAt))
+      return invalid("ENGINEERING_LIFECYCLE_WAL_V2_SYNCHRONIZATION_INVALID", this.traceId);
+    return this.serialized(async () => {
+      const current = await this.read(input);
+      if (!current.ok) return current;
+      if (current.value === undefined) return missing(this.traceId);
+      if (current.value.committedAt === null && current.value.rolledBackAt === null)
+        return invalid(
+          "ENGINEERING_LIFECYCLE_WAL_V2_SYNCHRONIZATION_BEFORE_TERMINAL",
+          this.traceId
+        );
+      if (current.value.synchronizedAt !== null) return ok(current.value);
+      const terminalAt = current.value.committedAt ?? current.value.rolledBackAt;
+      if (terminalAt === null || Date.parse(input.synchronizedAt) < Date.parse(terminalAt))
+        return invalid("ENGINEERING_LIFECYCLE_WAL_V2_SYNCHRONIZATION_INVALID", this.traceId);
+      const next = createLifecycleWal(
+        current.value.prepared,
+        current.value.receipts,
+        current.value.committedAt,
+        current.value.rolledBackAt,
+        input.synchronizedAt
       );
       const persisted = await this.persist(next, "replace");
       return persisted.ok ? ok(next) : persisted;
@@ -1746,7 +1788,8 @@ function createLifecycleWal(
   prepared: EngineeringLifecycleWriteTransactionInputV2,
   receipts: readonly EngineeringFileLifecycleReceiptV2[],
   committedAt: string | null,
-  rolledBackAt: string | null
+  rolledBackAt: string | null,
+  synchronizedAt: string | null
 ): EngineeringLifecycleWriteAheadLogV2 {
   const preparedChecksum = sha256EngineeringMutationTextV2(
     canonicalizeEngineeringMutationV2Json(prepared)
@@ -1758,7 +1801,8 @@ function createLifecycleWal(
     preparedChecksum,
     receipts,
     committedAt,
-    rolledBackAt
+    rolledBackAt,
+    synchronizedAt
   };
   return freeze({
     ...unsigned,
@@ -1781,6 +1825,7 @@ function validateLifecycleWal(
     !Array.isArray(value["receipts"]) ||
     (value["committedAt"] !== null && !isCanonicalUtcTimestamp(value["committedAt"])) ||
     (value["rolledBackAt"] !== null && !isCanonicalUtcTimestamp(value["rolledBackAt"])) ||
+    (value["synchronizedAt"] !== null && !isCanonicalUtcTimestamp(value["synchronizedAt"])) ||
     !isSha256(value["journalChecksum"])
   )
     return invalid("ENGINEERING_LIFECYCLE_WAL_V2_RECORD_INVALID", traceId);
@@ -1810,7 +1855,8 @@ function validateLifecycleWal(
     preparedChecksum: expectedPreparedChecksum,
     receipts,
     committedAt: value["committedAt"] as string | null,
-    rolledBackAt: value["rolledBackAt"] as string | null
+    rolledBackAt: value["rolledBackAt"] as string | null,
+    synchronizedAt: value["synchronizedAt"] as string | null
   };
   if (
     value["journalChecksum"] !==
@@ -1819,7 +1865,13 @@ function validateLifecycleWal(
     return invalid("ENGINEERING_LIFECYCLE_WAL_V2_AUTHENTICATION_FAILED", traceId);
   if (
     (value["committedAt"] !== null && value["rolledBackAt"] !== null) ||
-    (value["committedAt"] !== null && receipts.length !== prepared.value.operations.length)
+    (value["committedAt"] !== null && receipts.length !== prepared.value.operations.length) ||
+    (value["synchronizedAt"] !== null &&
+      value["committedAt"] === null &&
+      value["rolledBackAt"] === null) ||
+    (value["synchronizedAt"] !== null &&
+      Date.parse(value["synchronizedAt"] as string) <
+        Date.parse((value["committedAt"] ?? value["rolledBackAt"]) as string))
   )
     return invalid("ENGINEERING_LIFECYCLE_WAL_V2_COMMIT_INCOMPLETE", traceId);
   return ok(freeze({ ...unsigned, journalChecksum: value["journalChecksum"] as string }));
@@ -1960,5 +2012,6 @@ const lifecycleWalKeys = [
   "preparedChecksum",
   "receipts",
   "rolledBackAt",
-  "schemaVersion"
+  "schemaVersion",
+  "synchronizedAt"
 ] as const;

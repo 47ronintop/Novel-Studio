@@ -831,7 +831,8 @@ class TestLifecycleWalRepository implements EngineeringLifecycleWalRepositoryV2 
         this.current.prepared,
         [...this.current.receipts, input.receipt],
         this.current.committedAt,
-        this.current.rolledBackAt
+        this.current.rolledBackAt,
+        this.current.synchronizedAt
       );
       return ok(this.current);
     }
@@ -862,6 +863,24 @@ class TestLifecycleWalRepository implements EngineeringLifecycleWalRepositoryV2 
         this.current.receipts,
         null,
         input.rolledBackAt
+      );
+      return ok(this.current);
+    }
+  );
+
+  public readonly markSynchronized = vi.fn(
+    async (input: {
+      contentRootBindingId: string;
+      transactionId: string;
+      synchronizedAt: string;
+    }) => {
+      if (this.current === undefined) throw new Error("missing lifecycle WAL");
+      this.current = lifecycleJournal(
+        this.current.prepared,
+        this.current.receipts,
+        this.current.committedAt,
+        this.current.rolledBackAt,
+        input.synchronizedAt
       );
       return ok(this.current);
     }
@@ -1024,7 +1043,8 @@ function lifecycleJournal(
   prepared: EngineeringLifecycleWriteTransactionInputV2,
   receipts: readonly EngineeringFileLifecycleReceiptV2[],
   committedAt: string | null,
-  rolledBackAt: string | null
+  rolledBackAt: string | null,
+  synchronizedAt: string | null = null
 ): EngineeringLifecycleWriteAheadLogV2 {
   return {
     schemaVersion: "2.0",
@@ -1034,6 +1054,9 @@ function lifecycleJournal(
     receipts,
     committedAt,
     rolledBackAt,
-    journalChecksum: hash(JSON.stringify({ prepared, receipts, committedAt, rolledBackAt }))
+    synchronizedAt,
+    journalChecksum: hash(
+      JSON.stringify({ prepared, receipts, committedAt, rolledBackAt, synchronizedAt })
+    )
   };
 }

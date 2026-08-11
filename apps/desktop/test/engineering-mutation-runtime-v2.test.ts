@@ -86,6 +86,7 @@ describe("Engineering mutation runtime V2", () => {
         "lease-current",
         "lifecycle-transaction",
         "sync",
+        "lifecycle-sync-mark",
         "save-release",
         "lease-release"
       ]);
@@ -359,6 +360,10 @@ function createRuntimeHarness(includeLifecycleTransaction = true): RuntimeHarnes
                 rolledBackAt: null
               });
             }
+          },
+          async markLifecycleSynchronized() {
+            calls.push("lifecycle-sync-mark");
+            return ok(undefined);
           }
         }
       : {}),

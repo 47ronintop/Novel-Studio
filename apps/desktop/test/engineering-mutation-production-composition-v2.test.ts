@@ -28,6 +28,7 @@ import {
   createEngineeringMutationReceiptV2,
   createEngineeringRawByteManifestV2,
   createEngineeringWriteTransactionPreparedV2,
+  engineeringFileLifecycleRequestChecksumV2,
   engineeringFileMutationRequestChecksumV2,
   engineeringFullAfterManifestChecksumV2,
   engineeringSideEffectSubjectChecksumV2
@@ -136,6 +137,193 @@ describe("Desktop Engineering mutation production composition V2", () => {
     await expect(
       createDesktopEngineeringMutationProductionCompositionV2(harness.options)
     ).resolves.toBeUndefined();
+  });
+
+  test("treats a durably rolled-back lifecycle WAL as terminal during restart scanning", async () => {
+    const harness = createHarness();
+    const first = await createDesktopEngineeringMutationProductionCompositionV2(harness.options);
+    if (first === undefined) throw new Error("expected clear production composition");
+
+    await expect(first.lifecycleWalRepository.prepare(lifecyclePrepared())).resolves.toMatchObject({
+      ok: true,
+      value: { committedAt: null, rolledBackAt: null }
+    });
+    await expect(
+      first.lifecycleWalRepository.rollback({
+        contentRootBindingId: ROOT_BINDING_ID,
+        transactionId: "lifecycle_transaction_01",
+        rolledBackAt: "2099-01-01T00:00:01.000Z"
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { committedAt: null, rolledBackAt: "2099-01-01T00:00:01.000Z" }
+    });
+    await expect(
+      first.lifecycleWalRepository.markSynchronized({
+        contentRootBindingId: ROOT_BINDING_ID,
+        transactionId: "lifecycle_transaction_01",
+        synchronizedAt: "2099-01-01T00:00:02.000Z"
+      })
+    ).resolves.toMatchObject({ ok: true, value: { synchronizedAt: expect.any(String) } });
+    first.dispose();
+
+    const restarted = await createDesktopEngineeringMutationProductionCompositionV2(
+      harness.options
+    );
+    expect(restarted).toMatchObject({ recoveryRuntime: { status: "clear" } });
+    restarted?.dispose();
+  });
+
+  test("recovers an incomplete lifecycle WAL under save/editor controls before exposing capabilities", async () => {
+    const calls: string[] = [];
+    const addon = createBatch7Addon({
+      lifecycle: true,
+      onLifecycleInspect(request) {
+        calls.push("recover:inspect");
+        return lifecycleOperationState(request, "before");
+      },
+      onLifecycleFinalize() {
+        calls.push("recover:finalize");
+      }
+    });
+    const workspaceAccessSession = createWorkspaceAccessSession({
+      onBuildIndex() {
+        calls.push("sync:index");
+      }
+    });
+    const harness = createHarness({
+      addon,
+      workspaceAccessSession,
+      lifecycleRecoveryQualified: () => true,
+      verifyPreparedLifecycleAuthorization: async () => {
+        calls.push("recover:authorize");
+        return ok(undefined);
+      },
+      saveAuthority: {
+        async pauseAndDrainEngineeringRoot() {
+          calls.push("save:pause");
+          return Object.freeze({
+            release() {
+              calls.push("save:release");
+            }
+          });
+        }
+      },
+      editorStateRegistry: {
+        observe(input) {
+          calls.push(`editor:${input.relativePath}`);
+          return { status: "unknown" as const, reason: "missing" as const };
+        }
+      },
+      rendererSynchronizer: {
+        async request(input) {
+          calls.push(`sync:renderer:${input.operationKind}:${input.relativePaths.join(",")}`);
+          return ok(undefined);
+        }
+      }
+    });
+    const first = await createDesktopEngineeringMutationProductionCompositionV2(harness.options);
+    if (first === undefined) throw new Error("expected clear production composition");
+    await expect(first.lifecycleWalRepository.prepare(lifecyclePrepared())).resolves.toMatchObject({
+      ok: true,
+      value: { committedAt: null, rolledBackAt: null }
+    });
+    first.dispose();
+    calls.length = 0;
+
+    const restarted = await createDesktopEngineeringMutationProductionCompositionV2(
+      harness.options
+    );
+
+    expect(restarted).toMatchObject({
+      recoveryRuntime: { status: "clear" },
+      lifecycleCapabilities: { move: true, delete: false, createDirectory: true }
+    });
+    expect(calls).toEqual([
+      "save:pause",
+      "editor:src/new.ts",
+      "editor:src/old.ts",
+      "recover:authorize",
+      "recover:inspect",
+      "recover:authorize",
+      "recover:finalize",
+      "sync:renderer:move_file:src/new.ts,src/old.ts",
+      "sync:index",
+      "save:release"
+    ]);
+    restarted?.dispose();
+
+    calls.length = 0;
+    const settledRestart = await createDesktopEngineeringMutationProductionCompositionV2(
+      harness.options
+    );
+    expect(settledRestart).toMatchObject({ recoveryRuntime: { status: "clear" } });
+    expect(calls).toEqual([]);
+    settledRestart?.dispose();
+  });
+
+  test("persists sync_required and remains unavailable when startup recovery synchronization fails", async () => {
+    const calls: string[] = [];
+    const addon = createBatch7Addon({
+      lifecycle: true,
+      onLifecycleInspect(request) {
+        calls.push("recover:inspect");
+        return lifecycleOperationState(request, "before");
+      },
+      onLifecycleFinalize() {
+        calls.push("recover:finalize");
+      }
+    });
+    let failSynchronization = true;
+    const harness = createHarness({
+      addon,
+      lifecycleRecoveryQualified: () => true,
+      verifyPreparedLifecycleAuthorization: async () => ok(undefined),
+      saveAuthority: {
+        async pauseAndDrainEngineeringRoot() {
+          calls.push("save:pause");
+          return Object.freeze({
+            release() {
+              calls.push("save:release");
+            }
+          });
+        }
+      },
+      rendererSynchronizer: {
+        async request() {
+          calls.push("sync:renderer");
+          return failSynchronization
+            ? unavailable("ENGINEERING_TEST_STARTUP_SYNC_FAILED")
+            : ok(undefined);
+        }
+      }
+    });
+    const first = await createDesktopEngineeringMutationProductionCompositionV2(harness.options);
+    if (first === undefined) throw new Error("expected clear production composition");
+    await expect(first.lifecycleWalRepository.prepare(lifecyclePrepared())).resolves.toMatchObject({
+      ok: true,
+      value: { committedAt: null, rolledBackAt: null }
+    });
+    first.dispose();
+    calls.length = 0;
+
+    await expect(
+      createDesktopEngineeringMutationProductionCompositionV2(harness.options)
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      "save:pause",
+      "recover:inspect",
+      "recover:finalize",
+      "sync:renderer",
+      "save:release"
+    ]);
+
+    failSynchronization = false;
+    calls.length = 0;
+    await expect(
+      createDesktopEngineeringMutationProductionCompositionV2(harness.options)
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual([]);
   });
 
   test("keeps composition unavailable for a shared-ledger root-bound orphan reservation", async () => {
@@ -418,13 +606,17 @@ function createHarness(
     readonly validateStagingReservation?: DesktopEngineeringMutationProductionCompositionV2Options["validateStagingReservation"];
     readonly verifyPreparedLifecycleAuthorization?: DesktopEngineeringMutationProductionCompositionV2Options["verifyPreparedLifecycleAuthorization"];
     readonly lifecycleRecoveryQualified?: DesktopEngineeringMutationProductionCompositionV2Options["lifecycleRecoveryQualified"];
+    readonly workspaceAccessSession?: EngineeringWorkspaceAccessSession;
+    readonly saveAuthority?: DesktopEngineeringMutationProductionCompositionV2Options["saveAuthority"];
+    readonly editorStateRegistry?: DesktopEngineeringMutationProductionCompositionV2Options["editorStateRegistry"];
+    readonly rendererSynchronizer?: DesktopEngineeringMutationProductionCompositionV2Options["rendererSynchronizer"];
   } = {}
 ) {
-  const editorStateRegistry = createEngineeringEditorStateRegistry();
+  const editorStateRegistry = input.editorStateRegistry ?? createEngineeringEditorStateRegistry();
   const addon = input.addon ?? createBatch7Addon({ nativeRecoveryScan: input.nativeRecoveryScan });
-  const workspaceAccessSession = createWorkspaceAccessSession({
-    rootHandleAvailable: input.rootHandleAvailable
-  });
+  const workspaceAccessSession =
+    input.workspaceAccessSession ??
+    createWorkspaceAccessSession({ rootHandleAvailable: input.rootHandleAvailable });
   const options: DesktopEngineeringMutationProductionCompositionV2Options = {
     projectId: "project_01",
     workspaceBindingId: WORKSPACE_BINDING_ID,
@@ -454,17 +646,21 @@ function createHarness(
       ? {}
       : { lifecycleRecoveryQualified: input.lifecycleRecoveryQualified }),
     validateStagingReservation: input.validateStagingReservation ?? (async () => ok(undefined)),
-    saveAuthority: {
-      async pauseAndDrainEngineeringRoot() {
-        return Object.freeze({ release() {} });
-      }
-    },
+    saveAuthority:
+      input.saveAuthority ??
+      Object.freeze({
+        async pauseAndDrainEngineeringRoot() {
+          return Object.freeze({ release() {} });
+        }
+      }),
     editorStateRegistry,
-    rendererSynchronizer: {
-      async request() {
-        return ok(undefined);
-      }
-    },
+    rendererSynchronizer:
+      input.rendererSynchronizer ??
+      Object.freeze({
+        async request() {
+          return ok(undefined);
+        }
+      }),
     addonLoader: loadedAddon(addon),
     now: () => NOW
   };
@@ -488,7 +684,10 @@ function createQualificationService(input: {
   };
 }
 
-function createWorkspaceAccessSession(input: { readonly rootHandleAvailable?: boolean }) {
+function createWorkspaceAccessSession(input: {
+  readonly rootHandleAvailable?: boolean;
+  readonly onBuildIndex?: () => void;
+}) {
   const rootHandleAvailable = input.rootHandleAvailable ?? true;
   return {
     binding: {
@@ -513,6 +712,7 @@ function createWorkspaceAccessSession(input: { readonly rootHandleAvailable?: bo
       return ok({ matches: [], truncated: false });
     },
     async buildIndex() {
+      input.onBuildIndex?.();
       return ok({ files: [], truncated: false });
     },
     async close() {
@@ -941,6 +1141,10 @@ function createBatch7Addon(
     readonly nativeRecoveryScan?: unknown;
     readonly onCloseStateRoot?: () => void;
     readonly lifecycle?: boolean;
+    readonly onLifecycleInspect?: (
+      request: Record<string, unknown>
+    ) => ReturnType<typeof lifecycleOperationState>;
+    readonly onLifecycleFinalize?: (request: Record<string, unknown>) => void;
   } = {}
 ) {
   const files = new Map<string, Uint8Array>();
@@ -1074,8 +1278,35 @@ function createBatch7Addon(
             state: "restored"
           }),
           purgeEngineeringQuarantineObjectV2: () => undefined,
+          openEngineeringStateRootBoundToRecoveryV2: () => 10n,
           createEngineeringDirectoryV2: (_rootId: bigint, request: Record<string, unknown>) =>
-            lifecycleReceipt(request, "committed")
+            lifecycleReceipt(request, "committed"),
+          inspectEngineeringFileLifecycleOperationV2: (
+            _rootId: bigint,
+            _recoveryRootId: bigint,
+            request: Record<string, unknown>
+          ) => input.onLifecycleInspect?.(request),
+          resumeEngineeringFileLifecycleOperationV2: (
+            _rootId: bigint,
+            _recoveryRootId: bigint,
+            request: Record<string, unknown>
+          ) => ({
+            schemaVersion: "3.0",
+            kind: "engineering_file_lifecycle_operation_state",
+            state: "after",
+            requestChecksum: engineeringFileLifecycleRequestChecksumV2(request),
+            receipt: lifecycleReceipt(
+              request,
+              request["operationKind"] === "delete_file" ? "quarantined" : "committed"
+            )
+          }),
+          compensateEngineeringFileLifecycleOperationV2: () => undefined,
+          finalizeEngineeringFileLifecycleOperationV2: (
+            _rootId: bigint,
+            _recoveryRootId: bigint,
+            request: Record<string, unknown>
+          ) => input.onLifecycleFinalize?.(request),
+          inspectEngineeringQuarantineV2: () => undefined
         }
       : {};
   return input.durability === false
@@ -1096,6 +1327,19 @@ function lifecycleReceipt(request: Record<string, unknown>, state: "committed" |
     state,
     recoveryObjectId: state === "quarantined" ? request["recoveryObjectId"] : "",
     durability: "data_and_directory_flushed"
+  };
+}
+
+function lifecycleOperationState(
+  request: Record<string, unknown>,
+  state: "before" | "neither" | "unknown"
+) {
+  return {
+    schemaVersion: "3.0",
+    kind: "engineering_file_lifecycle_operation_state",
+    state,
+    requestChecksum: engineeringFileLifecycleRequestChecksumV2(request),
+    receipt: null
   };
 }
 

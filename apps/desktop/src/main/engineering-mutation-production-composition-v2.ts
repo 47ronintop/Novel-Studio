@@ -121,7 +121,8 @@ export interface DesktopEngineeringMutationProductionCompositionV2Options {
   readonly authenticateNativeProposalEvidence: EngineeringNativeProposalEvidenceAuthenticatorV2;
   readonly recovery: DesktopEngineeringMutationRecoveryDependenciesV2;
   readonly verifyPreparedLifecycleAuthorization?: (
-    prepared: EngineeringLifecycleWriteTransactionInputV2
+    prepared: EngineeringLifecycleWriteTransactionInputV2,
+    acceptableStates?: readonly ("reserved" | "consumed")[]
   ) => Promise<Result<void, UnifiedError>>;
   /** Main-owned recovery binding resolver. Omission keeps delete/quarantine fail closed. */
   readonly resolveLifecycleRecoveryBinding?: (
@@ -433,7 +434,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           return unavailable("ENGINEERING_MUTATION_PRODUCTION_ROOT_MISMATCH", traceId);
         const scan = await lifecycleWalRepository.scanRoot(contentRootBindingId);
         if (!scan.ok) return scan;
-        const incomplete = scan.value.journals.some((journal) => journal.committedAt === null);
+        const incomplete = scan.value.journals.some((journal) => journal.synchronizedAt === null);
         return ok({
           status:
             incomplete ||
@@ -455,25 +456,19 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
         return ok(
           journal.value !== undefined &&
             journal.value.committedAt === null &&
+            journal.value.rolledBackAt === null &&
             journal.value.preparedChecksum === input.preparedChecksum
         );
       },
       traceId: `${traceId}:recovery`,
       ...(options.now === undefined ? {} : { now: options.now })
     });
-    if (!recoveryRuntime.ok || recoveryRuntime.value.status !== "clear") {
+    if (!recoveryRuntime.ok) {
       unsubscribe();
       deactivate();
       return undefined;
     }
-    const startupClear = await recoveryRuntime.value.startupGate.assertMutationAllowed(
-      rootBinding.contentRootBindingId
-    );
-    if (!startupClear.ok) {
-      unsubscribe();
-      deactivate();
-      return undefined;
-    }
+    let recoveryRuntimeValue = recoveryRuntime.value;
     const syncRequiredClear = await safelyCall(
       () => syncRequiredStore.assertNoSyncRequired(rootBinding.contentRootBindingId),
       "ENGINEERING_MUTATION_PRODUCTION_SYNC_REQUIRED_CHECK_UNAVAILABLE",
@@ -514,7 +509,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       walRepository,
       blobStore,
       mutationPort,
-      recoveryGate: recoveryRuntime.value.transactionGate,
+      recoveryGate: recoveryRuntimeValue.transactionGate,
       validateReservedAuthorization: async (prepared) => {
         const root = await verifyRootAvailable();
         if (!root.ok) return root;
@@ -540,7 +535,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
     const lifecycleTransaction = new EngineeringLifecycleWriteTransactionV2({
       walRepository: lifecycleWalRepository,
       mutationPort,
-      recoveryGate: recoveryRuntime.value.transactionGate,
+      recoveryGate: recoveryRuntimeValue.transactionGate,
       validateReservedAuthorization: async (prepared) => {
         const root = await verifyRootAvailable();
         if (!root.ok) return root;
@@ -556,6 +551,21 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           traceId
         );
       },
+      validateTerminalAuthorization: async (prepared) => {
+        const root = await verifyRootAvailable();
+        if (!root.ok) return root;
+        if (options.verifyPreparedLifecycleAuthorization === undefined)
+          return unavailable(
+            "ENGINEERING_MUTATION_PRODUCTION_LIFECYCLE_AUTHORIZATION_UNAVAILABLE",
+            traceId
+          );
+        const verifyPreparedLifecycleAuthorization = options.verifyPreparedLifecycleAuthorization;
+        return safelyCall(
+          () => verifyPreparedLifecycleAuthorization(prepared, ["reserved", "consumed"]),
+          "ENGINEERING_MUTATION_PRODUCTION_AUTHORIZATION_UNAVAILABLE",
+          traceId
+        );
+      },
       ...(options.resolveLifecycleRecoveryBinding === undefined
         ? {}
         : { resolveRecoveryBinding: options.resolveLifecycleRecoveryBinding }),
@@ -563,6 +573,58 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       ...(options.now === undefined ? {} : { now: options.now })
     });
 
+    if (lifecycleRecoveryQualified) {
+      const recovered = await recoverLifecycleJournalsAtStartup({
+        contentRootBindingId: rootBinding.contentRootBindingId,
+        walRepository: lifecycleWalRepository,
+        transaction: lifecycleTransaction,
+        rootLease,
+        saveCoordinator,
+        editorState,
+        synchronizer,
+        syncRequiredStore,
+        now: options.now ?? (() => new Date().toISOString()),
+        traceId
+      });
+      if (!recovered.ok) {
+        unsubscribe();
+        deactivate();
+        return undefined;
+      }
+      if (recovered.value) {
+        const refreshed = await recoveryRuntimeValue.startupGate.initialize({
+          contentRootBindingIds: [rootBinding.contentRootBindingId]
+        });
+        const refreshedRoot = recoveryRuntimeValue.startupGate.rootSnapshot(
+          rootBinding.contentRootBindingId
+        );
+        if (!refreshed.ok || refreshedRoot === undefined) {
+          unsubscribe();
+          deactivate();
+          return undefined;
+        }
+        recoveryRuntimeValue = Object.freeze({
+          status: refreshedRoot.status,
+          startupGate: recoveryRuntimeValue.startupGate,
+          transactionGate: recoveryRuntimeValue.transactionGate,
+          snapshot: refreshed.value,
+          capabilityRevision: refreshedRoot.capabilityRevision
+        });
+      }
+    }
+    if (recoveryRuntimeValue.status !== "clear") {
+      unsubscribe();
+      deactivate();
+      return undefined;
+    }
+    const startupClear = await recoveryRuntimeValue.startupGate.assertMutationAllowed(
+      rootBinding.contentRootBindingId
+    );
+    if (!startupClear.ok) {
+      unsubscribe();
+      deactivate();
+      return undefined;
+    }
     const sessionBundle = createDesktopEngineeringFileMutationSessionV2({
       projectId: options.projectId,
       workspaceBindingId: options.workspaceBindingId,
@@ -647,13 +709,17 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       },
       createRuntime: (proposalApproval) =>
         createEngineeringMutationRuntimeV2({
-          recoveryGate: recoveryRuntime.value.startupGate,
+          recoveryGate: recoveryRuntimeValue.startupGate,
           rootLease,
           saveCoordinator,
           editorState,
           proposalApproval,
           transaction,
           lifecycleTransaction,
+          markLifecycleSynchronized: async (input) => {
+            const marked = await lifecycleWalRepository.markSynchronized(input);
+            return marked.ok ? ok(undefined) : marked;
+          },
           synchronizer,
           syncRequired: syncRequiredStore,
           ...(options.onMutationUnavailable === undefined
@@ -696,7 +762,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           lifecycleNativeCapabilities.createDirectory &&
           options.verifyPreparedLifecycleAuthorization !== undefined
       }),
-      recoveryRuntime: recoveryRuntime.value,
+      recoveryRuntime: recoveryRuntimeValue,
       dispose() {
         try {
           unsubscribe?.();
@@ -797,7 +863,13 @@ function readLifecycleNativeCapabilities(value: unknown): Readonly<{
     typeof record["quarantineEngineeringFileV2"] === "function" &&
     typeof record["restoreEngineeringFileV2"] === "function" &&
     typeof record["purgeEngineeringQuarantineObjectV2"] === "function" &&
-    typeof record["createEngineeringDirectoryV2"] === "function";
+    typeof record["openEngineeringStateRootBoundToRecoveryV2"] === "function" &&
+    typeof record["createEngineeringDirectoryV2"] === "function" &&
+    typeof record["inspectEngineeringFileLifecycleOperationV2"] === "function" &&
+    typeof record["resumeEngineeringFileLifecycleOperationV2"] === "function" &&
+    typeof record["compensateEngineeringFileLifecycleOperationV2"] === "function" &&
+    typeof record["finalizeEngineeringFileLifecycleOperationV2"] === "function" &&
+    typeof record["inspectEngineeringQuarantineV2"] === "function";
   if (!completeLifecycleAddon) {
     return Object.freeze({ move: false, delete: false, createDirectory: false });
   }
@@ -1317,8 +1389,178 @@ function revokeOnRootLoss(
       input: Parameters<EngineeringQualifiedFileMutationPortV2["createDirectory"]>[0]
     ) {
       return observe(await port.createDirectory(input));
+    },
+    async reconcileLifecycle(
+      input: Parameters<
+        NonNullable<EngineeringQualifiedFileMutationPortV2["reconcileLifecycle"]>
+      >[0]
+    ) {
+      return port.reconcileLifecycle === undefined
+        ? unavailable("ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE")
+        : observe(await port.reconcileLifecycle(input));
+    },
+    async resumeLifecycle(
+      input: Parameters<NonNullable<EngineeringQualifiedFileMutationPortV2["resumeLifecycle"]>>[0]
+    ) {
+      return port.resumeLifecycle === undefined
+        ? unavailable("ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE")
+        : observe(await port.resumeLifecycle(input));
+    },
+    async compensateLifecycle(
+      input: Parameters<
+        NonNullable<EngineeringQualifiedFileMutationPortV2["compensateLifecycle"]>
+      >[0]
+    ) {
+      return port.compensateLifecycle === undefined
+        ? unavailable("ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE")
+        : observe(await port.compensateLifecycle(input));
+    },
+    async finalizeLifecycle(
+      input: Parameters<NonNullable<EngineeringQualifiedFileMutationPortV2["finalizeLifecycle"]>>[0]
+    ) {
+      return port.finalizeLifecycle === undefined
+        ? unavailable("ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE")
+        : observe(await port.finalizeLifecycle(input));
+    },
+    async inspectQuarantine(
+      input: Parameters<NonNullable<EngineeringQualifiedFileMutationPortV2["inspectQuarantine"]>>[0]
+    ) {
+      return port.inspectQuarantine === undefined
+        ? unavailable("ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE")
+        : observe(await port.inspectQuarantine(input));
+    },
+    async restore(input: unknown) {
+      return port.restore === undefined
+        ? unavailable("ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE")
+        : observe(await port.restore(input));
+    },
+    async purge(input: unknown) {
+      return port.purge === undefined
+        ? unavailable("ENGINEERING_FILE_MUTATION_V2_UNAVAILABLE")
+        : observe(await port.purge(input));
     }
   });
+}
+
+async function recoverLifecycleJournalsAtStartup(input: {
+  readonly contentRootBindingId: string;
+  readonly walRepository: FileEngineeringLifecycleWalRepositoryV2;
+  readonly transaction: EngineeringLifecycleWriteTransactionV2;
+  readonly rootLease: EngineeringMutationRootLeasePortV2;
+  readonly saveCoordinator: EngineeringMutationSaveCoordinatorPortV2;
+  readonly editorState: EngineeringMutationEditorStatePortV2;
+  readonly synchronizer: EngineeringMutationSyncPortV2;
+  readonly syncRequiredStore: FileEngineeringMutationSyncRequiredStoreV2;
+  readonly now: () => string;
+  readonly traceId: string;
+}): Promise<Result<boolean, UnifiedError>> {
+  const scanned = await input.walRepository.scanRoot(input.contentRootBindingId);
+  if (!scanned.ok) return scanned;
+  if (scanned.value.unknownRecordCount > 0 || scanned.value.authenticationFailureCount > 0) {
+    return unavailable("ENGINEERING_MUTATION_PRODUCTION_LIFECYCLE_RECOVERY_INVALID", input.traceId);
+  }
+  const pendingJournals = scanned.value.journals.filter(
+    (journal) => journal.synchronizedAt === null
+  );
+  if (pendingJournals.length === 0) return ok(false);
+
+  const relativeIdentities = Object.freeze(
+    [
+      ...new Set(
+        pendingJournals.flatMap((journal) =>
+          journal.prepared.operations.flatMap((operation) =>
+            lifecycleOperationRelativeIdentities(operation.request)
+          )
+        )
+      )
+    ].sort((left, right) => left.localeCompare(right))
+  );
+  const lease = await input.rootLease.acquire(input.contentRootBindingId);
+  if (!lease.ok) return lease;
+  let pause:
+    Awaited<ReturnType<EngineeringMutationSaveCoordinatorPortV2["pauseAndDrainRoot"]>> | undefined;
+  try {
+    const current = await lease.value.assertCurrent();
+    if (!current.ok) return current;
+    pause = await input.saveCoordinator.pauseAndDrainRoot({
+      contentRootBindingId: input.contentRootBindingId,
+      relativeIdentities
+    });
+    if (!pause.ok) return pause;
+    const editor = await input.editorState.inspectAll({
+      contentRootBindingId: input.contentRootBindingId,
+      relativeIdentities
+    });
+    if (!editor.ok) return editor;
+    if (editor.value.status !== "ready") {
+      return unavailable(
+        "ENGINEERING_MUTATION_PRODUCTION_LIFECYCLE_RECOVERY_EDITOR_UNSAFE",
+        input.traceId
+      );
+    }
+
+    for (const journal of pendingJournals) {
+      const stillCurrent = await lease.value.assertCurrent();
+      if (!stillCurrent.ok) return stillCurrent;
+      const recovered = await input.transaction.recover({
+        contentRootBindingId: input.contentRootBindingId,
+        transactionId: journal.prepared.transactionId
+      });
+      if (!recovered.ok) return recovered;
+
+      for (const operation of journal.prepared.operations) {
+        const operationPaths = lifecycleOperationRelativeIdentities(operation.request);
+        const synchronized = await input.synchronizer.synchronize({
+          contentRootBindingId: input.contentRootBindingId,
+          operationKind: operation.request.operationKind,
+          relativeIdentities: operationPaths,
+          transactionId: journal.prepared.transactionId
+        });
+        if (!synchronized.ok) {
+          const recorded = await input.syncRequiredStore.writeSyncRequired({
+            schemaVersion: "2.0",
+            kind: "sync_required",
+            contentRootBindingId: input.contentRootBindingId,
+            transactionId: journal.prepared.transactionId,
+            operationKind: operation.request.operationKind,
+            relativeIdentities: operationPaths,
+            recordedAt: input.now()
+          });
+          return recorded.ok ? synchronized : recorded;
+        }
+      }
+      const marked = await input.walRepository.markSynchronized({
+        contentRootBindingId: input.contentRootBindingId,
+        transactionId: journal.prepared.transactionId,
+        synchronizedAt: input.now()
+      });
+      if (!marked.ok) return marked;
+    }
+    return ok(true);
+  } finally {
+    try {
+      if (pause?.ok) await pause.value.release();
+    } catch {
+      // The root remains unavailable after recovery cleanup failure.
+    }
+    try {
+      await lease.value.release();
+    } catch {
+      // The process-local root lease is discarded with the failed composition.
+    }
+  }
+}
+
+function lifecycleOperationRelativeIdentities(
+  request: EngineeringLifecycleWriteTransactionInputV2["operations"][number]["request"]
+): readonly string[] {
+  const identities =
+    request.operationKind === "move_file"
+      ? [request.relativeSource, request.relativeTarget]
+      : request.operationKind === "delete_file"
+        ? [request.relativeSource]
+        : [request.relativeTarget];
+  return Object.freeze([...new Set(identities)].sort((left, right) => left.localeCompare(right)));
 }
 
 function createRootHandleLeasePort(input: {

@@ -128,6 +128,12 @@ export interface EngineeringMutationRuntimeV2Options {
   readonly transaction: EngineeringWriteTransactionV2ApplyPort;
   /** B8 lifecycle writes must cross the same root/save/editor/sync coordinator. */
   readonly lifecycleTransaction?: EngineeringWriteTransactionV2ApplyPort;
+  /** Durably closes the lifecycle commit-to-sync crash window after synchronization succeeds. */
+  readonly markLifecycleSynchronized?: (input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly synchronizedAt: string;
+  }) => Promise<Result<void, UnifiedError>>;
   readonly synchronizer: EngineeringMutationSyncPortV2;
   readonly syncRequired: EngineeringMutationSyncRequiredPortV2;
   /** Main uses this to synchronously hide mutation tools while preserving qualified read access. */
@@ -314,6 +320,29 @@ async function applyRequest(
         return recorded.ok
           ? syncRequiredFailure(traceId)
           : unavailable("ENGINEERING_MUTATION_RUNTIME_SYNC_REQUIRED_PERSIST_FAILED", traceId);
+      }
+
+      if (isLifecycleOperation(request.operationKind)) {
+        const markLifecycleSynchronized = options.markLifecycleSynchronized;
+        if (markLifecycleSynchronized === undefined) {
+          locallyBlockedRoots.add(request.contentRootBindingId);
+          notifyMutationUnavailable(options);
+          return unavailable("ENGINEERING_LIFECYCLE_SYNCHRONIZATION_MARKER_UNAVAILABLE", traceId);
+        }
+        const marked = await safely(
+          () =>
+            markLifecycleSynchronized({
+              contentRootBindingId: request.contentRootBindingId,
+              transactionId: committed.transactionId,
+              synchronizedAt: now()
+            }),
+          traceId
+        );
+        if (!marked.ok) {
+          locallyBlockedRoots.add(request.contentRootBindingId);
+          notifyMutationUnavailable(options);
+          return marked;
+        }
       }
 
       return ok(
