@@ -189,6 +189,13 @@ describe("engineering file access development probe contract", () => {
       "utf8"
     );
 
+    const makeStringDeclaration = nativeSource.indexOf(
+      "napi_value makeString(napi_env env, const char* value);"
+    );
+    const firstMakeStringCall = nativeSource.indexOf("makeString(env");
+    expect(makeStringDeclaration).toBeGreaterThanOrEqual(0);
+    expect(firstMakeStringCall).toBeGreaterThan(makeStringDeclaration);
+
     expect(nativeSource).toContain("engineering_lifecycle_marker_v1");
     expect(nativeSource).toContain('LifecycleMarker{requestChecksum, "case_intermediate"');
     expect(nativeSource).toContain('LifecycleMarker{requestChecksum, "after"');

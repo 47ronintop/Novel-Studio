@@ -77,6 +77,8 @@ constexpr ULONG kFileLinkInformation = 11;
 constexpr size_t kMaxOpaqueIdentifierUtf8Bytes = 128;
 constexpr size_t kMaxStagingIdUtf8Bytes = 96;
 
+napi_value makeString(napi_env env, const char* value);
+
 struct NativeFileBothDirectoryInformation {
   ULONG nextEntryOffset;
   ULONG fileIndex;
