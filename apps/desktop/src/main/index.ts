@@ -603,8 +603,12 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                   });
                 }
               },
-              verifyPreparedLifecycleAuthorization: (prepared) =>
-                verifyEngineeringPreparedLifecycleAuthorization(authorizationLedger, prepared),
+              verifyPreparedLifecycleAuthorization: (prepared, acceptableStates) =>
+                verifyEngineeringPreparedLifecycleAuthorization(
+                  authorizationLedger,
+                  prepared,
+                  acceptableStates
+                ),
               validateStagingReservation: validateEngineeringStagingReservation,
               saveAuthority: agentWriteSaveCoordinator,
               editorStateRegistry: engineeringEditorStateRegistry,
@@ -1119,9 +1123,10 @@ async function verifyEngineeringPreparedAuthorization(
     : err(engineeringMutationAuthorityError("ENGINEERING_MUTATION_AUTHORIZATION_BINDING_STALE"));
 }
 
-async function verifyEngineeringPreparedLifecycleAuthorization(
+export async function verifyEngineeringPreparedLifecycleAuthorization(
   ledger: ApprovalAuthorizationLedger,
-  prepared: EngineeringLifecycleWriteTransactionInputV2
+  prepared: EngineeringLifecycleWriteTransactionInputV2,
+  acceptableStates: readonly ("reserved" | "consumed")[] = ["reserved"]
 ): Promise<Result<void, UnifiedError>> {
   const queried = await ledger.query(
     prepared.authorization.authorizationId,
@@ -1144,7 +1149,10 @@ async function verifyEngineeringPreparedLifecycleAuthorization(
       engineeringMutationAuthorityError("ENGINEERING_MUTATION_AUTHORIZATION_BINDING_INVALID")
     );
   }
-  return record.state === "reserved" &&
+  const stateAccepted =
+    (record.state === "reserved" || record.state === "consumed") &&
+    acceptableStates.includes(record.state);
+  return stateAccepted &&
     record.reservedTransactionId === prepared.transactionId &&
     record.providerSemanticVersionSetChecksum === prepared.providerSemanticVersionSetChecksum &&
     record.binding.bindingId === prepared.authorization.approvalBindingId &&
