@@ -927,7 +927,7 @@ export async function probeMutationV2Abi(addon) {
         stagingObjectId: "stage-b8-compensate",
         operationKind: "move_file",
         relativeSource: "docs/compensate-source.txt",
-        relativeTarget: "docs/compensate-target.txt",
+        relativeTarget: "docs/lifecycle/compensate-target.txt",
         sourceFileIdentity: compensationSnapshot.manifest.fileIdentity,
         sourceSha256: compensationSnapshot.manifest.sha256,
         targetProof: "absent"

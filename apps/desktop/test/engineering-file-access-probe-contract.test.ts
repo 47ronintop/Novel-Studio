@@ -127,15 +127,23 @@ describe("engineering file access development probe contract", () => {
     );
     const moveStart = nativeSource.indexOf("napi_value moveEngineeringPathV2");
     const moveEnd = nativeSource.indexOf("napi_value mutationV2ProbeInfo");
+    const compensateStart = nativeSource.indexOf("AccessError compensateLifecycleMove");
+    const compensateEnd = nativeSource.indexOf(
+      "AccessError compensateLifecycleDelete",
+      compensateStart
+    );
     const handoffStart = nativeSource.indexOf("AccessError openMutationHandoffDirectory");
     const handoffEnd = nativeSource.indexOf("AccessError openMutationFile", handoffStart);
 
     expect(moveStart).toBeGreaterThanOrEqual(0);
     expect(moveEnd).toBeGreaterThan(moveStart);
+    expect(compensateStart).toBeGreaterThan(moveStart);
+    expect(compensateEnd).toBeGreaterThan(compensateStart);
     expect(handoffStart).toBeGreaterThanOrEqual(0);
     expect(handoffEnd).toBeGreaterThan(handoffStart);
 
     const moveSource = nativeSource.slice(moveStart, moveEnd);
+    const compensateSource = nativeSource.slice(compensateStart, compensateEnd);
     const handoffSource = nativeSource.slice(handoffStart, handoffEnd);
 
     expect(handoffSource).toContain("const BY_HANDLE_FILE_INFORMATION& expectedIdentity");
@@ -145,7 +153,22 @@ describe("engineering file access development probe contract", () => {
     );
 
     expect(moveSource).toContain(
-      "const bool sameParent = sourceParentPath == destinationParentPath;"
+      "_wcsicmp(sourceParentPath.c_str(), destinationParentPath.c_str()) == 0;"
+    );
+    expect(moveSource).toContain(
+      "const bool destinationParentIsBelowSourceParent = !sameParent &&"
+    );
+    expect(moveSource).toMatch(
+      /sourceParentPath\.empty\(\) \|\|\s+isPathAncestorOrSame\(sourceParentPath, destinationParentPath\)/u
+    );
+    const descendantInitialStart = moveSource.indexOf(
+      "} else if (destinationParentIsBelowSourceParent) {"
+    );
+    const descendantInitialEnd = moveSource.indexOf("} else {", descendantInitialStart);
+    const descendantInitialSource = moveSource.slice(descendantInitialStart, descendantInitialEnd);
+    expect(descendantInitialStart).toBeGreaterThanOrEqual(0);
+    expect(descendantInitialSource.indexOf("destinationParentPath")).toBeLessThan(
+      descendantInitialSource.indexOf("sourceParentPath")
     );
     expect(moveSource).toContain("destinationParentIdentity = sourceParentIdentity;");
     expect(moveSource).toMatch(
@@ -156,6 +179,18 @@ describe("engineering file access development probe contract", () => {
     );
     expect(moveSource).toContain(
       "openMutationHandoffDirectory(rootId, destinationParentPath, destinationParentIdentity,"
+    );
+    const descendantHandoffStart = moveSource.indexOf(
+      "if (result == AccessError::kOk && destinationParentIsBelowSourceParent) {"
+    );
+    const descendantHandoffEnd = moveSource.indexOf(
+      "} else if (result == AccessError::kOk && !sameParent)",
+      descendantHandoffStart
+    );
+    const descendantHandoffSource = moveSource.slice(descendantHandoffStart, descendantHandoffEnd);
+    expect(descendantHandoffStart).toBeGreaterThanOrEqual(0);
+    expect(descendantHandoffSource.indexOf("destinationParentPath")).toBeLessThan(
+      descendantHandoffSource.indexOf("sourceParentPath")
     );
     expect(moveSource).toContain("handoffDestinationRaw = handoffSourceRaw;");
     expect(moveSource).toContain("handoffSourceRaw = INVALID_HANDLE_VALUE;");
@@ -180,6 +215,19 @@ describe("engineering file access development probe contract", () => {
     );
     expect(moveSource).toContain(
       "openMutationLeaf(moveDestinationParent, destinationLeaf, &finalRaw);"
+    );
+
+    expect(compensateSource).toContain(
+      "_wcsicmp(sourceParentPath.c_str(), targetParentPath.c_str()) == 0;"
+    );
+    expect(compensateSource).toContain(
+      "const bool targetParentIsBelowSourceParent = !sameParent &&"
+    );
+    expect(compensateSource).toMatch(
+      /else if \(targetParentIsBelowSourceParent\) \{[\s\S]{0,320}targetParentPath[\s\S]{0,240}sourceParentPath/u
+    );
+    expect(compensateSource).toMatch(
+      /if \(result == AccessError::kOk && targetParentIsBelowSourceParent\) \{[\s\S]{0,360}targetParentPath[\s\S]{0,320}sourceParentPath/u
     );
   });
 

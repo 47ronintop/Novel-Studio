@@ -4870,15 +4870,27 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
       if (index != 0) destinationParentPath += L'/';
       destinationParentPath += destinationSegments[index];
     }
-    const bool sameParent = sourceParentPath == destinationParentPath;
+    const bool sameParent =
+        _wcsicmp(sourceParentPath.c_str(), destinationParentPath.c_str()) == 0;
+    const bool destinationParentIsBelowSourceParent = !sameParent &&
+        (sourceParentPath.empty() ||
+         isPathAncestorOrSame(sourceParentPath, destinationParentPath));
     HANDLE sourceParentRaw = INVALID_HANDLE_VALUE;
     HANDLE destinationParentRaw = INVALID_HANDLE_VALUE;
-    AccessError result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
-    if (result == AccessError::kOk && sameParent) {
-      destinationParentRaw = sourceParentRaw;
-      sourceParentRaw = INVALID_HANDLE_VALUE;
-    } else if (result == AccessError::kOk) {
+    // A restrictive ancestor handle blocks a second traversal through that ancestor on Windows.
+    AccessError result = AccessError::kOk;
+    if (sameParent) {
+      result = openMutationDirectory(rootId, sourceParentPath, &destinationParentRaw);
+    } else if (destinationParentIsBelowSourceParent) {
       result = openMutationDirectory(rootId, destinationParentPath, &destinationParentRaw);
+      if (result == AccessError::kOk) {
+        result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
+      }
+    } else {
+      result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
+      if (result == AccessError::kOk) {
+        result = openMutationDirectory(rootId, destinationParentPath, &destinationParentRaw);
+      }
     }
     ScopedHandle sourceParentHandle(sourceParentRaw);
     ScopedHandle destinationParentHandle(destinationParentRaw);
@@ -4956,14 +4968,21 @@ napi_value moveEngineeringPathV2(napi_env env, napi_callback_info info) {
         (!sourceParentHandle.close() || !destinationParentHandle.close())) {
       result = AccessError::kIo;
     }
-    if (result == AccessError::kOk) {
+    if (result == AccessError::kOk && !destinationParentIsBelowSourceParent) {
       result = openMutationHandoffDirectory(rootId, sourceParentPath, sourceParentIdentity, &handoffSourceRaw);
       if (result == AccessError::kOk && sameParent) {
         handoffDestinationRaw = handoffSourceRaw;
         handoffSourceRaw = INVALID_HANDLE_VALUE;
       }
     }
-    if (result == AccessError::kOk && !sameParent) {
+    if (result == AccessError::kOk && destinationParentIsBelowSourceParent) {
+      result = openMutationHandoffDirectory(rootId, destinationParentPath, destinationParentIdentity,
+                                             &handoffDestinationRaw);
+      if (result == AccessError::kOk) {
+        result = openMutationHandoffDirectory(
+            rootId, sourceParentPath, sourceParentIdentity, &handoffSourceRaw);
+      }
+    } else if (result == AccessError::kOk && !sameParent) {
       result = openMutationHandoffDirectory(rootId, destinationParentPath, destinationParentIdentity,
                                              &handoffDestinationRaw);
     }
@@ -5528,15 +5547,25 @@ AccessError compensateLifecycleMove(uint64_t rootId, const LifecycleRequest& req
       !splitLifecyclePath(request.relativeTarget, &targetParentPath, &targetLeaf)) {
     return AccessError::kUnsafePath;
   }
-  const bool sameParent = sourceParentPath == targetParentPath;
+  const bool sameParent = _wcsicmp(sourceParentPath.c_str(), targetParentPath.c_str()) == 0;
+  const bool targetParentIsBelowSourceParent = !sameParent &&
+      (sourceParentPath.empty() || isPathAncestorOrSame(sourceParentPath, targetParentPath));
   HANDLE sourceParentRaw = INVALID_HANDLE_VALUE;
   HANDLE targetParentRaw = INVALID_HANDLE_VALUE;
-  AccessError result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
-  if (result == AccessError::kOk && sameParent) {
-    targetParentRaw = sourceParentRaw;
-    sourceParentRaw = INVALID_HANDLE_VALUE;
-  } else if (result == AccessError::kOk) {
+  // Compensation must acquire the same parent pair in the same descendant-first order.
+  AccessError result = AccessError::kOk;
+  if (sameParent) {
+    result = openMutationDirectory(rootId, sourceParentPath, &targetParentRaw);
+  } else if (targetParentIsBelowSourceParent) {
     result = openMutationDirectory(rootId, targetParentPath, &targetParentRaw);
+    if (result == AccessError::kOk) {
+      result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
+    }
+  } else {
+    result = openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw);
+    if (result == AccessError::kOk) {
+      result = openMutationDirectory(rootId, targetParentPath, &targetParentRaw);
+    }
   }
   ScopedHandle sourceParentHandle(sourceParentRaw);
   ScopedHandle targetParentHandle(targetParentRaw);
@@ -5568,7 +5597,7 @@ AccessError compensateLifecycleMove(uint64_t rootId, const LifecycleRequest& req
   }
   HANDLE handoffSourceRaw = INVALID_HANDLE_VALUE;
   HANDLE handoffTargetRaw = INVALID_HANDLE_VALUE;
-  if (result == AccessError::kOk) {
+  if (result == AccessError::kOk && !targetParentIsBelowSourceParent) {
     result = openMutationHandoffDirectory(
         rootId, sourceParentPath, sourceParentIdentity, &handoffSourceRaw);
     if (result == AccessError::kOk && sameParent) {
@@ -5576,7 +5605,14 @@ AccessError compensateLifecycleMove(uint64_t rootId, const LifecycleRequest& req
       handoffSourceRaw = INVALID_HANDLE_VALUE;
     }
   }
-  if (result == AccessError::kOk && !sameParent) {
+  if (result == AccessError::kOk && targetParentIsBelowSourceParent) {
+    result = openMutationHandoffDirectory(
+        rootId, targetParentPath, targetParentIdentity, &handoffTargetRaw);
+    if (result == AccessError::kOk) {
+      result = openMutationHandoffDirectory(
+          rootId, sourceParentPath, sourceParentIdentity, &handoffSourceRaw);
+    }
+  } else if (result == AccessError::kOk && !sameParent) {
     result = openMutationHandoffDirectory(
         rootId, targetParentPath, targetParentIdentity, &handoffTargetRaw);
   }
