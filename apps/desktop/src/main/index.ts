@@ -662,6 +662,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         binding.kind === "engineeringWorkspace" &&
         engineeringWorkspaceAccessSession !== undefined &&
         engineeringContentRootNativeIdentity !== undefined &&
+        engineeringQualification !== undefined &&
         engineeringMutationRefCapabilityRevision !== undefined &&
         changeSetApprovalV2 !== undefined
           ? await createDesktopEngineeringMutationProductionCompositionV2({
@@ -669,6 +670,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
               workspaceBindingId: binding.workspaceId,
               stateRoot: binding.stateRoot,
               workspaceAccessSession: engineeringWorkspaceAccessSession,
+              contentRootNativeIdentity: engineeringContentRootNativeIdentity,
               pathPolicy: defaultEngineeringPathPolicy,
               refCapabilityRevision: engineeringMutationRefCapabilityRevision,
               qualificationService: engineeringFileAccessQualification,
@@ -708,6 +710,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                   prepared,
                   acceptableStates
                 ),
+              lifecycleRecoveryQualified: () =>
+                hasMainOwnedEngineeringFileQualification(engineeringQualification, "mutation") &&
+                hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery"),
+              lifecycleRecoveryQualificationRevision: engineeringQualification.attestationChecksum,
               validateStagingReservation: validateEngineeringStagingReservation,
               saveAuthority: agentWriteSaveCoordinator,
               editorStateRegistry: engineeringEditorStateRegistry,

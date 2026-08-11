@@ -10,12 +10,17 @@ import type {
 import {
   EngineeringWriteTransactionV2,
   EngineeringLifecycleWriteTransactionV2,
+  EngineeringRecoveryRootRepositoryV2,
+  FileEngineeringRecoveryGlobalRecordStoreV2,
+  FileEngineeringRecoveryObjectManifestStoreV2,
+  FileEngineeringRecoveryPurgeDecisionStoreV2,
   FileEngineeringLifecycleWalRepositoryV2,
   FileEngineeringMutationBlobStoreV2,
   FileEngineeringMutationProposalRepositoryV2,
   FileEngineeringMutationSyncRequiredStoreV2,
   FileEngineeringWalRepositoryV2,
   createEngineeringFileMutationPortV2,
+  volumeLocalRecoverySideEffectChecksumV2,
   type AuthorizationReservationWalV2,
   type EngineeringFileMutationRootBindingV2,
   type EngineeringFullAfterManifestVerifierV2,
@@ -31,7 +36,8 @@ import {
   type EngineeringV2StagingReservationValidator,
   type EngineeringWriteTransactionPreparedV2,
   type EngineeringLifecycleWriteTransactionInputV2,
-  type EngineeringLifecycleRecoveryRootBindingV2
+  type EngineeringLifecycleRecoveryRootBindingV2,
+  type EngineeringWorkspaceNativeRootIdentity
 } from "@novel-studio/repository";
 import type { EngineeringWorkspaceAccessSession } from "@novel-studio/repository";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -61,6 +67,15 @@ import {
   createDesktopEngineeringRecoveryRuntimeV2,
   type DesktopEngineeringRecoveryRuntimeV2
 } from "./engineering-recovery-runtime.js";
+import {
+  createDesktopEngineeringRecoveryOperationServiceV2,
+  type DesktopEngineeringRecoveryOperationPortV2,
+  type DesktopEngineeringRecoveryOperationServiceV2
+} from "./engineering-recovery-operation-service-v2.js";
+import {
+  openDesktopEngineeringAppStateRecoveryAuthorityV2,
+  type DesktopEngineeringVolumeLocalRecoveryAuthorityV2
+} from "./engineering-volume-local-recovery-authority-v2.js";
 
 /**
  * Main-only save authority from the existing IPC coordinator. Keeping this structural avoids
@@ -103,6 +118,8 @@ export interface DesktopEngineeringMutationProductionCompositionV2Options {
   readonly stateRoot: string;
   /** The already-qualified B6 session whose native handle is reused by B7. */
   readonly workspaceAccessSession: EngineeringWorkspaceAccessSession;
+  /** Main-only identity captured from the exact native content-root handle during B6 open. */
+  readonly contentRootNativeIdentity?: EngineeringWorkspaceNativeRootIdentity;
   /** The exact Main-owned policy bound to the B6 session's path-policy revision. */
   readonly pathPolicy: EngineeringPathPolicy;
   /** Main-owned capability revision used to bind opaque source references. */
@@ -150,6 +167,8 @@ export interface DesktopEngineeringMutationProductionCompositionV2Options {
   >;
   /** Full B8 crash recovery/compensation qualification. Omission keeps every lifecycle gate off. */
   readonly lifecycleRecoveryQualified?: () => boolean;
+  /** Signed/current native qualification revision used to derive the app-state recovery grant. */
+  readonly lifecycleRecoveryQualificationRevision?: string;
   /** Validates the native preallocated staging object for the exact prepared operation. */
   readonly validateStagingReservation: EngineeringV2StagingReservationValidator;
   readonly saveAuthority: DesktopEngineeringMutationSaveAuthorityV2;
@@ -180,6 +199,9 @@ export interface DesktopEngineeringMutationProductionCompositionV2 {
   readonly transaction: EngineeringWriteTransactionV2;
   readonly lifecycleWalRepository: FileEngineeringLifecycleWalRepositoryV2;
   readonly lifecycleTransaction: EngineeringLifecycleWriteTransactionV2;
+  readonly recoveryRootRepository?: EngineeringRecoveryRootRepositoryV2;
+  /** Main-only local recovery review operations; never projected into Agent tools or IPC. */
+  readonly recoveryOperationService?: DesktopEngineeringRecoveryOperationServiceV2;
   readonly lifecycleCapabilities: Readonly<{
     readonly move: boolean;
     readonly delete: boolean;
@@ -261,6 +283,16 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
     }
   };
   let compositionOwnsDurability = false;
+  let volumeRecoveryAuthority: DesktopEngineeringVolumeLocalRecoveryAuthorityV2 | undefined;
+  const releaseVolumeRecoveryAuthority = (): void => {
+    const authority = volumeRecoveryAuthority;
+    volumeRecoveryAuthority = undefined;
+    try {
+      authority?.dispose();
+    } catch {
+      // The authority closes its retained descriptor before surfacing a native cleanup failure.
+    }
+  };
 
   try {
     const traceId = options.traceId ?? "desktop-engineering-mutation-production-composition-v2";
@@ -379,6 +411,182 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       durability,
       traceId: `${traceId}:sync-required`
     });
+    let recoveryRootRepository: EngineeringRecoveryRootRepositoryV2 | undefined;
+    let productionPrepareLifecycleRecoveryBinding:
+      | NonNullable<
+          DesktopEngineeringMutationProductionCompositionV2Options["prepareLifecycleRecoveryBinding"]
+        >
+      | undefined;
+    let productionResolveLifecycleRecoveryBinding:
+      | NonNullable<
+          DesktopEngineeringMutationProductionCompositionV2Options["resolveLifecycleRecoveryBinding"]
+        >
+      | undefined;
+    if (
+      lifecycleRecoveryQualified &&
+      lifecycleNativeCapabilities.delete &&
+      options.contentRootNativeIdentity !== undefined &&
+      typeof rootBinding.rootId === "bigint" &&
+      isStableId(options.lifecycleRecoveryQualificationRevision)
+    ) {
+      const contentRootNativeIdentity = options.contentRootNativeIdentity;
+      const openedRecovery = await openDesktopEngineeringAppStateRecoveryAuthorityV2({
+        stateRoot: options.stateRoot,
+        contentRoot: {
+          contentRootBindingId: rootBinding.contentRootBindingId,
+          rootId: rootBinding.rootId,
+          volumeIdentity: contentRootNativeIdentity.volumeIdentity,
+          directoryIdentity: contentRootNativeIdentity.directoryIdentity
+        },
+        qualificationRevision: options.lifecycleRecoveryQualificationRevision,
+        addonLoader,
+        authenticateEvidence: (evidence) =>
+          active &&
+          evidence.contentRootBindingId === rootBinding.contentRootBindingId &&
+          evidence.contentVolumeIdentity === contentRootNativeIdentity.volumeIdentity &&
+          evidence.recoveryVolumeIdentity === contentRootNativeIdentity.volumeIdentity &&
+          evidence.contentDirectoryIdentity === contentRootNativeIdentity.directoryIdentity &&
+          evidence.recoveryDirectoryIdentity !== contentRootNativeIdentity.directoryIdentity
+            ? ok(undefined)
+            : unavailable("ENGINEERING_MUTATION_PRODUCTION_RECOVERY_EVIDENCE_UNAVAILABLE", traceId),
+        ...(options.now === undefined ? {} : { now: options.now }),
+        traceId: `${traceId}:volume-recovery-authority`
+      });
+      if (openedRecovery.ok) {
+        const authority = openedRecovery.value.authority;
+        volumeRecoveryAuthority = authority;
+        const globalRecords = new FileEngineeringRecoveryGlobalRecordStoreV2({
+          stateRoot: options.stateRoot,
+          binding: authority.binding,
+          durability,
+          traceId: `${traceId}:recovery-global-records`
+        });
+        const manifests = new FileEngineeringRecoveryObjectManifestStoreV2({
+          recoveryRoot: openedRecovery.value.recoveryRoot,
+          binding: authority.binding,
+          durability: authority.durability,
+          traceId: `${traceId}:recovery-manifests`
+        });
+        const repository = new EngineeringRecoveryRootRepositoryV2({
+          binding: authority.binding,
+          globalRecords,
+          manifests,
+          inspectQuarantine: async (binding) => {
+            const current = await authority.assertCurrent();
+            if (!current.ok) return current;
+            if (current.value.bindingChecksum !== binding.bindingChecksum) {
+              return unavailable(
+                "ENGINEERING_MUTATION_PRODUCTION_RECOVERY_BINDING_MISMATCH",
+                traceId
+              );
+            }
+            const resolved = await authority.resolveLifecycleBinding(binding.bindingChecksum);
+            const inspectQuarantine = mutationPort.inspectQuarantine;
+            return !resolved.ok
+              ? resolved
+              : inspectQuarantine === undefined
+                ? unavailable(
+                    "ENGINEERING_MUTATION_PRODUCTION_RECOVERY_INVENTORY_UNAVAILABLE",
+                    traceId
+                  )
+                : inspectQuarantine(resolved.value);
+          },
+          isGrantCurrent: async (binding) => {
+            const current = await authority.assertCurrent();
+            return current.ok && current.value.bindingChecksum === binding.bindingChecksum;
+          },
+          ...(options.now === undefined ? {} : { now: options.now }),
+          traceId: `${traceId}:recovery-root`
+        });
+        recoveryRootRepository = repository;
+        productionPrepareLifecycleRecoveryBinding = async (input) => {
+          if (input.contentRootBindingId !== rootBinding.contentRootBindingId) {
+            return unavailable("ENGINEERING_MUTATION_PRODUCTION_ROOT_MISMATCH", traceId);
+          }
+          const current = await authority.assertCurrent();
+          if (!current.ok) return current;
+          const scan = await repository.scanRoot();
+          if (!scan.ok) return scan;
+          if (scan.value.status !== "clear" || scan.value.reasons.length > 0) {
+            return unavailable("ENGINEERING_MUTATION_PRODUCTION_RECOVERY_ROOT_BLOCKED", traceId);
+          }
+          let recoverySideEffectChecksum: string;
+          try {
+            recoverySideEffectChecksum = volumeLocalRecoverySideEffectChecksumV2({
+              binding: current.value,
+              transactionId: input.plannedTransactionId,
+              operationId: input.operationId,
+              recoveryObjectId: input.recoveryObjectId,
+              relativeIdentity: input.relativeIdentity,
+              sourceSha256: input.sourceSha256
+            });
+          } catch {
+            return unavailable(
+              "ENGINEERING_MUTATION_PRODUCTION_RECOVERY_SIDE_EFFECT_INVALID",
+              traceId
+            );
+          }
+          const resolved = await authority.resolveLifecycleBinding(recoverySideEffectChecksum);
+          if (!resolved.ok) return resolved;
+          return ok(
+            Object.freeze({
+              recoveryRootBindingId: current.value.recoveryRootBindingId,
+              recoveryGrantRevision: current.value.grantRevision,
+              recoverySideEffectChecksum,
+              recoveryObjectId: input.recoveryObjectId
+            })
+          );
+        };
+        productionResolveLifecycleRecoveryBinding = async (operation) => {
+          if (
+            operation.request.operationKind !== "delete_file" ||
+            operation.recoveryBinding === null
+          ) {
+            return unavailable(
+              "ENGINEERING_MUTATION_PRODUCTION_RECOVERY_BINDING_UNAVAILABLE",
+              traceId
+            );
+          }
+          const current = await authority.assertCurrent();
+          if (!current.ok) return current;
+          let expectedSideEffectChecksum: string;
+          try {
+            expectedSideEffectChecksum = volumeLocalRecoverySideEffectChecksumV2({
+              binding: current.value,
+              transactionId: operation.request.transactionId,
+              operationId: operation.request.operationId,
+              recoveryObjectId: operation.request.recoveryObjectId,
+              relativeIdentity: operation.request.relativeSource,
+              sourceSha256: operation.request.sourceSha256
+            });
+          } catch {
+            return unavailable(
+              "ENGINEERING_MUTATION_PRODUCTION_RECOVERY_SIDE_EFFECT_INVALID",
+              traceId
+            );
+          }
+          if (
+            operation.request.recoveryRootBindingId !== current.value.recoveryRootBindingId ||
+            operation.request.recoveryGrantRevision !== current.value.grantRevision ||
+            operation.request.recoverySideEffectChecksum !== expectedSideEffectChecksum ||
+            operation.recoveryBinding.recoveryRootBindingId !==
+              current.value.recoveryRootBindingId ||
+            operation.recoveryBinding.grantRevision !== current.value.grantRevision ||
+            operation.recoveryBinding.sideEffectChecksum !== expectedSideEffectChecksum
+          ) {
+            return unavailable(
+              "ENGINEERING_MUTATION_PRODUCTION_RECOVERY_BINDING_MISMATCH",
+              traceId
+            );
+          }
+          return authority.resolveLifecycleBinding(expectedSideEffectChecksum);
+        };
+      }
+    }
+    const prepareLifecycleRecoveryBinding =
+      productionPrepareLifecycleRecoveryBinding ?? options.prepareLifecycleRecoveryBinding;
+    const resolveLifecycleRecoveryBinding =
+      productionResolveLifecycleRecoveryBinding ?? options.resolveLifecycleRecoveryBinding;
     // Proposal blobs are intentionally durable before a transaction WAL exists. Recovery must
     // retain only the strictly scanned proposal references while it checks for genuine orphans.
     const recoveryBlobStore = createRecoveryBlobStore({
@@ -386,6 +594,14 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       proposalRepository,
       traceId
     });
+    const volumeLocalRecoveryRepository = recoveryRootRepository;
+    const scanVolumeLocalRecovery =
+      volumeLocalRecoveryRepository === undefined
+        ? undefined
+        : async (contentRootBindingId: string) =>
+            contentRootBindingId === rootBinding.contentRootBindingId
+              ? volumeLocalRecoveryRepository.scanRoot()
+              : unavailable("ENGINEERING_MUTATION_PRODUCTION_ROOT_MISMATCH", traceId);
 
     const recoveryRuntime = await createDesktopEngineeringRecoveryRuntimeV2({
       contentRootBindingId: rootBinding.contentRootBindingId,
@@ -429,6 +645,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           activeReservations.get(authorizationId) === transactionId,
         traceId
       }),
+      ...(scanVolumeLocalRecovery === undefined ? {} : { scanVolumeLocalRecovery }),
       scanLifecycleRecovery: async (contentRootBindingId) => {
         if (contentRootBindingId !== rootBinding.contentRootBindingId)
           return unavailable("ENGINEERING_MUTATION_PRODUCTION_ROOT_MISMATCH", traceId);
@@ -566,9 +783,37 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           traceId
         );
       },
-      ...(options.resolveLifecycleRecoveryBinding === undefined
+      ...(resolveLifecycleRecoveryBinding === undefined
         ? {}
-        : { resolveRecoveryBinding: options.resolveLifecycleRecoveryBinding }),
+        : { resolveRecoveryBinding: resolveLifecycleRecoveryBinding }),
+      ...(volumeLocalRecoveryRepository === undefined
+        ? {}
+        : {
+            recordQuarantine: (input) => volumeLocalRecoveryRepository.recordQuarantine(input),
+            recordQuarantineCompensation: ({ operation, receipt }) => {
+              if (
+                operation.request.operationKind !== "delete_file" ||
+                receipt.operationKind !== "delete_file" ||
+                receipt.recoveryObjectId !== operation.request.recoveryObjectId ||
+                receipt.transactionId !== operation.request.transactionId ||
+                receipt.operationId !== operation.request.operationId
+              ) {
+                return Promise.resolve(
+                  unavailable(
+                    "ENGINEERING_MUTATION_PRODUCTION_RECOVERY_COMPENSATION_MISMATCH",
+                    traceId
+                  )
+                );
+              }
+              return volumeLocalRecoveryRepository.markCompensated({
+                recoveryObjectId: operation.request.recoveryObjectId,
+                transactionId: operation.request.transactionId,
+                operationId: operation.request.operationId,
+                sourceSha256: operation.request.sourceSha256,
+                at: (options.now ?? (() => new Date().toISOString()))()
+              });
+            }
+          }),
       traceId: `${traceId}:lifecycle-transaction`,
       ...(options.now === undefined ? {} : { now: options.now })
     });
@@ -624,6 +869,162 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       unsubscribe();
       deactivate();
       return undefined;
+    }
+    let recoveryOperationService: DesktopEngineeringRecoveryOperationServiceV2 | undefined;
+    const recoveryAuthority = volumeRecoveryAuthority;
+    if (volumeLocalRecoveryRepository !== undefined && recoveryAuthority !== undefined) {
+      const recoveryBinding = await recoveryAuthority.resolveLifecycleBinding(
+        recoveryAuthority.binding.bindingChecksum
+      );
+      if (recoveryBinding.ok) {
+        const purgeDecisionStore = new FileEngineeringRecoveryPurgeDecisionStoreV2({
+          stateRoot: options.stateRoot,
+          durability,
+          traceId: `${traceId}:purge-decisions`
+        });
+        recoveryOperationService = createDesktopEngineeringRecoveryOperationServiceV2({
+          repository: volumeLocalRecoveryRepository,
+          contentRootBinding: mutationRootBinding,
+          recoveryBinding: recoveryBinding.value,
+          createPort: (authenticateRecoveryOperation) => {
+            const port = revokeOnRootLoss(
+              createEngineeringFileMutationPortV2({
+                addon: loaded.addon,
+                rootBinding: mutationRootBinding,
+                pathPolicy: options.pathPolicy,
+                authenticateNativeEvidence: (input) =>
+                  active
+                    ? options.authenticateNativeEvidence(input)
+                    : unavailable(
+                        "ENGINEERING_MUTATION_PRODUCTION_QUALIFICATION_UNAVAILABLE",
+                        traceId
+                      ),
+                authenticateNativeProposalEvidence: (input) =>
+                  active
+                    ? options.authenticateNativeProposalEvidence(input)
+                    : unavailable(
+                        "ENGINEERING_MUTATION_PRODUCTION_QUALIFICATION_UNAVAILABLE",
+                        traceId
+                      ),
+                authenticateRecoveryOperation,
+                traceId: `${traceId}:recovery-operations`
+              }),
+              deactivate
+            );
+            return createRecoveryOperationPort(port, traceId);
+          },
+          inspectRestoreTarget: async (relativeIdentity) => {
+            const root = await verifyRootAvailable();
+            if (!root.ok) return root;
+            const authority = await recoveryAuthority.assertCurrent();
+            if (!authority.ok) return authority;
+            const snapshot = await mutationPort.inspectProposalSnapshot({ relativeIdentity });
+            return snapshot.ok
+              ? ok(
+                  Object.freeze({
+                    targetState: snapshot.value.state,
+                    pathAllowed: true,
+                    policyCurrent: true
+                  })
+                )
+              : snapshot;
+          },
+          acquireRestoreGuard: async (relativeIdentity) => {
+            const gate = await recoveryRuntimeValue.startupGate.assertMutationAllowed(
+              rootBinding.contentRootBindingId
+            );
+            if (!gate.ok) return gate;
+            const lease = await rootLease.acquire(rootBinding.contentRootBindingId);
+            if (!lease.ok) return lease;
+            const pause = await saveCoordinator.pauseAndDrainRoot({
+              contentRootBindingId: rootBinding.contentRootBindingId,
+              relativeIdentities: [relativeIdentity]
+            });
+            if (!pause.ok) {
+              await releaseRestoreResources(undefined, lease.value);
+              return pause;
+            }
+            const inspectEditor = async (): Promise<Result<void, UnifiedError>> => {
+              const editor = await editorState.inspectAll({
+                contentRootBindingId: rootBinding.contentRootBindingId,
+                relativeIdentities: [relativeIdentity]
+              });
+              return editor.ok && editor.value.status === "ready"
+                ? ok(undefined)
+                : editor.ok
+                  ? unavailable("ENGINEERING_MUTATION_PRODUCTION_RESTORE_EDITOR_NOT_READY", traceId)
+                  : editor;
+            };
+            const assertCurrent = async (): Promise<Result<void, UnifiedError>> => {
+              const currentGate = await recoveryRuntimeValue.startupGate.assertMutationAllowed(
+                rootBinding.contentRootBindingId
+              );
+              if (!currentGate.ok) return currentGate;
+              const currentLease = await lease.value.assertCurrent();
+              if (!currentLease.ok) return currentLease;
+              const currentAuthority = await recoveryAuthority.assertCurrent();
+              if (!currentAuthority.ok) return currentAuthority;
+              return inspectEditor();
+            };
+            const ready = await assertCurrent();
+            if (!ready.ok) {
+              await releaseRestoreResources(pause.value, lease.value);
+              return ready;
+            }
+            let released = false;
+            return ok(
+              Object.freeze({
+                assertCurrent,
+                async release() {
+                  if (released) return;
+                  released = true;
+                  await releaseRestoreResources(pause.value, lease.value);
+                }
+              })
+            );
+          },
+          synchronizeRestore: async (input) => {
+            const synchronized = await synchronizer.synchronize({
+              contentRootBindingId: input.contentRootBindingId,
+              operationKind: "create_file",
+              relativeIdentities: [input.relativeIdentity],
+              transactionId: input.transactionId
+            });
+            if (synchronized.ok) return synchronized;
+            const recorded = await syncRequiredStore.writeSyncRequired({
+              schemaVersion: "2.0",
+              kind: "sync_required",
+              contentRootBindingId: input.contentRootBindingId,
+              transactionId: input.transactionId,
+              operationKind: "create_file",
+              relativeIdentities: [input.relativeIdentity],
+              recordedAt: (options.now ?? (() => new Date().toISOString()))()
+            });
+            deactivate();
+            try {
+              options.onMutationUnavailable?.();
+            } catch {
+              // Durable sync-required state remains the authority when the notification fails.
+            }
+            return recorded.ok ? synchronized : recorded;
+          },
+          persistPurgeDecision: async (input) => {
+            const eligible = await volumeLocalRecoveryRepository.validatePurgeDecision({
+              recoveryObjectId: input.recoveryObjectId,
+              actor: input.actor,
+              reason: input.reason,
+              at: input.decidedAt
+            });
+            if (!eligible.ok) return eligible;
+            const stored = await purgeDecisionStore.persist(input);
+            return stored.ok
+              ? ok(Object.freeze({ decisionChecksum: stored.value.decisionChecksum }))
+              : stored;
+          },
+          ...(options.now === undefined ? {} : { now: options.now }),
+          traceId: `${traceId}:recovery-operation-service`
+        });
+      }
     }
     const sessionBundle = createDesktopEngineeringFileMutationSessionV2({
       projectId: options.projectId,
@@ -728,9 +1129,9 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           traceId: `${traceId}:runtime`,
           ...(options.now === undefined ? {} : { now: options.now })
         }),
-      ...(options.prepareLifecycleRecoveryBinding === undefined
+      ...(prepareLifecycleRecoveryBinding === undefined
         ? {}
-        : { resolveLifecycleRecoveryBinding: options.prepareLifecycleRecoveryBinding }),
+        : { resolveLifecycleRecoveryBinding: prepareLifecycleRecoveryBinding }),
       ...(options.now === undefined ? {} : { now: options.now })
     });
 
@@ -746,6 +1147,10 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       syncRequiredStore,
       transaction,
       lifecycleTransaction,
+      ...(volumeLocalRecoveryRepository === undefined
+        ? {}
+        : { recoveryRootRepository: volumeLocalRecoveryRepository }),
+      ...(recoveryOperationService === undefined ? {} : { recoveryOperationService }),
       lifecycleCapabilities: Object.freeze({
         move:
           lifecycleRecoveryQualified &&
@@ -755,8 +1160,10 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
           lifecycleRecoveryQualified &&
           lifecycleNativeCapabilities.delete &&
           options.verifyPreparedLifecycleAuthorization !== undefined &&
-          options.prepareLifecycleRecoveryBinding !== undefined &&
-          options.resolveLifecycleRecoveryBinding !== undefined,
+          prepareLifecycleRecoveryBinding !== undefined &&
+          resolveLifecycleRecoveryBinding !== undefined &&
+          volumeLocalRecoveryRepository !== undefined &&
+          recoveryOperationService !== undefined,
         createDirectory:
           lifecycleRecoveryQualified &&
           lifecycleNativeCapabilities.createDirectory &&
@@ -771,13 +1178,17 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
         }
         unsubscribe = undefined;
         deactivate();
+        releaseVolumeRecoveryAuthority();
         releaseDurability();
       }
     });
     compositionOwnsDurability = true;
     return composition;
   } finally {
-    if (!compositionOwnsDurability) releaseDurability();
+    if (!compositionOwnsDurability) {
+      releaseVolumeRecoveryAuthority();
+      releaseDurability();
+    }
   }
 }
 
@@ -792,6 +1203,50 @@ async function hasCurrentBatch7Qualification(
     return mutation && recovery;
   } catch {
     return false;
+  }
+}
+
+function createRecoveryOperationPort(
+  port: EngineeringQualifiedFileMutationPortV2,
+  traceId: string
+): DesktopEngineeringRecoveryOperationPortV2 {
+  return Object.freeze({
+    async inspectQuarantine(
+      input: Parameters<DesktopEngineeringRecoveryOperationPortV2["inspectQuarantine"]>[0]
+    ) {
+      const operation = port.inspectQuarantine;
+      return operation === undefined
+        ? unavailable("ENGINEERING_MUTATION_PRODUCTION_RECOVERY_INVENTORY_UNAVAILABLE", traceId)
+        : operation(input);
+    },
+    async restore(input: Parameters<DesktopEngineeringRecoveryOperationPortV2["restore"]>[0]) {
+      const operation = port.restore;
+      return operation === undefined
+        ? unavailable("ENGINEERING_MUTATION_PRODUCTION_RESTORE_UNAVAILABLE", traceId)
+        : operation(input);
+    },
+    async purge(input: Parameters<DesktopEngineeringRecoveryOperationPortV2["purge"]>[0]) {
+      const operation = port.purge;
+      return operation === undefined
+        ? unavailable("ENGINEERING_MUTATION_PRODUCTION_PURGE_UNAVAILABLE", traceId)
+        : operation(input);
+    }
+  });
+}
+
+async function releaseRestoreResources(
+  pause: { release(): Promise<void> | void } | undefined,
+  lease: { release(): Promise<void> | void }
+): Promise<void> {
+  try {
+    await pause?.release();
+  } catch {
+    // Both Main adapters mark their resource released before surfacing cleanup failures.
+  }
+  try {
+    await lease.release();
+  } catch {
+    // A failed close cannot expand the retained root authority.
   }
 }
 
@@ -858,25 +1313,25 @@ function readLifecycleNativeCapabilities(value: unknown): Readonly<{
     return Object.freeze({ move: false, delete: false, createDirectory: false });
   }
   const record = value as Record<string, unknown>;
-  const completeLifecycleAddon =
-    typeof record["moveEngineeringPathV2"] === "function" &&
-    typeof record["quarantineEngineeringFileV2"] === "function" &&
-    typeof record["restoreEngineeringFileV2"] === "function" &&
-    typeof record["purgeEngineeringQuarantineObjectV2"] === "function" &&
-    typeof record["openEngineeringStateRootBoundToRecoveryV2"] === "function" &&
-    typeof record["createEngineeringDirectoryV2"] === "function" &&
+  const lifecycleRecovery =
     typeof record["inspectEngineeringFileLifecycleOperationV2"] === "function" &&
     typeof record["resumeEngineeringFileLifecycleOperationV2"] === "function" &&
     typeof record["compensateEngineeringFileLifecycleOperationV2"] === "function" &&
-    typeof record["finalizeEngineeringFileLifecycleOperationV2"] === "function" &&
-    typeof record["inspectEngineeringQuarantineV2"] === "function";
-  if (!completeLifecycleAddon) {
-    return Object.freeze({ move: false, delete: false, createDirectory: false });
-  }
+    typeof record["finalizeEngineeringFileLifecycleOperationV2"] === "function";
   return Object.freeze({
-    move: true,
-    delete: true,
-    createDirectory: true
+    move: lifecycleRecovery && typeof record["moveEngineeringPathV2"] === "function",
+    delete:
+      lifecycleRecovery &&
+      typeof record["quarantineEngineeringFileV2"] === "function" &&
+      typeof record["restoreEngineeringFileV2"] === "function" &&
+      typeof record["purgeEngineeringQuarantineObjectV2"] === "function" &&
+      typeof record["openEngineeringRecoveryRootV2"] === "function" &&
+      typeof record["closeEngineeringRecoveryRootV2"] === "function" &&
+      typeof record["inspectEngineeringRecoveryRootCapacityV2"] === "function" &&
+      typeof record["openEngineeringStateRootBoundToRecoveryV2"] === "function" &&
+      typeof record["inspectEngineeringQuarantineV2"] === "function",
+    createDirectory:
+      lifecycleRecovery && typeof record["createEngineeringDirectoryV2"] === "function"
   });
 }
 

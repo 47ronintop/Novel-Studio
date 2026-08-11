@@ -29,6 +29,8 @@ export type EngineeringRecoveryRootGateReasonV2 =
   | "orphaned_manifest"
   | "orphaned_physical_object"
   | "manifest_mismatch"
+  | "unknown_record"
+  | "authentication_failed"
   | "capacity_exceeded";
 
 export interface EngineeringRecoveryGateSnapshotV2 {
@@ -391,7 +393,8 @@ export class EngineeringRecoveryGateV2 {
         // The B7 gate has a deliberately small public reason set. Any volume-local failure is
         // represented as a root-bound unknown/auth failure and therefore keeps all mutation closed.
         reasons.add(
-          recovery.value.reasons.includes("binding_revoked")
+          recovery.value.reasons.includes("binding_revoked") ||
+            recovery.value.reasons.includes("authentication_failed")
             ? "authentication_failed"
             : "orphaned_object"
         );
@@ -617,6 +620,8 @@ function isVolumeLocalRecoveryScan(value: unknown): value is {
         "orphaned_manifest",
         "orphaned_physical_object",
         "manifest_mismatch",
+        "unknown_record",
+        "authentication_failed",
         "capacity_exceeded"
       ].includes(reason as string)
     )

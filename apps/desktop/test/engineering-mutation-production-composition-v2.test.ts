@@ -423,6 +423,37 @@ describe("Desktop Engineering mutation production composition V2", () => {
     composition?.dispose();
   });
 
+  test("opens delete only with handle-bound volume recovery capacity and durable stores", async () => {
+    const enabled = createHarness({
+      addon: createBatch7Addon({ lifecycle: true, volumeRecovery: true }),
+      verifyPreparedLifecycleAuthorization: async () => ok(undefined),
+      lifecycleRecoveryQualified: () => true
+    });
+    const composition = await createDesktopEngineeringMutationProductionCompositionV2({
+      ...enabled.options,
+      contentRootNativeIdentity: {
+        volumeIdentity: "volume_01",
+        directoryIdentity: "directory_content_01",
+        canonicalPathIdentityChecksum: "a".repeat(64)
+      },
+      lifecycleRecoveryQualificationRevision: "qualification_01",
+      addonLoader: loadedAddon(enabled.addon, "8")
+    });
+
+    expect(composition?.lifecycleCapabilities).toEqual({
+      move: true,
+      delete: true,
+      createDirectory: true
+    });
+    expect(composition?.recoveryRootRepository).toBeDefined();
+    expect(composition?.recoveryOperationService).toBeDefined();
+    await expect(composition?.recoveryRootRepository?.scanRoot()).resolves.toMatchObject({
+      ok: true,
+      value: { status: "clear", reasons: [] }
+    });
+    composition?.dispose();
+  });
+
   test("blocks reported-unknown and disconnected create targets before proposal revalidation", async () => {
     for (const connection of ["unknown", "disconnected"] as const) {
       const harness = createHarness();
@@ -1145,6 +1176,7 @@ function createBatch7Addon(
       request: Record<string, unknown>
     ) => ReturnType<typeof lifecycleOperationState>;
     readonly onLifecycleFinalize?: (request: Record<string, unknown>) => void;
+    readonly volumeRecovery?: boolean;
   } = {}
 ) {
   const files = new Map<string, Uint8Array>();
@@ -1214,6 +1246,8 @@ function createBatch7Addon(
       if (!files.delete(path)) return missing();
     }
   };
+  let recoveryRootBindingId = "";
+  let recoveryGrantRevision = "";
   const addon = {
     adapterInfo: () => undefined,
     openWorkspaceRoot: () => 7n,
@@ -1306,7 +1340,40 @@ function createBatch7Addon(
             _recoveryRootId: bigint,
             request: Record<string, unknown>
           ) => input.onLifecycleFinalize?.(request),
-          inspectEngineeringQuarantineV2: () => undefined
+          ...(input.volumeRecovery === true
+            ? {
+                openEngineeringRecoveryRootV2: (
+                  _rootId: bigint,
+                  _recoveryRoot: string,
+                  bindingId: string,
+                  grantRevision: string,
+                  ownershipMarkerChecksum: string
+                ) => {
+                  recoveryRootBindingId = bindingId;
+                  recoveryGrantRevision = grantRevision;
+                  return {
+                    recoveryRootId: 20n,
+                    volumeIdentity: "volume_01",
+                    directoryIdentity: "directory_recovery_01",
+                    recoveryRootBindingId: bindingId,
+                    grantRevision,
+                    ownershipMarkerChecksum
+                  };
+                },
+                closeEngineeringRecoveryRootV2: () => undefined,
+                inspectEngineeringRecoveryRootCapacityV2: () => ({
+                  capacityBytes: 32n * 1024n * 1024n,
+                  reservedBytes: 1024n
+                }),
+                inspectEngineeringQuarantineV2: () => ({
+                  schemaVersion: "3.0",
+                  kind: "engineering_quarantine_inventory",
+                  recoveryRootBindingId,
+                  grantRevision: recoveryGrantRevision,
+                  objects: []
+                })
+              }
+            : { inspectEngineeringQuarantineV2: () => undefined })
         }
       : {};
   return input.durability === false
