@@ -273,6 +273,21 @@ describe("engineering file access development probe contract", () => {
     expect(descendantOpenSource).toContain("hasExpectedLeafName(next, segments[index])");
   });
 
+  test("invokes the quarantine addon with its exact three-argument ABI", async () => {
+    const probeSource = await readFile("scripts/probe-engineering-file-access-package.mjs", "utf8");
+
+    const quarantineCallStart = probeSource.indexOf("addon.quarantineEngineeringFileV2(");
+    const quarantineCallEnd = probeSource.indexOf(");", quarantineCallStart) + 2;
+    expect(quarantineCallStart).toBeGreaterThanOrEqual(0);
+    expect(probeSource.slice(quarantineCallStart, quarantineCallEnd)).toBe(
+      `addon.quarantineEngineeringFileV2(
+          rootId,
+          recoveryBinding.recoveryRootId,
+          quarantineRequest
+        );`
+    );
+  });
+
   test("retains lifecycle markers until durable WAL finalize and exposes bounded recovery primitives", async () => {
     const nativeSource = await readFile(
       "native/engineering-file-access-win32/src/engineering_file_access.cc",

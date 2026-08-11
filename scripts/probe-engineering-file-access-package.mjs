@@ -833,8 +833,7 @@ export async function probeMutationV2Abi(addon) {
         addon.quarantineEngineeringFileV2(
           rootId,
           recoveryBinding.recoveryRootId,
-          quarantineRequest,
-          "after"
+          quarantineRequest
         );
         assertLifecycleOperationState(
           addon.inspectEngineeringFileLifecycleOperationV2(
