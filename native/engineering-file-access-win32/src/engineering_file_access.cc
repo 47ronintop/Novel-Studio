@@ -1475,6 +1475,56 @@ AccessError openMutationRelative(uint64_t rootId, const std::vector<std::wstring
   return AccessError::kOk;
 }
 
+bool isPathAncestorOrSame(const std::wstring& ancestor, const std::wstring& candidate);
+
+AccessError openMutationDescendantDirectory(HANDLE ancestor, const std::wstring& ancestorPath,
+                                            const std::wstring& descendantPath, HANDLE* output) {
+  if (ancestor == INVALID_HANDLE_VALUE ||
+      _wcsicmp(ancestorPath.c_str(), descendantPath.c_str()) == 0 ||
+      (!ancestorPath.empty() && !isPathAncestorOrSame(ancestorPath, descendantPath))) {
+    return AccessError::kUnsafePath;
+  }
+  const size_t suffixStart = ancestorPath.empty() ? 0 : ancestorPath.size() + 1;
+  const std::wstring descendantSuffix = descendantPath.substr(suffixStart);
+  std::vector<std::wstring> segments;
+  if (!parseRelativePath(descendantSuffix, false, &segments)) return AccessError::kUnsafePath;
+  const NtCreateFileFn create = ntCreateFile();
+  if (create == nullptr) return AccessError::kUnavailable;
+
+  HANDLE current = ancestor;
+  HANDLE ownedCurrent = INVALID_HANDLE_VALUE;
+  for (size_t index = 0; index < segments.size(); ++index) {
+    UNICODE_STRING name{};
+    name.Buffer = const_cast<PWSTR>(segments[index].data());
+    name.Length = static_cast<USHORT>(segments[index].size() * sizeof(wchar_t));
+    name.MaximumLength = name.Length;
+    OBJECT_ATTRIBUTES attributes{};
+    InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, current, nullptr);
+    IO_STATUS_BLOCK statusBlock{};
+    HANDLE next = INVALID_HANDLE_VALUE;
+    const DWORD desiredAccess = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
+        FILE_WRITE_ATTRIBUTES | FILE_ADD_FILE | FILE_DELETE_CHILD | SYNCHRONIZE;
+    const NTSTATUS status = create(
+        &next, desiredAccess, &attributes, &statusBlock, nullptr, 0, FILE_SHARE_READ, kFileOpen,
+        kFileDirectoryFile | kFileSynchronousIoNonAlert | noFollowOpenOption(), nullptr, 0);
+    if (!isSuccess(status) || next == INVALID_HANDLE_VALUE) {
+      if (ownedCurrent != INVALID_HANDLE_VALUE) CloseHandle(ownedCurrent);
+      return status == kStatusObjectNameNotFound ? AccessError::kNotFound : AccessError::kUnsafeObject;
+    }
+    const AccessError checked = verifyDirectory(next);
+    if (checked != AccessError::kOk || !hasExpectedLeafName(next, segments[index])) {
+      CloseHandle(next);
+      if (ownedCurrent != INVALID_HANDLE_VALUE) CloseHandle(ownedCurrent);
+      return checked == AccessError::kOk ? AccessError::kUnsafePath : checked;
+    }
+    if (ownedCurrent != INVALID_HANDLE_VALUE) CloseHandle(ownedCurrent);
+    ownedCurrent = next;
+    current = next;
+  }
+  *output = ownedCurrent;
+  return AccessError::kOk;
+}
+
 AccessError openMutationDirectory(uint64_t rootId, const std::wstring& relative, HANDLE* output) {
   std::vector<std::wstring> segments;
   if (!parseRelativePath(relative, true, &segments)) return AccessError::kUnsafePath;
@@ -5159,7 +5209,9 @@ AccessError classifyLifecycleOperation(uint64_t rootId, uint64_t recoveryId,
   if (!splitLifecyclePath(request.relativeSource, &sourceParentPath, &sourceLeaf)) {
     return AccessError::kUnsafePath;
   }
-  if (sourceParentPath != markerParentPath) return AccessError::kUnsafePath;
+  if (_wcsicmp(sourceParentPath.c_str(), markerParentPath.c_str()) != 0) {
+    return AccessError::kUnsafePath;
+  }
   HANDLE sourceParentRaw = markerParent.release();
   ScopedHandle sourceParent(sourceParentRaw);
   const LifecycleObjectMatch source = observeLifecycleFile(sourceParent.get(), sourceLeaf, request, 0);
@@ -5192,9 +5244,17 @@ AccessError classifyLifecycleOperation(uint64_t rootId, uint64_t recoveryId,
   if (!splitLifecyclePath(request.relativeTarget, &targetParentPath, &targetLeaf)) {
     return AccessError::kUnsafePath;
   }
+  const bool sameParent =
+      _wcsicmp(sourceParentPath.c_str(), targetParentPath.c_str()) == 0;
+  const bool targetParentIsBelowSourceParent = !sameParent &&
+      (sourceParentPath.empty() || isPathAncestorOrSame(sourceParentPath, targetParentPath));
   HANDLE targetParentRaw = INVALID_HANDLE_VALUE;
-  if (targetParentPath == sourceParentPath) {
+  if (sameParent) {
     targetParentRaw = sourceParent.release();
+  } else if (targetParentIsBelowSourceParent) {
+    result = openMutationDescendantDirectory(sourceParent.get(), sourceParentPath, targetParentPath,
+                                             &targetParentRaw);
+    if (result != AccessError::kOk) return result;
   } else {
     result = openMutationDirectory(rootId, targetParentPath, &targetParentRaw);
     if (result != AccessError::kOk) return result;

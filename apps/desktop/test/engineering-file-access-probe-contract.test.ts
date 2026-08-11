@@ -249,6 +249,28 @@ describe("engineering file access development probe contract", () => {
     expect(classifySource).not.toContain(
       "openMutationDirectory(rootId, sourceParentPath, &sourceParentRaw)"
     );
+    expect(classifySource).toContain(
+      "_wcsicmp(sourceParentPath.c_str(), targetParentPath.c_str()) == 0;"
+    );
+    expect(classifySource).toContain("const bool targetParentIsBelowSourceParent = !sameParent &&");
+    expect(classifySource).toContain(
+      "openMutationDescendantDirectory(sourceParent.get(), sourceParentPath, targetParentPath,"
+    );
+
+    const descendantOpenStart = nativeSource.indexOf("AccessError openMutationDescendantDirectory");
+    const descendantOpenEnd = nativeSource.indexOf(
+      "AccessError openMutationDirectory(uint64_t rootId",
+      descendantOpenStart
+    );
+    expect(descendantOpenStart).toBeGreaterThanOrEqual(0);
+    expect(descendantOpenEnd).toBeGreaterThan(descendantOpenStart);
+    const descendantOpenSource = nativeSource.slice(descendantOpenStart, descendantOpenEnd);
+    expect(descendantOpenSource).toContain("parseRelativePath(descendantSuffix, false, &segments)");
+    expect(descendantOpenSource).toContain("OBJ_CASE_INSENSITIVE");
+    expect(descendantOpenSource).toContain("FILE_SHARE_READ");
+    expect(descendantOpenSource).toContain("noFollowOpenOption()");
+    expect(descendantOpenSource).toContain("verifyDirectory(next)");
+    expect(descendantOpenSource).toContain("hasExpectedLeafName(next, segments[index])");
   });
 
   test("retains lifecycle markers until durable WAL finalize and exposes bounded recovery primitives", async () => {
