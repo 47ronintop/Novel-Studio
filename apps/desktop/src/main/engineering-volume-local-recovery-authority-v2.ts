@@ -1,4 +1,4 @@
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 
 import {
   ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
@@ -16,6 +16,7 @@ import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@no
 
 import {
   createEngineeringRecoveryStateDurabilityPortV2,
+  createEngineeringStateDurabilityPortV2,
   type EngineeringFileAccessAddonLoader,
   type EngineeringRecoveryStateDurabilityPortV2Handle
 } from "./engineering-file-access-adapter.js";
@@ -74,6 +75,23 @@ export interface OpenDesktopEngineeringVolumeLocalRecoveryAuthorityV2Options {
   readonly traceId?: string;
 }
 
+export interface DesktopEngineeringAppStateRecoveryAuthorityV2 {
+  /** Main-only path used solely by the durable manifest store. */
+  readonly recoveryRoot: string;
+  readonly authority: DesktopEngineeringVolumeLocalRecoveryAuthorityV2;
+}
+
+export interface OpenDesktopEngineeringAppStateRecoveryAuthorityV2Options {
+  readonly stateRoot: string;
+  readonly contentRoot: DesktopEngineeringContentRootIdentityV2;
+  readonly qualificationRevision: string;
+  readonly addonLoader: EngineeringFileAccessAddonLoader;
+  readonly authenticateEvidence: VolumeLocalRecoveryEvidenceAuthenticatorV2;
+  readonly minimumFreeBytes?: number;
+  readonly now?: () => string;
+  readonly traceId?: string;
+}
+
 interface EngineeringRecoveryAuthorityNativeAddon {
   readonly openEngineeringRecoveryRootV2: (
     contentRootId: bigint,
@@ -93,6 +111,96 @@ interface NativeRecoveryRootEvidenceV2 {
   readonly recoveryRootBindingId: string;
   readonly grantRevision: string;
   readonly ownershipMarkerChecksum: string;
+}
+
+/**
+ * Provisions only the reserved namespace below an already app-owned state root. If that root is
+ * not on the content volume, the native open rejects it and recoverable deletion stays closed.
+ */
+export async function openDesktopEngineeringAppStateRecoveryAuthorityV2(
+  options: OpenDesktopEngineeringAppStateRecoveryAuthorityV2Options
+): Promise<Result<DesktopEngineeringAppStateRecoveryAuthorityV2, UnifiedError>> {
+  const traceId = options.traceId ?? "desktop-engineering-app-state-recovery-authority-v2";
+  if (
+    !isAbsolute(options.stateRoot) ||
+    !isStableId(options.contentRoot.contentRootBindingId) ||
+    !isStableId(options.qualificationRevision)
+  ) {
+    return invalid(traceId);
+  }
+  const bindingDigest = sha256EngineeringMutationTextV2(
+    canonicalizeEngineeringMutationV2Json({
+      kind: "engineering_app_state_recovery_root_v2",
+      contentRootBindingId: options.contentRoot.contentRootBindingId
+    })
+  );
+  const recoveryRootBindingId = `recovery_${bindingDigest}`;
+  const recoveryRoot = join(options.stateRoot, "engineering-volume-recovery-v2", bindingDigest);
+  const markerBytes = new TextEncoder().encode(
+    `Novel Studio Engineering recovery owner v1\n${recoveryRootBindingId}\n`
+  );
+  const ownershipMarkerChecksum = sha256EngineeringMutationTextV2(
+    new TextDecoder().decode(markerBytes)
+  );
+  const grantRevision = `grant_${sha256EngineeringMutationTextV2(
+    canonicalizeEngineeringMutationV2Json({
+      kind: "engineering_app_state_recovery_grant_v2",
+      recoveryRootBindingId,
+      qualificationRevision: options.qualificationRevision,
+      ownershipMarkerChecksum
+    })
+  )}`;
+  const durability = createEngineeringStateDurabilityPortV2({
+    stateRoot: options.stateRoot,
+    addonLoader: options.addonLoader
+  });
+  if (durability === undefined) {
+    return unavailable("ENGINEERING_RECOVERY_AUTHORITY_DURABILITY_UNAVAILABLE", traceId);
+  }
+  try {
+    const markerPath = join(recoveryRoot, ".novel-studio-recovery-owner-v1");
+    await durability.ensureDirectoryNoFollow(recoveryRoot);
+    await durability.flushDirectory(recoveryRoot);
+    const markerReady = await ensureExactOwnershipMarker(
+      durability,
+      markerPath,
+      markerBytes,
+      recoveryRoot
+    );
+    if (!markerReady) {
+      return unavailable("ENGINEERING_RECOVERY_AUTHORITY_OWNERSHIP_MARKER_INVALID", traceId);
+    }
+  } catch {
+    return unavailable("ENGINEERING_RECOVERY_AUTHORITY_PROVISION_FAILED", traceId);
+  } finally {
+    try {
+      durability.dispose();
+    } catch {
+      // The authority open below must still revalidate the independently retained recovery root.
+    }
+  }
+
+  const opened = await openDesktopEngineeringVolumeLocalRecoveryAuthorityV2({
+    recoveryRoot,
+    appStateRoot: options.stateRoot,
+    contentRoot: options.contentRoot,
+    grant: {
+      authority: "app_state_root",
+      recoveryRootBindingId,
+      grantRevision,
+      ownershipMarkerChecksum,
+      storageLabel: "Application recovery storage",
+      retentionDays: 30
+    },
+    addonLoader: options.addonLoader,
+    authenticateEvidence: options.authenticateEvidence,
+    ...(options.minimumFreeBytes === undefined
+      ? {}
+      : { minimumFreeBytes: options.minimumFreeBytes }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    traceId
+  });
+  return opened.ok ? ok(Object.freeze({ recoveryRoot, authority: opened.value })) : opened;
 }
 
 /**
@@ -473,6 +581,57 @@ function validCapacity(value: DesktopEngineeringRecoveryCapacityV2): boolean {
     Number.isSafeInteger(value.reservedBytes) &&
     value.reservedBytes >= 0 &&
     value.reservedBytes <= value.capacityBytes
+  );
+}
+
+async function ensureExactOwnershipMarker(
+  durability: NonNullable<ReturnType<typeof createEngineeringStateDurabilityPortV2>>,
+  markerPath: string,
+  expected: Uint8Array,
+  recoveryRoot: string
+): Promise<boolean> {
+  try {
+    return sameBytes(await durability.readFileNoFollow(markerPath), expected);
+  } catch (cause) {
+    if (!hasErrorCode(cause, "ENOENT")) return false;
+  }
+
+  let handle: Awaited<ReturnType<typeof durability.openExclusiveNoFollow>> | undefined;
+  let closeFailed = false;
+  try {
+    handle = await durability.openExclusiveNoFollow(markerPath);
+    await handle.writeFile(expected);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await durability.flushDirectory(recoveryRoot);
+  } catch (cause) {
+    if (!hasErrorCode(cause, "EEXIST")) return false;
+  } finally {
+    try {
+      await handle?.close();
+    } catch {
+      closeFailed = true;
+    }
+  }
+  if (closeFailed) return false;
+  try {
+    return sameBytes(await durability.readFileNoFollow(markerPath), expected);
+  } catch {
+    return false;
+  }
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
+}
+
+function hasErrorCode(value: unknown, code: string): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "code" in value &&
+    (value as { readonly code?: unknown }).code === code
   );
 }
 

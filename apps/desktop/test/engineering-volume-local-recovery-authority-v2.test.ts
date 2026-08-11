@@ -2,6 +2,7 @@ import { createUnifiedError, err, ok } from "@novel-studio/shared";
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  openDesktopEngineeringAppStateRecoveryAuthorityV2,
   openDesktopEngineeringVolumeLocalRecoveryAuthorityV2,
   type OpenDesktopEngineeringVolumeLocalRecoveryAuthorityV2Options
 } from "../src/main/engineering-volume-local-recovery-authority-v2.js";
@@ -10,6 +11,62 @@ const marker = "a".repeat(64);
 const sideEffect = "b".repeat(64);
 
 describe("Desktop volume-local recovery authority V2", () => {
+  test("provisions an exact owner marker only below the app-owned state root", async () => {
+    const addon = recoveryAddon();
+    let markerBytes: Uint8Array | undefined;
+    addon.openEngineeringStateRoot.mockReturnValue(90n);
+    addon.openEngineeringStateExclusiveNoFollow.mockReturnValue(101n);
+    addon.readEngineeringStateFileNoFollow.mockImplementation(() => {
+      if (markerBytes === undefined) {
+        throw Object.assign(new Error("missing"), { code: "ENGINEERING_ACCESS_NOT_FOUND" });
+      }
+      return markerBytes;
+    });
+    addon.writeEngineeringStateFile.mockImplementation((_fileId, bytes: Uint8Array) => {
+      markerBytes = new Uint8Array(bytes);
+    });
+    addon.openEngineeringRecoveryRootV2.mockImplementation(
+      (
+        _rootId: bigint,
+        _recoveryRoot: string,
+        recoveryRootBindingId: string,
+        grantRevision: string,
+        ownershipMarkerChecksum: string
+      ) => ({
+        ...nativeEvidence(21n),
+        recoveryRootBindingId,
+        grantRevision,
+        ownershipMarkerChecksum
+      })
+    );
+
+    const opened = await openDesktopEngineeringAppStateRecoveryAuthorityV2({
+      stateRoot: "C:\\Novel Studio\\state",
+      contentRoot: {
+        contentRootBindingId: "content_root_01",
+        rootId: 11n,
+        volumeIdentity: "volume_01",
+        directoryIdentity: "directory_content_01"
+      },
+      qualificationRevision: "qualification_01",
+      addonLoader: loadedAddon(addon),
+      authenticateEvidence: () => ok(undefined),
+      now: () => "2026-08-11T04:00:00.000Z"
+    });
+    expect(opened).toMatchObject({ ok: true });
+    if (!opened.ok) throw new Error(opened.error.code);
+    expect(opened.value.recoveryRoot).toMatch(
+      /^C:\\Novel Studio\\state\\engineering-volume-recovery-v2\\[a-f0-9]{64}$/u
+    );
+    expect(addon.ensureEngineeringStateDirectoryNoFollow).toHaveBeenCalledWith(
+      90n,
+      expect.stringMatching(/^engineering-volume-recovery-v2\/[a-f0-9]{64}$/u)
+    );
+    expect(addon.openEngineeringRecoveryRootV2).toHaveBeenCalledOnce();
+    expect(markerBytes).toBeInstanceOf(Uint8Array);
+    opened.value.authority.dispose();
+  });
+
   test("binds native same-volume evidence and durability to the exact recovery handle", async () => {
     const addon = recoveryAddon();
     const inspectCapacity = vi.fn(async () =>
