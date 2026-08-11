@@ -59,6 +59,59 @@ describe("Desktop engineering recovery operation service V2", () => {
     });
   });
 
+  test("holds the restore guard through native mutation and workspace synchronization", async () => {
+    const fixture = await createFixture();
+    const order: string[] = [];
+    const service = createService(
+      fixture,
+      (authenticate) =>
+        createPortFixture(fixture, {
+          async restore(input) {
+            order.push("native_restore");
+            const authenticated = authenticate(restoreAuthInput(input, fixture));
+            return authenticated.ok ? ok(restoreReceipt(input)) : authenticated;
+          }
+        }),
+      undefined,
+      undefined,
+      {
+        acquireRestoreGuard: async () => {
+          order.push("guard_acquire");
+          return ok({
+            async assertCurrent() {
+              order.push("guard_current");
+              return ok(undefined);
+            },
+            release() {
+              order.push("guard_release");
+            }
+          });
+        },
+        synchronizeRestore: async () => {
+          order.push("sync_restore");
+          return ok(undefined);
+        }
+      }
+    );
+    const preview = await service.previewRestore({ recoveryObjectId: "object_01" });
+    if (!preview.ok) throw new Error(preview.error.message);
+
+    await expect(
+      service.restore({
+        recoveryObjectId: "object_01",
+        previewChecksum: preview.value.previewChecksum
+      })
+    ).resolves.toMatchObject({ ok: true });
+    expect(order).toEqual([
+      "guard_acquire",
+      "guard_current",
+      "guard_current",
+      "native_restore",
+      "sync_restore",
+      "guard_release"
+    ]);
+  });
+
   test("fails closed for stale or conflicting restore previews", async () => {
     const fixture = await createFixture();
     const restore = vi.fn();
@@ -252,7 +305,13 @@ function createService(
   persistPurgeDecision: Parameters<
     typeof createDesktopEngineeringRecoveryOperationServiceV2
   >[0]["persistPurgeDecision"] = async () =>
-    ok({ decisionChecksum: hash("durable-purge-decision") })
+    ok({ decisionChecksum: hash("durable-purge-decision") }),
+  restoreLifecycle: Partial<
+    Pick<
+      Parameters<typeof createDesktopEngineeringRecoveryOperationServiceV2>[0],
+      "acquireRestoreGuard" | "synchronizeRestore"
+    >
+  > = {}
 ) {
   let id = 0;
   return createDesktopEngineeringRecoveryOperationServiceV2({
@@ -261,6 +320,16 @@ function createService(
     recoveryBinding: fixture.recoveryBinding,
     createPort,
     inspectRestoreTarget,
+    acquireRestoreGuard:
+      restoreLifecycle.acquireRestoreGuard ??
+      (async () =>
+        ok({
+          async assertCurrent() {
+            return ok(undefined);
+          },
+          release() {}
+        })),
+    synchronizeRestore: restoreLifecycle.synchronizeRestore ?? (async () => ok(undefined)),
     persistPurgeDecision,
     now: () => "2099-03-01T00:00:00.000Z",
     allocateId: (kind) => `${kind}_${++id}`

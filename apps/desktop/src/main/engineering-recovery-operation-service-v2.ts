@@ -37,6 +37,11 @@ export interface DesktopEngineeringDurablePurgeDecisionV2 {
   readonly decisionChecksum: string;
 }
 
+export interface DesktopEngineeringRestoreGuardV2 {
+  assertCurrent(): Promise<Result<void, UnifiedError>>;
+  release(): Promise<void> | void;
+}
+
 export interface DesktopEngineeringRecoveryOperationPortV2 {
   readonly inspectQuarantine: NonNullable<EngineeringFileMutationPortV2["inspectQuarantine"]>;
   readonly restore: NonNullable<EngineeringFileMutationPortV2["restore"]>;
@@ -53,6 +58,14 @@ export interface DesktopEngineeringRecoveryOperationServiceV2Options {
   readonly inspectRestoreTarget: (
     relativeIdentity: string
   ) => Promise<Result<DesktopEngineeringRestoreTargetObservationV2, UnifiedError>>;
+  readonly acquireRestoreGuard: (
+    relativeIdentity: string
+  ) => Promise<Result<DesktopEngineeringRestoreGuardV2, UnifiedError>>;
+  readonly synchronizeRestore: (input: {
+    readonly contentRootBindingId: string;
+    readonly transactionId: string;
+    readonly relativeIdentity: string;
+  }) => Promise<Result<void, UnifiedError>>;
   /**
    * Main must verify the current quarantined/unpinned manifest (including retention expiry for
    * policy decisions) and must not resolve until that exact decision is durable.
@@ -132,56 +145,94 @@ export function createDesktopEngineeringRecoveryOperationServiceV2(
     async restore(input: unknown): Promise<Result<EngineeringFileRestoreReceiptV2, UnifiedError>> {
       const parsed = parseRestoreInput(input, traceId);
       if (!parsed.ok) return parsed;
-      const preview = await previewRestore({ recoveryObjectId: parsed.value.recoveryObjectId });
-      if (!preview.ok) return preview;
+      const initialPreview = await previewRestore({
+        recoveryObjectId: parsed.value.recoveryObjectId
+      });
+      if (!initialPreview.ok) return initialPreview;
       if (
-        preview.value.state !== "ready" ||
-        preview.value.previewChecksum !== parsed.value.previewChecksum
+        initialPreview.value.state !== "ready" ||
+        initialPreview.value.previewChecksum !== parsed.value.previewChecksum
       ) {
         return err(stalePreview(traceId));
       }
-      const inventory = await port.inspectQuarantine(options.recoveryBinding);
-      if (!inventory.ok) return inventory;
-      const object = inventory.value.objects.find(
-        (candidate) => candidate.recoveryObjectId === parsed.value.recoveryObjectId
+      const guard = await safelyAcquireRestoreGuard(
+        options.acquireRestoreGuard,
+        initialPreview.value.relativeIdentity,
+        traceId
       );
-      if (object === undefined || object.sha256 !== preview.value.sourceSha256) {
-        return err(blocked(traceId));
+      if (!guard.ok) return guard;
+      try {
+        const currentGuard = await safelyAssertRestoreGuard(guard.value, traceId);
+        if (!currentGuard.ok) return currentGuard;
+        const preview = await previewRestore({ recoveryObjectId: parsed.value.recoveryObjectId });
+        if (!preview.ok) return preview;
+        if (
+          preview.value.state !== "ready" ||
+          preview.value.previewChecksum !== parsed.value.previewChecksum
+        ) {
+          return err(stalePreview(traceId));
+        }
+        const inventory = await port.inspectQuarantine(options.recoveryBinding);
+        if (!inventory.ok) return inventory;
+        const object = inventory.value.objects.find(
+          (candidate) => candidate.recoveryObjectId === parsed.value.recoveryObjectId
+        );
+        if (object === undefined || object.sha256 !== preview.value.sourceSha256) {
+          return err(blocked(traceId));
+        }
+        const request: EngineeringFileRestoreRequestV2 = Object.freeze({
+          schemaVersion: ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION,
+          operationKind: "restore_file",
+          transactionId: allocateId("transaction"),
+          operationId: allocateId("operation"),
+          contentRootBindingId: options.contentRootBinding.contentRootBindingId,
+          relativeSource: "",
+          relativeTarget: preview.value.relativeIdentity,
+          sourceFileIdentity: object.fileIdentity,
+          sourceSha256: object.sha256,
+          targetProof: "absent",
+          recoveryRootBindingId: options.recoveryBinding.recoveryRootBindingId,
+          recoveryGrantRevision: options.recoveryBinding.grantRevision,
+          recoverySideEffectChecksum: options.recoveryBinding.sideEffectChecksum,
+          recoveryObjectId: object.recoveryObjectId,
+          stagingObjectId: allocateId("staging"),
+          expectedState: "wal_prepared"
+        });
+        const stillCurrent = await safelyAssertRestoreGuard(guard.value, traceId);
+        if (!stillCurrent.ok) return stillCurrent;
+        const expected = {
+          kind: "restore" as const,
+          rootBinding: options.contentRootBinding,
+          recoveryBinding: options.recoveryBinding,
+          request
+        };
+        const restored = await invokeAuthorized(expected, () =>
+          port.restore({ request, recoveryBinding: options.recoveryBinding })
+        );
+        if (!restored.ok) return restored;
+        const synchronized = await safelySynchronizeRestore(
+          options.synchronizeRestore,
+          {
+            contentRootBindingId: options.contentRootBinding.contentRootBindingId,
+            transactionId: request.transactionId,
+            relativeIdentity: preview.value.relativeIdentity
+          },
+          traceId
+        );
+        if (!synchronized.ok) return synchronized;
+        const marked = await options.repository.markRestored({
+          recoveryObjectId: object.recoveryObjectId,
+          at: now(),
+          preview: preview.value
+        });
+        return marked.ok ? restored : err(marked.error);
+      } finally {
+        try {
+          await guard.value.release();
+        } catch {
+          // Main-owned guards close their lease/save pause before reporting cleanup failures.
+        }
       }
-      const request: EngineeringFileRestoreRequestV2 = Object.freeze({
-        schemaVersion: ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION,
-        operationKind: "restore_file",
-        transactionId: allocateId("transaction"),
-        operationId: allocateId("operation"),
-        contentRootBindingId: options.contentRootBinding.contentRootBindingId,
-        relativeSource: "",
-        relativeTarget: preview.value.relativeIdentity,
-        sourceFileIdentity: object.fileIdentity,
-        sourceSha256: object.sha256,
-        targetProof: "absent",
-        recoveryRootBindingId: options.recoveryBinding.recoveryRootBindingId,
-        recoveryGrantRevision: options.recoveryBinding.grantRevision,
-        recoverySideEffectChecksum: options.recoveryBinding.sideEffectChecksum,
-        recoveryObjectId: object.recoveryObjectId,
-        stagingObjectId: allocateId("staging"),
-        expectedState: "wal_prepared"
-      });
-      const expected = {
-        kind: "restore" as const,
-        rootBinding: options.contentRootBinding,
-        recoveryBinding: options.recoveryBinding,
-        request
-      };
-      const restored = await invokeAuthorized(expected, () =>
-        port.restore({ request, recoveryBinding: options.recoveryBinding })
-      );
-      if (!restored.ok) return restored;
-      const marked = await options.repository.markRestored({
-        recoveryObjectId: object.recoveryObjectId,
-        at: now(),
-        preview: preview.value
-      });
-      return marked.ok ? restored : err(marked.error);
     },
 
     async purge(input: unknown): Promise<Result<void, UnifiedError>> {
@@ -291,6 +342,51 @@ function authorizationKey(
         : { retentionDecision: input.retentionDecision })
     })
   );
+}
+
+async function safelyAcquireRestoreGuard(
+  acquire: DesktopEngineeringRecoveryOperationServiceV2Options["acquireRestoreGuard"],
+  relativeIdentity: string,
+  traceId: string
+): Promise<Result<DesktopEngineeringRestoreGuardV2, UnifiedError>> {
+  try {
+    return await acquire(relativeIdentity);
+  } catch {
+    return err(blocked(traceId));
+  }
+}
+
+async function safelyAssertRestoreGuard(
+  guard: DesktopEngineeringRestoreGuardV2,
+  traceId: string
+): Promise<Result<void, UnifiedError>> {
+  try {
+    return await guard.assertCurrent();
+  } catch {
+    return err(blocked(traceId));
+  }
+}
+
+async function safelySynchronizeRestore(
+  synchronize: DesktopEngineeringRecoveryOperationServiceV2Options["synchronizeRestore"],
+  input: Parameters<DesktopEngineeringRecoveryOperationServiceV2Options["synchronizeRestore"]>[0],
+  traceId: string
+): Promise<Result<void, UnifiedError>> {
+  try {
+    return await synchronize(input);
+  } catch {
+    return err(
+      createUnifiedError({
+        code: "ENGINEERING_RECOVERY_RESTORE_SYNC_FAILED",
+        category: "StorageError",
+        message: "Engineering restore committed but workspace synchronization failed.",
+        recoverability: "user-action",
+        suggestedAction:
+          "Keep the root blocked until editor, tree, and index synchronization completes.",
+        traceId
+      })
+    );
+  }
 }
 
 async function safelyInspectRestoreTarget(
