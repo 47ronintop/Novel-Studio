@@ -337,6 +337,26 @@ describe("EngineeringRecoveryRootRepositoryV2", () => {
     await globals.put(createGlobal(manifest));
 
     await expect(
+      repository.validatePurgeDecision({
+        recoveryObjectId: "object_01",
+        actor: "retention_policy",
+        reason: "retention_expired",
+        at: "2099-01-15T00:00:00.000Z"
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_STATE_CONFLICT" }
+    });
+    await expect(
+      repository.validatePurgeDecision({
+        recoveryObjectId: "object_01",
+        actor: "local_user",
+        reason: "user_confirmed",
+        at: "2099-01-15T00:00:00.000Z"
+      })
+    ).resolves.toEqual({ ok: true, value: undefined });
+
+    await expect(
       repository.markPurged({
         recoveryObjectId: "object_01",
         actor: "retention_policy",

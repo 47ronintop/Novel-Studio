@@ -395,6 +395,43 @@ export class EngineeringRecoveryRootRepositoryV2 {
    * Retention policy cannot purge before expiry. Main performs native deletion only after this
    * marker is durable; a mismatch blocks the root rather than unlinking by pathname.
    */
+  public async validatePurgeDecision(input: unknown): Promise<Result<void, UnifiedError>> {
+    if (
+      !hasExactKeys(input, purgeInputKeys) ||
+      !isStableId(input["recoveryObjectId"]) ||
+      (input["actor"] !== "local_user" && input["actor"] !== "retention_policy") ||
+      (input["reason"] !== "user_confirmed" && input["reason"] !== "retention_expired") ||
+      (input["actor"] === "local_user" && input["reason"] !== "user_confirmed") ||
+      (input["actor"] === "retention_policy" && input["reason"] !== "retention_expired") ||
+      !isCanonicalUtcTimestamp(input["at"])
+    ) {
+      return invalid("ENGINEERING_RECOVERY_PURGE_INPUT_INVALID", this.traceId);
+    }
+    const binding = await this.assertBindingCurrent();
+    if (!binding.ok) return binding;
+    const current = await this.options.globalRecords.get(input["recoveryObjectId"] as string);
+    if (!current.ok) return current;
+    if (current.value === undefined) return missing(this.traceId);
+    const manifestResult = await this.options.manifests.get(current.value.recoveryObjectId);
+    if (!manifestResult.ok) return manifestResult;
+    const manifest = manifestResult.value;
+    if (
+      manifest === undefined ||
+      !sameGlobalForManifest(current.value, manifest) ||
+      !sameBinding(current.value, manifest, binding.value)
+    ) {
+      return scanBlocked(["manifest_mismatch"], this.traceId, binding.value);
+    }
+    if (manifest.state !== "quarantined" || manifest.pinned) return stateConflict(this.traceId);
+    if (
+      input["reason"] === "retention_expired" &&
+      Date.parse(input["at"] as string) < Date.parse(manifest.retentionExpiresAt)
+    ) {
+      return stateConflict(this.traceId);
+    }
+    return ok(undefined);
+  }
+
   public async markPurged(
     input: unknown
   ): Promise<Result<EngineeringRecoveryGlobalRecordV2, UnifiedError>> {
