@@ -497,7 +497,11 @@ function validateFacts(
     !isStableId(facts.workspaceBindingId) ||
     !isStableId(facts.rootBindingId) ||
     !isEngineeringOperation(facts.operationKind) ||
-    !validateAgentRelativePath(facts.relativeIdentity).ok ||
+    !validateAgentRelativePath(
+      facts.operationKind === "create_directory"
+        ? `${facts.relativeIdentity}/__directory__.md`
+        : facts.relativeIdentity
+    ).ok ||
     !Array.isArray(facts.selectedOperationIds) ||
     facts.selectedOperationIds.length === 0 ||
     facts.selectedOperationIds.some((id) => !isOperationId(id)) ||

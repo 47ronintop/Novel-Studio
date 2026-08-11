@@ -114,7 +114,8 @@ export function createTrustedChangeSetApprovalV2Port(
         );
       }
 
-      const reservationTransactionId = createTransactionId();
+      const reservationTransactionId =
+        input.approvalContext.engineeringReservationTransactionId ?? createTransactionId();
       const reserved = await options.authorizationLedger.reserve({
         authorizationId: decision.value.issued.authorizationId,
         transactionId: reservationTransactionId
@@ -154,6 +155,15 @@ export function buildTrustedApprovalPreparation(input: {
   const selectedOperationIds = selectedIds(changeSet);
   const expectedSelectionChecksum = selectedSelectionChecksum(changeSet);
   const engineeringFacts = context.engineeringApprovalFacts;
+  const engineeringLifecycle =
+    engineeringFacts !== undefined &&
+    (context.operation === "move_file" ||
+      context.operation === "delete_file" ||
+      context.operation === "create_directory");
+  const engineeringReservationMatches = engineeringLifecycle
+    ? typeof context.engineeringReservationTransactionId === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(context.engineeringReservationTransactionId)
+    : context.engineeringReservationTransactionId === undefined;
   const engineeringFactsMatch =
     engineeringFacts === undefined ||
     (engineeringFacts.workspaceBindingId === context.workspaceBindingId &&
@@ -179,6 +189,7 @@ export function buildTrustedApprovalPreparation(input: {
       changeSet.providerSemanticVersionSetChecksum ||
     expectedSelectionChecksum === undefined ||
     context.preview.selectionChecksum !== expectedSelectionChecksum ||
+    !engineeringReservationMatches ||
     !engineeringFactsMatch ||
     !operationMatchesBindingKind(context.operation, context.approvalBindingOperationKind) ||
     changeSet.files.some((file) => file.selected && !file.validation.valid)
@@ -190,7 +201,7 @@ export function buildTrustedApprovalPreparation(input: {
   }
 
   const operationKind = context.approvalBindingOperationKind;
-  if (operationKind === "delete_file" || operationKind === "chapter_delete") {
+  if (operationKind === "chapter_delete") {
     return failure(
       "CHANGE_SET_TRUSTED_APPROVAL_RECOVERY_BINDING_REQUIRED",
       "Delete remains unavailable until its volume-local recovery binding is qualified."

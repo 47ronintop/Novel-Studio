@@ -9,6 +9,7 @@ import {
   createApprovalBindingV2,
   createChangeSetRevisionV2,
   createMainOnlyApprovalDecisionProofV1,
+  createOperationsChangeSetRevisionV2,
   decideChangeSetApprovalV2,
   type ApprovalBindingV2,
   type ChangeSetApprovalV2,
@@ -238,13 +239,120 @@ describe("DesktopEngineeringFileMutationSessionV2", () => {
         }
       }
     });
-    expect(await onlyRecord(harness)).toMatchObject({
+    const record = await onlyRecord(harness);
+    if (record.operationKind !== "create_directory") throw new Error("expected directory proposal");
+    expect(record).toMatchObject({
       operationKind: "create_directory",
+      plannedTransactionId: expect.stringMatching(/^engineering-lifecycle-transaction-/u),
       relativeIdentity: "src/new-directory",
       targetRelativeIdentity: "src/new-directory",
       targetProof: { kind: "absent", relativeIdentity: "src/new-directory" },
       recoveryRootBindingId: null
     });
+    expect(JSON.stringify(prepared)).not.toContain(record.plannedTransactionId);
+
+    const replayed = expectOk(
+      await harness.bundle.session.prepare({
+        runId: "run_01",
+        projectId: "project_01",
+        toolCallId: "directory_call_01",
+        toolName: "propose_directory_create",
+        arguments: { parentRef, name: "new-directory" },
+        canonicalPayloadChecksum: checksum("directory-payload"),
+        writePolicy: "write_before_confirmation",
+        boundary: proposalBoundary()
+      })
+    );
+    expect(replayed.proposalId).toBe(prepared.proposalId);
+    const replayedRecord = await onlyRecord(harness);
+    if (replayedRecord.operationKind !== "create_directory")
+      throw new Error("expected directory proposal");
+    expect(replayedRecord.plannedTransactionId).toBe(record.plannedTransactionId);
+  });
+
+  test("rejects a different reserved lifecycle transaction before WAL or native execution", async () => {
+    const lifecycleApplyInputs: unknown[] = [];
+    const harness = createHarness(presentSnapshot(encodeText("ignored\n", false)), {
+      lifecycleTransaction: {
+        async apply(input) {
+          lifecycleApplyInputs.push(input);
+          throw new Error("lifecycle apply must not run");
+        }
+      }
+    });
+    const parentRef = issueDirectoryRef(harness, "src");
+    const prepared = expectOk(
+      await harness.bundle.session.prepare({
+        runId: "run_01",
+        projectId: "project_01",
+        toolCallId: "directory_transaction_mismatch_call_01",
+        toolName: "propose_directory_create",
+        arguments: { parentRef, name: "new-directory" },
+        canonicalPayloadChecksum: checksum("directory-transaction-mismatch-payload"),
+        writePolicy: "write_before_confirmation",
+        boundary: proposalBoundary()
+      })
+    );
+    if (prepared.changeSetMutation.kind !== "create_directory") {
+      throw new Error("expected a directory change-set mutation");
+    }
+    const record = await onlyRecord(harness);
+    if (record.operationKind !== "create_directory") throw new Error("expected directory proposal");
+    const changeSet = createOperationsChangeSetRevisionV2({
+      changeSetId: "changes_directory_transaction_mismatch",
+      runId: "run_01",
+      projectId: "project_01",
+      checkpointId: "checkpoint_01",
+      contextSnapshotId: "context_01",
+      operations: [prepared.changeSetMutation.operation],
+      createdAt: NOW,
+      providerSemanticVersionSetChecksum: PROVIDER_VERSION_SET_CHECKSUM,
+      writePolicy: "write_before_confirmation"
+    });
+    expectOk(await harness.bundle.session.bindChangeSet({ prepared, changeSet }));
+    const request = approvalProofRequest(changeSet);
+    const proofInput = expectOk(await harness.bundle.session.prepareApprovalProofInput(request));
+    const proof = approvalProof(changeSet, proofInput);
+    harness.state.proof = proof;
+    const facts = expectOk(
+      await harness.bundle.session.finalizeApprovalFacts({
+        changeSet,
+        proof,
+        proofInput,
+        ...request
+      })
+    );
+    const seed = expectOk(
+      buildEngineeringApprovalBindingV2({
+        schemaVersion: "2.0",
+        changeSet,
+        facts,
+        issuedAt: NOW,
+        expiresAt: EXPIRES_AT
+      })
+    );
+    const binding = createApprovalBindingV2(seed);
+    authorizeApprovalBindingV2(binding, createMainApprovalIssuer());
+    harness.state.binding = binding;
+    const approval = expectOk(
+      decideChangeSetApprovalV2({
+        changeSet,
+        decision: "apply_selected",
+        displayBindingChecksum: changeSet.displayBindingChecksum,
+        binding,
+        authorizationId: "auth_01",
+        reservationTransactionId: `${record.plannedTransactionId}-different`,
+        trustedConfirmationQualified: true,
+        resolvedAt: NOW,
+        now: Date.parse(NOW)
+      })
+    );
+
+    await expect(harness.bundle.session.apply({ changeSet, approval })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_FILE_MUTATION_V2_STALE" }
+    });
+    expect(lifecycleApplyInputs).toHaveLength(0);
   });
 
   test("keeps delete fail closed without a qualified recovery binding", async () => {
@@ -273,12 +381,14 @@ describe("DesktopEngineeringFileMutationSessionV2", () => {
   test("binds a recoverable delete proposal to an authenticated absent after-state", async () => {
     const snapshot = presentSnapshot(encodeText("delete me\n", false));
     const harness = createHarness(snapshot, {
-      resolveLifecycleRecoveryBinding: async () =>
+      resolveLifecycleRecoveryBinding: async (input) =>
         ok({
           recoveryRootBindingId: "recovery_01",
           recoveryGrantRevision: "grant_01",
-          recoverySideEffectChecksum: checksum("delete-side-effect"),
-          recoveryObjectId: "recovery_object_01"
+          recoverySideEffectChecksum: checksum(
+            `${input.plannedTransactionId}:${input.operationId}:${input.recoveryObjectId}:${input.relativeIdentity}:${input.sourceSha256}`
+          ),
+          recoveryObjectId: input.recoveryObjectId
         })
     });
 
@@ -298,6 +408,7 @@ describe("DesktopEngineeringFileMutationSessionV2", () => {
     expect(prepared).toMatchObject({ operationKind: "delete_file" });
     expect(await onlyRecord(harness)).toMatchObject({
       operationKind: "delete_file",
+      plannedTransactionId: expect.stringMatching(/^engineering-lifecycle-transaction-/u),
       targetRelativeIdentity: "",
       targetProof: {
         kind: "absent",
@@ -706,7 +817,7 @@ function createHarness(
   snapshot: EngineeringFileMutationProposalSnapshotV2,
   input: Pick<
     DesktopEngineeringFileMutationSessionV2Options,
-    "resolveLifecycleRecoveryBinding"
+    "lifecycleTransaction" | "resolveLifecycleRecoveryBinding"
   > = {}
 ): Harness {
   const blobStore = new InMemoryEngineeringMutationBlobStoreV2();
@@ -825,6 +936,9 @@ function createHarness(
       proposalApproval = approval;
       return runtime;
     },
+    ...(input.lifecycleTransaction === undefined
+      ? {}
+      : { lifecycleTransaction: input.lifecycleTransaction }),
     ...(input.resolveLifecycleRecoveryBinding === undefined
       ? {}
       : { resolveLifecycleRecoveryBinding: input.resolveLifecycleRecoveryBinding }),
@@ -1034,7 +1148,8 @@ function approvalProofRequest(changeSet: ChangeSetV2) {
 function approvalProof(
   changeSet: ChangeSetV2,
   proofInput: {
-    readonly operationKind: "replace_file" | "create_file";
+    readonly operationKind:
+      "replace_file" | "create_file" | "move_file" | "delete_file" | "create_directory";
     readonly rootBindingId: string;
     readonly selectionChecksum: string;
     readonly proposalPayloadChecksum: string;

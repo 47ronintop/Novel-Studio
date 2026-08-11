@@ -385,6 +385,7 @@ function deleteProposalInput(): EngineeringMutationProposalCreateInputV2 {
       manifest: beforeManifest,
       blob: blobFor(beforeManifest, contentRootBindingId)
     },
+    plannedTransactionId: "transaction_delete_01",
     targetRelativeIdentity: "",
     targetProof: {
       ...proof,

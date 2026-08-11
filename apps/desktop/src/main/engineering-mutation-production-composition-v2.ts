@@ -130,7 +130,11 @@ export interface DesktopEngineeringMutationProductionCompositionV2Options {
   /** Proposal-time recovery facts. Omission keeps delete out of the Engineering tool catalog. */
   readonly prepareLifecycleRecoveryBinding?: (input: {
     readonly contentRootBindingId: string;
+    readonly plannedTransactionId: string;
+    readonly operationId: string;
+    readonly recoveryObjectId: string;
     readonly relativeIdentity: string;
+    readonly sourceSha256: string;
     readonly sourceRef: string;
   }) => Promise<
     Result<
@@ -143,6 +147,8 @@ export interface DesktopEngineeringMutationProductionCompositionV2Options {
       UnifiedError
     >
   >;
+  /** Full B8 crash recovery/compensation qualification. Omission keeps every lifecycle gate off. */
+  readonly lifecycleRecoveryQualified?: () => boolean;
   /** Validates the native preallocated staging object for the exact prepared operation. */
   readonly validateStagingReservation: EngineeringV2StagingReservationValidator;
   readonly saveAuthority: DesktopEngineeringMutationSaveAuthorityV2;
@@ -233,6 +239,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
   const addon = asBatch7NativeAddon(loaded.addon);
   if (addon === undefined) return undefined;
   const lifecycleNativeCapabilities = readLifecycleNativeCapabilities(loaded.addon);
+  const lifecycleRecoveryQualified = options.lifecycleRecoveryQualified?.() === true;
 
   // This calls the same cached loader above; there is no separate state host or Node fs fallback.
   const durability = createEngineeringStateDurabilityPortV2({
@@ -675,14 +682,17 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
       lifecycleTransaction,
       lifecycleCapabilities: Object.freeze({
         move:
+          lifecycleRecoveryQualified &&
           lifecycleNativeCapabilities.move &&
           options.verifyPreparedLifecycleAuthorization !== undefined,
         delete:
+          lifecycleRecoveryQualified &&
           lifecycleNativeCapabilities.delete &&
           options.verifyPreparedLifecycleAuthorization !== undefined &&
           options.prepareLifecycleRecoveryBinding !== undefined &&
           options.resolveLifecycleRecoveryBinding !== undefined,
         createDirectory:
+          lifecycleRecoveryQualified &&
           lifecycleNativeCapabilities.createDirectory &&
           options.verifyPreparedLifecycleAuthorization !== undefined
       }),
@@ -782,10 +792,19 @@ function readLifecycleNativeCapabilities(value: unknown): Readonly<{
     return Object.freeze({ move: false, delete: false, createDirectory: false });
   }
   const record = value as Record<string, unknown>;
+  const completeLifecycleAddon =
+    typeof record["moveEngineeringPathV2"] === "function" &&
+    typeof record["quarantineEngineeringFileV2"] === "function" &&
+    typeof record["restoreEngineeringFileV2"] === "function" &&
+    typeof record["purgeEngineeringQuarantineObjectV2"] === "function" &&
+    typeof record["createEngineeringDirectoryV2"] === "function";
+  if (!completeLifecycleAddon) {
+    return Object.freeze({ move: false, delete: false, createDirectory: false });
+  }
   return Object.freeze({
-    move: typeof record["moveEngineeringPathV2"] === "function",
-    delete: typeof record["quarantineEngineeringFileV2"] === "function",
-    createDirectory: typeof record["createEngineeringDirectoryV2"] === "function"
+    move: true,
+    delete: true,
+    createDirectory: true
   });
 }
 

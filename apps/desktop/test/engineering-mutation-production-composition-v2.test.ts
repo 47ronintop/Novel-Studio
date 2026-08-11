@@ -217,10 +217,11 @@ describe("Desktop Engineering mutation production composition V2", () => {
     expect(closeStateRootCalls).toBe(1);
   });
 
-  test("advertises B8 lifecycle operations only with native exports and authorization seams", async () => {
+  test("advertises B8 lifecycle operations only with native exports, authorization, and full recovery qualification", async () => {
     const enabled = createHarness({
       addon: createBatch7Addon({ lifecycle: true }),
-      verifyPreparedLifecycleAuthorization: async () => ok(undefined)
+      verifyPreparedLifecycleAuthorization: async () => ok(undefined),
+      lifecycleRecoveryQualified: () => true
     });
     const composition = await createDesktopEngineeringMutationProductionCompositionV2({
       ...enabled.options,
@@ -416,6 +417,7 @@ function createHarness(
     readonly readApprovalDecisionProof?: DesktopEngineeringMutationProductionCompositionV2Options["readApprovalDecisionProof"];
     readonly validateStagingReservation?: DesktopEngineeringMutationProductionCompositionV2Options["validateStagingReservation"];
     readonly verifyPreparedLifecycleAuthorization?: DesktopEngineeringMutationProductionCompositionV2Options["verifyPreparedLifecycleAuthorization"];
+    readonly lifecycleRecoveryQualified?: DesktopEngineeringMutationProductionCompositionV2Options["lifecycleRecoveryQualified"];
   } = {}
 ) {
   const editorStateRegistry = createEngineeringEditorStateRegistry();
@@ -448,6 +450,9 @@ function createHarness(
       : {
           verifyPreparedLifecycleAuthorization: input.verifyPreparedLifecycleAuthorization
         }),
+    ...(input.lifecycleRecoveryQualified === undefined
+      ? {}
+      : { lifecycleRecoveryQualified: input.lifecycleRecoveryQualified }),
     validateStagingReservation: input.validateStagingReservation ?? (async () => ok(undefined)),
     saveAuthority: {
       async pauseAndDrainEngineeringRoot() {
@@ -1059,6 +1064,16 @@ function createBatch7Addon(
             _recoveryRootId: bigint,
             request: Record<string, unknown>
           ) => lifecycleReceipt(request, "quarantined"),
+          restoreEngineeringFileV2: (
+            _rootId: bigint,
+            _recoveryRootId: bigint,
+            request: Record<string, unknown>
+          ) => ({
+            ...lifecycleReceipt(request, "committed"),
+            operationKind: "restore_file",
+            state: "restored"
+          }),
+          purgeEngineeringQuarantineObjectV2: () => undefined,
           createEngineeringDirectoryV2: (_rootId: bigint, request: Record<string, unknown>) =>
             lifecycleReceipt(request, "committed")
         }

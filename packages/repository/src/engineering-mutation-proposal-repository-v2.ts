@@ -84,6 +84,8 @@ export type EngineeringMutationProposalPayloadV2 =
       readonly sourceRef: string;
       readonly targetRef: string;
       readonly before: EngineeringMutationBeforeImageV2;
+      /** Main-only transaction identity fixed before approval; never projected to Renderer/Provider. */
+      readonly plannedTransactionId: string;
       readonly targetRelativeIdentity: string;
       readonly targetProof: EngineeringMutationLifecycleTargetProofV2 | null;
       readonly recoveryRootBindingId: string | null;
@@ -850,6 +852,7 @@ function parsePayload(value: unknown): EngineeringMutationProposalPayloadV2 | un
     value["recoverySideEffectChecksum"] === null &&
     value["recoveryObjectId"] === null;
   if (
+    !isStableId(value["plannedTransactionId"]) ||
     targetRelativeIdentity === undefined ||
     (operationKind === "delete_file"
       ? targetProof === undefined || targetProof === null || targetProof.kind !== "absent"
@@ -861,6 +864,7 @@ function parsePayload(value: unknown): EngineeringMutationProposalPayloadV2 | un
   const payload = {
     ...base,
     operationKind,
+    plannedTransactionId: value["plannedTransactionId"] as string,
     targetRelativeIdentity,
     targetProof: targetProof ?? null,
     recoveryRootBindingId: value["recoveryRootBindingId"] as string | null,
@@ -1514,6 +1518,7 @@ const rawPayloadKeys = [...commonPayloadKeys, "candidate"] as const;
 
 const lifecyclePayloadKeys = [
   ...commonPayloadKeys,
+  "plannedTransactionId",
   "recoveryGrantRevision",
   "recoveryObjectId",
   "recoveryRootBindingId",

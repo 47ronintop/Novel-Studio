@@ -86,7 +86,11 @@ export interface DesktopEngineeringFileMutationSessionV2Options {
   /** Main-owned qualified recovery facts for delete/quarantine proposals. */
   readonly resolveLifecycleRecoveryBinding?: (input: {
     readonly contentRootBindingId: string;
+    readonly plannedTransactionId: string;
+    readonly operationId: string;
+    readonly recoveryObjectId: string;
     readonly relativeIdentity: string;
+    readonly sourceSha256: string;
     readonly sourceRef: string;
   }) => Promise<
     Result<
@@ -598,9 +602,11 @@ export function createDesktopEngineeringFileMutationSessionV2(
         relativeIdentity,
         absence.value.parentDirectoryIdentity
       );
+      const lifecycleIds = allocateLifecycleIds();
       return ok({
         record: lifecycleRecord({
           input,
+          ...lifecycleIds,
           operationKind: "create_directory",
           relativeIdentity,
           sourceRef: parentRef,
@@ -661,15 +667,24 @@ export function createDesktopEngineeringFileMutationSessionV2(
       const resolveRecovery = options.resolveLifecycleRecoveryBinding;
       if (resolveRecovery === undefined)
         return unavailable("ENGINEERING_LIFECYCLE_RECOVERY_BINDING_UNAVAILABLE");
+      const lifecycleIds = allocateLifecycleIds(true);
       const recovery = await resolveRecovery({
         contentRootBindingId: options.contentRootBindingId,
+        plannedTransactionId: lifecycleIds.plannedTransactionId,
+        operationId: lifecycleIds.operationId,
+        recoveryObjectId: lifecycleIds.recoveryObjectId,
         relativeIdentity: source.relativeIdentity,
+        sourceSha256: snapshot.value.manifest.sha256,
         sourceRef
       });
       if (!recovery.ok) return recovery;
+      if (recovery.value.recoveryObjectId !== lifecycleIds.recoveryObjectId) return stale();
       return ok({
         record: lifecycleRecord({
           input,
+          plannedTransactionId: lifecycleIds.plannedTransactionId,
+          operationId: lifecycleIds.operationId,
+          stagingObjectId: lifecycleIds.stagingObjectId,
           operationKind: "delete_file",
           relativeIdentity: source.relativeIdentity,
           sourceRef,
@@ -722,9 +737,11 @@ export function createDesktopEngineeringFileMutationSessionV2(
         targetParent.sourceNativeRefChecksum
       );
     }
+    const lifecycleIds = allocateLifecycleIds();
     return ok({
       record: lifecycleRecord({
         input,
+        ...lifecycleIds,
         operationKind: "move_file",
         relativeIdentity: source.relativeIdentity,
         sourceRef,
@@ -759,6 +776,9 @@ export function createDesktopEngineeringFileMutationSessionV2(
 
   function lifecycleRecord(input: {
     readonly input: Parameters<EngineeringFileMutationSessionV2["prepare"]>[0];
+    readonly plannedTransactionId: string;
+    readonly operationId: string;
+    readonly stagingObjectId: string;
     readonly operationKind: "move_file" | "delete_file" | "create_directory";
     readonly relativeIdentity: string;
     readonly sourceRef: string;
@@ -792,14 +812,37 @@ export function createDesktopEngineeringFileMutationSessionV2(
       sourceRef: input.sourceRef,
       targetRef: input.targetRef,
       before: input.before,
+      plannedTransactionId: input.plannedTransactionId,
       targetRelativeIdentity: input.targetRelativeIdentity,
       targetProof: input.targetProof,
       recoveryRootBindingId: input.recovery?.recoveryRootBindingId ?? null,
       recoveryGrantRevision: input.recovery?.recoveryGrantRevision ?? null,
       recoverySideEffectChecksum: input.recovery?.recoverySideEffectChecksum ?? null,
       recoveryObjectId: input.recovery?.recoveryObjectId ?? null,
+      operationId: input.operationId,
+      stagingObjectId: input.stagingObjectId
+    };
+  }
+
+  function allocateLifecycleIds(includeRecoveryObject: true): {
+    readonly plannedTransactionId: string;
+    readonly operationId: string;
+    readonly stagingObjectId: string;
+    readonly recoveryObjectId: string;
+  };
+  function allocateLifecycleIds(includeRecoveryObject?: false): {
+    readonly plannedTransactionId: string;
+    readonly operationId: string;
+    readonly stagingObjectId: string;
+  };
+  function allocateLifecycleIds(includeRecoveryObject = false) {
+    return {
+      plannedTransactionId: `engineering-lifecycle-transaction-${randomId()}`,
       operationId: `engineering-lifecycle-${randomId()}`,
-      stagingObjectId: `engineering-stage-${randomId()}`
+      stagingObjectId: `engineering-stage-${randomId()}`,
+      ...(includeRecoveryObject
+        ? { recoveryObjectId: `engineering-recovery-object-${randomId()}` }
+        : {})
     };
   }
 
@@ -937,6 +980,7 @@ export function createDesktopEngineeringFileMutationSessionV2(
     approval: ReservedChangeSetApprovalV2
   ): Result<EngineeringLifecycleWriteTransactionInputV2, UnifiedError> {
     const transactionId = approval.reservationTransactionId;
+    if (transactionId !== record.plannedTransactionId) return stale();
     const sourceManifest = record.before.kind === "present" ? record.before.manifest : undefined;
     if (
       (record.operationKind === "move_file" || record.operationKind === "delete_file") &&
@@ -1163,6 +1207,7 @@ function proofInput(
       proposalPayloadChecksum: record.proposalPayloadChecksum,
       baseManifestChecksum,
       candidateManifestChecksum: record.targetProof.proofChecksum,
+      plannedTransactionId: record.plannedTransactionId,
       ...(record.operationKind === "delete_file" && record.recoveryRootBindingId !== null
         ? {
             recoveryRootBindingId: record.recoveryRootBindingId,

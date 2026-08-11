@@ -53,6 +53,8 @@ export interface EngineeringApprovalProofInputV2 {
   readonly proposalPayloadChecksum: string;
   readonly baseManifestChecksum: string;
   readonly candidateManifestChecksum: string;
+  /** Main-only preallocated transaction identity for lifecycle approval reservation. */
+  readonly plannedTransactionId?: string;
   readonly recoveryRootBindingId?: string;
   readonly recoveryGrantRevision?: string;
   readonly recoverySideEffectChecksum?: string;

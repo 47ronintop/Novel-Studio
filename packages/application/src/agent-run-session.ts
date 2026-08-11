@@ -920,6 +920,8 @@ export interface AgentRunChangeSetApprovalV2ApprovalContext {
    * when the trusted coordinator creates Approval Binding 2.0.
    */
   readonly engineeringApprovalFacts?: EngineeringApprovalBindingFactsV2;
+  /** Main-only lifecycle transaction identity reserved only after trusted confirmation. */
+  readonly engineeringReservationTransactionId?: string;
   /** Exact immutable preview binding; repeated so the surface need not trust renderer state. */
   readonly preview: {
     readonly changeSetId: string;
@@ -11390,6 +11392,11 @@ async function prepareV2ApprovalContext(input: {
       }),
       capabilityBoundary: Object.freeze({ ...boundary }),
       ...(engineeringApprovalFacts === undefined ? {} : { engineeringApprovalFacts }),
+      ...(engineeringProofInput?.plannedTransactionId === undefined
+        ? {}
+        : {
+            engineeringReservationTransactionId: engineeringProofInput.plannedTransactionId
+          }),
       preview: Object.freeze({
         changeSetId: changeSet.changeSetId,
         revision: changeSet.revision,
@@ -11499,6 +11506,10 @@ function validateEngineeringApprovalProofInput(
   expectedSelectionChecksum: string
 ): Result<EngineeringApprovalProofInputV2, UnifiedError> {
   const expectedOperation = v2ApprovalOperation(changeSet);
+  const lifecycleOperation =
+    value.operationKind === "move_file" ||
+    value.operationKind === "delete_file" ||
+    value.operationKind === "create_directory";
   const validEvidence = (() => {
     try {
       createMainOnlyApprovalDecisionProofV1({
@@ -11539,6 +11550,10 @@ function validateEngineeringApprovalProofInput(
     !isChecksum(value.proposalPayloadChecksum) ||
     !isChecksum(value.baseManifestChecksum) ||
     !isChecksum(value.candidateManifestChecksum) ||
+    (lifecycleOperation
+      ? typeof value.plannedTransactionId !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value.plannedTransactionId)
+      : value.plannedTransactionId !== undefined) ||
     !hasValidEngineeringRecoveryProofBinding(value) ||
     !validEvidence
   ) {
