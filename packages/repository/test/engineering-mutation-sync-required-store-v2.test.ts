@@ -32,6 +32,18 @@ const record = {
 };
 
 describe("FileEngineeringMutationSyncRequiredStoreV2", () => {
+  test.each([
+    "replace_file",
+    "create_file",
+    "move_file",
+    "delete_file",
+    "create_directory"
+  ] as const)("accepts %s as a durable sync-required operation", (operationKind) => {
+    expect(
+      validateEngineeringMutationSyncRequiredRecordV2({ ...record, operationKind })
+    ).toMatchObject({ ok: true, value: { operationKind } });
+  });
+
   test("durably records a root block, reloads it, and rejects the next mutation", async () => {
     const stateRoot = await mkdtemp(join(tmpdir(), "engineering-v2-sync-required-"));
     const durability = nodeTestDurability();

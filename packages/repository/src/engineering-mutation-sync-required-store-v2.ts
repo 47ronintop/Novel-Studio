@@ -16,7 +16,8 @@ import {
 } from "./engineering-mutation-blob-store.js";
 import { storageError, validationError } from "./errors.js";
 
-export type EngineeringMutationSyncRequiredOperationKindV2 = "replace_file" | "create_file";
+export type EngineeringMutationSyncRequiredOperationKindV2 =
+  "replace_file" | "create_file" | "move_file" | "delete_file" | "create_directory";
 
 /**
  * A Main-owned durable block after disk commit succeeded but editor/tree/index synchronization
@@ -345,7 +346,13 @@ function isCanonicalTargetList(value: unknown): value is readonly string[] {
 }
 
 function isOperationKind(value: unknown): value is EngineeringMutationSyncRequiredOperationKindV2 {
-  return value === "replace_file" || value === "create_file";
+  return (
+    value === "replace_file" ||
+    value === "create_file" ||
+    value === "move_file" ||
+    value === "delete_file" ||
+    value === "create_directory"
+  );
 }
 
 function isStableId(value: unknown): value is string {
