@@ -46,15 +46,13 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: { createChapter } as unknown as ProjectWorkflowBridge,
         settingsBridge: undefined,
         storyBibleBridge: undefined,
-        studioBridge: undefined,
         beforeCreateChapter,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -93,14 +91,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge: undefined,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: (next) => storyBibleStates.push(resolveState(next)),
-        setStoryBibleEditor: (next) => storyBibleEditorStates.push(resolveState(next)),
-        setStudio: () => undefined
+        setStoryBibleEditor: (next) => storyBibleEditorStates.push(resolveState(next))
       });
       return null;
     }
@@ -147,15 +143,13 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge: undefined,
-        studioBridge: undefined,
         beforeWorkspaceTransition,
         setChapterEditor: () => undefined,
         setProjectWorkflow: (next) => workflowStates.push(resolveState(next)),
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -219,15 +213,13 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         beforeWorkspaceTransition,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -282,14 +274,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -337,14 +327,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -401,14 +389,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -459,14 +445,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -516,14 +500,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge: undefined,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: (next) => storyBibleStates.push(resolveState(next)),
-        setStoryBibleEditor: (next) => storyBibleEditorStates.push(resolveState(next)),
-        setStudio: () => undefined
+        setStoryBibleEditor: (next) => storyBibleEditorStates.push(resolveState(next))
       });
       return null;
     }
@@ -571,14 +553,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge: undefined,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: (next) => storyBibleStates.push(resolveState(next)),
-        setStoryBibleEditor: (next) => storyBibleEditorStates.push(resolveState(next)),
-        setStudio: () => undefined
+        setStoryBibleEditor: (next) => storyBibleEditorStates.push(resolveState(next))
       });
       return null;
     }
@@ -620,15 +600,13 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge: undefined,
-        studioBridge: undefined,
         setChapterEditor: (next) => editorStates.push(resolveState(next)),
         setFileEditor: (next) => fileStates.push(resolveState(next)),
         setProjectWorkflow: (next) => workflowStates.push(resolveState(next)),
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -673,14 +651,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: bridge,
         settingsBridge: undefined,
         storyBibleBridge: undefined,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: (next) => workflowStates.push(resolveState(next)),
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: () => undefined,
-        setStudio: () => undefined
+        setStoryBibleEditor: () => undefined
       });
       return null;
     }
@@ -729,14 +705,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: undefined,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: (next) => summaryStates.push(resolveState(next)),
-        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
-        setStudio: () => undefined
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next))
       });
       return null;
     }
@@ -898,14 +872,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: undefined,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
-        setStudio: () => undefined
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next))
       });
       return null;
     }
@@ -963,14 +935,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: undefined,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
-        setStudio: () => undefined
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next))
       });
       return null;
     }
@@ -1012,14 +982,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: undefined,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor: () => undefined,
         setProjectWorkflow: () => undefined,
         setSettings: () => undefined,
         setShellState: () => undefined,
         setStoryBible: () => undefined,
-        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
-        setStudio: () => undefined
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next))
       });
       return null;
     }
@@ -1108,7 +1076,6 @@ describe("useProjectWorkflowActions", () => {
     const setProjectWorkflow = vi.fn();
     const setSettings = vi.fn();
     const setShellState = vi.fn();
-    const setStudio = vi.fn();
     let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
 
     function Harness() {
@@ -1118,14 +1085,12 @@ describe("useProjectWorkflowActions", () => {
         projectWorkflowBridge: undefined,
         settingsBridge: undefined,
         storyBibleBridge,
-        studioBridge: undefined,
         setChapterEditor,
         setProjectWorkflow,
         setSettings,
         setShellState,
         setStoryBible: (next) => summaryStates.push(resolveState(next)),
-        setStoryBibleEditor: (next) => editorStates.push(resolveState(next)),
-        setStudio
+        setStoryBibleEditor: (next) => editorStates.push(resolveState(next))
       });
       return null;
     }
@@ -1146,7 +1111,6 @@ describe("useProjectWorkflowActions", () => {
     expect(setProjectWorkflow).not.toHaveBeenCalled();
     expect(setSettings).not.toHaveBeenCalled();
     expect(setShellState).not.toHaveBeenCalled();
-    expect(setStudio).not.toHaveBeenCalled();
     await expect(actions?.guardStoryBibleDraft()).resolves.toBe(false);
   });
 });

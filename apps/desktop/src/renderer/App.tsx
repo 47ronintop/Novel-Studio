@@ -27,7 +27,6 @@ import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createEngineeringWorkspaceBridge } from "./engineering-workspace-bridge.js";
 import { useEngineeringEditorStateBinding } from "./engineering-editor-state-binding.js";
 import { createSettingsBridge } from "./settings-bridge.js";
-import { createStudioBridge } from "./studio-bridge.js";
 import { createAgentRunBridge } from "./agent-run-bridge.js";
 import {
   decorateAgentConversationWorkspace,
@@ -57,7 +56,6 @@ import { useAgentUsageSettingsActions } from "./agent-usage-settings-actions.js"
 import { useModelSettingsActions, useSettingsPanelActions } from "./settings-panel-actions.js";
 import { useShellPreferenceActions } from "./shell-preference-actions.js";
 import { createWorkspaceNavigation, type WorkspaceNavigation } from "./workspace-navigation.js";
-import { useStudioActions } from "./studio-actions.js";
 import { useStoryAnalysisWorkspace } from "./story-analysis-workspace.js";
 import {
   saveWorkspaceModelSharingDefaults,
@@ -97,7 +95,6 @@ export function App() {
   const [agentRunBridge] = useState(() =>
     api === undefined ? undefined : createAgentRunBridge(api)
   );
-  const [studioBridge] = useState(() => (api === undefined ? undefined : createStudioBridge(api)));
   const [commandExecutionBridge] = useState(() =>
     api === undefined ? undefined : createCommandExecutionBridge(api)
   );
@@ -201,7 +198,6 @@ export function App() {
     pendingMainReview,
     agentConversationWorkspace.scope
   );
-  const [studio, setStudio] = useState(() => studioBridge?.getProps());
   const [shortcutState, setShortcutState] = useState({ commandPaletteOpen: false });
   const [commandPaletteFeedback, setCommandPaletteFeedback] = useState<
     CommandPaletteFeedback | undefined
@@ -303,7 +299,6 @@ export function App() {
     storyBibleBridge,
     storyBibleWorkspaceId: activeCreativeWorkspaceId,
     settingsBridge,
-    studioBridge,
     shortcutState,
     setShortcutState,
     setShellState,
@@ -316,8 +311,7 @@ export function App() {
     setStoryBible,
     setStoryBibleEditor,
     setSettings,
-    setAiWritingWorkflow,
-    setStudio
+    setAiWritingWorkflow
   });
 
   const handleBodyChange = useCallback(
@@ -460,7 +454,6 @@ export function App() {
     projectWorkflowBridge,
     settingsBridge,
     storyBibleBridge,
-    studioBridge,
     beforeWorkspaceTransition: guardWorkspaceFileTransition,
     beforeCreateChapter: storyAnalysisWorkspace.beforeCreateChapter,
     setChapterEditor,
@@ -469,8 +462,7 @@ export function App() {
     setSettings,
     setShellState,
     setStoryBible,
-    setStoryBibleEditor,
-    setStudio
+    setStoryBibleEditor
   });
   const guardWorkspaceTransition = useCallback(async () => {
     if (!(await guardWorkspaceFileTransition())) return false;
@@ -828,19 +820,6 @@ export function App() {
   const agentUsageSettingsActions = useAgentUsageSettingsActions(settingsBridge, setSettings);
   const settingsPanelActions = useSettingsPanelActions(settingsBridge, setSettings);
 
-  const {
-    handleStudioAssetSelect,
-    handleStudioContentChange,
-    handleStudioWorkflowNodeSelect,
-    handleStudioWorkflowEdgeSelect,
-    handleStudioWorkflowNodeEdit,
-    handleStudioWorkflowSemanticEdit,
-    handleStudioWorkflowLayoutChange,
-    handleStudioWorkflowNodeDragCommit,
-    handleStudioSave,
-    handleStudioRestoreVersion
-  } = useStudioActions(studioBridge, setStudio);
-
   const interactiveChapterEditor =
     chapterEditor === undefined
       ? undefined
@@ -923,7 +902,6 @@ export function App() {
         projectWorkflow={projectWorkflow}
         projectSearch={projectSearch}
         settings={interactiveSettings}
-        studio={studio}
         chapterEditor={interactiveChapterEditor}
         fileEditor={fileEditor}
         fileEditorScope={fileEditorScope}
@@ -969,16 +947,6 @@ export function App() {
         onDiscoverSettingsModelOptions={handleDiscoverSettingsModelOptions}
         onRefreshPluginRegistry={handleRefreshPluginRegistry}
         onSetPluginEnabled={handleSetPluginEnabled}
-        onStudioAssetSelect={handleStudioAssetSelect}
-        onStudioContentChange={handleStudioContentChange}
-        onStudioWorkflowNodeSelect={handleStudioWorkflowNodeSelect}
-        onStudioWorkflowEdgeSelect={handleStudioWorkflowEdgeSelect}
-        onStudioWorkflowNodeEdit={handleStudioWorkflowNodeEdit}
-        onStudioWorkflowSemanticEdit={handleStudioWorkflowSemanticEdit}
-        onStudioWorkflowLayoutChange={handleStudioWorkflowLayoutChange}
-        onStudioWorkflowNodeDragCommit={handleStudioWorkflowNodeDragCommit}
-        onStudioSave={handleStudioSave}
-        onStudioRestoreVersion={handleStudioRestoreVersion}
         onStoryBibleDraftChange={handleStoryBibleDraftChange}
         onStoryBibleFiltersChange={handleStoryBibleFiltersChange}
         onStoryBibleStatusActionRequest={handleStoryBibleStatusActionRequest}

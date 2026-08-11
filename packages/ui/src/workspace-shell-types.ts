@@ -38,7 +38,6 @@ import type {
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import type { CommandPaletteFeedback } from "./command-palette.js";
 import type { ChangeSetReviewProps, RollbackReviewProps } from "./change-set-review.js";
-import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import type { EditorPreferences } from "./editor-toolbar.js";
 import type { ModelSettingsPanelProps } from "./model-settings-panel.js";
 import type { PlanArtifactReviewProps } from "./plan-artifact-review.js";
@@ -60,7 +59,6 @@ export interface WorkspaceShellProps {
   readonly agentConversationWorkspace?: AgentConversationWorkspaceShellProps;
   readonly search?: ProjectSearchProps;
   readonly settings?: ModelSettingsPanelProps;
-  readonly studio?: ConfigStudioPanelProps;
   readonly storyBible?: StoryBibleSummaryProps;
   readonly storyBibleEditor?: StoryBibleEditorProps;
   readonly creativeNavigator?: CreativeWorkspaceNavigatorProps;

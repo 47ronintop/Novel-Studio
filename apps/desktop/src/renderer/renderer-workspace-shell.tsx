@@ -11,7 +11,6 @@ import type {
   AgentConversationWorkspaceShellProps,
   ChapterEditorProps,
   CommandPaletteFeedback,
-  ConfigStudioPanelProps,
   CreativeProjectFilesNavigatorProps,
   CreativeWorkspaceNavigatorProps,
   ModelSettingsPanelProps,
@@ -34,7 +33,6 @@ export interface RendererWorkspaceShellProps {
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly projectSearch: ProjectSearchProps | undefined;
   readonly settings: ModelSettingsPanelProps | undefined;
-  readonly studio: ConfigStudioPanelProps | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly fileEditor: PlainFileEditorProps | undefined;
   readonly fileEditorScope: "creativeProjectFile" | "engineeringWorkspaceFile" | undefined;
@@ -91,22 +89,6 @@ export interface RendererWorkspaceShellProps {
   readonly onSetPluginEnabled: NonNullable<
     NonNullable<ModelSettingsPanelProps["plugins"]>["onSetEnabled"]
   >;
-  readonly onStudioAssetSelect: NonNullable<ConfigStudioPanelProps["onAssetSelect"]>;
-  readonly onStudioContentChange: NonNullable<ConfigStudioPanelProps["onContentChange"]>;
-  readonly onStudioWorkflowNodeSelect: NonNullable<ConfigStudioPanelProps["onWorkflowNodeSelect"]>;
-  readonly onStudioWorkflowEdgeSelect: NonNullable<ConfigStudioPanelProps["onWorkflowEdgeSelect"]>;
-  readonly onStudioWorkflowNodeEdit: NonNullable<ConfigStudioPanelProps["onWorkflowNodeEdit"]>;
-  readonly onStudioWorkflowSemanticEdit: NonNullable<
-    ConfigStudioPanelProps["onWorkflowSemanticEdit"]
-  >;
-  readonly onStudioWorkflowLayoutChange: NonNullable<
-    ConfigStudioPanelProps["onWorkflowLayoutChange"]
-  >;
-  readonly onStudioWorkflowNodeDragCommit: NonNullable<
-    ConfigStudioPanelProps["onWorkflowNodeDragCommit"]
-  >;
-  readonly onStudioSave: NonNullable<ConfigStudioPanelProps["onSave"]>;
-  readonly onStudioRestoreVersion: NonNullable<ConfigStudioPanelProps["onRestoreVersion"]>;
   readonly onStoryBibleDraftChange: StoryBibleEditorProps["onDraftChange"];
   readonly onStoryBibleFiltersChange: StoryBibleEditorProps["onFiltersChange"];
   readonly onStoryBibleStatusActionRequest: NonNullable<
@@ -336,23 +318,6 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
                     }
                   })
             } satisfies ModelSettingsPanelProps
-          })}
-      {...(props.studio === undefined
-        ? {}
-        : {
-            studio: {
-              ...props.studio,
-              onAssetSelect: props.onStudioAssetSelect,
-              onContentChange: props.onStudioContentChange,
-              onWorkflowNodeSelect: props.onStudioWorkflowNodeSelect,
-              onWorkflowEdgeSelect: props.onStudioWorkflowEdgeSelect,
-              onWorkflowNodeEdit: props.onStudioWorkflowNodeEdit,
-              onWorkflowSemanticEdit: props.onStudioWorkflowSemanticEdit,
-              onWorkflowLayoutChange: props.onStudioWorkflowLayoutChange,
-              onWorkflowNodeDragCommit: props.onStudioWorkflowNodeDragCommit,
-              onSave: props.onStudioSave,
-              onRestoreVersion: props.onStudioRestoreVersion
-            } satisfies ConfigStudioPanelProps
           })}
       {...(props.chapterEditor === undefined ? {} : { chapterEditor: props.chapterEditor })}
       {...(props.fileEditor === undefined ? {} : { fileEditor: props.fileEditor })}

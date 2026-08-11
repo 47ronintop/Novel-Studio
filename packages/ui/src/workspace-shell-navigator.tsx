@@ -1,6 +1,5 @@
 import type { ActivityId, DesktopShellState } from "@novel-studio/application";
 
-import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import { WorkspaceNavigator } from "./workspace-navigator.js";
 import type { EngineeringWorkspaceNavigatorProps as FormalEngineeringWorkspaceNavigatorProps } from "./engineering-workspace-navigator.js";
 import type {
@@ -15,7 +14,6 @@ interface WorkspaceShellNavigatorProps {
   readonly creative?: CreativeWorkspaceNavigatorProps | undefined;
   readonly projectWorkflow?: ProjectWorkflowProps | undefined;
   readonly storyBibleEditor?: StoryBibleEditorProps | undefined;
-  readonly studio?: ConfigStudioPanelProps | undefined;
   readonly engineeringNavigator?: FormalEngineeringWorkspaceNavigatorProps | undefined;
   readonly onOpenEngineeringWorkspace?: (() => void) | undefined;
   readonly navigatorSearchQuery?: string | undefined;
@@ -33,7 +31,6 @@ export function WorkspaceShellNavigator({
   creative,
   projectWorkflow,
   storyBibleEditor,
-  studio,
   engineeringNavigator,
   onOpenEngineeringWorkspace,
   navigatorSearchQuery,
@@ -48,7 +45,8 @@ export function WorkspaceShellNavigator({
       collapsed={collapsed}
       creative={shellState.workspaceContext.kind === "creativeProject" ? creative : undefined}
       engineering={
-        shellState.workspaceContext.kind === "engineeringWorkspace" && engineeringNavigator === undefined
+        shellState.workspaceContext.kind === "engineeringWorkspace" &&
+        engineeringNavigator === undefined
           ? {
               activeActivity: shellState.activeActivity,
               expandedSectionIds: shellState.navigatorExpandedSectionIds,
@@ -58,8 +56,7 @@ export function WorkspaceShellNavigator({
               projectWorkflow,
               searchQuery: navigatorSearchQuery,
               sections: shellState.navigatorSections,
-              storyBibleEditor,
-              studio
+              storyBibleEditor
             }
           : undefined
       }

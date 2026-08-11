@@ -6,7 +6,6 @@ import type {
 import type { ChapterSummary } from "@novel-studio/shared";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ChapterEditorProps } from "./chapter-editor.js";
-import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 import { editorFontFamilyValue } from "./editor-toolbar.js";
 import { PanelBottom, Sparkles } from "lucide-react";
 
@@ -17,7 +16,6 @@ import { AiWorkflowHistoryPanel } from "./ai-workflow-history-panel.js";
 import { PlanArtifactReview } from "./plan-artifact-review.js";
 import { CodeMirrorDocumentEditor } from "./codemirror-document-editor.js";
 import { CommandPalette } from "./command-palette.js";
-import { ConfigStudioPanel } from "./config-studio-panel.js";
 import {
   chapterDocumentLabel,
   EditorDocumentBar,
@@ -84,7 +82,6 @@ function WorkspaceShellContent({
   agentConversationWorkspace,
   search,
   settings,
-  studio,
   storyBibleEditor,
   creativeNavigator,
   engineeringNavigator,
@@ -189,7 +186,6 @@ function WorkspaceShellContent({
           projectWorkflow={projectWorkflow}
           shellState={shellState}
           storyBibleEditor={storyBibleEditor}
-          studio={studio}
         />
 
         <div
@@ -225,7 +221,6 @@ function WorkspaceShellContent({
             <ActivityEmptyState
               activityId={shellState.activeActivity}
               search={search}
-              studio={studio}
               storyBibleEditor={storyBibleEditor}
               onSearchResultOpen={onSearchResultOpen}
               onTimelineEntryOpen={onTimelineEntryOpen}
@@ -839,14 +834,12 @@ function PlainFileEditor({
 function ActivityEmptyState({
   activityId,
   search,
-  studio,
   storyBibleEditor,
   onSearchResultOpen,
   onTimelineEntryOpen
 }: {
   readonly activityId: ActivityId;
   readonly search: ProjectSearchProps | undefined;
-  readonly studio: ConfigStudioPanelProps | undefined;
   readonly storyBibleEditor: StoryBibleEditorProps | undefined;
   readonly onSearchResultOpen: ((result: ProjectSearchResultItem) => void) | undefined;
   readonly onTimelineEntryOpen: ((entryId: string) => void) | undefined;
@@ -857,10 +850,6 @@ function ActivityEmptyState({
 
   if (activityId === "storyBible" && storyBibleEditor !== undefined) {
     return <StoryBibleEditorView editor={storyBibleEditor} />;
-  }
-
-  if (activityId === "studio" && studio !== undefined) {
-    return <ConfigStudioPanel {...studio} />;
   }
 
   if (activityId === "timeline") {
@@ -916,12 +905,6 @@ function activityViewCopy(activityId: Exclude<ActivityId, "workspace" | "storyBi
         title: "时间线",
         description: "时间线事件已进入 Story Bible 数据层，完整可视化编辑会在后续里程碑补齐。",
         nextAction: "下一步：打开故事圣经时间线编辑器。"
-      };
-    case "studio":
-      return {
-        title: "创作系统",
-        description: "提示词、Agent 和工作流配置已经有安全边界，完整编辑体验会继续产品化。",
-        nextAction: "下一步：完善 Prompt / Agent / Workflow Studio。"
       };
     case "settings":
       return {

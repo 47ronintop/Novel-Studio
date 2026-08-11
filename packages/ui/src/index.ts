@@ -26,17 +26,6 @@ export {
   editorFontFamilyValue
 } from "./editor-toolbar.js";
 export type { EditorFontFamily, EditorPreferences, WritingMetrics } from "./editor-toolbar.js";
-export { ConfigStudioPanel } from "./config-studio-panel.js";
-export type {
-  ConfigStudioAsset,
-  ConfigStudioAssetSummary,
-  ConfigStudioAssetType,
-  ConfigStudioPanelProps,
-  ConfigStudioStatus,
-  ConfigStudioVersionEntry,
-  ConfigStudioWorkflowNodeEdit,
-  ConfigValidationStatus
-} from "./config-studio-panel.js";
 export { ModelSettingsPanel } from "./model-settings-panel.js";
 export { EditorDocumentBar, chapterDocumentLabel } from "./editor-document-bar.js";
 export type { EditorDocumentBarProps, EditorDocumentTab } from "./editor-document-bar.js";

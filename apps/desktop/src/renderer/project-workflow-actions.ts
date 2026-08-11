@@ -1,7 +1,6 @@
 import type { DesktopShellState, NovelStudioApi } from "@novel-studio/application";
 import type {
   ChapterEditorProps,
-  ConfigStudioPanelProps,
   ModelSettingsPanelProps,
   PlainFileEditorProps,
   ProjectWorkflowProps,
@@ -16,7 +15,6 @@ import type { ProjectWorkflowBridge } from "./project-workflow-bridge.js";
 import type { SettingsBridge } from "./settings-bridge.js";
 import type { StoryBibleBridge } from "./story-bible-bridge.js";
 import { guardDirtyStoryBibleDraft } from "./story-bible-draft-guard.js";
-import type { StudioBridge } from "./studio-bridge.js";
 
 export interface ProjectWorkflowActionInputs {
   readonly api: NovelStudioApi | undefined;
@@ -28,7 +26,6 @@ export interface ProjectWorkflowActionInputs {
   readonly projectWorkflowBridge: ProjectWorkflowBridge | undefined;
   readonly settingsBridge: SettingsBridge | undefined;
   readonly storyBibleBridge: StoryBibleBridge | undefined;
-  readonly studioBridge: StudioBridge | undefined;
   readonly beforeWorkspaceTransition?: (() => Promise<boolean>) | undefined;
   readonly beforeCreateChapter?: (() => Promise<boolean>) | undefined;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
@@ -39,7 +36,6 @@ export interface ProjectWorkflowActionInputs {
   readonly setShellState: Dispatch<SetStateAction<DesktopShellState>>;
   readonly setStoryBible: Dispatch<SetStateAction<StoryBibleSummaryProps | undefined>>;
   readonly setStoryBibleEditor: Dispatch<SetStateAction<StoryBibleEditorProps | undefined>>;
-  readonly setStudio: Dispatch<SetStateAction<ConfigStudioPanelProps | undefined>>;
 }
 
 export function useProjectWorkflowActions({
@@ -52,7 +48,6 @@ export function useProjectWorkflowActions({
   projectWorkflowBridge,
   settingsBridge,
   storyBibleBridge,
-  studioBridge,
   beforeWorkspaceTransition,
   beforeCreateChapter,
   setChapterEditor,
@@ -62,8 +57,7 @@ export function useProjectWorkflowActions({
   setSettings,
   setShellState,
   setStoryBible,
-  setStoryBibleEditor,
-  setStudio
+  setStoryBibleEditor
 }: ProjectWorkflowActionInputs) {
   const refreshProjectWorkflow = useCallback(
     async (nextWorkflow: ProjectWorkflowProps) => {
@@ -90,9 +84,6 @@ export function useProjectWorkflowActions({
       if (settingsBridge !== undefined) {
         setSettings(await settingsBridge.load());
       }
-      if (studioBridge !== undefined) {
-        setStudio(await studioBridge.load());
-      }
     },
     [
       api,
@@ -106,9 +97,7 @@ export function useProjectWorkflowActions({
       setShellState,
       setStoryBible,
       setStoryBibleEditor,
-      setStudio,
-      storyBibleBridge,
-      studioBridge
+      storyBibleBridge
     ]
   );
 

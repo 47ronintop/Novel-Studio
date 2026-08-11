@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
-import { ConfigStudioPanel, ModelSettingsPanel } from "../src/index.js";
+import { ModelSettingsPanel } from "../src/index.js";
 
 (
   globalThis as typeof globalThis & {
@@ -12,7 +12,7 @@ import { ConfigStudioPanel, ModelSettingsPanel } from "../src/index.js";
   }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe("M8 Settings and Studio UI", () => {
+describe("M8 Settings UI", () => {
   test("renders only functional model appearance and plugin settings", () => {
     const html = renderToStaticMarkup(
       <ModelSettingsPanel
@@ -665,153 +665,6 @@ describe("M8 Settings and Studio UI", () => {
     expect(reasoningEffortIndex).toBeGreaterThan(advancedIndex);
     expect(profileIdIndex).toBeGreaterThan(advancedIndex);
     expect(temperatureIndex).toBeGreaterThan(advancedIndex);
-  });
-
-  test("renders Prompt Agent Workflow studio controls through callback-driven props", () => {
-    const html = renderToStaticMarkup(
-      <ConfigStudioPanel
-        assets={[
-          {
-            assetType: "prompt",
-            assetId: "prompt_reviewer_default",
-            title: "Reviewer Prompt"
-          },
-          {
-            assetType: "agent",
-            assetId: "agent_reviewer_default",
-            title: "Reviewer Agent"
-          },
-          {
-            assetType: "workflow",
-            assetId: "wf_review_chapter",
-            title: "Review Chapter"
-          }
-        ]}
-        selectedAsset={{
-          assetType: "workflow",
-          assetId: "wf_review_chapter",
-          title: "Review Chapter",
-          validationStatus: "valid",
-          content: '{\n  "schemaVersion": "1.0"\n}',
-          workflowGraph: {
-            graph: {
-              workflowId: "wf_review_chapter",
-              title: "Review Chapter",
-              entryNodeId: "context",
-              nodes: [
-                {
-                  id: "context",
-                  stepId: "context",
-                  kind: "context",
-                  label: "context",
-                  metadata: {}
-                },
-                {
-                  id: "save",
-                  stepId: "save",
-                  kind: "save",
-                  label: "save",
-                  metadata: {}
-                }
-              ],
-              edges: [
-                {
-                  id: "context:next:save",
-                  fromNodeId: "context",
-                  toNodeId: "save",
-                  kind: "next"
-                }
-              ]
-            },
-            validation: {
-              status: "invalid",
-              issues: [
-                {
-                  code: "WORKFLOW_GRAPH_NODE_UNREACHABLE",
-                  severity: "error",
-                  stepId: "save",
-                  message: "Workflow step is not reachable from the entry step."
-                }
-              ]
-            },
-            layout: {
-              schemaVersion: "1.0",
-              source: "draft",
-              viewport: { x: 0, y: 0, zoom: 1 },
-              nodes: [
-                { nodeId: "context", x: 0, y: 0 },
-                { nodeId: "save", x: 240, y: 80 }
-              ]
-            }
-          }
-        }}
-        selectedWorkflowNodeId="save"
-        selectedWorkflowEdgeId="context:next:save"
-        versions={[
-          {
-            versionId: "ver_before_save",
-            label: "Before save",
-            createdAt: "2026-07-04T00:00:00.000Z"
-          }
-        ]}
-        status="idle"
-        onAssetSelect={() => undefined}
-        onContentChange={() => undefined}
-        onWorkflowNodeSelect={() => undefined}
-        onWorkflowEdgeSelect={() => undefined}
-        onWorkflowSemanticEdit={() => undefined}
-        onWorkflowNodeDragCommit={() => undefined}
-        onSave={() => undefined}
-        onRestoreVersion={() => undefined}
-      />
-    );
-
-    expect(html).toContain("创作系统");
-    expect(html).toContain("提示词");
-    expect(html).toContain("Agent");
-    expect(html).toContain("工作流");
-    expect(html).toContain("Review Chapter");
-    expect(html).toContain("workflow");
-    expect(html).toContain("Schema 有效");
-    expect(html).toContain("JSON 编辑器");
-    expect(html).toContain('aria-label="保存配置资产"');
-    expect(html).toContain('aria-label="恢复配置版本 Before save"');
-    expect(html).toContain('aria-label="选择配置资产 Reviewer Prompt"');
-    expect(html).toContain('aria-label="Workflow graph preview"');
-    expect(html).toContain('aria-label="工作流画布暂不可编辑"');
-    expect(html).toContain("节点 2");
-    expect(html).toContain("连线 1");
-    expect(html).toContain('data-canvas-x="240"');
-    expect(html).toContain('data-canvas-y="80"');
-    expect(html).toContain('style="--canvas-x:240px;--canvas-y:80px"');
-    expect(html).toContain('aria-label="Move workflow node save right"');
-    expect(html).toContain('aria-label="Commit workflow node drag save"');
-    expect(html).toContain('aria-label="Select workflow node context"');
-    expect(html).toContain('aria-label="Select workflow node save"');
-    expect(html).toContain('aria-label="Select workflow edge context:next:save"');
-    expect(html).toContain('data-selected-node="true"');
-    expect(html).toContain('data-selected-edge="true"');
-    expect(html).toContain("context → save");
-    expect(html).toContain("校验：有问题");
-    expect(html).toContain('aria-label="Workflow node inspector"');
-    expect(html).toContain("当前节点：save");
-    expect(html).toContain("类型：保存");
-    expect(html).toContain('aria-label="Workflow node next step"');
-    expect(html).toContain('aria-label="Add confirmation node after save"');
-    expect(html).toContain('aria-label="Workflow new node kind"');
-    expect(html).toContain('aria-label="Add selected workflow node kind after save"');
-    expect(html).toContain('aria-label="Workflow edge retarget target"');
-    expect(html).toContain('aria-label="Retarget workflow edge context:next:save"');
-    expect(html).toContain('aria-label="Workflow branch label"');
-    expect(html).toContain('aria-label="Workflow branch condition"');
-    expect(html).toContain('aria-label="Apply workflow branch edit for save"');
-    expect(html).toContain('aria-label="Confirm delete workflow node save"');
-    expect(html).toContain('aria-label="Delete workflow node save"');
-    expect(html).toContain('name="nextStepId"');
-    expect(html).toContain("入站 context → save");
-    expect(html).toContain("WORKFLOW_GRAPH_NODE_UNREACHABLE");
-    expect(html).toContain("Workflow step is not reachable from the entry step.");
-    expect(html).not.toMatch(/filesystem|node:|fs\./i);
   });
 });
 

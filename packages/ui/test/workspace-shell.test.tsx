@@ -79,7 +79,7 @@ describe("WorkspaceShell", () => {
       "search",
       "timeline"
     ]);
-    expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["studio", "settings"]);
+    expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["settings"]);
 
     const html = renderToStaticMarkup(
       <WorkspaceShell
@@ -905,7 +905,7 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="工作区"');
     expect(html).toContain('aria-label="搜索"');
     expect(html).toContain('aria-label="时间线"');
-    expect(html).toContain('aria-label="创作系统"');
+    expect(html).not.toContain('aria-label="创作系统"');
     expect(html).toContain('aria-label="设置"');
     expect(html).toContain('data-activity-id="workspace"');
     expect(html).not.toContain(`data-activity-id="${legacyActivityId}"`);
@@ -4260,44 +4260,6 @@ describe("WorkspaceShell", () => {
     expect(html).toContain('aria-label="故事圣经编辑器"');
     expect(html).toContain('aria-label="返回时间线列表"');
     expect(html).not.toContain('aria-label="时间线主视图"');
-  });
-
-  test("renders the M23 Studio editor view", () => {
-    const application = createDesktopApplication();
-    const html = renderToStaticMarkup(
-      <WorkspaceShell
-        shellState={{ ...application.getShellState(), activeActivity: "studio" }}
-        commands={application.listCommands()}
-        commandPaletteOpen={false}
-        studio={{
-          assets: [
-            {
-              assetType: "prompt",
-              assetId: "prompt_reviewer_default",
-              title: "默认审稿 Prompt"
-            }
-          ],
-          selectedAsset: {
-            assetType: "prompt",
-            assetId: "prompt_reviewer_default",
-            title: "默认审稿 Prompt",
-            validationStatus: "valid",
-            content: '{\n  "schemaVersion": "1.0"\n}'
-          },
-          versions: [],
-          status: "idle",
-          onAssetSelect: () => undefined,
-          onContentChange: () => undefined,
-          onSave: () => undefined,
-          onRestoreVersion: () => undefined
-        }}
-      />
-    );
-
-    expect(html).toContain('aria-label="创作系统工作台"');
-    expect(html).toContain("默认审稿 Prompt");
-    expect(html).toContain("保存配置资产");
-    expect(html).toContain("版本历史");
   });
 });
 

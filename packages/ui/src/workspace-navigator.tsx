@@ -12,7 +12,6 @@ import type {
   ProjectWorkflowProps,
   StoryBibleEditorProps
 } from "./workspace-shell-types.js";
-import type { ConfigStudioPanelProps } from "./config-studio-panel.js";
 
 export interface EngineeringWorkspaceNavigatorProps {
   readonly displayName?: string;
@@ -29,7 +28,6 @@ export interface EngineeringWorkspaceNavigatorProps {
   readonly projectWorkflow?: ProjectWorkflowProps | undefined;
   readonly fileTree?: readonly ProjectFileTreeItemProps[] | undefined;
   readonly storyBibleEditor?: StoryBibleEditorProps | undefined;
-  readonly studio?: ConfigStudioPanelProps | undefined;
   readonly collapsed?: boolean | undefined;
   readonly focusHidden?: boolean | undefined;
   readonly onSearchQueryChange?: ((query: string) => void) | undefined;

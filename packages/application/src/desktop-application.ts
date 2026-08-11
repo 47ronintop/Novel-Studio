@@ -148,7 +148,7 @@ import type {
 import type { ContextCandidate } from "@novel-studio/context-engine";
 import type { StoryAnalysisCompletionEvent } from "./novel-studio-api.js";
 
-export type ActivityId = "workspace" | "search" | "storyBible" | "timeline" | "studio" | "settings";
+export type ActivityId = "workspace" | "search" | "storyBible" | "timeline" | "settings";
 
 export type SaveStatus = "Saved" | "Saving" | "Unsaved" | "Recovery available";
 

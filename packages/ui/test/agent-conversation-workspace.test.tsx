@@ -14,7 +14,7 @@ import { WorkspaceShell } from "../src/workspace-shell.js";
 describe("Agent Conversation workspace", () => {
   afterEach(() => document.body.replaceChildren());
 
-  test.each(["workspace", "search", "timeline", "studio"] as const)(
+  test.each(["workspace", "search", "timeline"] as const)(
     "keeps one Agent surface when the %s activity is active",
     (activeActivity) => {
       const application = createDesktopApplication();

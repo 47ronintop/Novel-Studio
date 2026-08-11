@@ -1,5 +1,5 @@
 import type { ActivityId, DesktopShellState } from "@novel-studio/application";
-import { BookOpenText, Boxes, Clock3, FolderTree, Search, Settings } from "lucide-react";
+import { BookOpenText, Clock3, FolderTree, Search, Settings } from "lucide-react";
 
 export interface WorkspaceActivityDescriptor {
   readonly id: ActivityId;
@@ -15,7 +15,6 @@ export const projectActivities: readonly WorkspaceActivityDescriptor[] = [
 ];
 
 export const bottomActivities: readonly WorkspaceActivityDescriptor[] = [
-  { id: "studio", label: "创作系统", icon: Boxes },
   { id: "settings", label: "设置", icon: Settings }
 ];
 
