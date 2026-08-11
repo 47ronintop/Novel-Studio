@@ -340,6 +340,56 @@ export class EngineeringRecoveryRootRepositoryV2 {
   }
 
   /**
+   * Main-only rollback marker for a delete whose exact native quarantine was compensated. A
+   * missing record is the expected crash-before-double-write case and is therefore idempotent.
+   */
+  public async markCompensated(
+    input: unknown
+  ): Promise<Result<EngineeringRecoveryGlobalRecordV2 | undefined, UnifiedError>> {
+    return this.serialized(async () => {
+      if (
+        !hasExactKeys(input, compensationStateInputKeys) ||
+        !isStableId(input["recoveryObjectId"]) ||
+        !isStableId(input["transactionId"]) ||
+        !isStableId(input["operationId"]) ||
+        !isSha256(input["sourceSha256"]) ||
+        !isCanonicalUtcTimestamp(input["at"])
+      ) {
+        return invalid("ENGINEERING_RECOVERY_COMPENSATION_INPUT_INVALID", this.traceId);
+      }
+      const binding = await this.assertBindingCurrent();
+      if (!binding.ok) return binding;
+      const current = await this.options.globalRecords.get(input["recoveryObjectId"] as string);
+      if (!current.ok || current.value === undefined) return current;
+      const manifestResult = await this.options.manifests.get(current.value.recoveryObjectId);
+      if (!manifestResult.ok) return manifestResult;
+      const manifest = manifestResult.value;
+      if (
+        manifest === undefined ||
+        !sameGlobalForManifest(current.value, manifest) ||
+        !sameBinding(current.value, manifest, binding.value)
+      ) {
+        return scanBlocked(["manifest_mismatch"], this.traceId, binding.value);
+      }
+      if (
+        current.value.transactionId !== input["transactionId"] ||
+        current.value.operationId !== input["operationId"] ||
+        manifest.sourceSha256 !== input["sourceSha256"]
+      ) {
+        return invalid("ENGINEERING_RECOVERY_COMPENSATION_BINDING_MISMATCH", this.traceId);
+      }
+      if (manifest.state === "restored") return ok(current.value);
+      if (manifest.state !== "quarantined") return stateConflict(this.traceId);
+      const nextManifest = sealManifestState(manifest, "restored");
+      const storedManifest = await this.options.manifests.replace(manifest, nextManifest);
+      if (!storedManifest.ok) return storedManifest;
+      const nextGlobal = createGlobalRecord(nextManifest, input["at"] as string);
+      const storedGlobal = await this.options.globalRecords.replace(current.value, nextGlobal);
+      return storedGlobal.ok ? ok(storedGlobal.value) : storedGlobal;
+    });
+  }
+
+  /**
    * Permanent purge is intentionally outside the Provider contract.  It requires either a local
    * user confirmation or an explicit retention-policy decision and refuses pinned objects.
    * Retention policy cannot purge before expiry. Main performs native deletion only after this
@@ -909,6 +959,13 @@ const restorePreviewInputKeys = [
   "targetState"
 ] as const;
 const restoreStateInputKeys = ["at", "preview", "recoveryObjectId"] as const;
+const compensationStateInputKeys = [
+  "at",
+  "operationId",
+  "recoveryObjectId",
+  "sourceSha256",
+  "transactionId"
+] as const;
 const purgeInputKeys = ["actor", "at", "reason", "recoveryObjectId"] as const;
 const restorePreviewKeys = [
   "previewChecksum",

@@ -289,6 +289,43 @@ describe("EngineeringRecoveryRootRepositoryV2", () => {
     });
   });
 
+  test("idempotently marks only the exact compensated delete record restored", async () => {
+    const binding = createBinding();
+    const globals = new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>();
+    const manifests =
+      new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>();
+    const repository = createRepository(binding, globals, manifests);
+    const compensation = {
+      recoveryObjectId: "object_01",
+      transactionId: "tx_01",
+      operationId: "op_01",
+      sourceSha256: hash("source"),
+      at: "2099-01-02T00:00:00.000Z"
+    };
+
+    await expect(repository.markCompensated(compensation)).resolves.toEqual({
+      ok: true,
+      value: undefined
+    });
+    const manifest = createManifest(binding);
+    await manifests.put(manifest);
+    await globals.put(createGlobal(manifest));
+    await expect(
+      repository.markCompensated({ ...compensation, sourceSha256: hash("other") })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_COMPENSATION_BINDING_MISMATCH" }
+    });
+    await expect(repository.markCompensated(compensation)).resolves.toMatchObject({
+      ok: true,
+      value: { state: "restored" }
+    });
+    await expect(repository.markCompensated(compensation)).resolves.toMatchObject({
+      ok: true,
+      value: { state: "restored" }
+    });
+  });
+
   test("purge remains Main-only and enforces pin and retention-policy boundaries", async () => {
     const binding = createBinding();
     const globals = new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>();
