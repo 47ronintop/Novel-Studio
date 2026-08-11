@@ -72,6 +72,67 @@ describe("EngineeringRecoveryRootRepositoryV2", () => {
     });
   });
 
+  test("accounts for reserved capacity before admitting a quarantine object", async () => {
+    const binding = createBinding({ capacityBytes: 16, reservedBytes: 8 });
+    const globals = new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>();
+    const manifests =
+      new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>();
+    const repository = createRepository(binding, globals, manifests);
+
+    await expect(
+      repository.recordQuarantine(createRecordInput(binding, { byteLength: 9 }))
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_ROOT_BLOCKED" }
+    });
+    await expect(repository.scanRoot()).resolves.toMatchObject({
+      ok: true,
+      value: { status: "clear", usedBytes: 0 }
+    });
+  });
+
+  test("detects both durable double-write crash points", async () => {
+    const binding = createBinding();
+    const firstWriteGlobals =
+      new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>();
+    const firstWriteManifests =
+      new FailingEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>({
+        failPutAt: 1
+      });
+    const firstWriteRepository = createRepository(binding, firstWriteGlobals, firstWriteManifests);
+    await expect(
+      firstWriteRepository.recordQuarantine(createRecordInput(binding))
+    ).resolves.toMatchObject({ ok: false, error: { code: "TEST_RECOVERY_STORE_CRASH" } });
+    await expect(firstWriteRepository.scanRoot()).resolves.toMatchObject({
+      ok: true,
+      value: { status: "clear", globalRecordCount: 0, manifestCount: 0 }
+    });
+
+    const secondWriteGlobals =
+      new FailingEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>({
+        failPutAt: 1
+      });
+    const secondWriteManifests =
+      new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>();
+    const secondWriteRepository = createRepository(
+      binding,
+      secondWriteGlobals,
+      secondWriteManifests
+    );
+    await expect(
+      secondWriteRepository.recordQuarantine(createRecordInput(binding))
+    ).resolves.toMatchObject({ ok: false, error: { code: "TEST_RECOVERY_STORE_CRASH" } });
+    await expect(secondWriteRepository.scanRoot()).resolves.toMatchObject({
+      ok: true,
+      value: {
+        status: "blocked",
+        reasons: ["orphaned_manifest"],
+        globalRecordCount: 0,
+        manifestCount: 1
+      }
+    });
+  });
+
   test("restore preview never overwrites an occupied target", async () => {
     const binding = createBinding();
     const globals = new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>();
@@ -105,8 +166,154 @@ describe("EngineeringRecoveryRootRepositoryV2", () => {
       ok: true,
       value: { state: "conflict", conflictReason: "target_occupied" }
     });
+
+    const revoked = createRepository(binding, globals, manifests, async () => false);
+    await expect(
+      revoked.createRestorePreview({
+        recoveryObjectId: "object_01",
+        targetState: "absent",
+        pathAllowed: true,
+        policyCurrent: true
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_ROOT_BLOCKED" }
+    });
+
+    const changedBinding = createBinding({ grantRevision: "grant_02" });
+    const stale = createRepository(changedBinding, globals, manifests);
+    await expect(
+      stale.createRestorePreview({
+        recoveryObjectId: "object_01",
+        targetState: "absent",
+        pathAllowed: true,
+        policyCurrent: true
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_ROOT_BLOCKED" }
+    });
+  });
+
+  test("durably transitions restore with compare-and-swap and detects a second-write crash", async () => {
+    const binding = createBinding();
+    const globals = new FailingEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>({
+      failReplaceAt: 1
+    });
+    const manifests =
+      new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>();
+    const repository = createRepository(binding, globals, manifests);
+    const manifest = createManifest(binding);
+    await manifests.put(manifest);
+    await globals.put(createGlobal(manifest));
+    const preview = await repository.createRestorePreview({
+      recoveryObjectId: "object_01",
+      targetState: "absent",
+      pathAllowed: true,
+      policyCurrent: true
+    });
+    if (!preview.ok) throw new Error(preview.error.message);
+
+    await expect(
+      repository.markRestored({
+        recoveryObjectId: "object_01",
+        at: "2099-01-02T00:00:00.000Z",
+        preview: preview.value
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: "TEST_RECOVERY_STORE_CRASH" } });
+    await expect(repository.scanRoot()).resolves.toMatchObject({
+      ok: true,
+      value: { status: "blocked", reasons: ["manifest_mismatch"] }
+    });
+  });
+
+  test("purge remains Main-only and enforces pin and retention-policy boundaries", async () => {
+    const binding = createBinding();
+    const globals = new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>();
+    const manifests =
+      new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>();
+    const repository = createRepository(binding, globals, manifests);
+    const manifest = createManifest(binding);
+    await manifests.put(manifest);
+    await globals.put(createGlobal(manifest));
+
+    await expect(
+      repository.markPurged({
+        recoveryObjectId: "object_01",
+        actor: "retention_policy",
+        reason: "retention_expired",
+        at: "2099-01-15T00:00:00.000Z"
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_STATE_CONFLICT" }
+    });
+
+    await expect(
+      repository.markPurged({
+        recoveryObjectId: "object_01",
+        actor: "local_user",
+        reason: "user_confirmed",
+        at: "2099-01-15T00:00:00.000Z"
+      })
+    ).resolves.toMatchObject({ ok: true, value: { state: "purged" } });
+
+    const pinnedManifest = createManifest(binding, {
+      recoveryObjectId: "object_pinned",
+      pinned: true
+    });
+    await manifests.put(pinnedManifest);
+    await globals.put(createGlobal(pinnedManifest));
+    await expect(
+      repository.markPurged({
+        recoveryObjectId: "object_pinned",
+        actor: "retention_policy",
+        reason: "retention_expired",
+        at: "2099-03-01T00:00:00.000Z"
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_STATE_CONFLICT" }
+    });
+
+    await expect(repository.scanRoot()).resolves.toMatchObject({
+      ok: true,
+      value: { status: "clear", usedBytes: 8 }
+    });
   });
 });
+
+class FailingEngineeringRecoveryRootStoreV2<
+  T extends { readonly recoveryObjectId: string; readonly contentRootBindingId: string }
+> extends InMemoryEngineeringRecoveryRootStoreV2<T> {
+  private putCount = 0;
+  private replaceCount = 0;
+
+  public constructor(
+    private readonly failures: { readonly failPutAt?: number; readonly failReplaceAt?: number }
+  ) {
+    super();
+  }
+
+  public override async put(
+    value: T
+  ): ReturnType<InMemoryEngineeringRecoveryRootStoreV2<T>["put"]> {
+    this.putCount += 1;
+    if (this.putCount === this.failures.failPutAt)
+      return { ok: false, error: { code: "TEST_RECOVERY_STORE_CRASH" } as never };
+    return super.put(value);
+  }
+
+  public override async replace(
+    expected: T,
+    value: T
+  ): ReturnType<InMemoryEngineeringRecoveryRootStoreV2<T>["replace"]> {
+    this.replaceCount += 1;
+    if (this.replaceCount === this.failures.failReplaceAt)
+      return { ok: false, error: { code: "TEST_RECOVERY_STORE_CRASH" } as never };
+    return super.replace(expected, value);
+  }
+}
 
 function createRepository(
   binding: ReturnType<typeof createBinding>,
@@ -153,6 +360,28 @@ function createBinding(changes: Record<string, unknown> = {}) {
   );
   if (!issued.ok) throw new Error(issued.error.message);
   return issued.value;
+}
+
+function createRecordInput(
+  binding: ReturnType<typeof createBinding>,
+  changes: { readonly byteLength?: number } = {}
+) {
+  return {
+    recoveryObjectId: "object_01",
+    transactionId: "tx_01",
+    operationId: "op_01",
+    relativeIdentity: "src/main.ts",
+    sourceSha256: hash("source"),
+    byteLength: changes.byteLength ?? 8,
+    sideEffectChecksum: volumeLocalRecoverySideEffectChecksumV2({
+      binding,
+      transactionId: "tx_01",
+      operationId: "op_01",
+      recoveryObjectId: "object_01",
+      relativeIdentity: "src/main.ts",
+      sourceSha256: hash("source")
+    })
+  };
 }
 
 function createManifest(

@@ -72,6 +72,8 @@ export interface EngineeringRecoveryRootScanV2 {
 
 export interface EngineeringRecoveryRootStoreV2<T> {
   put(value: T): Promise<Result<T, UnifiedError>>;
+  /** Replace one record only when its authenticated prior value is still present. */
+  replace(expected: T, value: T): Promise<Result<T, UnifiedError>>;
   get(id: string): Promise<Result<T | undefined, UnifiedError>>;
   list(contentRootBindingId: string): Promise<Result<readonly T[], UnifiedError>>;
 }
@@ -136,7 +138,10 @@ export class EngineeringRecoveryRootRepositoryV2 {
       // failed second write must leave the root blocked, never silently exceed retention space.
       const current = await this.scanRoot();
       if (!current.ok) return current;
-      if (current.value.usedBytes + parsed.value.byteLength > binding.value.capacityBytes) {
+      if (
+        current.value.usedBytes + parsed.value.byteLength >
+        binding.value.capacityBytes - binding.value.reservedBytes
+      ) {
         return scanBlocked(["capacity_exceeded"], this.traceId, binding.value);
       }
 
@@ -195,8 +200,8 @@ export class EngineeringRecoveryRootRepositoryV2 {
       const manifest = manifestById.get(record.recoveryObjectId);
       if (manifest === undefined) reasons.add("orphaned_global_record");
       else if (
-        !sameBinding(record, manifest, binding.value) ||
-        record.manifestChecksum !== manifest.manifestChecksum
+        !sameGlobalForManifest(record, manifest) ||
+        !sameBinding(record, manifest, binding.value)
       )
         reasons.add("manifest_mismatch");
     }
@@ -208,7 +213,8 @@ export class EngineeringRecoveryRootRepositoryV2 {
       if (!globalById.has(manifest.recoveryObjectId)) reasons.add("orphaned_manifest");
       if (manifest.state !== "purged") usedBytes += manifest.byteLength;
     }
-    if (usedBytes > binding.value.capacityBytes) reasons.add("capacity_exceeded");
+    if (usedBytes > binding.value.capacityBytes - binding.value.reservedBytes)
+      reasons.add("capacity_exceeded");
     const reasonsArray = [...reasons].sort() as EngineeringRecoveryRootScanV2["reasons"];
     const unsigned = {
       schemaVersion: ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
@@ -243,6 +249,8 @@ export class EngineeringRecoveryRootRepositoryV2 {
       typeof input["policyCurrent"] !== "boolean"
     )
       return invalid("ENGINEERING_RECOVERY_RESTORE_INPUT_INVALID", this.traceId);
+    const binding = await this.assertBindingCurrent();
+    if (!binding.ok) return binding;
     const record = await this.read(input["recoveryObjectId"] as string);
     if (!record.ok) return record;
     if (record.value === undefined) return missing(this.traceId);
@@ -250,7 +258,9 @@ export class EngineeringRecoveryRootRepositoryV2 {
     if (!manifest.ok) return manifest;
     if (
       manifest.value === undefined ||
-      manifest.value.manifestChecksum !== record.value.manifestChecksum
+      !sameGlobalForManifest(record.value, manifest.value) ||
+      !sameBinding(record.value, manifest.value, binding.value) ||
+      manifest.value.state !== "quarantined"
     )
       return scanBlocked(["manifest_mismatch"], this.traceId, this.options.binding);
     const conflictReason =
@@ -289,9 +299,9 @@ export class EngineeringRecoveryRootRepositoryV2 {
 
   /**
    * Permanent purge is intentionally outside the Provider contract.  It requires either a local
-   * user confirmation or an explicit retention-policy decision and refuses pinned/unexpired
-   * objects.  Native deletion of the quarantine object is performed by Main after this marker is
-   * durably recorded; a mismatch blocks the root rather than unlinking by pathname.
+   * user confirmation or an explicit retention-policy decision and refuses pinned objects.
+   * Retention policy cannot purge before expiry. Main performs native deletion only after this
+   * marker is durable; a mismatch blocks the root rather than unlinking by pathname.
    */
   public async markPurged(
     input: unknown
@@ -330,7 +340,11 @@ export class EngineeringRecoveryRootRepositoryV2 {
       const manifestResult = await this.options.manifests.get(current.value.recoveryObjectId);
       if (!manifestResult.ok) return manifestResult;
       const manifest = manifestResult.value;
-      if (manifest === undefined || !sameGlobalForManifest(current.value, manifest)) {
+      if (
+        manifest === undefined ||
+        !sameGlobalForManifest(current.value, manifest) ||
+        !sameBinding(current.value, manifest, binding.value)
+      ) {
         return scanBlocked(["manifest_mismatch"], this.traceId, binding.value);
       }
       if (
@@ -358,10 +372,10 @@ export class EngineeringRecoveryRootRepositoryV2 {
         return stateConflict(this.traceId);
       }
       const nextManifest = sealManifestState(manifest, state);
-      const storedManifest = await this.options.manifests.put(nextManifest);
+      const storedManifest = await this.options.manifests.replace(manifest, nextManifest);
       if (!storedManifest.ok) return storedManifest;
       const nextGlobal = createGlobalRecord(nextManifest, this.now());
-      const storedGlobal = await this.options.globalRecords.put(nextGlobal);
+      const storedGlobal = await this.options.globalRecords.replace(current.value, nextGlobal);
       if (!storedGlobal.ok) return storedGlobal;
       return ok(storedGlobal.value);
     });
@@ -417,6 +431,24 @@ export class InMemoryEngineeringRecoveryRootStoreV2<
           code: "ENGINEERING_RECOVERY_STORE_CONFLICT",
           message: "Recovery object already exists with different content.",
           suggestedAction: "Rebuild the recovery proposal from current state.",
+          traceId: "engineering-recovery-root-store-v2"
+        })
+      );
+    this.values.set(value.recoveryObjectId, Object.freeze(value));
+    return ok(value);
+  }
+  public async replace(expected: T, value: T): Promise<Result<T, UnifiedError>> {
+    const current = this.values.get(expected.recoveryObjectId);
+    if (
+      current === undefined ||
+      canonicalizeEngineeringMutationV2Json(current) !==
+        canonicalizeEngineeringMutationV2Json(expected)
+    )
+      return err(
+        storageError({
+          code: "ENGINEERING_RECOVERY_STORE_CONFLICT",
+          message: "Recovery object changed before its durable state transition.",
+          suggestedAction: "Rescan the recovery root and require a fresh review.",
           traceId: "engineering-recovery-root-store-v2"
         })
       );
