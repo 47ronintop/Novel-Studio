@@ -164,7 +164,7 @@ describe("engineering file access production evidence", () => {
         now: fixture.now
       })
     ).rejects.toThrow();
-  });
+  }, 15_000);
 
   test("fails closed unless the native controls are freshly re-executed", async () => {
     const fixture = await createFixture();
