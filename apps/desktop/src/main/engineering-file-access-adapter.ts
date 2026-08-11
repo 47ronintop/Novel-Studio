@@ -2,9 +2,11 @@ import { createRequire } from "node:module";
 import { isAbsolute, join, relative } from "node:path";
 
 import type {
+  EngineeringVolumeLocalRecoveryDurabilityPortV2,
   EngineeringStateDirectoryEntryV2,
   EngineeringStateDurabilityPortV2,
-  EngineeringStateFileHandleV2
+  EngineeringStateFileHandleV2,
+  VolumeLocalRecoveryBindingV2
 } from "@novel-studio/repository";
 
 import { ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT } from "./engineering-file-access-qualification.js";
@@ -65,6 +67,7 @@ export interface EngineeringFileAccessAddon {
 
 interface EngineeringStateDurabilityAddon extends EngineeringFileAccessAddon {
   readonly openEngineeringStateRoot: (stateRoot: string) => unknown;
+  readonly openEngineeringStateRootBoundToRecoveryV2?: (recoveryRootId: bigint) => unknown;
   readonly closeEngineeringStateRoot: (stateRootId: bigint) => unknown;
   readonly ensureEngineeringStateDirectoryNoFollow: (
     stateRootId: bigint,
@@ -102,6 +105,10 @@ interface EngineeringStateDurabilityAddon extends EngineeringFileAccessAddon {
 /** Main-owned lifetime handle for the native state-root descriptor. */
 export interface EngineeringStateDurabilityPortV2Handle extends EngineeringStateDurabilityPortV2 {
   /** Releases the native state-root descriptor. Safe to call repeatedly, including after a throw. */
+  dispose(): void;
+}
+
+export interface EngineeringRecoveryStateDurabilityPortV2Handle extends EngineeringVolumeLocalRecoveryDurabilityPortV2 {
   dispose(): void;
 }
 
@@ -224,9 +231,50 @@ export function createEngineeringStateDurabilityPortV2(options: {
     return undefined;
   }
 
+  return createEngineeringStateDurabilityPortForOpenedRootV2(options.stateRoot, addon, stateRootId);
+}
+
+export function createEngineeringRecoveryStateDurabilityPortV2(options: {
+  readonly recoveryRoot: string;
+  readonly recoveryRootId: bigint;
+  readonly recoveryBinding: VolumeLocalRecoveryBindingV2;
+  readonly addonLoader: EngineeringFileAccessAddonLoader;
+}): EngineeringRecoveryStateDurabilityPortV2Handle | undefined {
+  if (
+    !isAbsolute(options.recoveryRoot) ||
+    options.recoveryRootId.toString() !== options.recoveryBinding.recoveryRootId
+  )
+    return undefined;
+  const loaded = options.addonLoader.load();
+  if (loaded.status !== "loaded" || !isEngineeringStateDurabilityAddon(loaded.addon))
+    return undefined;
+  const addon = loaded.addon;
+  const openBound = addon.openEngineeringStateRootBoundToRecoveryV2;
+  if (typeof openBound !== "function") return undefined;
+  let stateRootId: bigint;
+  try {
+    const opened = openBound(options.recoveryRootId);
+    if (typeof opened !== "bigint") return undefined;
+    stateRootId = opened;
+  } catch {
+    return undefined;
+  }
+  const durability = createEngineeringStateDurabilityPortForOpenedRootV2(
+    options.recoveryRoot,
+    addon,
+    stateRootId
+  );
+  return Object.freeze({ ...durability, recoveryBinding: options.recoveryBinding });
+}
+
+function createEngineeringStateDurabilityPortForOpenedRootV2(
+  stateRoot: string,
+  addon: EngineeringStateDurabilityAddon,
+  stateRootId: bigint
+): EngineeringStateDurabilityPortV2Handle {
   const toRelative = (path: string, allowRoot: boolean): string => {
     if (!isAbsolute(path)) throw new Error("Engineering state path must be absolute.");
-    const candidate = relative(options.stateRoot, path).replaceAll("\\", "/");
+    const candidate = relative(stateRoot, path).replaceAll("\\", "/");
     if (candidate === "") {
       if (allowRoot) return candidate;
       throw new Error("Engineering state file path cannot be the state root.");

@@ -1,6 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { createEngineeringStateDurabilityPortV2 } from "../src/main/engineering-file-access-adapter.js";
+import {
+  createEngineeringRecoveryStateDurabilityPortV2,
+  createEngineeringStateDurabilityPortV2
+} from "../src/main/engineering-file-access-adapter.js";
 
 describe("EngineeringStateDurabilityPortV2 adapter", () => {
   test("maps only Main-owned state-root paths to the single native addon durability ABI", async () => {
@@ -77,6 +80,63 @@ describe("EngineeringStateDurabilityPortV2 adapter", () => {
     expect(addon.closeEngineeringStateRoot).toHaveBeenCalledWith(9n);
   });
 
+  test("binds volume-local durability to the authenticated recovery descriptor", async () => {
+    const addon = stateAddon();
+    addon.openEngineeringStateRootBoundToRecoveryV2.mockReturnValue(10n);
+    const recoveryBinding = {
+      schemaVersion: "2.0" as const,
+      recoveryRootBindingId: "recovery_01",
+      contentRootBindingId: "root_01",
+      recoveryRootId: "7",
+      contentVolumeIdentity: "volume_01",
+      recoveryVolumeIdentity: "volume_01",
+      contentDirectoryIdentity: "directory_content",
+      recoveryDirectoryIdentity: "directory_recovery",
+      rootRelationship: "identity_disjoint" as const,
+      authority: "user_os_directory_grant" as const,
+      grantRevision: "grant_01",
+      ownershipMarkerChecksum: "a".repeat(64),
+      aclModeQualification: "qualified" as const,
+      atomicRenameQualification: "qualified" as const,
+      directoryDurabilityQualification: "qualified" as const,
+      storageLabel: "Recovery storage",
+      capacityBytes: 1024,
+      reservedBytes: 0,
+      retentionDays: 30,
+      observedAt: "2099-01-01T00:00:00.000Z",
+      bindingChecksum: "b".repeat(64)
+    };
+    const port = createEngineeringRecoveryStateDurabilityPortV2({
+      recoveryRoot: "D:\\Novel Studio Recovery",
+      recoveryRootId: 7n,
+      recoveryBinding,
+      addonLoader: loadedAddon(addon)
+    });
+    if (port === undefined) throw new Error("expected qualified recovery durability port");
+
+    await port.ensureDirectoryNoFollow(
+      "D:\\Novel Studio Recovery\\.novel-studio-engineering-v2\\volume-local-manifests"
+    );
+    expect(addon.openEngineeringStateRootBoundToRecoveryV2).toHaveBeenCalledWith(7n);
+    expect(addon.openEngineeringStateRoot).not.toHaveBeenCalled();
+    expect(addon.ensureEngineeringStateDirectoryNoFollow).toHaveBeenCalledWith(
+      10n,
+      ".novel-studio-engineering-v2/volume-local-manifests"
+    );
+    expect(port.recoveryBinding).toBe(recoveryBinding);
+    port.dispose();
+    expect(addon.closeEngineeringStateRoot).toHaveBeenCalledWith(10n);
+
+    expect(
+      createEngineeringRecoveryStateDurabilityPortV2({
+        recoveryRoot: "D:\\Novel Studio Recovery",
+        recoveryRootId: 8n,
+        recoveryBinding,
+        addonLoader: loadedAddon(addon)
+      })
+    ).toBeUndefined();
+  });
+
   test("fails closed when native ABI is absent, state root is relative, or a path escapes the root", async () => {
     const addon = stateAddon();
     expect(
@@ -144,6 +204,7 @@ function stateAddon() {
     searchText: vi.fn(),
     buildIndex: vi.fn(),
     openEngineeringStateRoot: vi.fn(() => 9n),
+    openEngineeringStateRootBoundToRecoveryV2: vi.fn(() => 10n),
     closeEngineeringStateRoot: vi.fn(),
     ensureEngineeringStateDirectoryNoFollow: vi.fn(),
     flushEngineeringStateDirectory: vi.fn(),
