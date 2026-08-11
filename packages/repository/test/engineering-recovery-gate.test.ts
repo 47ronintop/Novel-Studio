@@ -5,14 +5,17 @@ import { err, ok } from "@novel-studio/shared";
 import {
   createEngineeringAbsenceProofV2,
   createEngineeringRawByteManifestV2,
+  engineeringFileMutationRequestChecksumV2,
   engineeringMutationBlobIdForSha256V2,
   sha256EngineeringMutationTextV2,
   type EngineeringFileMutationRequestV2
 } from "../src/engineering-file-mutation-port-v2.js";
 import { InMemoryEngineeringMutationBlobStoreV2 } from "../src/engineering-mutation-blob-store.js";
 import { EngineeringRecoveryGateV2 } from "../src/engineering-recovery-gate.js";
+import { createEngineeringMutationReceiptV2 } from "../src/engineering-mutation-receipt.js";
 import {
   createEngineeringWriteTransactionPreparedV2,
+  engineeringFullAfterManifestChecksumV2,
   engineeringSideEffectSubjectChecksumV2,
   InMemoryEngineeringWalRepositoryV2
 } from "../src/engineering-wal-repository.js";
@@ -61,6 +64,120 @@ describe("EngineeringRecoveryGateV2", () => {
       ok: false,
       error: { code: "ENGINEERING_RECOVERY_GATE_BLOCKED" }
     });
+    await lease.value.release();
+  });
+
+  test("revalidates a lifecycle lease and fails closed when its durable binding drifts", async () => {
+    const wal = new InMemoryEngineeringWalRepositoryV2();
+    const blobs = new InMemoryEngineeringMutationBlobStoreV2();
+    let current = true;
+    const observed: unknown[] = [];
+    const gate = createGate(wal, blobs, {
+      verifyLifecycleLease: async (input) => {
+        observed.push(input);
+        return ok(current);
+      }
+    });
+    const input = {
+      contentRootBindingId: "root_01",
+      transactionId: "tx_lifecycle_01",
+      preparedChecksum: hash("lifecycle_prepared")
+    };
+
+    const lease = await gate.acquireMutationLease(input);
+    expect(lease).toMatchObject({
+      ok: true,
+      value: { kind: "ordinary", transactionId: "tx_lifecycle_01" }
+    });
+    if (!lease.ok) throw new Error(lease.error.message);
+
+    await expect(lease.value.assertCurrent()).resolves.toEqual({ ok: true, value: undefined });
+    current = false;
+    await expect(lease.value.assertCurrent()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_GATE_LEASE_INVALID" }
+    });
+    expect(observed).toEqual([input, input, input]);
+    await lease.value.release();
+  });
+
+  test("fails a lifecycle lease revalidation closed when its verifier errors", async () => {
+    const wal = new InMemoryEngineeringWalRepositoryV2();
+    const blobs = new InMemoryEngineeringMutationBlobStoreV2();
+    let verificationCount = 0;
+    const gate = createGate(wal, blobs, {
+      verifyLifecycleLease: async () => {
+        verificationCount += 1;
+        return verificationCount === 1
+          ? ok(true)
+          : err({ code: "LIFECYCLE_WAL_UNAVAILABLE" } as never);
+      }
+    });
+    const lease = await gate.acquireRecoveryLease({
+      contentRootBindingId: "root_01",
+      transactionId: "tx_lifecycle_01",
+      preparedChecksum: hash("lifecycle_prepared")
+    });
+    if (!lease.ok) throw new Error(lease.error.message);
+
+    await expect(lease.value.assertCurrent()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_GATE_LEASE_INVALID" }
+    });
+    await lease.value.release();
+  });
+
+  test("allows lifecycle recovery beside committed ordinary WAL history", async () => {
+    const wal = new InMemoryEngineeringWalRepositoryV2();
+    const blobs = new InMemoryEngineeringMutationBlobStoreV2();
+    const request = createRequest();
+    const prepared = createPrepared(request);
+    const receipt = createEngineeringMutationReceiptV2({
+      transactionId: request.transactionId,
+      operationId: request.operationId,
+      operationKind: request.operationKind,
+      contentRootBindingId: request.contentRootBindingId,
+      providerSemanticVersionSetChecksum: request.providerSemanticVersionSetChecksum,
+      relativeIdentity: request.relativeIdentity,
+      requestChecksum: engineeringFileMutationRequestChecksumV2(request),
+      observedBefore: request.before,
+      observedAfter: {
+        ...request.candidate.manifest,
+        identity: {
+          kind: "observed_file",
+          rootBindingId: "root_01",
+          relativeIdentity: request.relativeIdentity,
+          fileIdentity: "file_01"
+        }
+      },
+      stagingObjectId: request.stagingObjectId,
+      recoveryObjectId: null,
+      durability: "data_and_directory_flushed"
+    });
+    await blobs.put({ contentRootBindingId: "root_01", bytes: candidateBytes() });
+    await wal.prepare(prepared);
+    await wal.appendProgress({
+      contentRootBindingId: "root_01",
+      transactionId: "tx_01",
+      receipt,
+      recordedAt: "2099-01-01T00:00:01.000Z"
+    });
+    await wal.commit({
+      contentRootBindingId: "root_01",
+      transactionId: "tx_01",
+      fullAfterManifestChecksum: engineeringFullAfterManifestChecksumV2([receipt]),
+      committedAt: "2099-01-01T00:00:02.000Z"
+    });
+    const gate = createGate(wal, blobs, { verifyLifecycleLease: async () => ok(true) });
+
+    const lease = await gate.acquireRecoveryLease({
+      contentRootBindingId: "root_01",
+      transactionId: "tx_lifecycle_01",
+      preparedChecksum: hash("lifecycle_prepared")
+    });
+    expect(lease).toMatchObject({ ok: true, value: { kind: "recovery" } });
+    if (!lease.ok) throw new Error(lease.error.message);
+    await expect(lease.value.assertCurrent()).resolves.toEqual({ ok: true, value: undefined });
     await lease.value.release();
   });
 
@@ -123,6 +240,20 @@ describe("EngineeringRecoveryGateV2", () => {
     await expect(gate.scanRoot({ contentRootBindingId: "root_01" })).resolves.toMatchObject({
       ok: true,
       value: { status: "blocked", reasons: expect.arrayContaining(["unknown_record"]) }
+    });
+  });
+
+  test("maps a physical quarantine orphan to the closed public recovery gate", async () => {
+    const wal = new InMemoryEngineeringWalRepositoryV2();
+    const blobs = new InMemoryEngineeringMutationBlobStoreV2();
+    const gate = createGate(wal, blobs, {
+      scanVolumeLocalRecovery: async () =>
+        ok({ status: "blocked" as const, reasons: ["orphaned_physical_object" as const] })
+    });
+
+    await expect(gate.scanRoot({ contentRootBindingId: "root_01" })).resolves.toMatchObject({
+      ok: true,
+      value: { status: "blocked", reasons: ["orphaned_object"] }
     });
   });
 });

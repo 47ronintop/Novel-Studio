@@ -8,7 +8,8 @@ import {
 } from "../src/engineering-recovery-root-repository.js";
 import {
   canonicalizeEngineeringMutationV2Json,
-  sha256EngineeringMutationTextV2
+  sha256EngineeringMutationTextV2,
+  type EngineeringQuarantineInventoryV2
 } from "../src/engineering-file-mutation-port-v2.js";
 import {
   issueVolumeLocalRecoveryBindingV2,
@@ -88,6 +89,67 @@ describe("EngineeringRecoveryRootRepositoryV2", () => {
     await expect(repository.scanRoot()).resolves.toMatchObject({
       ok: true,
       value: { status: "clear", usedBytes: 0 }
+    });
+  });
+
+  test("blocks when native quarantine inventory contains an object absent from both stores", async () => {
+    const binding = createBinding();
+    const globals = new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>();
+    const manifests =
+      new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>();
+    const repository = createRepository(
+      binding,
+      globals,
+      manifests,
+      async () => true,
+      async (current) => ({
+        ok: true,
+        value: createInventory(current, [
+          {
+            recoveryObjectId: "object_orphan",
+            fileIdentity: "file_orphan",
+            sha256: hash("orphan"),
+            byteLength: 7n
+          }
+        ])
+      })
+    );
+
+    await expect(repository.scanRoot()).resolves.toMatchObject({
+      ok: true,
+      value: { status: "blocked", reasons: ["orphaned_physical_object"] }
+    });
+  });
+
+  test("fails closed when the native quarantine inventory is unavailable or invalid", async () => {
+    const binding = createBinding();
+    const globals = new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>();
+    const manifests =
+      new InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>();
+    const missingInspector = new EngineeringRecoveryRootRepositoryV2({
+      binding,
+      globalRecords: globals,
+      manifests,
+      now: () => "2099-01-01T00:00:00.000Z"
+    });
+    const invalidInspector = createRepository(
+      binding,
+      globals,
+      manifests,
+      async () => true,
+      async () => ({
+        ok: true,
+        value: { ...createInventory(binding), grantRevision: "stale_revision" }
+      })
+    );
+
+    await expect(missingInspector.scanRoot()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_ROOT_BLOCKED" }
+    });
+    await expect(invalidInspector.scanRoot()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_ROOT_BLOCKED" }
     });
   });
 
@@ -319,15 +381,50 @@ function createRepository(
   binding: ReturnType<typeof createBinding>,
   globalRecords: InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>,
   manifests: InMemoryEngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>,
-  isGrantCurrent: (binding: ReturnType<typeof createBinding>) => Promise<boolean> = async () => true
+  isGrantCurrent: (binding: ReturnType<typeof createBinding>) => Promise<boolean> = async () =>
+    true,
+  inspectQuarantine: NonNullable<
+    ConstructorParameters<typeof EngineeringRecoveryRootRepositoryV2>[0]["inspectQuarantine"]
+  > = async (current) => {
+    const listed = await manifests.list(current.contentRootBindingId);
+    if (!listed.ok) return listed;
+    return {
+      ok: true,
+      value: createInventory(
+        current,
+        listed.value
+          .filter((manifest) => manifest.state === "quarantined")
+          .map((manifest) => ({
+            recoveryObjectId: manifest.recoveryObjectId,
+            fileIdentity: `file_${manifest.recoveryObjectId}`,
+            sha256: manifest.sourceSha256,
+            byteLength: BigInt(manifest.byteLength)
+          }))
+      )
+    };
+  }
 ) {
   return new EngineeringRecoveryRootRepositoryV2({
     binding,
     globalRecords,
     manifests,
+    inspectQuarantine,
     isGrantCurrent,
     now: () => "2099-01-01T00:00:00.000Z"
   });
+}
+
+function createInventory(
+  binding: ReturnType<typeof createBinding>,
+  objects: EngineeringQuarantineInventoryV2["objects"] = []
+): EngineeringQuarantineInventoryV2 {
+  return {
+    schemaVersion: "3.0",
+    kind: "engineering_quarantine_inventory",
+    recoveryRootBindingId: binding.recoveryRootBindingId,
+    grantRevision: binding.grantRevision,
+    objects
+  };
 }
 
 function createBinding(changes: Record<string, unknown> = {}) {

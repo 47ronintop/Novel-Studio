@@ -1,7 +1,9 @@
 import {
+  ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION,
   ENGINEERING_MUTATION_V2_SCHEMA_VERSION,
   canonicalizeEngineeringMutationV2Json,
-  sha256EngineeringMutationTextV2
+  sha256EngineeringMutationTextV2,
+  type EngineeringQuarantineInventoryV2
 } from "./engineering-file-mutation-port-v2.js";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 import {
@@ -57,6 +59,7 @@ export interface EngineeringRecoveryRootScanV2 {
     | "binding_revoked"
     | "orphaned_global_record"
     | "orphaned_manifest"
+    | "orphaned_physical_object"
     | "manifest_mismatch"
     | "unknown_record"
     | "authentication_failed"
@@ -82,6 +85,10 @@ export interface EngineeringRecoveryRootRepositoryV2Options {
   readonly binding: VolumeLocalRecoveryBindingV2;
   readonly globalRecords: EngineeringRecoveryRootStoreV2<EngineeringRecoveryGlobalRecordV2>;
   readonly manifests: EngineeringRecoveryRootStoreV2<EngineeringRecoveryObjectManifestV2>;
+  /** Native, no-follow inventory. Omission or invalid evidence keeps recovery fail closed. */
+  readonly inspectQuarantine?: (
+    binding: VolumeLocalRecoveryBindingV2
+  ) => Promise<Result<EngineeringQuarantineInventoryV2, UnifiedError>>;
   readonly isGrantCurrent?: (binding: VolumeLocalRecoveryBindingV2) => Promise<boolean>;
   readonly now?: () => string;
   readonly traceId?: string;
@@ -186,11 +193,41 @@ export class EngineeringRecoveryRootRepositoryV2 {
     const manifests = await this.options.manifests.list(binding.value.contentRootBindingId);
     if (!globals.ok || !manifests.ok)
       return scanBlocked(["unknown_record"], this.traceId, binding.value);
+    if (this.options.inspectQuarantine === undefined)
+      return scanBlocked(["unknown_record"], this.traceId, binding.value);
+    let inventory: Result<EngineeringQuarantineInventoryV2, UnifiedError>;
+    try {
+      inventory = await this.options.inspectQuarantine(binding.value);
+    } catch {
+      return scanBlocked(["unknown_record"], this.traceId, binding.value);
+    }
+    if (!inventory.ok || !isQuarantineInventory(inventory.value, binding.value))
+      return scanBlocked(["unknown_record"], this.traceId, binding.value);
     const reasons = new Set<EngineeringRecoveryRootScanV2["reasons"][number]>();
     const globalById = new Map(globals.value.map((record) => [record.recoveryObjectId, record]));
     const manifestById = new Map(
       manifests.value.map((manifest) => [manifest.recoveryObjectId, manifest])
     );
+    const physicalById = new Map(
+      inventory.value.objects.map((object) => [object.recoveryObjectId, object])
+    );
+    let physicalBytes = 0n;
+    for (const object of inventory.value.objects) {
+      physicalBytes += object.byteLength;
+      const manifest = manifestById.get(object.recoveryObjectId);
+      const record = globalById.get(object.recoveryObjectId);
+      if (manifest === undefined && record === undefined) {
+        reasons.add("orphaned_physical_object");
+      } else if (
+        manifest !== undefined &&
+        record !== undefined &&
+        (manifest.state !== "quarantined" ||
+          object.sha256 !== manifest.sourceSha256 ||
+          object.byteLength !== BigInt(manifest.byteLength))
+      ) {
+        reasons.add("manifest_mismatch");
+      }
+    }
     let usedBytes = 0;
     for (const record of globals.value) {
       if (!isAuthenticatedGlobalRecord(record)) {
@@ -211,9 +248,14 @@ export class EngineeringRecoveryRootRepositoryV2 {
         continue;
       }
       if (!globalById.has(manifest.recoveryObjectId)) reasons.add("orphaned_manifest");
+      if (manifest.state === "quarantined" && !physicalById.has(manifest.recoveryObjectId))
+        reasons.add("manifest_mismatch");
       if (manifest.state !== "purged") usedBytes += manifest.byteLength;
     }
-    if (usedBytes > binding.value.capacityBytes - binding.value.reservedBytes)
+    if (
+      usedBytes > binding.value.capacityBytes - binding.value.reservedBytes ||
+      physicalBytes > BigInt(binding.value.capacityBytes - binding.value.reservedBytes)
+    )
       reasons.add("capacity_exceeded");
     const reasonsArray = [...reasons].sort() as EngineeringRecoveryRootScanV2["reasons"];
     const unsigned = {
@@ -698,6 +740,38 @@ function isAuthenticatedGlobalRecord(value: EngineeringRecoveryGlobalRecordV2): 
   );
 }
 
+function isQuarantineInventory(
+  value: unknown,
+  binding: VolumeLocalRecoveryBindingV2
+): value is EngineeringQuarantineInventoryV2 {
+  if (
+    !hasExactKeys(value, quarantineInventoryKeys) ||
+    value["schemaVersion"] !== ENGINEERING_FILE_LIFECYCLE_V2_SCHEMA_VERSION ||
+    value["kind"] !== "engineering_quarantine_inventory" ||
+    value["recoveryRootBindingId"] !== binding.recoveryRootBindingId ||
+    value["grantRevision"] !== binding.grantRevision ||
+    !Array.isArray(value["objects"])
+  ) {
+    return false;
+  }
+  const ids = new Set<string>();
+  for (const object of value["objects"]) {
+    if (
+      !hasExactKeys(object, quarantineInventoryObjectKeys) ||
+      !isStableId(object["recoveryObjectId"]) ||
+      ids.has(object["recoveryObjectId"]) ||
+      !isStableId(object["fileIdentity"]) ||
+      !isSha256(object["sha256"]) ||
+      typeof object["byteLength"] !== "bigint" ||
+      object["byteLength"] < 0n
+    ) {
+      return false;
+    }
+    ids.add(object["recoveryObjectId"]);
+  }
+  return true;
+}
+
 function scanBlocked(
   reasons: EngineeringRecoveryRootScanV2["reasons"],
   traceId: string,
@@ -814,6 +888,19 @@ const recordInputKeys = [
   "sideEffectChecksum",
   "sourceSha256",
   "transactionId"
+] as const;
+const quarantineInventoryKeys = [
+  "grantRevision",
+  "kind",
+  "objects",
+  "recoveryRootBindingId",
+  "schemaVersion"
+] as const;
+const quarantineInventoryObjectKeys = [
+  "byteLength",
+  "fileIdentity",
+  "recoveryObjectId",
+  "sha256"
 ] as const;
 const restorePreviewInputKeys = [
   "pathAllowed",

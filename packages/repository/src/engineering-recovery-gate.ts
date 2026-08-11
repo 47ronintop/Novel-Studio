@@ -27,6 +27,7 @@ export type EngineeringRecoveryRootGateReasonV2 =
   | "binding_revoked"
   | "orphaned_global_record"
   | "orphaned_manifest"
+  | "orphaned_physical_object"
   | "manifest_mismatch"
   | "capacity_exceeded";
 
@@ -141,6 +142,7 @@ export class EngineeringRecoveryGateV2 {
       readonly token: object;
       readonly input: EngineeringRecoveryMutationLeaseInputV2;
       readonly kind: EngineeringRecoveryMutationLeaseV2["kind"];
+      readonly journalKind: "ordinary" | "lifecycle";
     }>
   >();
   private readonly now: () => string;
@@ -209,10 +211,11 @@ export class EngineeringRecoveryGateV2 {
     if (!evaluated.ok) return evaluated;
     // A concurrent acquirer may have completed its scan while this lease was scanning.
     if (this.leases.has(parsed.contentRootBindingId)) return leaseUnavailable(this.traceId);
-    if (!isExactUncommittedPrepared(evaluated.value, parsed)) {
+    const ordinaryJournal = isExactUncommittedPrepared(evaluated.value, parsed);
+    if (!ordinaryJournal) {
       if (
         this.options.verifyLifecycleLease === undefined ||
-        evaluated.value.journals.some((journal) => journal.commit !== null)
+        evaluated.value.journals.some((journal) => journal.commit === null)
       )
         return leaseRejected(this.traceId);
       const verifyLifecycleLease = this.options.verifyLifecycleLease;
@@ -221,7 +224,12 @@ export class EngineeringRecoveryGateV2 {
       if (!lifecycle.ok || lifecycle.value !== true) return leaseRejected(this.traceId);
     }
     const token = Object.freeze({});
-    const active = freeze({ token, input: parsed, kind });
+    const active = freeze({
+      token,
+      input: parsed,
+      kind,
+      journalKind: ordinaryJournal ? ("ordinary" as const) : ("lifecycle" as const)
+    });
     this.leases.set(parsed.contentRootBindingId, active);
     return ok(
       freeze({
@@ -242,6 +250,7 @@ export class EngineeringRecoveryGateV2 {
       readonly token: object;
       readonly input: EngineeringRecoveryMutationLeaseInputV2;
       readonly kind: EngineeringRecoveryMutationLeaseV2["kind"];
+      readonly journalKind: "ordinary" | "lifecycle";
     }>
   ): Promise<Result<void, UnifiedError>> {
     if (this.leases.get(active.input.contentRootBindingId) !== active) {
@@ -249,9 +258,20 @@ export class EngineeringRecoveryGateV2 {
     }
     const evaluated = await this.evaluateRoot(active.input.contentRootBindingId);
     if (!evaluated.ok) return evaluated;
-    return isExactUncommittedPrepared(evaluated.value, active.input)
-      ? ok(undefined)
-      : leaseRejected(this.traceId);
+    if (active.journalKind === "ordinary") {
+      return isExactUncommittedPrepared(evaluated.value, active.input)
+        ? ok(undefined)
+        : leaseRejected(this.traceId);
+    }
+    if (
+      this.options.verifyLifecycleLease === undefined ||
+      evaluated.value.journals.some((journal) => journal.commit === null)
+    ) {
+      return leaseRejected(this.traceId);
+    }
+    const verifyLifecycleLease = this.options.verifyLifecycleLease;
+    const lifecycle = await safely(() => verifyLifecycleLease(active.input));
+    return lifecycle.ok && lifecycle.value === true ? ok(undefined) : leaseRejected(this.traceId);
   }
 
   private async evaluateRoot(contentRootBindingId: string): Promise<
@@ -595,6 +615,7 @@ function isVolumeLocalRecoveryScan(value: unknown): value is {
         "binding_revoked",
         "orphaned_global_record",
         "orphaned_manifest",
+        "orphaned_physical_object",
         "manifest_mismatch",
         "capacity_exceeded"
       ].includes(reason as string)

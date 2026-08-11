@@ -226,6 +226,27 @@ function createRepository(
     binding,
     globalRecords: stores.globalRecords,
     manifests: stores.manifests,
+    inspectQuarantine: async (current) => {
+      const listed = await stores.manifests.list(current.contentRootBindingId);
+      if (!listed.ok) return listed;
+      return {
+        ok: true,
+        value: {
+          schemaVersion: "3.0",
+          kind: "engineering_quarantine_inventory",
+          recoveryRootBindingId: current.recoveryRootBindingId,
+          grantRevision: current.grantRevision,
+          objects: listed.value
+            .filter((manifest) => manifest.state === "quarantined")
+            .map((manifest) => ({
+              recoveryObjectId: manifest.recoveryObjectId,
+              fileIdentity: `file_${manifest.recoveryObjectId}`,
+              sha256: manifest.sourceSha256,
+              byteLength: BigInt(manifest.byteLength)
+            }))
+        }
+      };
+    },
     isGrantCurrent: async () => true,
     now: () => "2099-01-01T00:00:00.000Z"
   });
