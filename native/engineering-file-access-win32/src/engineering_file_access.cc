@@ -4842,9 +4842,111 @@ napi_value quarantineEngineeringFileV2(napi_env env, napi_callback_info info) {
 
 napi_value restoreEngineeringFileV2(napi_env env, napi_callback_info info) {
 #ifdef _WIN32
-  try { size_t argc=3;napi_value argv[3];bool a=false,b=false;uint64_t rootId=0,recoveryId=0;if(napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr)!=napi_ok||argc!=3||napi_get_value_bigint_uint64(env,argv[0],&rootId,&a)!=napi_ok||!a||napi_get_value_bigint_uint64(env,argv[1],&recoveryId,&b)!=napi_ok||!b){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}LifecycleRequest request{};if(!parseLifecycleRequest(env,argv[2],&request)||request.operationKind!="restore_file"||request.recoveryObjectId.empty()||request.targetProof!="absent"){throwAccessError(env,AccessError::kInvalidArgument);return nullptr;}RecoveryRootSession recovery{};RootSession content{};AccessError result=recoveryRootSnapshot(recoveryId,&recovery);if(result==AccessError::kOk)result=rootSessionSnapshot(rootId,&content);if(result==AccessError::kOk&&(recovery.contentRootId!=rootId||recovery.recoveryRootBindingId!=request.recoveryRootBindingId||recovery.grantRevision!=request.recoveryGrantRevision||!sameVolume(recovery.identity,content.identity)))result=AccessError::kPrecondition;std::wstring target;std::vector<std::wstring> seg;if(!utf8ToWide(request.relativeTarget,&target)||!parseRelativePath(target,false,&seg)){throwAccessError(env,AccessError::kUnsafePath);return nullptr;}const std::wstring leaf=seg.back();seg.pop_back();std::wstring parent;for(size_t i=0;i<seg.size();++i){if(i)parent+=L'/';parent+=seg[i];}HANDLE pr=INVALID_HANDLE_VALUE,rr=INVALID_HANDLE_VALUE,obj=INVALID_HANDLE_VALUE;if(result==AccessError::kOk)result=openMutationDirectory(rootId,parent,&pr);if(result==AccessError::kOk)result=openRecoveryDirectory(recoveryId,L"",&rr);ScopedHandle ph(pr),rh(rr);if(result==AccessError::kOk)result=validateRecoveryRootOwnership(rh.get(),recovery);if(result==AccessError::kOk)result=checkRelativeLeafAbsent(ph.get(),leaf);const std::wstring objectLeaf(request.recoveryObjectId.begin(),request.recoveryObjectId.end());if(result==AccessError::kOk)result=openMutationLeafWithAccess(rh.get(),objectLeaf,FILE_READ_DATA|FILE_READ_ATTRIBUTES|DELETE|SYNCHRONIZE,&obj);ScopedHandle oh(obj);if(result==AccessError::kOk)result=renameOpenedFileCreateOnly(oh.get(),ph.get(),leaf);if(result==AccessError::kOk&&(!flushDurably(rh.get(),DurableFlushKind::kDirectory)||!flushDurably(ph.get(),DurableFlushKind::kDirectory)))result=AccessError::kDurability;if(result!=AccessError::kOk){throwAccessError(env,result==AccessError::kPrecondition?AccessError::kRecoveryRequired:result);return nullptr;}napi_value out;if(!makeLifecycleReceipt(env,request,"restored",request.recoveryObjectId,&out)){throwAccessError(env,AccessError::kIo);return nullptr;}return out;}catch(...){throwAccessError(env,AccessError::kIo);return nullptr;}
+  try {
+    size_t argc = 3;
+    napi_value argv[3];
+    bool rootLossless = false;
+    bool recoveryLossless = false;
+    uint64_t rootId = 0;
+    uint64_t recoveryId = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 3 ||
+        napi_get_value_bigint_uint64(env, argv[0], &rootId, &rootLossless) != napi_ok || !rootLossless ||
+        napi_get_value_bigint_uint64(env, argv[1], &recoveryId, &recoveryLossless) != napi_ok ||
+        !recoveryLossless) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    LifecycleRequest request{};
+    if (!parseLifecycleRequest(env, argv[2], &request) || request.operationKind != "restore_file" ||
+        request.recoveryObjectId.empty() || request.targetProof != "absent") {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    RecoveryRootSession recovery{};
+    RootSession content{};
+    AccessError result = recoveryRootSnapshot(recoveryId, &recovery);
+    if (result == AccessError::kOk) result = rootSessionSnapshot(rootId, &content);
+    if (result == AccessError::kOk &&
+        (recovery.contentRootId != rootId ||
+         recovery.recoveryRootBindingId != request.recoveryRootBindingId ||
+         recovery.grantRevision != request.recoveryGrantRevision ||
+         !sameVolume(recovery.identity, content.identity))) {
+      result = AccessError::kPrecondition;
+    }
+    std::wstring target;
+    std::vector<std::wstring> segments;
+    if (!utf8ToWide(request.relativeTarget, &target) ||
+        !parseRelativePath(target, false, &segments)) {
+      throwAccessError(env, AccessError::kUnsafePath);
+      return nullptr;
+    }
+    const std::wstring leaf = segments.back();
+    segments.pop_back();
+    std::wstring parentPath;
+    for (size_t index = 0; index < segments.size(); ++index) {
+      if (index != 0) parentPath += L'/';
+      parentPath += segments[index];
+    }
+    HANDLE parentRaw = INVALID_HANDLE_VALUE;
+    HANDLE recoveryRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) {
+      result = openMutationDirectory(rootId, parentPath, &parentRaw);
+    }
+    if (result == AccessError::kOk) result = openRecoveryDirectory(recoveryId, L"", &recoveryRaw);
+    ScopedHandle parent(parentRaw);
+    ScopedHandle recoveryHandle(recoveryRaw);
+    if (result == AccessError::kOk) {
+      result = validateRecoveryRootOwnership(recoveryHandle.get(), recovery);
+    }
+    if (result == AccessError::kOk) result = checkRelativeLeafAbsent(parent.get(), leaf);
+    BY_HANDLE_FILE_INFORMATION parentIdentity{};
+    if (result == AccessError::kOk &&
+        !GetFileInformationByHandle(parent.get(), &parentIdentity)) {
+      result = AccessError::kIo;
+    }
+    const std::wstring objectLeaf(
+        request.recoveryObjectId.begin(), request.recoveryObjectId.end());
+    HANDLE objectRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) {
+      result = openMutationLeafWithAccess(
+          recoveryHandle.get(), objectLeaf,
+          FILE_READ_DATA | FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE, &objectRaw);
+    }
+    ScopedHandle object(objectRaw);
+    if (result == AccessError::kOk && !parent.close()) result = AccessError::kIo;
+    HANDLE handoffRaw = INVALID_HANDLE_VALUE;
+    if (result == AccessError::kOk) {
+      result = openMutationHandoffDirectory(rootId, parentPath, parentIdentity, &handoffRaw);
+    }
+    ScopedHandle handoff(handoffRaw);
+    if (result == AccessError::kOk) result = checkRelativeLeafAbsent(handoff.get(), leaf);
+    if (result == AccessError::kOk) {
+      result = renameOpenedFileCreateOnly(object.get(), handoff.get(), leaf);
+    }
+    if (result == AccessError::kOk &&
+        (!flushDurably(recoveryHandle.get(), DurableFlushKind::kDirectory) ||
+         !flushDurably(handoff.get(), DurableFlushKind::kDirectory))) {
+      result = AccessError::kDurability;
+    }
+    if (result != AccessError::kOk) {
+      throwAccessError(
+          env, result == AccessError::kPrecondition ? AccessError::kRecoveryRequired : result);
+      return nullptr;
+    }
+    napi_value output;
+    if (!makeLifecycleReceipt(env, request, "restored", request.recoveryObjectId, &output)) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    return output;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
 #else
-  (void)info;throwAccessError(env,AccessError::kUnavailable);return nullptr;
+  (void)info;
+  throwAccessError(env, AccessError::kUnavailable);
+  return nullptr;
 #endif
 }
 

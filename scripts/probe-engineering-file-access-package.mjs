@@ -844,8 +844,11 @@ export async function probeMutationV2Abi(addon) {
           quarantineRequest,
           "after"
         );
+        const quarantinedBeforeRestore = addon.inspectEngineeringQuarantineV2(
+          recoveryBinding.recoveryRootId
+        );
         assertQuarantineInventory(
-          addon.inspectEngineeringQuarantineV2(recoveryBinding.recoveryRootId),
+          quarantinedBeforeRestore,
           lifecycleBase.recoveryRootBindingId,
           lifecycleBase.recoveryGrantRevision,
           [lifecycleBase.recoveryObjectId]
@@ -856,13 +859,50 @@ export async function probeMutationV2Abi(addon) {
           quarantineRequest,
           "after"
         );
-        addon.restoreEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, {
+        const restoreRequest = {
           ...lifecycleBase,
           operationKind: "restore_file",
           relativeSource: "",
           relativeTarget: "docs/lifecycle/Moved.txt",
           targetProof: "absent"
+        };
+        const restoreCollision = Buffer.from("B8 restore collision bytes\n", "utf8");
+        await writeFile(join(docs, "lifecycle", "Moved.txt"), restoreCollision, {
+          flag: "wx",
+          flush: true
         });
+        await expectMutationFailure(
+          () =>
+            addon.restoreEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, restoreRequest),
+          "restore over occupied target"
+        );
+        assertExactNativeBytes(
+          addon.readFile(rootId, "docs/lifecycle/Moved.txt"),
+          restoreCollision,
+          "B8 restore collision"
+        );
+        const quarantinedAfterRestoreConflict = addon.inspectEngineeringQuarantineV2(
+          recoveryBinding.recoveryRootId
+        );
+        assertQuarantineInventory(
+          quarantinedAfterRestoreConflict,
+          lifecycleBase.recoveryRootBindingId,
+          lifecycleBase.recoveryGrantRevision,
+          [lifecycleBase.recoveryObjectId]
+        );
+        const quarantinedObjectBeforeRestore = quarantinedBeforeRestore.objects[0];
+        const quarantinedObjectAfterRestoreConflict = quarantinedAfterRestoreConflict.objects[0];
+        if (
+          quarantinedObjectAfterRestoreConflict.fileIdentity !==
+            quarantinedObjectBeforeRestore.fileIdentity ||
+          quarantinedObjectAfterRestoreConflict.sha256 !== quarantinedObjectBeforeRestore.sha256 ||
+          quarantinedObjectAfterRestoreConflict.byteLength !==
+            quarantinedObjectBeforeRestore.byteLength
+        ) {
+          throw new Error("Batch 8 restore conflict changed the quarantined object");
+        }
+        await rm(join(docs, "lifecycle", "Moved.txt"));
+        addon.restoreEngineeringFileV2(rootId, recoveryBinding.recoveryRootId, restoreRequest);
         assertQuarantineInventory(
           addon.inspectEngineeringQuarantineV2(recoveryBinding.recoveryRootId),
           lifecycleBase.recoveryRootBindingId,
@@ -875,6 +915,9 @@ export async function probeMutationV2Abi(addon) {
           "B8 restore"
         );
         const restored = addon.inspectEngineeringFileSnapshotV2(rootId, "docs/lifecycle/Moved.txt");
+        if (restored.manifest.fileIdentity !== quarantinedObjectBeforeRestore.fileIdentity) {
+          throw new Error("Batch 8 restore did not preserve the quarantined file identity");
+        }
         const purgeRequest = {
           ...lifecycleBase,
           operationId: "op-b8-purge-source",

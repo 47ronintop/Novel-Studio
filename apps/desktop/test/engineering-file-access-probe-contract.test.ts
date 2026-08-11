@@ -288,6 +288,34 @@ describe("engineering file access development probe contract", () => {
     );
   });
 
+  test("reopens the restore target parent for the create-only rename handoff", async () => {
+    const nativeSource = await readFile(
+      "native/engineering-file-access-win32/src/engineering_file_access.cc",
+      "utf8"
+    );
+    const restoreStart = nativeSource.indexOf("napi_value restoreEngineeringFileV2");
+    const restoreEnd = nativeSource.indexOf(
+      "napi_value purgeEngineeringQuarantineObjectV2",
+      restoreStart
+    );
+    expect(restoreStart).toBeGreaterThanOrEqual(0);
+    expect(restoreEnd).toBeGreaterThan(restoreStart);
+
+    const restoreSource = nativeSource.slice(restoreStart, restoreEnd);
+    expect(restoreSource).toContain("GetFileInformationByHandle(parent.get(), &parentIdentity)");
+    expect(restoreSource).toContain("!parent.close()");
+    expect(restoreSource).toContain(
+      "openMutationHandoffDirectory(rootId, parentPath, parentIdentity, &handoffRaw)"
+    );
+    expect(restoreSource).toContain("checkRelativeLeafAbsent(handoff.get(), leaf)");
+    expect(restoreSource).toContain(
+      "renameOpenedFileCreateOnly(object.get(), handoff.get(), leaf)"
+    );
+    expect(restoreSource).not.toContain(
+      "renameOpenedFileCreateOnly(object.get(), parent.get(), leaf)"
+    );
+  });
+
   test("retains lifecycle markers until durable WAL finalize and exposes bounded recovery primitives", async () => {
     const nativeSource = await readFile(
       "native/engineering-file-access-win32/src/engineering_file_access.cc",
