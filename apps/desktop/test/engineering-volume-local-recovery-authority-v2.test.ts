@@ -208,9 +208,7 @@ function authorityOptions(
       retentionDays: 30
     },
     addonLoader: loadedAddon(input.addon),
-    inspectCapacity:
-      input.inspectCapacity ??
-      (async () => ok({ capacityBytes: 32 * 1024 * 1024, reservedBytes: 1024 })),
+    ...(input.inspectCapacity === undefined ? {} : { inspectCapacity: input.inspectCapacity }),
     authenticateEvidence: input.authenticateEvidence ?? (() => ok(undefined)),
     minimumFreeBytes: input.minimumFreeBytes ?? 1024,
     now: () => "2026-08-11T04:00:00.000Z",
@@ -262,6 +260,10 @@ function recoveryAddon() {
     buildIndex: vi.fn(),
     openEngineeringRecoveryRootV2: vi.fn(() => nativeEvidence(nextRecoveryRootId++)),
     closeEngineeringRecoveryRootV2: vi.fn(),
+    inspectEngineeringRecoveryRootCapacityV2: vi.fn(() => ({
+      capacityBytes: 32n * 1024n * 1024n,
+      reservedBytes: 1024n
+    })),
     openEngineeringStateRoot: vi.fn(),
     openEngineeringStateRootBoundToRecoveryV2: vi.fn(() => nextStateRootId++),
     closeEngineeringStateRoot: vi.fn(),

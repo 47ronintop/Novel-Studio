@@ -604,6 +604,7 @@ export async function probeMutationV2Abi(addon) {
     "openEngineeringRecoveryRootV2",
     "closeEngineeringRecoveryRootV2",
     "openEngineeringStateRootBoundToRecoveryV2",
+    "inspectEngineeringRecoveryRootCapacityV2",
     "inspectEngineeringQuarantineV2",
     "moveEngineeringPathV2",
     "quarantineEngineeringFileV2",
@@ -787,6 +788,18 @@ export async function probeMutationV2Abi(addon) {
         recoveryMarkerChecksum
       );
       try {
+        const recoveryCapacity = addon.inspectEngineeringRecoveryRootCapacityV2(
+          recoveryBinding.recoveryRootId
+        );
+        if (
+          typeof recoveryCapacity?.capacityBytes !== "bigint" ||
+          typeof recoveryCapacity?.reservedBytes !== "bigint" ||
+          recoveryCapacity.capacityBytes <= 0n ||
+          recoveryCapacity.reservedBytes < 0n ||
+          recoveryCapacity.reservedBytes > recoveryCapacity.capacityBytes
+        ) {
+          throw new Error("Batch 8 recovery capacity evidence is invalid");
+        }
         const recoveryStateRootId = addon.openEngineeringStateRootBoundToRecoveryV2(
           recoveryBinding.recoveryRootId
         );

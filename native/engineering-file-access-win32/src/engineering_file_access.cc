@@ -516,6 +516,36 @@ bool canonicalRootPathChecksum(HANDLE handle, std::string* output) {
   return wideToUtf8(normalized, &utf8) && sha256Hex(utf8, output);
 }
 
+AccessError volumeCapacityForHandle(HANDLE handle, uint64_t* capacityBytes,
+                                    uint64_t* reservedBytes) {
+  const DWORD required = GetFinalPathNameByHandleW(
+      handle, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
+  if (required == 0 || required > static_cast<DWORD>(kMaxRootUtf16Units)) {
+    return AccessError::kIo;
+  }
+  std::vector<wchar_t> buffer(static_cast<size_t>(required) + 1, L'\0');
+  const DWORD written = GetFinalPathNameByHandleW(
+      handle, buffer.data(), static_cast<DWORD>(buffer.size()),
+      FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
+  if (written == 0 || written >= static_cast<DWORD>(buffer.size())) {
+    return AccessError::kIo;
+  }
+  const std::wstring finalPath(buffer.data(), written);
+  const size_t volumeEnd = finalPath.find(L"}\\");
+  if (volumeEnd == std::wstring::npos) return AccessError::kIo;
+  const std::wstring volumeRoot = finalPath.substr(0, volumeEnd + 2);
+  ULARGE_INTEGER available{};
+  ULARGE_INTEGER capacity{};
+  ULARGE_INTEGER freeBytes{};
+  if (!GetDiskFreeSpaceExW(volumeRoot.c_str(), &available, &capacity, &freeBytes) ||
+      available.QuadPart > capacity.QuadPart) {
+    return AccessError::kIo;
+  }
+  *capacityBytes = capacity.QuadPart;
+  *reservedBytes = capacity.QuadPart - available.QuadPart;
+  return AccessError::kOk;
+}
+
 bool readUtf16String(napi_env env, napi_value value, size_t maxUnits, std::wstring* output) {
   size_t length = 0;
   if (napi_get_value_string_utf16(env, value, nullptr, 0, &length) != napi_ok ||
@@ -4289,6 +4319,60 @@ napi_value closeEngineeringRecoveryRootV2(napi_env env, napi_callback_info info)
 #endif
 }
 
+napi_value inspectEngineeringRecoveryRootCapacityV2(napi_env env, napi_callback_info info) {
+#ifdef _WIN32
+  try {
+    size_t argc = 1;
+    napi_value argv[1];
+    bool lossless = false;
+    uint64_t recoveryRootId = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 1 ||
+        napi_get_value_bigint_uint64(env, argv[0], &recoveryRootId, &lossless) != napi_ok ||
+        !lossless) {
+      throwAccessError(env, AccessError::kInvalidArgument);
+      return nullptr;
+    }
+    RecoveryRootSession recovery{};
+    HANDLE rootRaw = INVALID_HANDLE_VALUE;
+    AccessError result = recoveryRootSnapshot(recoveryRootId, &recovery);
+    if (result == AccessError::kOk) result = openRecoveryDirectory(recoveryRootId, L"", &rootRaw);
+    ScopedHandle root(rootRaw);
+    if (result == AccessError::kOk) result = validateRecoveryRootOwnership(root.get(), recovery);
+    uint64_t capacityBytes = 0;
+    uint64_t reservedBytes = 0;
+    if (result == AccessError::kOk) {
+      result = volumeCapacityForHandle(root.get(), &capacityBytes, &reservedBytes);
+    }
+    if (result != AccessError::kOk) {
+      throwAccessError(env, result);
+      return nullptr;
+    }
+    napi_value output;
+    napi_value capacity;
+    napi_value reserved;
+    if (napi_create_object(env, &output) != napi_ok ||
+        napi_create_bigint_uint64(env, capacityBytes, &capacity) != napi_ok ||
+        napi_create_bigint_uint64(env, reservedBytes, &reserved) != napi_ok ||
+        napi_set_named_property(env, output, "capacityBytes", capacity) != napi_ok ||
+        napi_set_named_property(env, output, "reservedBytes", reserved) != napi_ok) {
+      throwAccessError(env, AccessError::kIo);
+      return nullptr;
+    }
+    return output;
+  } catch (const std::bad_alloc&) {
+    throwAccessError(env, AccessError::kResourceLimit);
+    return nullptr;
+  } catch (...) {
+    throwAccessError(env, AccessError::kIo);
+    return nullptr;
+  }
+#else
+  (void)info;
+  throwAccessError(env, AccessError::kUnavailable);
+  return nullptr;
+#endif
+}
+
 napi_value inspectEngineeringQuarantineV2(napi_env env, napi_callback_info info) {
 #ifdef _WIN32
   try {
@@ -7053,6 +7137,7 @@ napi_value Init(napi_env env, napi_value exports) {
     {"unlinkEngineeringStateFileNoFollow", nullptr, unlinkEngineeringStateFileNoFollow, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"openEngineeringRecoveryRootV2", nullptr, openEngineeringRecoveryRootV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"closeEngineeringRecoveryRootV2", nullptr, closeEngineeringRecoveryRootV2, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"inspectEngineeringRecoveryRootCapacityV2", nullptr, inspectEngineeringRecoveryRootCapacityV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"inspectEngineeringQuarantineV2", nullptr, inspectEngineeringQuarantineV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"moveEngineeringPathV2", nullptr, moveEngineeringPathV2, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"quarantineEngineeringFileV2", nullptr, quarantineEngineeringFileV2, nullptr, nullptr, nullptr, napi_default, nullptr},

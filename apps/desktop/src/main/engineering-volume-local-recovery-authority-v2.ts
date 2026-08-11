@@ -66,7 +66,8 @@ export interface OpenDesktopEngineeringVolumeLocalRecoveryAuthorityV2Options {
   readonly contentRoot: DesktopEngineeringContentRootIdentityV2;
   readonly grant: DesktopEngineeringRecoveryAuthorityGrantV2;
   readonly addonLoader: EngineeringFileAccessAddonLoader;
-  readonly inspectCapacity: DesktopEngineeringRecoveryCapacityInspectorV2;
+  /** Test/installer seam. Production defaults to the same addon's handle-bound capacity ABI. */
+  readonly inspectCapacity?: DesktopEngineeringRecoveryCapacityInspectorV2;
   readonly authenticateEvidence: VolumeLocalRecoveryEvidenceAuthenticatorV2;
   readonly minimumFreeBytes?: number;
   readonly now?: () => string;
@@ -82,6 +83,7 @@ interface EngineeringRecoveryAuthorityNativeAddon {
     ownershipMarkerChecksum: string
   ) => unknown;
   readonly closeEngineeringRecoveryRootV2: (recoveryRootId: bigint) => unknown;
+  readonly inspectEngineeringRecoveryRootCapacityV2: (recoveryRootId: bigint) => unknown;
 }
 
 interface NativeRecoveryRootEvidenceV2 {
@@ -116,6 +118,8 @@ export async function openDesktopEngineeringVolumeLocalRecoveryAuthorityV2(
   if (addon === undefined) {
     return unavailable("ENGINEERING_RECOVERY_AUTHORITY_NATIVE_UNAVAILABLE", traceId);
   }
+  const inspectCapacityPort =
+    options.inspectCapacity ?? createNativeCapacityInspector(addon, traceId);
 
   const opened = openNativeRecoveryRoot(addon, options);
   if (!opened.ok) return unavailable(opened.code, traceId);
@@ -131,7 +135,7 @@ export async function openDesktopEngineeringVolumeLocalRecoveryAuthorityV2(
   };
 
   try {
-    const capacity = await inspectCapacity(options.inspectCapacity, native.recoveryRootId, traceId);
+    const capacity = await inspectCapacity(inspectCapacityPort, native.recoveryRootId, traceId);
     if (!capacity.ok) {
       closeRecoveryRoot(native.recoveryRootId);
       return capacity;
@@ -180,7 +184,7 @@ export async function openDesktopEngineeringVolumeLocalRecoveryAuthorityV2(
           return unavailable("ENGINEERING_RECOVERY_AUTHORITY_IDENTITY_DRIFT", traceId);
         }
         const currentCapacity = await inspectCapacity(
-          options.inspectCapacity,
+          inspectCapacityPort,
           fresh.value.recoveryRootId,
           traceId
         );
@@ -390,8 +394,39 @@ function asRecoveryAuthorityAddon(
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   return typeof record["openEngineeringRecoveryRootV2"] === "function" &&
-    typeof record["closeEngineeringRecoveryRootV2"] === "function"
+    typeof record["closeEngineeringRecoveryRootV2"] === "function" &&
+    typeof record["inspectEngineeringRecoveryRootCapacityV2"] === "function"
     ? (value as EngineeringRecoveryAuthorityNativeAddon)
+    : undefined;
+}
+
+function createNativeCapacityInspector(
+  addon: EngineeringRecoveryAuthorityNativeAddon,
+  traceId: string
+): DesktopEngineeringRecoveryCapacityInspectorV2 {
+  return async ({ recoveryRootId }) => {
+    let raw: unknown;
+    try {
+      raw = await Promise.resolve(addon.inspectEngineeringRecoveryRootCapacityV2(recoveryRootId));
+    } catch {
+      return unavailable("ENGINEERING_RECOVERY_AUTHORITY_CAPACITY_UNAVAILABLE", traceId);
+    }
+    if (!hasExactKeys(raw, capacityEvidenceKeys)) {
+      return unavailable("ENGINEERING_RECOVERY_AUTHORITY_CAPACITY_INVALID", traceId);
+    }
+    const capacityBytes = safeIntegerFromBigInt(raw["capacityBytes"]);
+    const reservedBytes = safeIntegerFromBigInt(raw["reservedBytes"]);
+    return capacityBytes !== undefined &&
+      reservedBytes !== undefined &&
+      reservedBytes <= capacityBytes
+      ? ok(Object.freeze({ capacityBytes, reservedBytes }))
+      : unavailable("ENGINEERING_RECOVERY_AUTHORITY_CAPACITY_INVALID", traceId);
+  };
+}
+
+function safeIntegerFromBigInt(value: unknown): number | undefined {
+  return typeof value === "bigint" && value >= 0n && value <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number(value)
     : undefined;
 }
 
@@ -501,3 +536,4 @@ const nativeEvidenceKeys = [
   "recoveryRootId",
   "volumeIdentity"
 ] as const;
+const capacityEvidenceKeys = ["capacityBytes", "reservedBytes"] as const;

@@ -198,11 +198,16 @@ describe("engineering file access development probe contract", () => {
     expect(nativeSource).toContain("napi_value finalizeEngineeringFileLifecycleOperationV2");
     expect(nativeSource).toContain("napi_value inspectEngineeringQuarantineV2");
     expect(nativeSource).toContain("napi_value openEngineeringStateRootBoundToRecoveryV2");
+    expect(nativeSource).toContain("napi_value inspectEngineeringRecoveryRootCapacityV2");
+    expect(nativeSource).toContain("GetDiskFreeSpaceExW(volumeRoot.c_str()");
     expect(nativeSource).toContain('makeString(env, "engineering_quarantine_inventory")');
     expect(nativeSource).toContain('name == L".novel-studio-engineering-v2"');
     expect(nativeSource).toContain("DuplicateHandle(GetCurrentProcess(), found->second.handle");
     const recoveryOpenStart = nativeSource.indexOf("AccessError openRecoveryDirectory");
-    const lifecycleParserStart = nativeSource.indexOf("bool readLifecycleString", recoveryOpenStart);
+    const lifecycleParserStart = nativeSource.indexOf(
+      "bool readLifecycleString",
+      recoveryOpenStart
+    );
     expect(nativeSource.slice(recoveryOpenStart, lifecycleParserStart)).not.toContain(
       "CreateFileW(session.path.c_str()"
     );
@@ -234,6 +239,9 @@ describe("engineering file access development probe contract", () => {
     );
     expect(nativeSource).toContain(
       '{"openEngineeringStateRootBoundToRecoveryV2", nullptr, openEngineeringStateRootBoundToRecoveryV2'
+    );
+    expect(nativeSource).toContain(
+      '{"inspectEngineeringRecoveryRootCapacityV2", nullptr, inspectEngineeringRecoveryRootCapacityV2'
     );
     expect(nativeSource).toContain(
       '{"resumeEngineeringFileLifecycleOperationV2", nullptr, resumeEngineeringFileLifecycleOperationV2'
