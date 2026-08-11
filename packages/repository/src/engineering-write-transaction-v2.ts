@@ -221,8 +221,31 @@ export interface EngineeringLifecycleWriteTransactionV2Options {
   readonly resolveRecoveryBinding?: (
     operation: EngineeringLifecycleWriteOperationV2
   ) => Promise<Result<EngineeringLifecycleRecoveryRootBindingV2, UnifiedError>>;
+  /** Persists the exact physical quarantine object only after native success and WAL progress. */
+  readonly recordQuarantine?: (
+    input: EngineeringLifecycleQuarantineRecordInputV2
+  ) => Promise<Result<unknown, UnifiedError>>;
+  /** Idempotently marks an existing quarantine record restored after native compensation. */
+  readonly recordQuarantineCompensation?: (
+    input: EngineeringLifecycleQuarantineCompensationRecordInputV2
+  ) => Promise<Result<unknown, UnifiedError>>;
   readonly now?: () => string;
   readonly traceId?: string;
+}
+
+export interface EngineeringLifecycleQuarantineRecordInputV2 {
+  readonly recoveryObjectId: string;
+  readonly transactionId: string;
+  readonly operationId: string;
+  readonly relativeIdentity: string;
+  readonly sourceSha256: string;
+  readonly byteLength: number;
+  readonly sideEffectChecksum: string;
+}
+
+export interface EngineeringLifecycleQuarantineCompensationRecordInputV2 {
+  readonly operation: EngineeringLifecycleWriteOperationV2;
+  readonly receipt: EngineeringFileLifecycleReceiptV2;
 }
 
 export interface EngineeringLifecycleWalScanV2 {
@@ -615,7 +638,12 @@ export class EngineeringLifecycleWriteTransactionV2 {
           if (current.request.operationKind === "move_file") {
             result = await this.invoke("move", current.request);
           } else if (current.request.operationKind === "delete_file") {
-            if (this.options.resolveRecoveryBinding === undefined)
+            if (
+              this.options.resolveRecoveryBinding === undefined ||
+              this.options.mutationPort.inspectQuarantine === undefined ||
+              this.options.recordQuarantine === undefined ||
+              this.options.recordQuarantineCompensation === undefined
+            )
               return lifecycleUnavailable(this.traceId);
             const recovery = await this.options.resolveRecoveryBinding(current);
             if (!recovery.ok) return recovery;
@@ -646,6 +674,10 @@ export class EngineeringLifecycleWriteTransactionV2 {
           });
           if (!advanced.ok) return advanced;
           journal = advanced.value;
+          if (current.request.operationKind === "delete_file") {
+            const recorded = await this.recordQuarantine(current, result.value);
+            if (!recorded.ok) return recorded;
+          }
         }
         const committed = await this.options.walRepository.commit({
           contentRootBindingId: prepared.value.contentRootBindingId,
@@ -857,6 +889,16 @@ export class EngineeringLifecycleWriteTransactionV2 {
       );
       if (!compensatedState.ok || compensatedState.value.state !== "before")
         return lifecycleRecoveryReviewRequired(this.traceId);
+      const operation = durable.prepared.operations[index];
+      if (operation?.request.operationKind === "delete_file") {
+        if (this.options.recordQuarantineCompensation === undefined)
+          return lifecycleUnavailable(this.traceId);
+        const marked = await this.options.recordQuarantineCompensation({
+          operation,
+          receipt: expectedReceipt
+        });
+        if (!marked.ok) return marked;
+      }
     }
 
     const rolledBack = await this.options.walRepository.rollback({
@@ -916,6 +958,47 @@ export class EngineeringLifecycleWriteTransactionV2 {
         this.traceId
       );
     return ok({ request: operation.request, recoveryBinding: resolved.value });
+  }
+
+  private async recordQuarantine(
+    operation: EngineeringLifecycleWriteOperationV2,
+    receipt: EngineeringFileLifecycleReceiptV2
+  ): Promise<Result<unknown, UnifiedError>> {
+    const inspect = this.options.mutationPort.inspectQuarantine;
+    const record = this.options.recordQuarantine;
+    if (
+      operation.request.operationKind !== "delete_file" ||
+      inspect === undefined ||
+      record === undefined
+    )
+      return lifecycleUnavailable(this.traceId);
+    const recoveryInput = await this.recoveryInputFor(operation);
+    if (!recoveryInput.ok) return recoveryInput;
+    if (recoveryInput.value.recoveryBinding === null) return lifecycleUnavailable(this.traceId);
+    const inventory = await inspect(recoveryInput.value.recoveryBinding);
+    if (!inventory.ok) return inventory;
+    const matches = inventory.value.objects.filter(
+      (candidate) => candidate.recoveryObjectId === operation.request.recoveryObjectId
+    );
+    const object = matches[0];
+    if (
+      matches.length !== 1 ||
+      object === undefined ||
+      object.fileIdentity !== operation.request.sourceFileIdentity ||
+      object.sha256 !== operation.request.sourceSha256 ||
+      object.byteLength > BigInt(Number.MAX_SAFE_INTEGER) ||
+      receipt.recoveryObjectId !== operation.request.recoveryObjectId
+    )
+      return lifecycleQuarantineRecordInvalid(this.traceId);
+    return record({
+      recoveryObjectId: operation.request.recoveryObjectId,
+      transactionId: operation.request.transactionId,
+      operationId: operation.request.operationId,
+      relativeIdentity: operation.request.relativeSource,
+      sourceSha256: operation.request.sourceSha256,
+      byteLength: Number(object.byteLength),
+      sideEffectChecksum: operation.request.recoverySideEffectChecksum
+    });
   }
 
   private async invoke(
@@ -1779,6 +1862,17 @@ function lifecycleUnavailable<T = never>(traceId: string): Result<T, UnifiedErro
       message: "The qualified Engineering lifecycle mutation backend is unavailable.",
       suggestedAction:
         "Keep the corresponding operation disabled until its native backend is qualified.",
+      traceId
+    })
+  );
+}
+
+function lifecycleQuarantineRecordInvalid<T = never>(traceId: string): Result<T, UnifiedError> {
+  return err(
+    storageError({
+      code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_QUARANTINE_RECORD_INVALID",
+      message: "The quarantined object does not match the exact durable delete operation.",
+      suggestedAction: "Keep recovery blocked and inspect the volume-local quarantine root.",
       traceId
     })
   );

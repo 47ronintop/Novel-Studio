@@ -207,6 +207,161 @@ describe("EngineeringWriteTransactionV2", () => {
   });
 });
 
+describe("EngineeringLifecycleWriteTransactionV2 quarantine records", () => {
+  test("fails closed before native quarantine when durable record hooks are unavailable", async () => {
+    const input = lifecycleTransactionInput(["delete_file"]);
+    const wal = new TestLifecycleWalRepository();
+    const quarantine = vi.fn();
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: { quarantine },
+      withoutQuarantineHooks: true
+    });
+
+    await expect(transaction.apply(input)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_UNAVAILABLE" }
+    });
+    expect(quarantine).not.toHaveBeenCalled();
+  });
+
+  test("records the exact physical object only after native quarantine and durable WAL progress", async () => {
+    const input = lifecycleTransactionInput(["delete_file"]);
+    const request = lifecycleOperationAt(input, 0).request;
+    const wal = new TestLifecycleWalRepository();
+    const quarantine = vi.fn(async () => ok(lifecycleReceipt(request)));
+    const inspectQuarantine = vi.fn(async () => ok(quarantineInventory(request, 37n)));
+    const recordQuarantine = vi.fn(async () => ok(undefined));
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: { quarantine, inspectQuarantine },
+      recordQuarantine
+    });
+
+    await expect(transaction.apply(input)).resolves.toMatchObject({
+      ok: true,
+      value: { committedAt: "2099-01-01T00:00:01.000Z" }
+    });
+    expect(recordQuarantine).toHaveBeenCalledWith({
+      recoveryObjectId: request.recoveryObjectId,
+      transactionId: request.transactionId,
+      operationId: request.operationId,
+      relativeIdentity: request.relativeSource,
+      sourceSha256: request.sourceSha256,
+      byteLength: 37,
+      sideEffectChecksum: request.recoverySideEffectChecksum
+    });
+    expect(quarantine.mock.invocationCallOrder[0]).toBeLessThan(
+      wal.appendProgress.mock.invocationCallOrder[0] ?? 0
+    );
+    expect(wal.appendProgress.mock.invocationCallOrder[0]).toBeLessThan(
+      inspectQuarantine.mock.invocationCallOrder[0] ?? 0
+    );
+    expect(inspectQuarantine.mock.invocationCallOrder[0]).toBeLessThan(
+      recordQuarantine.mock.invocationCallOrder[0] ?? 0
+    );
+    expect(recordQuarantine.mock.invocationCallOrder[0]).toBeLessThan(
+      wal.commit.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  test("keeps the WAL incomplete when physical quarantine evidence does not match", async () => {
+    const input = lifecycleTransactionInput(["delete_file"]);
+    const request = lifecycleOperationAt(input, 0).request;
+    const wal = new TestLifecycleWalRepository();
+    const recordQuarantine = vi.fn();
+    const inventory = quarantineInventory(request, 37n);
+    const physicalObject = inventory.objects[0];
+    if (physicalObject === undefined) throw new Error("missing quarantine fixture");
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        quarantine: async () => ok(lifecycleReceipt(request)),
+        inspectQuarantine: async () =>
+          ok({
+            ...inventory,
+            objects: [{ ...physicalObject, sha256: hash("drift") }]
+          })
+      },
+      recordQuarantine
+    });
+
+    await expect(transaction.apply(input)).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "ENGINEERING_LIFECYCLE_WRITE_TRANSACTION_V2_QUARANTINE_RECORD_INVALID"
+      }
+    });
+    expect(wal.current?.receipts).toHaveLength(1);
+    expect(wal.commit).not.toHaveBeenCalled();
+    expect(recordQuarantine).not.toHaveBeenCalled();
+  });
+
+  test("idempotently marks an existing record compensated after crash-before-record recovery", async () => {
+    const input = lifecycleTransactionInput(["delete_file"]);
+    const request = lifecycleOperationAt(input, 0).request;
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    await wal.appendProgress({
+      ...lifecycleLocator(),
+      receipt: lifecycleReceipt(request),
+      recordedAt: "2099-01-01T00:00:00.500Z"
+    });
+    const recordQuarantine = vi.fn();
+    const recordQuarantineCompensation = vi.fn(async () => ok(undefined));
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async () => ok(lifecycleState("after", request)),
+        compensateLifecycle: async () => ok(lifecycleState("before", request))
+      },
+      recordQuarantine,
+      recordQuarantineCompensation
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: true,
+      value: { rolledBackAt: "2099-01-01T00:00:01.000Z" }
+    });
+    expect(recordQuarantine).not.toHaveBeenCalled();
+    expect(recordQuarantineCompensation).toHaveBeenCalledWith({
+      operation: lifecycleOperationAt(input, 0),
+      receipt: lifecycleReceipt(request)
+    });
+    expect(wal.rollback).toHaveBeenCalledOnce();
+  });
+
+  test("does not silently roll back after a partial quarantine record transition failure", async () => {
+    const input = lifecycleTransactionInput(["delete_file"]);
+    const request = lifecycleOperationAt(input, 0).request;
+    const wal = new TestLifecycleWalRepository();
+    await wal.prepare(input);
+    await wal.appendProgress({
+      ...lifecycleLocator(),
+      receipt: lifecycleReceipt(request),
+      recordedAt: "2099-01-01T00:00:00.500Z"
+    });
+    const transaction = createLifecycleTransaction({
+      wal,
+      mutationPort: {
+        reconcileLifecycle: async () => ok(lifecycleState("after", request)),
+        compensateLifecycle: async () => ok(lifecycleState("before", request))
+      },
+      recordQuarantineCompensation: async () => ({
+        ok: false,
+        error: { code: "ENGINEERING_RECOVERY_RECORD_PARTIAL_FAILURE" } as never
+      })
+    });
+
+    await expect(transaction.recover(lifecycleLocator())).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_RECOVERY_RECORD_PARTIAL_FAILURE" }
+    });
+    expect(wal.rollback).not.toHaveBeenCalled();
+    expect(wal.current?.rolledBackAt).toBeNull();
+  });
+});
+
 describe("EngineeringLifecycleWriteTransactionV2 recovery", () => {
   test("durably rolls back an all-before journal without compensation", async () => {
     const input = lifecycleTransactionInput(["move_file", "create_directory"]);
@@ -893,6 +1048,13 @@ function createLifecycleTransaction(input: {
   resolveRecoveryBinding?: ConstructorParameters<
     typeof EngineeringLifecycleWriteTransactionV2
   >[0]["resolveRecoveryBinding"];
+  recordQuarantine?: ConstructorParameters<
+    typeof EngineeringLifecycleWriteTransactionV2
+  >[0]["recordQuarantine"];
+  recordQuarantineCompensation?: ConstructorParameters<
+    typeof EngineeringLifecycleWriteTransactionV2
+  >[0]["recordQuarantineCompensation"];
+  withoutQuarantineHooks?: boolean;
 }) {
   return new EngineeringLifecycleWriteTransactionV2({
     walRepository: input.wal,
@@ -920,6 +1082,13 @@ function createLifecycleTransaction(input: {
           grantRevision: "grant_01",
           sideEffectChecksum: hash("side-effect")
         })),
+    ...(input.withoutQuarantineHooks
+      ? {}
+      : {
+          recordQuarantine: input.recordQuarantine ?? (async () => ok(undefined)),
+          recordQuarantineCompensation:
+            input.recordQuarantineCompensation ?? (async () => ok(undefined))
+        }),
     now: () => "2099-01-01T00:00:01.000Z"
   });
 }
@@ -1001,6 +1170,23 @@ function lifecycleReceipt(
     state: request.operationKind === "delete_file" ? "quarantined" : "committed",
     recoveryObjectId: request.operationKind === "delete_file" ? request.recoveryObjectId : "",
     durability: "data_and_directory_flushed"
+  };
+}
+
+function quarantineInventory(request: EngineeringFileLifecycleRequestV2, byteLength: bigint) {
+  return {
+    schemaVersion: "3.0" as const,
+    kind: "engineering_quarantine_inventory" as const,
+    recoveryRootBindingId: request.recoveryRootBindingId,
+    grantRevision: request.recoveryGrantRevision,
+    objects: [
+      {
+        recoveryObjectId: request.recoveryObjectId,
+        fileIdentity: request.sourceFileIdentity,
+        sha256: request.sourceSha256,
+        byteLength
+      }
+    ]
   };
 }
 
