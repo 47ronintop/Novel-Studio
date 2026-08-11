@@ -1,11 +1,15 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { ok } from "@novel-studio/shared";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { createProjectPathGuard, withProjectFileLock } from "../src/atomic-write.js";
+import {
+  createProjectPathGuard,
+  verifyProjectStoragePath,
+  withProjectFileLock
+} from "../src/atomic-write.js";
 
 const tempRoots: string[] = [];
 
@@ -189,10 +193,77 @@ describe("project file lock", () => {
     expect(inspections).toBe(1);
     expect(operationCalls).toBe(0);
   });
+
+  test("accepts a final lock path only when a failed canonicalization is followed by confirmed disappearance", async () => {
+    const projectRoot = await createTempRoot();
+    const lockPath = join(projectRoot, ".novel-studio", "locks", "released.lock");
+    await mkdir(dirname(lockPath), { recursive: true });
+    await writeFile(lockPath, "transient lock\n", "utf8");
+    const canonicalLockPath = await realpath(lockPath);
+    let removedDuringCanonicalization = false;
+
+    const result = await verifyProjectStoragePath(
+      createProjectPathGuard(projectRoot),
+      lockPath,
+      "trace_project_lock_disappeared",
+      {
+        lstat,
+        realpath: async (path) => {
+          if (sameTestPath(path, canonicalLockPath)) {
+            await rm(lockPath, { force: true });
+            removedDuringCanonicalization = true;
+            throw Object.assign(new Error("simulated Windows release race"), { code: "EPERM" });
+          }
+          return realpath(path);
+        }
+      }
+    );
+
+    expect(removedDuringCanonicalization).toBe(true);
+    expect(result).toEqual({ ok: true, value: undefined });
+  });
+
+  test("keeps a canonicalization error fail-closed when the lock path still exists", async () => {
+    const projectRoot = await createTempRoot();
+    const lockPath = join(projectRoot, ".novel-studio", "locks", "rejected.lock");
+    await mkdir(dirname(lockPath), { recursive: true });
+    await writeFile(lockPath, "stable lock\n", "utf8");
+    const canonicalLockPath = await realpath(lockPath);
+
+    const result = await verifyProjectStoragePath(
+      createProjectPathGuard(projectRoot),
+      lockPath,
+      "trace_project_lock_still_present",
+      {
+        lstat,
+        realpath: async (path) => {
+          if (sameTestPath(path, canonicalLockPath)) {
+            throw Object.assign(new Error("simulated persistent canonicalization failure"), {
+              code: "EPERM"
+            });
+          }
+          return realpath(path);
+        }
+      }
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "PROJECT_STORAGE_PATH_REJECTED" }
+    });
+  });
 });
 
 async function createTempRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "novel-studio-project-file-lock-"));
   tempRoots.push(root);
   return root;
+}
+
+function sameTestPath(left: string, right: string): boolean {
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  return process.platform === "win32"
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
 }

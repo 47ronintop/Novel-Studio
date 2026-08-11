@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -50,6 +51,11 @@ export interface ProjectRootIdentity {
   readonly inode: bigint;
 }
 
+interface ProjectPathInspection {
+  lstat(path: string): Promise<Stats>;
+  realpath(path: string): Promise<string>;
+}
+
 const defaultFileSystem: AtomicWriteFileSystem = {
   async mkdir(path: string): Promise<void> {
     await mkdir(path, { recursive: true });
@@ -72,6 +78,7 @@ const defaultFileSystem: AtomicWriteFileSystem = {
 const DEFAULT_LOCK_STALE_AFTER_MS = 30 * 60 * 1_000;
 const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_LOCK_RETRY_DELAY_MS = 25;
+const defaultProjectPathInspection: ProjectPathInspection = { lstat, realpath };
 
 interface ProjectFileLockRecord {
   readonly schemaVersion: "1.0";
@@ -93,7 +100,8 @@ export function createProjectPathGuard(
 export async function verifyProjectStoragePath(
   guard: ProjectPathGuard,
   targetPath: string,
-  traceId = "trace_repository_project_path"
+  traceId = "trace_repository_project_path",
+  inspection: ProjectPathInspection = defaultProjectPathInspection
 ): Promise<Result<void, UnifiedError>> {
   try {
     const lexicalRoot = resolve(guard.projectRoot);
@@ -115,7 +123,7 @@ export async function verifyProjectStoragePath(
         throw new Error("Project root identity changed.");
       }
     }
-    const currentRoot = await realpath(guard.projectRoot);
+    const currentRoot = await inspection.realpath(guard.projectRoot);
     if (!samePath(currentRoot, canonicalRoot)) {
       throw new Error("Project root identity changed.");
     }
@@ -124,19 +132,29 @@ export async function verifyProjectStoragePath(
     const segments = lexicalRelative.split(/[\\/]/u);
     for (const [index, segment] of segments.entries()) {
       current = join(current, segment);
+      let stats: Stats;
       try {
-        const stats = await lstat(current);
-        if (stats.isSymbolicLink()) throw new Error("Reparse point rejected.");
-        if (index < segments.length - 1 && !stats.isDirectory()) {
-          throw new Error("Storage path parent is not a directory.");
-        }
-        const canonicalCurrent = await realpath(current);
-        if (!isContainedRelativePath(relative(canonicalRoot, canonicalCurrent))) {
-          throw new Error("Storage path escaped the bound project root.");
-        }
+        stats = await inspection.lstat(current);
       } catch (error) {
         if (isMissingPathError(error)) break;
+        if (await pathDisappearedAfterInspectionError(current, inspection)) break;
         throw error;
+      }
+      if (stats.isSymbolicLink()) throw new Error("Reparse point rejected.");
+      if (index < segments.length - 1 && !stats.isDirectory()) {
+        throw new Error("Storage path parent is not a directory.");
+      }
+      let canonicalCurrent: string;
+      try {
+        canonicalCurrent = await inspection.realpath(current);
+      } catch (error) {
+        if (isMissingPathError(error)) break;
+        // Windows may surface EPERM while a lock leaf disappears between lstat and realpath.
+        if (await pathDisappearedAfterInspectionError(current, inspection)) break;
+        throw error;
+      }
+      if (!isContainedRelativePath(relative(canonicalRoot, canonicalCurrent))) {
+        throw new Error("Storage path escaped the bound project root.");
       }
     }
     return ok(undefined);
@@ -436,6 +454,19 @@ function isMissingPathError(error: unknown): boolean {
     "code" in error &&
     (error as { readonly code?: unknown }).code === "ENOENT"
   );
+}
+
+async function pathDisappearedAfterInspectionError(
+  path: string,
+  inspection: ProjectPathInspection
+): Promise<boolean> {
+  try {
+    await inspection.lstat(path);
+    return false;
+  } catch (error) {
+    if (isMissingPathError(error)) return true;
+    throw error;
+  }
 }
 
 function isFileExistsError(error: unknown): boolean {

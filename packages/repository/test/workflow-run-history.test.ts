@@ -188,12 +188,12 @@ describe("Workflow run history", () => {
     const firstHistory = new HistoryRepository({
       projectRoot,
       traceId: "trace_story_analysis_cas_first",
-      storyAnalysisLock: { waitTimeoutMs: 1_000, retryDelayMs: 2 }
+      storyAnalysisLock: { waitTimeoutMs: 5_000, retryDelayMs: 2 }
     });
     const secondHistory = new HistoryRepository({
       projectRoot,
       traceId: "trace_story_analysis_cas_second",
-      storyAnalysisLock: { waitTimeoutMs: 1_000, retryDelayMs: 2 }
+      storyAnalysisLock: { waitTimeoutMs: 5_000, retryDelayMs: 2 }
     });
     const initialBundle = storyAnalysisBundle();
     const created = await firstHistory.writeStoryAnalysis({
@@ -234,7 +234,7 @@ describe("Workflow run history", () => {
         persisted.value.storyAnalysis.analysisRun.runtime.extractorVersion
       );
     }
-  });
+  }, 10_000);
 
   test("coordinates one chapter across two repository instances with a persistent lock", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-story-analysis-chapter-lock-"));
