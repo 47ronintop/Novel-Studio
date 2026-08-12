@@ -1,4 +1,4 @@
-# STORY_BIBLE - Novel Studio
+# STORY_BIBLE - ShanHai（山海）
 
 Version: 1.0 | Status: Accepted for M16 | Phase: 7 Formal Development
 

@@ -1,4 +1,4 @@
-# Product
+# 山海（ShanHai）
 
 ## Register
 
@@ -6,11 +6,11 @@ product
 
 ## Users
 
-Novel Studio serves professional and semi-professional long-form fiction writers who maintain large local projects over months or years. They work in a desktop writing environment, often switching between chapters, story bible assets, timelines, prompts, agents, workflows, and AI suggestions.
+ShanHai（山海） serves professional and semi-professional long-form fiction writers who maintain large local projects over months or years. They work in a desktop writing environment, often switching between chapters, story bible assets, timelines, prompts, agents, workflows, and AI suggestions.
 
 ## Product Purpose
 
-Novel Studio is a local-first, project-based AI novel creation IDE. It organizes creative source material, chapters, history, prompts, agents, workflows, model settings, and AI assistance into an auditable workspace where the user remains the author and final decision maker.
+ShanHai（山海） is a local-first, project-based AI novel creation IDE. It organizes creative source material, chapters, history, prompts, agents, workflows, model settings, and AI assistance into an auditable workspace where the user remains the author and final decision maker.
 
 ## Brand Personality
 
