@@ -1,7 +1,7 @@
 # 山海（ShanHai）创作工作台最小实现方案
 
 **日期：** 2026-08-12
-**状态：** Reviewed（MVP-1，缩减范围，可进入实施）
+**状态：** Reviewed（MVP-1，已补齐实现接缝，可进入实施）
 **范围：** 复用现有“新建创作项目”和“打开创作项目”，覆盖普通小说文件夹接入和空项目“开始构思”入口；新书、续写沿用现有 Agent 能力，审稿模式和创作导航改造列为后续版本
 
 ## 1. 品牌与命名
@@ -17,16 +17,16 @@
 1. **新建创作项目**：在用户选择的父目录下创建一个新的山海项目文件夹。
 2. **打开创作项目**：选择一个小说文件夹；如果它已经是山海项目就直接打开，如果只是普通正文文件夹就显示接入预览。
 
-普通小说文件夹的 MVP 不做原地初始化，而是在同级创建一个新的山海项目副本：源文件夹始终保持不变，用户确认的正文复制到新项目的 `chapters/`，然后打开新项目。这样可以复用现有 `createProjectInParent` 的目录所有权和失败清理逻辑，不新增原地回滚、原稿备份或恢复事务。
+普通小说文件夹的 MVP 不做原地初始化，而是在同级创建一个新的山海项目副本：源文件夹始终保持不变，用户确认的正文复制到新项目的 `chapters/`，然后打开新项目。这样可以复用现有 `createProjectInParent` 的目录所有权和失败清理逻辑，不新增原地回滚、原稿备份或恢复事务。导入链路不复用现有 Renderer 生成的 `projectId`，而由 Main/Application 注入的受管 ID factory 生成；现有“新建创作项目”链路暂不改变。
 
 新建项目完成后，如果项目还没有章节，中央空章节工作区同时提供两条起点：**开始构思**（由 Agent 主导提问，作者用自然语言回答）和现有的**新建第一章**（直接写正文）。这不是新增项目创建入口，而是帮助新用户选择“先想清楚”还是“先写起来”。
 
 工作量按范围分为：
 
-| 范围 | 主要改动 | 评估 |
-| --- | --- | --- |
-| 原完整方案 | 原地导入、文件移动/恢复、崩溃事务、导航重构、Agent 规划模式、跨层测试 | 大，涉及 Main、Application、Repository、Renderer 和 Agent Engine |
-| 本 MVP-1 | 目录分类、只读预览、同级新项目创建、章节复制、激活、空项目构思入口和定向测试 | 中小，接入复用项目创建/激活/文件安全边界，构思入口只改 Renderer 与现有 Composer 草稿桥接 |
+| 范围       | 主要改动                                                                     | 评估                                                                                     |
+| ---------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 原完整方案 | 原地导入、文件移动/恢复、崩溃事务、导航重构、Agent 规划模式、跨层测试        | 大，涉及 Main、Application、Repository、Renderer 和 Agent Engine                         |
+| 本 MVP-1   | 目录分类、只读预览、同级新项目创建、章节复制、激活、空项目构思入口和定向测试 | 中小，接入复用项目创建/激活/文件安全边界，构思入口只改 Renderer 与现有 Composer 草稿桥接 |
 
 本 MVP 明确不追求“导入后原目录变成项目”；这是后续版本的独立能力。
 
@@ -41,6 +41,10 @@
 
 因此，现有流程可以打开应用创建的项目，但不能接入一个只包含 `.txt/.md` 正文的普通文件夹。本 MVP 只在这个选择后的分支增加“预览并复制到新项目”。有效山海项目的现有 `WorkspaceActivationDto` 合同保持不变。
 
+普通目录分支不把目录直接传给现有激活协调器。打开流程先经过 Main/Application 的只读分类：有效山海项目继续调用原有 `openCreativeProject` 并返回现有激活结果；普通正文目录进入新的预览/确认合同；可疑目录返回修复错误。这样既保持有效项目的 `WorkspaceActivationDto` 不变，也避免把普通目录误交给会立即激活的创建/打开流程。
+
+分类与激活是两个调用：`inspectOpenCreativeDirectory(selectionId)` 只读分类并返回“已有项目 / 普通正文目录预览”的判别结果；只有“已有项目”分支才随后调用 `openCreativeProject(selectionId)`。检查调用本身不消费选择记录；打开已有项目或提交任一确认尝试时，Main 都必须原子消费对应选择记录，即使后续激活或校验失败也不能复用同一个选择。
+
 ## 4. 打开目录后的最小分支
 
 ### 4.1 已有山海项目
@@ -54,11 +58,11 @@
 1. Main/Application 只读扫描所选根目录的直接子文件，按自然文件名排序。预览只展示根目录相对路径、文件大小和默认标题；MVP 不提供自定义项目标题、语言或章节重排。
 2. 预览允许勾选/取消勾选候选文件，并显示目标项目目录，默认取同级的 `<源目录名> - ShanHai`。目标目录已存在时直接拒绝本次接入并结束，不覆盖已有目录；自定义目标名留到后续版本。
 3. 预览必须明确显示“将创建同级的新项目副本，源文件夹不会被修改”。确认前不创建目录、不写入文件、不移动源文件。至少需要确认一份章节文件；全部取消或取消确认则直接结束。
-4. 确认时 Renderer 只提交 `selectionId` 和确认的根目录相对路径列表。Main 消费并重新校验目录选择记录、根目录身份、候选仍是根层级普通文本文件，以及大小/修改时间/校验和未变化；Renderer 不提交绝对路径、项目 ID、章节 ID 或目标路径。
-5. 校验通过后，Application 使用现有项目创建流程在同级创建新项目，项目标题默认使用源目录名，语言固定为 `zh-CN`。目标项目 ID、章节 ID、章节顺序和时间戳均由 Main/Application/Repository 生成。
-6. 在新项目的章节 Repository 中按确认顺序创建章节，正文按 UTF-8 原样写入；复制失败时调用现有“新建子目录所有权”清理逻辑删除本次创建且仍归本次操作所有的新项目目录，源文件夹不受影响。
-7. 复制完成后调用现有项目激活流程，并通过现有章节选择/加载链路打开最后一个已导入章节。
-8. 成功后在现有工作区反馈区域显示新项目位置，并再次说明源文件夹未被修改；失败只显示错误，不把源目录标记为已接入。
+4. 确认时 Renderer 只提交 `selectionId` 和确认的根目录相对路径列表。Main 消费并重新校验目录选择记录、根目录身份、候选仍是根层级普通文本文件，以及大小/修改时间/校验和未变化；Renderer 不提交绝对路径、项目 ID、章节 ID、时间戳或文件内容。目标目录名只能来自 Main 保存的预览结果，不能由 Renderer 在确认时改写。
+5. 校验通过后，Application 通过注入的 Repository Port 和候选 `ProjectWorkspaceSession` 在同级创建新项目，项目标题默认使用源目录名，语言固定为 `zh-CN`。导入链路使用新的 Main/Application-owned ID factory 生成项目 ID；章节 ID、章节顺序和时间戳由 Repository 生成。Application 不直接 import 具体 `ProjectCreationFileRepository`。
+6. 候选 session 先取得新项目锁并完成元数据初始化，再按确认顺序批量创建章节，正文按 UTF-8 原样写入；批量操作必须是 Application-owned 用例，内部复用 `createAgentChapter({ title, body })` 或等价的 Repository Port，不把 Renderer 提供的 ID 或路径传入通用 `createChapter`。复制、锁获取或准备阶段失败时释放锁，并调用现有“新建子目录所有权”清理逻辑删除本次创建且仍归本次操作所有的新项目目录，源文件夹不受影响。
+7. 所有章节复制成功后，候选 session 显式选择 `lastImportedChapterId`，生成 `PreparedWorkspaceActivation`；随后沿用现有 runtime prepare、commit、finalize 激活协调器。现有 session 默认选择第一个章节，因此不能直接用普通 `createProjectInParent` 代替该导入用例。
+8. 成功后在现有工作区反馈区域显示 Main 生成的只读 `targetLocationLabel`（仅用于展示，不是 Renderer 提交的路径），并再次说明源文件夹未被修改；失败只显示错误，不把源目录标记为已接入。
 
 这是“打开创作项目”入口下的三阶段内部流程：只读预览、创建同级副本、激活新项目；不新增用户可见的“导入”菜单。
 
@@ -75,18 +79,19 @@
 
 ### 4.4 预览与安全边界
 
-- 复用现有 Main-owned `selectionId`；选择记录短时有效，确认成功或确认校验失败后消费，取消则不执行写入并按现有过期机制清理。MVP 不新增独立 `previewToken`、导入事务文件或持久化导入状态。
+- 复用现有 Main-owned `selectionId`；当前 `resolveDirectorySelection` 在成功解析时不会自动消费，因此本功能必须在 Main 的检查/打开/确认入口中显式实现一次性消费：检查阶段保持可继续预览，打开已有项目或任一确认尝试（包括校验失败）都删除选择记录。取消不执行写入，剩余记录依靠现有过期机制清理。MVP 不新增独立 `previewToken`、导入事务文件或持久化导入状态。
+- 预览结果只在 Main 内存中按 `selectionId` 绑定：规范化源根目录身份、同级目标父目录身份、默认目标目录名、候选相对路径，以及每个候选的大小、修改时间、SHA-256 和文件身份。Renderer 收到的 `relativePath` 只用于勾选；确认时必须与 Main 保存的候选集合逐项匹配，不能由 Renderer 回传或推导绝对路径、目标路径或指纹。
 - 复用现有创作项目文件策略：只读根目录直接子文件，不跟随符号链接、联接点或重解析点；候选必须是普通文件、合法 UTF-8，并遵守现有文本扩展名、深度/条目数、文件大小和路径长度限制。
-- Main 在确认前重新 `stat`/读取候选并校验大小、修改时间、SHA-256 校验和和文本编码；任一候选变化、选择记录过期、根目录身份变化或目标目录冲突，都在首次写入前拒绝。每个文件复制前再次以受管文件操作读取并校验校验和，避免把过期内容写入新项目。
+- Main 在确认前重新 `stat`/读取候选并校验大小、修改时间、SHA-256 校验和和文本编码；任一候选变化、选择记录过期、根目录身份变化或目标目录冲突，都在首次写入前拒绝。每个文件复制前再次以受管文件操作读取并校验校验和，避免把过期内容写入新项目。预览和检查阶段只读，不创建目标目录。
 - 目标目录是本次新建的子目录，失败清理只能使用现有创建操作记录的目录身份；不得递归删除源目录，也不得删除目标目录创建前已有的内容。
 
 ### 4.5 最小内部合同
 
 以下合同只供本次打开链路内部使用，不改变有效项目的 `WorkspaceActivationDto`：
 
-- `CreativeFolderPreview`：包含 `schemaVersion`、源目录显示名、目标目录显示名、默认项目标题/语言和候选数组；候选包含根目录相对 `relativePath`、`sizeBytes`、`modifiedAt`、`sha256`、默认标题和自然排序位置。不返回绝对路径。
-- `CreativeFolderConfirmationRequest`：只包含 `selectionId` 和确认后的相对路径列表。不接受 Renderer 提交项目 ID、章节 ID、目标路径、时间戳或文件内容。
-- `CreativeFolderCopyResult`：包含 `schemaVersion`、Main/Application 生成的 `projectId`、已导入章节 ID 列表和 `lastImportedChapterId`；成功后再调用既有激活合同。
+- `CreativeFolderPreview`：包含 `schemaVersion`、源目录显示名、目标目录显示名、默认项目标题/语言和候选数组；候选包含根目录相对 `relativePath`、`sizeBytes`、`modifiedAt`、`sha256`、默认标题和自然排序位置。不返回绝对路径。预览内部指纹和目录身份留在 Main 的 `selectionId` 记录中，不信任 Renderer 回传。
+- `CreativeFolderConfirmationRequest`：只包含 `selectionId` 和确认后的相对路径列表。不接受 Renderer 提交项目 ID、章节 ID、目标路径、时间戳、文件内容或指纹。
+- `CreativeFolderCopyResult`：包含 `schemaVersion`、Main/Application 生成的 `projectId`、已导入章节 ID 列表、`lastImportedChapterId` 和只读 `targetLocationLabel`；成功后再调用既有激活合同。`targetLocationLabel` 不能被当作路径输入再次提交。
 
 ## 5. 正文转换规则
 
@@ -104,6 +109,7 @@
 本 MVP 不修改创作导航和 Agent 上下文模型：
 
 - 现有“写作 / 故事资料 / 项目文件”布局保持不变，不新增底部“其他文件”折叠区，不调整 `creativeNavigatorMode` 或旧偏好兼容。
+- 时间线只作为“故事资料”中的既有子项保留；删除最左侧独立的时间线 activity，MVP 不维护两个时间线入口。
 - 源文件夹不是项目根目录，未选文件不会自动进入新项目文件树；用户仍可在系统文件管理器中访问原文件夹。
 - 新增的“开始构思”只出现在已激活且章节数为 0 的创作项目中央空章节工作区；无项目、工程工作区、已有章节或 Agent 上下文不可用时不显示。现有快速开始区和“新建第一章”路径保留，不重复创建另一套项目引导。
 - 点击“开始构思”复用现有 Agent 会话和 Composer：如果当前没有会话，沿用现有会话创建/选择流程；会话可用后把以下固定请求写入 Composer 并聚焦输入框，但不自动发送：
@@ -123,34 +129,35 @@
 
 ### 7.1 Main / IPC
 
-- 在现有 `chooseOpenCreativeDirectory` 选择记录上增加普通目录预检与确认两个内部调用，继续由 Main 持有规范化源路径。
+- 在现有 `chooseOpenCreativeDirectory` 选择记录上增加 `inspectOpenCreativeDirectory(selectionId)` 和 `confirmCreativeFolder(request)` 两个调用，继续由 Main 持有规范化源路径；已有项目分支仍单独调用 `openCreativeProject(selectionId)`，普通目录确认不能复用现有会立即激活的 `createCreativeProject`。
 - 增加 `CreativeFolderPreview` 和 `CreativeFolderConfirmationRequest` 的形状校验；Renderer 只能提交 `selectionId` 与相对路径列表。
-- 复用现有目录选择过期、根目录绑定和有效项目 `openCreativeProject` 激活合同。
+- 复用现有目录选择过期、根目录绑定和有效项目 `openCreativeProject` 激活合同；为普通目录确认增加一个对应的 WorkspaceActivationCoordinator/Application prepare 入口，最终仍走同一套 runtime prepare/commit/finalize。该确认入口只接收 Main 已解析的内部候选，不把绝对源路径或目标路径暴露给 Renderer。
 
 ### 7.2 Application / Repository
 
-- 增加一个“从已确认根目录候选创建同级项目副本”的 Application 编排入口。
-- 复用 `ProjectCreationFileRepository.createProjectInParent` 创建目标子目录和失败清理，不复用原地目录清理逻辑，因为 MVP 不做原地导入；不要先调用会立即激活项目的桌面 `createProjectInParent`，应在章节复制成功后再走现有激活协调器。
-- 复用 `ProjectFileRepository` 的初始化目录/元数据写入和 `ChapterFileRepository` 的受管章节创建；源文件只读，不新增备份、事务日志或恢复状态。
-- 创建完成后返回 `CreativeFolderCopyResult`，再走现有工作区激活与章节加载链路。
+- 增加一个“从已确认根目录候选创建同级项目副本”的 Application 编排入口，并在 Application 合同中显式区分“准备导入候选”和“提交激活”。Application 只依赖 `ProjectCreationRepositoryPort`、项目/章节 Repository Port 和 session factory，不直接 import `ProjectCreationFileRepository` 或其他具体 Repository。
+- 复用 `ProjectCreationRepositoryPort.createProjectInParent` 创建目标子目录和失败清理，但不能把它包装成现有会立即激活的桌面 `createProjectInParent`；应新增候选 `ProjectWorkspaceSession` 用例：创建项目、批量创建章节、选择最后章节、返回 `PreparedWorkspaceActivation`。这样可复用同一套项目初始化、锁和激活快照逻辑，又不在章节未复制完成时切换当前工作区。
+- 候选 session 的批量导入方法接收 Application 已校验的 `{ title, body }[]`，内部调用可选的 `createAgentChapter` Port 或新增等价的 Application-owned copy 方法；Repository 继续生成 ID、顺序和时间戳。源文件只读，不新增备份、事务日志或恢复状态。
+- 复制、锁获取、候选 session 准备或运行时激活任一失败，都先释放候选锁，再调用 `cleanupCreatedProject`；清理失败要保留可诊断错误，不能继续把部分项目提交为活动工作区。
+- 创建完成后返回 `CreativeFolderCopyResult`，随后由 Main 调用现有 runtime prepare/commit/finalize 激活链路，并在激活前显式携带 `lastImportedChapterId`；不改变有效项目的 `WorkspaceActivationDto` 合同。
 
 ### 7.3 Renderer
 
 - 增加一个最小预览确认界面：候选文件勾选、目标目录提示、确认/取消。
-- 在现有 `WorkspaceEmptyEditor` 增加“开始构思”按钮，与现有“新建第一章”并列；仅在活动创作项目且 `chapters.length === 0` 时显示。
-- 增加一个 Renderer 内部的 `onStartBrainstorming` 动作：复用现有会话创建/选择结果，调用 Composer 的 `onRequestChange` 写入固定请求，并通过最小 ref/focus 桥接把焦点交给现有 `textarea[aria-label="Agent 请求"]`。不得调用 `onSend`，不得改写 operation mode、context mode、write policy 或 references。
-- 非空 Composer 草稿、会话加载中、Agent 不可用或已有章节时，按钮隐藏或禁用并给出已有状态提示；创建第一章后按钮立即消失。无需新增用户偏好 schema 或持久化引导状态。
+- 在现有 `WorkspaceEmptyEditor` 增加“开始构思”按钮，与现有“新建第一章”并列；直接使用现有 `projectWorkflow.chapters.length === 0` 判断，不新增 `chapterCount`/`hasChapters` prop。
+- 增加一个 Renderer 内部的 `onStartBrainstorming` 动作：复用现有会话创建/选择结果，待会话加载完成且存在 Composer 后，通过受控的 Composer bridge/ref 调用现有 `onRequestChange` 写入固定请求并聚焦输入框。不能依赖不受控的全局 DOM 查询；不得调用 `onSend`，不得改写 operation mode、context mode、write policy 或 references。
+- 非空 Composer 草稿、会话加载中、Agent 不可用或已有章节时，按钮隐藏或禁用并给出已有状态提示；会话加载路径继续复用现有自动创建/选择逻辑。创建第一章后按钮立即消失。无需新增用户偏好 schema 或持久化引导状态。
 
 ### 7.4 测试
 
-- 目录分类：有效项目、普通正文目录、损坏/可疑目录。
-- 预览确认：取消不写入，确认只提交相对路径，过期选择被拒绝。
-- 导入复制：目标项目结构、章节标题/顺序/正文、Main 生成 ID、源文件保持不变。
-- 失败清理：复制失败只清理本次新建目标目录，不影响源目录和目标父目录既有内容。
-- 激活：新项目激活后打开最后一个已导入章节。
+- 目录分类：有效项目、普通正文目录、损坏/可疑目录；检查调用只读且不消费选择，已有项目打开和确认尝试按合同消费选择。
+- 预览确认：取消不写入，确认只提交相对路径，Main 重新校验 Main-owned 候选指纹，过期/重复/篡改选择被拒绝。
+- 导入复制：目标项目结构、章节标题/顺序/正文、Main/Application factory 生成项目 ID、Repository 生成章节 ID，源文件保持不变；成功反馈只展示 `targetLocationLabel`。
+- 失败清理：复制、锁、准备或激活失败只清理本次新建目标目录，不影响源目录和目标父目录既有内容；清理失败可诊断且不提交部分项目。
+- 激活：候选 session 完成复制后显式选择最后一个已导入章节，新项目激活后打开该章节。
 - 空项目构思：章节数为 0 时显示“开始构思”和“新建第一章”；点击后复用现有会话、预填固定请求并聚焦 Composer，不自动发送；已有草稿不被覆盖，创建第一章后入口消失。
 - 首次使用边界：未创建或未激活项目时，现有快速开始区仍只提供创建/打开项目和新建第一章等已有入口，不显示“开始构思”。
-- 构思对话：Agent 每轮只问一两个关键问题；作者回答“没想好”时给出不超过三个方向；信息充分后先总结并等待作者确认，未经确认不写入资料。
+- 构思对话：不对真实模型输出做脆弱断言；用固定请求、mock Agent adapter 或人工验收验证每轮最多一两个问题、“没想好”时不超过三个方向、信息充分后先总结并等待作者确认，未经确认不写入资料。
 
 ## 8. 后续版本明确承接
 
@@ -187,7 +194,7 @@
 - MVP 不改变导航标签、偏好 schema、Agent operation mode、context mode 或工具目录。
 - 不新增用户可见的“导入”入口；普通文件夹接入行为都从现有“打开创作项目”分支进入，空项目构思则从激活后的中央空章节工作区进入。
 - “开始构思”只作为空项目中央工作区的第二条起点，不新增项目创建入口、设定表或独立 Agent；现有“新建第一章”仍可直接开始写作。
-- 相关 Main、Application、Repository、Renderer 定向测试通过。
+- 相关 Main、Application、Repository、Renderer 定向测试通过；至少覆盖 `inspectOpenCreativeDirectory`、`confirmCreativeFolder` 与既有 `openCreativeProject` 的分支和一次性消费语义。
 
 ## 10. 推荐实施顺序
 
