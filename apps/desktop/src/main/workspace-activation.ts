@@ -5,6 +5,8 @@ import type {
   DesktopApplication,
   DesktopShellState,
   PreparedWorkspaceActivation,
+  PreparedCreativeProjectImport,
+  ImportCreativeProjectInput,
   WorkspaceActivationDto
 } from "@novel-studio/application";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
@@ -19,6 +21,14 @@ export interface WorkspaceActivationCoordinator {
   createCreativeProject(
     input: CreateCreativeProjectInput
   ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
+  importCreativeProject(input: ImportCreativeProjectInput): Promise<
+    Result<
+      Omit<PreparedCreativeProjectImport, "activation"> & {
+        readonly activation: WorkspaceActivationDto;
+      },
+      UnifiedError
+    >
+  >;
   openEngineeringWorkspace(
     contentRoot: string
   ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
@@ -42,6 +52,13 @@ export function createWorkspaceActivationCoordinator(
       activate(() => options.application.prepareOpenCreativeProject(projectRoot)),
     createCreativeProject: (input) =>
       activate(() => options.application.prepareCreateCreativeProject(input)),
+    importCreativeProject: async (input) => {
+      const candidate = await options.application.prepareImportCreativeProject(input);
+      if (!candidate.ok) return candidate;
+      const activated = await activatePrepared(candidate.value.activation);
+      if (!activated.ok) return activated;
+      return ok({ ...candidate.value, activation: activated.value });
+    },
     openEngineeringWorkspace: (contentRoot) =>
       activate(() => options.application.prepareOpenEngineeringWorkspace(contentRoot)),
     closeCurrentWorkspace
@@ -73,34 +90,37 @@ export function createWorkspaceActivationCoordinator(
   ): Promise<Result<WorkspaceActivationDto, UnifiedError>> {
     const candidate = await prepareApplication();
     if (!candidate.ok) return candidate;
-    options.clearCreativeGeneralActiveResourceProof?.();
+    return activatePrepared(candidate.value);
+  }
 
+  async function activatePrepared(
+    candidate: PreparedWorkspaceActivation
+  ): Promise<Result<WorkspaceActivationDto, UnifiedError>> {
+    options.clearCreativeGeneralActiveResourceProof?.();
     const preparedRuntime = await options.runtimeManager.prepareWorkspace(
-      toDesktopAgentWorkspaceBinding(candidate.value)
+      toDesktopAgentWorkspaceBinding(candidate)
     );
     if (!preparedRuntime.ok) {
-      await options.application.discardWorkspaceActivation(candidate.value.activationId);
+      await options.application.discardWorkspaceActivation(candidate.activationId);
       return err(preparedRuntime.error);
     }
-
-    if ("creativeProject" in candidate.value && options.creativeProjectFileSession !== undefined) {
+    if ("creativeProject" in candidate && options.creativeProjectFileSession !== undefined) {
       const preparedFiles = await options.creativeProjectFileSession.activate({
-        projectId: candidate.value.creativeProject.project.projectId,
-        workspaceId: candidate.value.context.workspaceId,
-        projectRoot: candidate.value.context.contentRoot,
-        stateRoot: candidate.value.context.stateRoot
+        projectId: candidate.creativeProject.project.projectId,
+        workspaceId: candidate.context.workspaceId,
+        projectRoot: candidate.context.contentRoot,
+        stateRoot: candidate.context.stateRoot
       });
       if (!preparedFiles.ok) {
         options.runtimeManager.discardPreparedWorkspace(preparedRuntime.value);
-        await options.application.discardWorkspaceActivation(candidate.value.activationId);
+        await options.application.discardWorkspaceActivation(candidate.activationId);
         return err(preparedFiles.error);
       }
     }
-
-    const committed = options.application.commitWorkspaceActivation(candidate.value.activationId);
+    const committed = options.application.commitWorkspaceActivation(candidate.activationId);
     options.runtimeManager.commitPreparedWorkspace(preparedRuntime.value);
     let activation = committed;
-    if ("creativeProject" in candidate.value) {
+    if ("creativeProject" in candidate) {
       const refreshed = await options.application.refreshActiveProjectWorkspace();
       if (refreshed.ok && "creativeProject" in committed) {
         activation = {
@@ -117,9 +137,7 @@ export function createWorkspaceActivationCoordinator(
     } else {
       options.creativeProjectFileSession?.deactivate();
     }
-    const finalized = await options.application.finalizeWorkspaceActivation(
-      candidate.value.activationId
-    );
+    const finalized = await options.application.finalizeWorkspaceActivation(candidate.activationId);
     if (!finalized.ok) {
       try {
         options.reportCleanupFailure?.(finalized.error);

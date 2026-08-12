@@ -126,8 +126,12 @@ export function useProjectWorkflowActions({
   }, [setStoryBible, setStoryBibleEditor, storyBibleBridge]);
 
   const refreshWorkspaceTransition = useCallback(
-    async (nextWorkflow: ProjectWorkflowProps) => {
-      if (nextWorkflow.status === "ready" && nextWorkflow.feedback === undefined) {
+    async (nextWorkflow: ProjectWorkflowProps, previousProjectId?: string) => {
+      if (
+        nextWorkflow.status === "ready" &&
+        nextWorkflow.projectId !== undefined &&
+        nextWorkflow.projectId !== previousProjectId
+      ) {
         clearProjectBoundStory();
       }
       await refreshProjectWorkflow(nextWorkflow);
@@ -175,7 +179,7 @@ export function useProjectWorkflowActions({
       if (previous === undefined) return;
       setProjectWorkflow({ ...previous, status });
       try {
-        await refreshWorkspaceTransition(await operation());
+        await refreshWorkspaceTransition(await operation(), previous.projectId);
       } catch (error) {
         restoreWorkspaceTransition(previous, error);
       }
@@ -196,6 +200,24 @@ export function useProjectWorkflowActions({
     }
 
     void runWorkspaceTransition(() => projectWorkflowBridge.openProject(), "opening");
+  }, [projectWorkflowBridge, runWorkspaceTransition]);
+
+  const handleFolderImportCandidateToggle = useCallback(
+    (relativePath: string, selected: boolean) => {
+      setProjectWorkflow(
+        projectWorkflowBridge?.setFolderImportCandidateSelected(relativePath, selected)
+      );
+    },
+    [projectWorkflowBridge, setProjectWorkflow]
+  );
+
+  const handleFolderImportCancel = useCallback(() => {
+    setProjectWorkflow(projectWorkflowBridge?.cancelFolderImport());
+  }, [projectWorkflowBridge, setProjectWorkflow]);
+
+  const handleFolderImportConfirm = useCallback(() => {
+    if (projectWorkflowBridge === undefined) return;
+    void runWorkspaceTransition(() => projectWorkflowBridge.confirmFolderImport(), "creating");
   }, [projectWorkflowBridge, runWorkspaceTransition]);
 
   const handleCreateProject = useCallback(() => {
@@ -491,6 +513,9 @@ export function useProjectWorkflowActions({
     handleProjectFolderNameChange,
     handleChooseCreateParentDirectory,
     handleOpenProject,
+    handleFolderImportCandidateToggle,
+    handleFolderImportCancel,
+    handleFolderImportConfirm,
     handleCreateProject,
     handleCreateExampleProject,
     handleCreateChapter,

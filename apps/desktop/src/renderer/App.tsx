@@ -15,7 +15,11 @@ import type {
   CommandPaletteFeedback,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import { AgentModelSharingDialog, ProjectCreateDialog } from "@novel-studio/ui";
+import {
+  AgentModelSharingDialog,
+  ProjectCreateDialog,
+  ProjectFolderImportDialog
+} from "@novel-studio/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
@@ -66,6 +70,7 @@ import {
   useWorkspaceFileEditorRuntime
 } from "./workspace-file-editor-runtime.js";
 import { useWritingEditorIntegration } from "./use-writing-editor-integration.js";
+import { useBrainstormingEntry } from "./brainstorming-entry.js";
 
 export { useEngineeringEditorStateBinding } from "./engineering-editor-state-binding.js";
 
@@ -118,7 +123,6 @@ export function App() {
     aiWritingWorkflowBridge?.getProps()
   );
   const [agentRun, setAgentRun] = useState(() => agentRunBridge?.getProps());
-
   const workspaceContext = shellState.workspaceContext;
   const activeProjectId =
     workspaceContext.kind === "none" ? undefined : workspaceContext.workspaceId;
@@ -127,6 +131,7 @@ export function App() {
     workspaceContext.kind === "creativeProject" ? workspaceContext.projectId : undefined;
   const activeCreativeWorkspaceId =
     workspaceContext.kind === "creativeProject" ? workspaceContext.workspaceId : undefined;
+
   const persistUserPreferences = useCallback(
     (input: UserPreferencesSaveInput) => {
       if (api === undefined) return;
@@ -419,6 +424,9 @@ export function App() {
     handleProjectFolderNameChange,
     handleChooseCreateParentDirectory,
     handleOpenProject,
+    handleFolderImportCandidateToggle,
+    handleFolderImportCancel,
+    handleFolderImportConfirm,
     handleCreateProject,
     handleCreateExampleProject,
     handleCreateChapter,
@@ -795,6 +803,10 @@ export function App() {
     onRejectSelection: handleRejectSelectionReview,
     onUndoSelection: handleUndoSelectionReview
   });
+  const brainstormingEntry = useBrainstormingEntry(
+    agentConversationWorkspaceForShell,
+    activeProjectId
+  );
 
   const handleAppearancePreferencesChange = useCallback(
     (preferences: UserAppearancePreferences) => {
@@ -898,7 +910,7 @@ export function App() {
       <RendererWorkspaceShell
         appearancePreferences={appearancePreferences}
         aiWritingWorkflow={aiWritingWorkflow}
-        agentConversationWorkspace={agentConversationWorkspaceForShell}
+        agentConversationWorkspace={brainstormingEntry.workspace}
         projectWorkflow={projectWorkflow}
         projectSearch={projectSearch}
         settings={interactiveSettings}
@@ -927,6 +939,7 @@ export function App() {
         onProjectFolderNameChange={handleProjectFolderNameChange}
         onChooseCreateParentDirectory={handleChooseCreateParentDirectory}
         onCreateChapter={handleCreateChapter}
+        onStartBrainstorming={brainstormingEntry.onStart}
         onRenameChapter={handleRenameChapter}
         onDuplicateChapter={handleDuplicateChapter}
         onDeleteChapter={handleDeleteChapter}
@@ -1002,6 +1015,16 @@ export function App() {
         onCancel={() => setProjectCreateDialogOpen(false)}
         onCreate={handleCreateProject}
       />
+      {projectWorkflow?.folderImportPreview === undefined ? null : (
+        <ProjectFolderImportDialog
+          {...projectWorkflow.folderImportPreview}
+          open
+          busy={projectWorkflow.folderImportPreview.busy || projectWorkflow.status === "creating"}
+          onCandidateToggle={handleFolderImportCandidateToggle}
+          onCancel={handleFolderImportCancel}
+          onConfirm={handleFolderImportConfirm}
+        />
+      )}
       <AgentModelSharingDialog
         open={modelSharingDialogOpen}
         onClose={() => setModelSharingDialogOpen(false)}

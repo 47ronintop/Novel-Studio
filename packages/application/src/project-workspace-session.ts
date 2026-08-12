@@ -5,6 +5,7 @@ import type {
   ChapterHistoryRepositoryPort,
   ChapterMaintenanceRepositoryPort,
   ChapterSummary,
+  CreateAgentChapterInput,
   CreateChapterInput,
   DeleteChapterInput,
   DuplicateChapterInput,
@@ -69,6 +70,17 @@ export interface CreateCreativeProjectInput {
 export interface ProjectCreationResult {
   readonly projectRoot: string;
   readonly snapshot: ProjectSnapshot;
+}
+
+export interface ImportCreativeProjectInput extends CreateCreativeProjectInput {
+  readonly chapters: readonly CreateAgentChapterInput[];
+}
+
+export interface CreativeProjectImportResult {
+  readonly projectRoot: string;
+  readonly workspace: ProjectWorkspaceSnapshot;
+  readonly importedChapterIds: readonly string[];
+  readonly lastImportedChapterId: string;
 }
 
 export interface ProjectCreationPreview {
@@ -199,6 +211,9 @@ export interface ProjectWorkspaceSession {
   createProjectInParent(
     input: CreateCreativeProjectInput
   ): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
+  importProjectInParent(
+    input: ImportCreativeProjectInput
+  ): Promise<Result<CreativeProjectImportResult, UnifiedError>>;
   /** Re-read the active project's repository-backed chapter and recovery projections. */
   refreshFromRepository(): Promise<Result<ProjectWorkspaceSnapshot, UnifiedError>>;
   listChapters(): Promise<Result<readonly ChapterSummary[], UnifiedError>>;
@@ -326,6 +341,80 @@ export function createProjectWorkspaceSession(
         return cleanupCreatedProjectAfterFailure(created.value.projectRoot, activated);
       }
       return activated;
+    },
+    async importProjectInParent(input) {
+      if (input.chapters.length === 0) {
+        return creativeProjectImportEmpty();
+      }
+
+      const created = await options.projectCreationRepository.createProjectInParent(input);
+      if (!created.ok) {
+        return created;
+      }
+
+      let acquiredLock: Result<AcquiredWorkspaceLock, UnifiedError>;
+      try {
+        acquiredLock = await acquireWorkspaceLock(created.value.projectRoot);
+      } catch (error) {
+        return cleanupCreatedProjectAfterFailure(
+          created.value.projectRoot,
+          unexpectedProjectActivationFailure(error)
+        );
+      }
+      if (!acquiredLock.ok) {
+        return cleanupCreatedProjectAfterFailure(created.value.projectRoot, acquiredLock);
+      }
+
+      try {
+        const activated = await activateProject(
+          created.value.projectRoot,
+          created.value.snapshot,
+          acquiredLock.value
+        );
+        if (!activated.ok) {
+          await releaseProjectLockBestEffort(acquiredLock.value.repository);
+          return cleanupCreatedProjectAfterFailure(created.value.projectRoot, activated);
+        }
+        if (chapterRepository?.createAgentChapter === undefined) {
+          return cleanupImportedProjectAfterFailure(
+            created.value.projectRoot,
+            creativeProjectImportUnavailable()
+          );
+        }
+
+        const importedChapterIds: string[] = [];
+        for (const chapter of input.chapters) {
+          const imported = await chapterRepository.createAgentChapter(chapter);
+          if (!imported.ok) {
+            return cleanupImportedProjectAfterFailure(created.value.projectRoot, imported);
+          }
+          importedChapterIds.push(imported.value.chapter.frontmatter.id);
+        }
+
+        const lastImportedChapterId = importedChapterIds[importedChapterIds.length - 1];
+        if (lastImportedChapterId === undefined) {
+          return cleanupImportedProjectAfterFailure(
+            created.value.projectRoot,
+            creativeProjectImportEmpty()
+          );
+        }
+        const selected = await activateChapter(lastImportedChapterId);
+        if (!selected.ok) {
+          return cleanupImportedProjectAfterFailure(created.value.projectRoot, selected);
+        }
+
+        return ok({
+          projectRoot: created.value.projectRoot,
+          workspace: selected.value,
+          importedChapterIds,
+          lastImportedChapterId
+        });
+      } catch (error) {
+        return cleanupImportedProjectAfterFailure(
+          created.value.projectRoot,
+          unexpectedProjectActivationFailure(error)
+        );
+      }
     },
     async refreshFromRepository() {
       if (state === undefined || chapterRepository === undefined) {
@@ -953,6 +1042,30 @@ export function createProjectWorkspaceSession(
     );
   }
 
+  async function cleanupImportedProjectAfterFailure<T>(
+    projectRoot: string,
+    primaryFailure: Result<T, UnifiedError>
+  ): Promise<Result<T, UnifiedError>> {
+    if (primaryFailure.ok) return primaryFailure;
+
+    let lockReleaseFailure: UnifiedError | undefined;
+    if (projectLockRepository !== undefined) {
+      try {
+        const released = await projectLockRepository.releaseProjectLock();
+        if (!released.ok) lockReleaseFailure = released.error;
+      } catch (error) {
+        lockReleaseFailure = unexpectedProjectLockReleaseFailure(error);
+      }
+    }
+    projectLockRepository = undefined;
+    return cleanupCreatedProjectAfterFailure(
+      projectRoot,
+      lockReleaseFailure === undefined
+        ? primaryFailure
+        : creativeProjectImportRollbackFailed(primaryFailure.error, lockReleaseFailure)
+    );
+  }
+
   async function releaseProjectLockBestEffort(
     repository: ProjectWorkspaceLockPort | undefined
   ): Promise<void> {
@@ -981,6 +1094,66 @@ export function createProjectWorkspaceSession(
       repository
     });
   }
+}
+
+function creativeProjectImportEmpty<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "CREATIVE_PROJECT_IMPORT_EMPTY",
+      category: "ValidationError",
+      message: "At least one chapter is required to create a project copy.",
+      recoverability: "user-action",
+      suggestedAction: "Select at least one chapter and retry.",
+      traceId: "project-workspace-session"
+    })
+  );
+}
+
+function creativeProjectImportUnavailable<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "CREATIVE_PROJECT_IMPORT_UNAVAILABLE",
+      category: "ValidationError",
+      message: "The project chapter repository cannot create managed imported chapters.",
+      recoverability: "fatal",
+      suggestedAction: "Configure a chapter repository with managed chapter creation support.",
+      traceId: "project-workspace-session"
+    })
+  );
+}
+
+function creativeProjectImportRollbackFailed<T>(
+  primaryError: UnifiedError,
+  lockReleaseError: UnifiedError
+): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "CREATIVE_PROJECT_IMPORT_ROLLBACK_FAILED",
+      category: "StorageError",
+      message: "The project import failed and its workspace lock could not be released cleanly.",
+      recoverability: "user-action",
+      suggestedAction: "Restart ShanHai before retrying the import.",
+      traceId: "project-workspace-session",
+      redactedDetail: {
+        primaryErrorCode: primaryError.code,
+        lockReleaseErrorCode: lockReleaseError.code
+      }
+    })
+  );
+}
+
+function unexpectedProjectLockReleaseFailure(error: unknown): UnifiedError {
+  return createUnifiedError({
+    code: "PROJECT_LOCK_RELEASE_FAILED",
+    category: "StorageError",
+    message: "The project workspace lock could not be released.",
+    recoverability: "retryable",
+    suggestedAction: "Restart ShanHai before reopening the workspace.",
+    traceId: "project-workspace-session",
+    redactedDetail: {
+      reason: error instanceof Error ? error.message : "Unknown lock release error"
+    }
+  });
 }
 
 interface AcquiredWorkspaceLock {

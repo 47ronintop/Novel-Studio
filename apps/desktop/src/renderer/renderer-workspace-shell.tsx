@@ -25,6 +25,7 @@ import { WorkspaceShell } from "@novel-studio/ui";
 import type { EngineeringWorkspaceSnapshot } from "@novel-studio/application";
 
 import type { WorkspaceNavigation } from "./workspace-navigation.js";
+import { brainstormingDisabledReason } from "./brainstorming-entry.js";
 
 export interface RendererWorkspaceShellProps {
   readonly appearancePreferences?: UserAppearancePreferences | undefined;
@@ -63,6 +64,7 @@ export interface RendererWorkspaceShellProps {
     ProjectWorkflowProps["onChooseCreateParentDirectory"]
   >;
   readonly onCreateChapter: ProjectWorkflowProps["onCreateChapter"];
+  readonly onStartBrainstorming: () => void;
   readonly onRenameChapter: NonNullable<ProjectWorkflowProps["onRenameChapter"]>;
   readonly onDuplicateChapter: NonNullable<ProjectWorkflowProps["onDuplicateChapter"]>;
   readonly onDeleteChapter: NonNullable<ProjectWorkflowProps["onDeleteChapter"]>;
@@ -143,6 +145,10 @@ export interface RendererWorkspaceShellProps {
 }
 
 export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
+  const brainstorming = resolveBrainstormingEntry(
+    props.agentConversationWorkspace,
+    props.onStartBrainstorming
+  );
   const projectWorkflow =
     props.projectWorkflow === undefined
       ? undefined
@@ -154,6 +160,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
           onOpenProject: props.navigation.openCreativeProject,
           onCreateProject: props.navigation.createCreativeProject,
           onCreateChapter: props.onCreateChapter,
+          ...(brainstorming === undefined ? {} : { brainstorming }),
           onOpenFile: (path) => {
             void props.navigation.navigateToFile(path);
           },
@@ -347,4 +354,17 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       onNavigatorExpandedSectionIdsChange={props.onNavigatorExpandedSectionIdsChange}
     />
   );
+}
+
+export function resolveBrainstormingEntry(
+  workspace: AgentConversationWorkspaceShellProps | undefined,
+  onStart: () => void
+): ProjectWorkflowProps["brainstorming"] | undefined {
+  if (workspace?.view.composer === undefined) return undefined;
+
+  const disabledReason = brainstormingDisabledReason(workspace);
+  return {
+    ...(disabledReason === undefined ? {} : { disabledReason }),
+    onStart
+  };
 }

@@ -3,9 +3,9 @@ import {
   toProjectWorkspaceSnapshotDto,
   validateStoryAnalysisBundle
 } from "@novel-studio/application";
-import { realpath, stat } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { basename, isAbsolute, relative } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, relative } from "node:path";
 import type {
   AgentConversationSession,
   AgentContextSession,
@@ -24,6 +24,10 @@ import type {
   CreativeProjectFileSessionIdentity,
   DesktopApplication,
   ProjectCreationPreviewDto,
+  CreativeFolderConfirmationRequest,
+  CreativeFolderCopyResult,
+  CreativeFolderPreview,
+  OpenCreativeDirectoryInspection,
   ProjectTextFileSelectionDto,
   WorkspaceActivationDto,
   EngineeringWorkspaceSnapshot,
@@ -126,7 +130,11 @@ import {
   type WorkspaceContextSourcePreferenceMutation
 } from "./workspace-context-policy-store.js";
 import type { CreativeGeneralActiveResourceProof } from "./creative-general-active-resource-proof.js";
-import { normalizeCreativeProjectFilePath } from "@novel-studio/repository";
+import {
+  DEFAULT_CREATIVE_PROJECT_FILE_POLICY,
+  normalizeCreativeProjectFilePath,
+  validateWithSchema
+} from "@novel-studio/repository";
 import {
   validateStoryBibleCreateValue,
   validateStoryBibleWriteCandidate
@@ -152,6 +160,8 @@ export interface ApplicationIpcHandlerOptions {
   readonly chooseEngineeringDirectory?: () => Promise<string | undefined>;
   readonly chooseProjectTextFile?: (workspaceRoot: string) => Promise<string | undefined>;
   readonly workspaceActivationCoordinator?: WorkspaceActivationCoordinator;
+  /** Main-owned ID source for projects created from ordinary creative folders. */
+  readonly createImportedCreativeProjectId?: () => string;
   readonly modelSecretStore?: ModelSecretStore;
   readonly publishAiSuggestionStreamEvent?: (event: AiWritingSuggestionStreamPushEvent) => void;
   readonly agentRunSession?: AgentRunSession;
@@ -254,6 +264,35 @@ interface DirectorySelection {
   readonly displayName: string;
   readonly expiresAt: number;
 }
+
+interface CreativeFolderCandidateInternal {
+  readonly relativePath: string;
+  readonly absolutePath: string;
+  readonly fileIdentity: string;
+  readonly sizeBytes: number;
+  readonly modifiedAtMs: number;
+  readonly modifiedAt: string;
+  readonly sha256: string;
+  readonly defaultTitle: string;
+  readonly naturalOrder: number;
+}
+
+interface CreativeFolderInspectionState {
+  readonly rootPath: string;
+  readonly rootIdentity: string;
+  readonly parentPath: string;
+  readonly parentIdentity: string;
+  readonly targetDisplayName: string;
+  readonly candidates: readonly CreativeFolderCandidateInternal[];
+}
+
+const CREATIVE_FOLDER_TEXT_EXTENSIONS = new Set([".txt", ".md"]);
+const CREATIVE_FOLDER_MANAGED_MARKERS = new Set(
+  [
+    ...DEFAULT_CREATIVE_PROJECT_FILE_POLICY.managedFileNames,
+    ...DEFAULT_CREATIVE_PROJECT_FILE_POLICY.managedPathSegments
+  ].map((value) => value.toLocaleLowerCase())
+);
 
 export function createAgentWriteSaveCoordinator(): AgentWriteSaveCoordinator {
   const stateByPath = new Map<string, SavePathState>();
@@ -400,6 +439,7 @@ export function createApplicationIpcHandlers(
   const activeAiSuggestionStreams = new Map<string, ActiveAiSuggestionStream>();
   const activeAiSuggestionPushStreams = new Map<string, ActiveAiSuggestionPushStream>();
   const directorySelections = new Map<string, DirectorySelection>();
+  const creativeFolderInspections = new Map<string, CreativeFolderInspectionState>();
   let nextAiSuggestionStreamId = 0;
   const publishAgentRunEvent = (event: AgentRunEvent): void => {
     try {
@@ -523,6 +563,12 @@ export function createApplicationIpcHandlers(
       UnifiedError
     >
   > {
+    const now = Date.now();
+    for (const [selectionId, selection] of directorySelections) {
+      if (selection.expiresAt > now) continue;
+      directorySelections.delete(selectionId);
+      creativeFolderInspections.delete(selectionId);
+    }
     const selected = await choose?.();
     if (selected === undefined) return ok({ canceled: true });
     try {
@@ -596,9 +642,258 @@ export function createApplicationIpcHandlers(
       selection.expiresAt <= Date.now()
     ) {
       directorySelections.delete(selectionId);
+      creativeFolderInspections.delete(selectionId);
       return err(directorySelectionInvalid());
     }
     return ok(selection);
+  }
+
+  async function inspectCreativeFolder(
+    selectionId: unknown
+  ): Promise<Result<OpenCreativeDirectoryInspection, UnifiedError>> {
+    const selection = resolveDirectorySelection(selectionId, "creative-open");
+    if (!selection.ok) return selection;
+    const rootPath = selection.value.path;
+    try {
+      const [rootStats, entries] = await Promise.all([
+        lstat(rootPath),
+        readdir(rootPath, { withFileTypes: true })
+      ]);
+      if (!rootStats.isDirectory()) return err(creativeFolderInvalid("选择的路径不是目录。"));
+      const projectPath = join(rootPath, "project.json");
+      const settingsPath = join(rootPath, "settings.json");
+      const [projectStat, settingsStat] = await Promise.all([
+        lstatIfPresent(projectPath),
+        lstatIfPresent(settingsPath)
+      ]);
+      const hasManagedMarker = entries.some((entry) =>
+        CREATIVE_FOLDER_MANAGED_MARKERS.has(entry.name.toLocaleLowerCase())
+      );
+      if (projectStat !== undefined || settingsStat !== undefined) {
+        if (
+          !projectStat?.isFile() ||
+          projectStat.isSymbolicLink() ||
+          !settingsStat?.isFile() ||
+          settingsStat.isSymbolicLink()
+        ) {
+          return err(creativeFolderInvalid("该目录包含不完整的山海项目元数据。"));
+        }
+        try {
+          const [projectText, settingsText] = await Promise.all([
+            readFile(projectPath, "utf8"),
+            readFile(settingsPath, "utf8")
+          ]);
+          const project = JSON.parse(projectText) as unknown;
+          const settings = JSON.parse(settingsText) as unknown;
+          const [projectValidation, settingsValidation] = await Promise.all([
+            validateWithSchema("project", project),
+            validateWithSchema("settings", settings)
+          ]);
+          if (!projectValidation.valid || !settingsValidation.valid) {
+            return err(creativeFolderInvalid("项目元数据格式无效，请先修复后再打开。"));
+          }
+          return ok({ kind: "existing-project" });
+        } catch {
+          return err(creativeFolderInvalid("项目元数据损坏，请先修复后再打开。"));
+        }
+      }
+      if (hasManagedMarker) {
+        return err(creativeFolderInvalid("该目录包含受管项目目录，但缺少完整项目元数据。"));
+      }
+
+      const textEntries = entries
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            CREATIVE_FOLDER_TEXT_EXTENSIONS.has(extname(entry.name).toLocaleLowerCase())
+        )
+        .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }));
+      if (textEntries.length === 0)
+        return err(creativeFolderInvalid("未找到根目录下的 .txt 或 .md 正文文件。"));
+      if (textEntries.length > DEFAULT_CREATIVE_PROJECT_FILE_POLICY.maxItems)
+        return err(creativeFolderInvalid("正文文件数量超过支持上限。"));
+
+      const parentPath = dirname(rootPath);
+      const targetDisplayName = `${basename(rootPath)} - ShanHai`;
+      const targetPath = join(parentPath, targetDisplayName);
+      if ((await lstatIfPresent(targetPath)) !== undefined) {
+        return err(creativeFolderTargetConflict());
+      }
+      const candidates: CreativeFolderCandidateInternal[] = [];
+      for (let index = 0; index < textEntries.length; index += 1) {
+        const entry = textEntries[index];
+        if (entry === undefined) continue;
+        const absolutePath = join(rootPath, entry.name);
+        if (absolutePath.length > 1024) {
+          return err(creativeFolderInvalid("正文文件路径超过支持上限。"));
+        }
+        const fileStats = await lstat(absolutePath);
+        if (
+          !fileStats.isFile() ||
+          fileStats.isSymbolicLink() ||
+          fileStats.size > DEFAULT_CREATIVE_PROJECT_FILE_POLICY.maxTextBytes
+        ) {
+          return err(creativeFolderInvalid("正文文件不是受支持的普通 UTF-8 文本文件。"));
+        }
+        const bytes = await readFile(absolutePath);
+        const defaultTitle = basename(entry.name, extname(entry.name)).trim();
+        if (defaultTitle.length === 0) {
+          return err(creativeFolderInvalid("正文文件名必须包含可用的章节标题。"));
+        }
+        try {
+          const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          if (decoded.includes("\0")) {
+            return err(creativeFolderInvalid("正文文件包含不受支持的空字符。"));
+          }
+        } catch {
+          return err(creativeFolderInvalid("正文文件必须是合法 UTF-8 编码。"));
+        }
+        candidates.push({
+          relativePath: entry.name.replaceAll("\\", "/"),
+          absolutePath,
+          fileIdentity: fileIdentity(fileStats),
+          sizeBytes: bytes.byteLength,
+          modifiedAtMs: fileStats.mtimeMs,
+          modifiedAt: new Date(fileStats.mtimeMs).toISOString(),
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          defaultTitle,
+          naturalOrder: index
+        });
+      }
+      const rootIdentity = fileIdentity(rootStats);
+      const parentStats = await lstat(parentPath);
+      const parentIdentity = fileIdentity(parentStats);
+      creativeFolderInspections.set(selectionId as string, {
+        rootPath,
+        rootIdentity,
+        parentPath,
+        parentIdentity,
+        targetDisplayName,
+        candidates
+      });
+      const preview: CreativeFolderPreview = {
+        schemaVersion: "1.0",
+        sourceDisplayName: selection.value.displayName,
+        targetDisplayName,
+        defaultProjectTitle: basename(rootPath),
+        language: "zh-CN",
+        candidates: candidates.map((candidate) => ({
+          relativePath: candidate.relativePath,
+          sizeBytes: candidate.sizeBytes,
+          modifiedAt: candidate.modifiedAt,
+          sha256: candidate.sha256,
+          defaultTitle: candidate.defaultTitle,
+          naturalOrder: candidate.naturalOrder
+        }))
+      };
+      return ok({ kind: "creative-folder", preview });
+    } catch {
+      return err(creativeFolderInvalid("无法读取所选目录。"));
+    }
+  }
+
+  async function confirmCreativeFolder(
+    input: unknown
+  ): Promise<Result<CreativeFolderCopyResult, UnifiedError>> {
+    const request = toCreativeFolderConfirmationRequest(input);
+    if (request === undefined) return invalidWorkspaceRequest<CreativeFolderCopyResult>();
+    const selection = resolveDirectorySelection(request.selectionId, "creative-open");
+    if (!selection.ok) return selection;
+    const inspection = creativeFolderInspections.get(request.selectionId);
+    directorySelections.delete(request.selectionId);
+    creativeFolderInspections.delete(request.selectionId);
+    if (inspection === undefined) return err(directorySelectionInvalid());
+    const recovery = await assertEngineeringRecovery(options);
+    if (!recovery.ok) return recovery;
+    try {
+      const [rootStats, parentStats] = await Promise.all([
+        lstat(inspection.rootPath),
+        lstat(inspection.parentPath)
+      ]);
+      if (
+        fileIdentity(rootStats) !== inspection.rootIdentity ||
+        fileIdentity(parentStats) !== inspection.parentIdentity
+      ) {
+        return err(creativeFolderInvalid("源目录已发生变化，请重新选择。"));
+      }
+      const currentEntries = await readdir(inspection.rootPath, { withFileTypes: true });
+      if (
+        currentEntries.some((entry) =>
+          CREATIVE_FOLDER_MANAGED_MARKERS.has(entry.name.toLocaleLowerCase())
+        )
+      ) {
+        return err(creativeFolderInvalid("源目录已出现山海项目数据，请重新选择。"));
+      }
+      const unique = new Set(request.relativePaths);
+      if (unique.size !== request.relativePaths.length)
+        return err(creativeFolderInvalid("正文文件不能重复选择。"));
+      const selected = inspection.candidates
+        .filter((candidate) => unique.has(candidate.relativePath))
+        .sort((left, right) => left.naturalOrder - right.naturalOrder);
+      if (selected.some((candidate) => candidate === undefined) || selected.length === 0) {
+        return err(creativeFolderInvalid("请选择至少一个有效正文文件。"));
+      }
+      if (selected.length !== request.relativePaths.length) {
+        return err(creativeFolderInvalid("请选择至少一个有效正文文件。"));
+      }
+      const chapters = [];
+      for (const candidate of selected) {
+        const currentStats = await lstat(candidate.absolutePath);
+        const bytes = await readFile(candidate.absolutePath);
+        const currentHash = createHash("sha256").update(bytes).digest("hex");
+        if (
+          !currentStats.isFile() ||
+          currentStats.isSymbolicLink() ||
+          fileIdentity(currentStats) !== candidate.fileIdentity ||
+          currentStats.size !== candidate.sizeBytes ||
+          currentStats.mtimeMs !== candidate.modifiedAtMs ||
+          currentHash !== candidate.sha256
+        ) {
+          return err(creativeFolderInvalid("正文文件已发生变化，请重新选择。"));
+        }
+        let body: string;
+        try {
+          body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          if (body.includes("\0")) {
+            return err(creativeFolderInvalid("正文文件包含不受支持的空字符。"));
+          }
+        } catch {
+          return err(creativeFolderInvalid("正文文件必须是合法 UTF-8 编码。"));
+        }
+        chapters.push({ title: candidate.defaultTitle, body });
+      }
+      const targetPath = join(inspection.parentPath, inspection.targetDisplayName);
+      if ((await lstatIfPresent(targetPath)) !== undefined)
+        return err(creativeFolderTargetConflict());
+      if (options.workspaceActivationCoordinator?.importCreativeProject === undefined) {
+        return workspaceActivationUnavailable<CreativeFolderCopyResult>();
+      }
+      const projectId =
+        options.createImportedCreativeProjectId?.() ??
+        `prj_import_${randomUUID().replaceAll("-", "")}`;
+      if (!isSafeId(projectId)) {
+        return err(creativeFolderInvalid("无法生成有效的山海项目标识。"));
+      }
+      const imported = await options.workspaceActivationCoordinator.importCreativeProject({
+        parentDirectory: inspection.parentPath,
+        folderName: inspection.targetDisplayName,
+        projectId,
+        title: basename(inspection.rootPath),
+        language: "zh-CN",
+        chapters
+      });
+      if (!imported.ok) return imported;
+      return ok({
+        schemaVersion: "1.0",
+        projectId: imported.value.projectId,
+        importedChapterIds: imported.value.importedChapterIds,
+        lastImportedChapterId: imported.value.lastImportedChapterId,
+        targetLocationLabel: inspection.targetDisplayName,
+        activation: imported.value.activation
+      });
+    } catch {
+      return err(creativeFolderInvalid("接入正文时读取源文件失败。"));
+    }
   }
 
   return {
@@ -622,6 +917,9 @@ export function createApplicationIpcHandlers(
     },
     "application:project:choose-open-creative-directory": () =>
       chooseDirectory("creative-open", options.chooseOpenProjectDirectory),
+    "application:project:inspect-open-creative-directory": (selectionId: unknown) =>
+      inspectCreativeFolder(selectionId),
+    "application:project:confirm-creative-folder": (input: unknown) => confirmCreativeFolder(input),
     "application:project:choose-create-parent-directory": () =>
       chooseDirectory("creative-create-parent", options.chooseCreateProjectDirectory),
     "application:project:get-active-workspace": () =>
@@ -631,10 +929,12 @@ export function createApplicationIpcHandlers(
         .refreshActiveProjectWorkspace()
         .then((result) => projectSnapshotResultToDto(result)),
     "application:project:open-creative-project": async (selectionId: unknown) => {
-      const recovery = await assertEngineeringRecovery(options);
-      if (!recovery.ok) return recovery;
       const selection = resolveDirectorySelection(selectionId, "creative-open");
       if (!selection.ok) return selection;
+      directorySelections.delete(selectionId as string);
+      creativeFolderInspections.delete(selectionId as string);
+      const recovery = await assertEngineeringRecovery(options);
+      if (!recovery.ok) return recovery;
       if (options.workspaceActivationCoordinator === undefined) {
         return workspaceActivationUnavailable<WorkspaceActivationDto>();
       }
@@ -4747,6 +5047,33 @@ function toCreativePreviewRequest(
   };
 }
 
+function toCreativeFolderConfirmationRequest(
+  value: unknown
+): CreativeFolderConfirmationRequest | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["selectionId", "relativePaths"]) ||
+    !isNonEmptyString(value["selectionId"]) ||
+    !Array.isArray(value["relativePaths"]) ||
+    value["relativePaths"].length === 0 ||
+    value["relativePaths"].length > DEFAULT_CREATIVE_PROJECT_FILE_POLICY.maxItems ||
+    !value["relativePaths"].every(
+      (path): path is string =>
+        typeof path === "string" &&
+        path.length > 0 &&
+        path.length <= DEFAULT_CREATIVE_PROJECT_FILE_POLICY.maxPathLength &&
+        !isAbsolute(path) &&
+        !path.includes("/") &&
+        !path.includes("\\") &&
+        path !== "." &&
+        path !== ".."
+    )
+  ) {
+    return undefined;
+  }
+  return { selectionId: value["selectionId"], relativePaths: value["relativePaths"] };
+}
+
 function toCreateCreativeProjectRequest(value: unknown):
   | {
       readonly parentSelectionId: string;
@@ -5164,6 +5491,52 @@ function directorySelectionInvalid(): UnifiedError {
     suggestedAction: "Choose the directory again.",
     traceId: "desktop-directory-selection"
   });
+}
+
+function creativeFolderInvalid(message: string): UnifiedError {
+  return createUnifiedError({
+    code: "CREATIVE_FOLDER_INVALID",
+    category: "ValidationError",
+    message,
+    recoverability: "user-action",
+    suggestedAction: "修复目录内容或重新选择一个普通正文文件夹。",
+    traceId: "desktop-creative-folder-import"
+  });
+}
+
+function creativeFolderTargetConflict(): UnifiedError {
+  return createUnifiedError({
+    code: "CREATIVE_FOLDER_TARGET_CONFLICT",
+    category: "UserError",
+    message: "同级目标项目目录已存在。",
+    recoverability: "user-action",
+    suggestedAction: "移走已有目标目录后重试。",
+    traceId: "desktop-creative-folder-import"
+  });
+}
+
+function fileIdentity(stats: Awaited<ReturnType<typeof lstat>>): string {
+  return `${stats.dev}:${stats.ino}`;
+}
+
+async function lstatIfPresent(
+  path: string
+): Promise<Awaited<ReturnType<typeof lstat>> | undefined> {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) return undefined;
+    throw error;
+  }
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === code
+  );
 }
 
 function projectTextFileSelectionInvalid(): UnifiedError {

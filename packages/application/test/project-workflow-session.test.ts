@@ -32,6 +32,265 @@ afterEach(async () => {
 });
 
 describe("M12 project workflow session", () => {
+  test("rejects an empty managed import before creating a project directory", async () => {
+    let createCalls = 0;
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: {
+        async previewProjectInParent() {
+          throw new Error("not used");
+        },
+        async createProjectInParent() {
+          createCalls += 1;
+          throw new Error("must not create");
+        },
+        async cleanupCreatedProject() {
+          throw new Error("must not clean");
+        }
+      },
+      createProjectRepository: () => {
+        throw new Error("not used");
+      },
+      createChapterRepository: () => {
+        throw new Error("not used");
+      },
+      createHistoryRepository: () => {
+        throw new Error("not used");
+      },
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+
+    const imported = await session.importProjectInParent({
+      parentDirectory: "D:/Novel",
+      folderName: "empty",
+      projectId: "prj_empty_import",
+      title: "empty",
+      language: "zh-CN",
+      chapters: []
+    });
+
+    expect(imported).toMatchObject({
+      ok: false,
+      error: { code: "CREATIVE_PROJECT_IMPORT_EMPTY" }
+    });
+    expect(createCalls).toBe(0);
+  });
+
+  test("imports managed chapters and selects the last imported chapter", async () => {
+    const parentDirectory = await createTempRoot();
+    const canonicalParent = await realpath(parentDirectory);
+    const creationRepository = new ProjectCreationFileRepository({
+      now: () => "2026-07-19T00:00:00.000Z"
+    });
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: creationRepository,
+      now: () => "2026-07-19T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({ projectRoot: root, now: () => "2026-07-19T00:00:00.000Z" }),
+      createChapterRepository: (root) =>
+        new ChapterFileRepository({ projectRoot: root, now: () => "2026-07-19T00:00:00.000Z" }),
+      createHistoryRepository: (root) =>
+        new HistoryRepository({
+          projectRoot: root,
+          now: () => "2026-07-19T00:00:00.000Z",
+          createVersionId: () => "ver_import"
+        }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+
+    const imported = await session.importProjectInParent({
+      parentDirectory,
+      folderName: "source - ShanHai",
+      projectId: "prj_import",
+      title: "source",
+      language: "zh-CN",
+      chapters: [
+        { title: "开篇", body: "第一段\n" },
+        { title: "终章", body: "最后一段\n" }
+      ]
+    });
+
+    expect(isOk(imported)).toBe(true);
+    if (isErr(imported)) throw new Error(imported.error.message);
+    expect(imported.value.projectRoot).toBe(join(canonicalParent, "source - ShanHai"));
+    expect(imported.value.importedChapterIds).toHaveLength(2);
+    expect(imported.value.lastImportedChapterId).toBe(imported.value.importedChapterIds[1]);
+    expect(imported.value.workspace.activeChapterId).toBe(imported.value.lastImportedChapterId);
+    const chapters = await session.listChapters();
+    expect(chapters).toMatchObject({ ok: true, value: [{ title: "开篇" }, { title: "终章" }] });
+    const last = await new ChapterFileRepository({
+      projectRoot: imported.value.projectRoot,
+      now: () => "2026-07-19T00:00:00.000Z"
+    }).readChapter(imported.value.lastImportedChapterId);
+    expect(last).toMatchObject({ ok: true, value: { body: "最后一段\n" } });
+  });
+
+  test("cleans up and releases the candidate lock when chapter import fails", async () => {
+    const parentDirectory = await createTempRoot();
+    const candidateRoot = join(await realpath(parentDirectory), "failed-import");
+    const locks = new Map<string, ProjectWorkspaceLock>();
+    const creationRepository = new ProjectCreationFileRepository({
+      now: () => "2026-07-19T00:00:00.000Z"
+    });
+    let chapterCreates = 0;
+    const failedChapter = createUnifiedError({
+      code: "TEST_IMPORT_CHAPTER_FAILED",
+      category: "StorageError",
+      message: "The second chapter could not be written.",
+      recoverability: "retryable",
+      suggestedAction: "Retry the import.",
+      traceId: "test-import"
+    });
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: creationRepository,
+      now: () => "2026-07-19T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({ projectRoot: root, now: () => "2026-07-19T00:00:00.000Z" }),
+      createChapterRepository: (root) => {
+        const repository = new ChapterFileRepository({
+          projectRoot: root,
+          now: () => "2026-07-19T00:00:00.000Z"
+        });
+        const createAgentChapter = repository.createAgentChapter.bind(repository);
+        repository.createAgentChapter = async (input) => {
+          chapterCreates += 1;
+          if (chapterCreates === 2) return err(failedChapter);
+          return createAgentChapter(input);
+        };
+        return repository;
+      },
+      createHistoryRepository: (root) => new HistoryRepository({ projectRoot: root }),
+      createRecoveryRepository: () => emptyRecoveryRepository(),
+      createProjectLockRepository: (root) => createMemoryLockRepository(root, "import", locks)
+    });
+
+    const imported = await session.importProjectInParent({
+      parentDirectory,
+      folderName: "failed-import",
+      projectId: "prj_failed_import",
+      title: "failed-import",
+      language: "zh-CN",
+      chapters: [
+        { title: "第一章", body: "ok\n" },
+        { title: "第二章", body: "fails\n" }
+      ]
+    });
+
+    expect(imported).toMatchObject({ ok: false, error: { code: "TEST_IMPORT_CHAPTER_FAILED" } });
+    expect(locks.has(candidateRoot)).toBe(false);
+    await expect(pathExists(candidateRoot)).resolves.toBe(false);
+  });
+
+  test("reports a lock rollback failure while still cleaning the imported project", async () => {
+    const parentDirectory = await createTempRoot();
+    const candidateRoot = join(await realpath(parentDirectory), "failed-lock-release");
+    const creationRepository = new ProjectCreationFileRepository({
+      now: () => "2026-07-19T00:00:00.000Z"
+    });
+    const chapterFailure = createUnifiedError({
+      code: "TEST_IMPORT_CHAPTER_FAILED",
+      category: "StorageError",
+      message: "The chapter could not be written.",
+      recoverability: "retryable",
+      suggestedAction: "Retry the import.",
+      traceId: "test-import"
+    });
+    const lockFailure = createUnifiedError({
+      code: "PROJECT_LOCK_RELEASE_FAILED",
+      category: "StorageError",
+      message: "The lock could not be released.",
+      recoverability: "retryable",
+      suggestedAction: "Restart ShanHai.",
+      traceId: "test-import"
+    });
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: creationRepository,
+      now: () => "2026-07-19T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({ projectRoot: root, now: () => "2026-07-19T00:00:00.000Z" }),
+      createChapterRepository: (root) => {
+        const repository = new ChapterFileRepository({ projectRoot: root });
+        repository.createAgentChapter = async () => err(chapterFailure);
+        return repository;
+      },
+      createHistoryRepository: (root) => new HistoryRepository({ projectRoot: root }),
+      createRecoveryRepository: () => emptyRecoveryRepository(),
+      createProjectLockRepository: () => ({
+        async acquireProjectLock() {
+          return ok({
+            schemaVersion: "1.0",
+            ownerId: "import",
+            projectRoot: candidateRoot,
+            acquiredAt: "2026-07-19T00:00:00.000Z"
+          });
+        },
+        async releaseProjectLock() {
+          return err(lockFailure);
+        }
+      })
+    });
+
+    const imported = await session.importProjectInParent({
+      parentDirectory,
+      folderName: "failed-lock-release",
+      projectId: "prj_failed_lock_release",
+      title: "failed-lock-release",
+      language: "zh-CN",
+      chapters: [{ title: "第一章", body: "body\n" }]
+    });
+
+    expect(imported).toMatchObject({
+      ok: false,
+      error: {
+        code: "CREATIVE_PROJECT_IMPORT_ROLLBACK_FAILED",
+        redactedDetail: {
+          primaryErrorCode: "TEST_IMPORT_CHAPTER_FAILED",
+          lockReleaseErrorCode: "PROJECT_LOCK_RELEASE_FAILED"
+        }
+      }
+    });
+    await expect(pathExists(candidateRoot)).resolves.toBe(false);
+  });
+
+  test("cleans up when the project chapter repository lacks managed creation", async () => {
+    const parentDirectory = await createTempRoot();
+    const candidateRoot = join(await realpath(parentDirectory), "unsupported-import");
+    const creationRepository = new ProjectCreationFileRepository({
+      now: () => "2026-07-19T00:00:00.000Z"
+    });
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: creationRepository,
+      now: () => "2026-07-19T00:00:00.000Z",
+      createProjectRepository: (root) =>
+        new ProjectFileRepository({ projectRoot: root, now: () => "2026-07-19T00:00:00.000Z" }),
+      createChapterRepository: (root) => {
+        const repository = new ChapterFileRepository({ projectRoot: root });
+        return {
+          readChapter: (chapterId) => repository.readChapter(chapterId),
+          writeChapter: (chapter) => repository.writeChapter(chapter),
+          listChapters: () => repository.listChapters(),
+          createChapter: (input) => repository.createChapter(input)
+        };
+      },
+      createHistoryRepository: (root) => new HistoryRepository({ projectRoot: root }),
+      createRecoveryRepository: () => emptyRecoveryRepository()
+    });
+
+    const imported = await session.importProjectInParent({
+      parentDirectory,
+      folderName: "unsupported-import",
+      projectId: "prj_unsupported_import",
+      title: "unsupported-import",
+      language: "zh-CN",
+      chapters: [{ title: "第一章", body: "body\n" }]
+    });
+
+    expect(imported).toMatchObject({
+      ok: false,
+      error: { code: "CREATIVE_PROJECT_IMPORT_UNAVAILABLE" }
+    });
+    await expect(pathExists(candidateRoot)).resolves.toBe(false);
+  });
+
   test("creates and activates a project in a dedicated child directory", async () => {
     const parentDirectory = await createTempRoot();
     const canonicalParent = await realpath(parentDirectory);

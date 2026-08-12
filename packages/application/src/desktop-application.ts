@@ -74,6 +74,7 @@ import type {
 } from "./ai-writing-workflow-session.js";
 import type {
   CreateCreativeProjectInput,
+  ImportCreativeProjectInput,
   ProjectCreationPreview,
   ProjectCreationRepositoryPort,
   ProjectRecoveryApplyResult,
@@ -226,6 +227,13 @@ export type PreparedWorkspaceActivation =
       readonly engineeringWorkspace: EngineeringWorkspaceSnapshot;
     };
 
+export interface PreparedCreativeProjectImport {
+  readonly activation: Extract<PreparedWorkspaceActivation, { readonly creativeProject: unknown }>;
+  readonly projectId: string;
+  readonly importedChapterIds: readonly string[];
+  readonly lastImportedChapterId: string;
+}
+
 export type WorkspaceActivationDto =
   | {
       readonly context: Extract<WorkspaceContextDto, { readonly kind: "creativeProject" }>;
@@ -272,6 +280,9 @@ export interface DesktopApplication {
   prepareCreateCreativeProject(
     input: CreateCreativeProjectInput
   ): Promise<Result<PreparedWorkspaceActivation, UnifiedError>>;
+  prepareImportCreativeProject(
+    input: ImportCreativeProjectInput
+  ): Promise<Result<PreparedCreativeProjectImport, UnifiedError>>;
   prepareOpenEngineeringWorkspace(
     contentRoot: string
   ): Promise<Result<PreparedWorkspaceActivation, UnifiedError>>;
@@ -755,6 +766,24 @@ export function createDesktopApplication(
       const created = await session.createProjectInParent(input);
       if (!created.ok) return created;
       return storeCreativeActivation(session, created.value, created.value.projectRoot);
+    },
+    async prepareImportCreativeProject(input) {
+      const session = createProjectCandidateSession();
+      if (session === undefined) return projectWorkspaceUnavailable();
+      const imported = await session.importProjectInParent(input);
+      if (!imported.ok) return imported;
+      const stored = storeCreativeActivation(
+        session,
+        imported.value.workspace,
+        imported.value.projectRoot
+      );
+      if (!stored.ok) return stored;
+      return ok({
+        activation: stored.value,
+        projectId: imported.value.workspace.project.projectId,
+        importedChapterIds: imported.value.importedChapterIds,
+        lastImportedChapterId: imported.value.lastImportedChapterId
+      });
     },
     async prepareOpenEngineeringWorkspace(contentRoot) {
       const session = createEngineeringCandidateSession();
@@ -1623,7 +1652,10 @@ export function createDesktopApplication(
     session: ProjectWorkspaceSession,
     snapshot: ProjectWorkspaceSnapshot,
     createdProjectRoot?: string
-  ): Result<PreparedWorkspaceActivation, UnifiedError> {
+  ): Result<
+    Extract<PreparedWorkspaceActivation, { readonly creativeProject: unknown }>,
+    UnifiedError
+  > {
     const activationId = createActivationId();
     const context: Extract<WorkspaceActivationContext, { readonly kind: "creativeProject" }> = {
       kind: "creativeProject",

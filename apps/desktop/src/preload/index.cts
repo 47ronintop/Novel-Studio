@@ -32,6 +32,8 @@ import type {
   ConfigAssetSnapshot,
   ConfigAssetType,
   ConfigVersionSummary,
+  CreativeFolderConfirmationRequest,
+  CreativeFolderCopyResult,
   CreativeProjectFileDocument,
   CreativeProjectFileLifecycleCommand,
   CreativeProjectFileLifecycleReceipt,
@@ -53,6 +55,7 @@ import type {
   ModelSettingsSnapshot,
   NativeMenuCommandId,
   NovelStudioApi,
+  OpenCreativeDirectoryInspection,
   PackedAgentContextPreview,
   ReadAgentPermissionSummaryQuery,
   PluginSettingsSnapshot,
@@ -166,6 +169,16 @@ const api: NovelStudioApi = {
     chooseOpenCreativeDirectory: () =>
       invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(
         "application:project:choose-open-creative-directory"
+      ),
+    inspectOpenCreativeDirectory: (selectionId: string) =>
+      invokeTyped<Result<OpenCreativeDirectoryInspection, UnifiedError>>(
+        "application:project:inspect-open-creative-directory",
+        selectionId
+      ),
+    confirmCreativeFolder: (request: CreativeFolderConfirmationRequest) =>
+      invokeTyped<Result<CreativeFolderCopyResult, UnifiedError>>(
+        "application:project:confirm-creative-folder",
+        request
       ),
     chooseCreateParentDirectory: () =>
       invokeTyped<Result<ProjectDirectorySelectionDto, UnifiedError>>(

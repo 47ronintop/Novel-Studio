@@ -299,6 +299,12 @@ export interface NovelStudioApi {
     getActiveWorkspace(): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     refreshActiveWorkspace(): Promise<Result<ProjectWorkspaceSnapshotDto, UnifiedError>>;
     chooseOpenCreativeDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
+    inspectOpenCreativeDirectory(
+      selectionId: string
+    ): Promise<Result<OpenCreativeDirectoryInspection, UnifiedError>>;
+    confirmCreativeFolder(
+      request: CreativeFolderConfirmationRequest
+    ): Promise<Result<CreativeFolderCopyResult, UnifiedError>>;
     chooseCreateParentDirectory(): Promise<Result<ProjectDirectorySelectionDto, UnifiedError>>;
     openCreativeProject(selectionId: string): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
     previewCreativeProject(input: {
@@ -758,6 +764,42 @@ export interface ProjectDirectorySelectionDto {
   readonly canceled: boolean;
   readonly selectionId?: string;
   readonly displayName?: string;
+}
+
+export interface CreativeFolderCandidate {
+  readonly relativePath: string;
+  readonly sizeBytes: number;
+  readonly modifiedAt: string;
+  readonly sha256: string;
+  readonly defaultTitle: string;
+  readonly naturalOrder: number;
+}
+
+export interface CreativeFolderPreview {
+  readonly schemaVersion: "1.0";
+  readonly sourceDisplayName: string;
+  readonly targetDisplayName: string;
+  readonly defaultProjectTitle: string;
+  readonly language: "zh-CN";
+  readonly candidates: readonly CreativeFolderCandidate[];
+}
+
+export type OpenCreativeDirectoryInspection =
+  | { readonly kind: "existing-project" }
+  | { readonly kind: "creative-folder"; readonly preview: CreativeFolderPreview };
+
+export interface CreativeFolderConfirmationRequest {
+  readonly selectionId: string;
+  readonly relativePaths: readonly string[];
+}
+
+export interface CreativeFolderCopyResult {
+  readonly schemaVersion: "1.0";
+  readonly projectId: string;
+  readonly importedChapterIds: readonly string[];
+  readonly lastImportedChapterId: string;
+  readonly targetLocationLabel: string;
+  readonly activation: WorkspaceActivationDto;
 }
 
 export interface ProjectTextFileSelectionDto {

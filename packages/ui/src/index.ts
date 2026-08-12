@@ -169,6 +169,8 @@ export type {
 } from "./workspace-navigator.js";
 export { ProjectCreateDialog } from "./project-create-dialog.js";
 export type { ProjectCreateDialogProps } from "./project-create-dialog.js";
+export { ProjectFolderImportDialog } from "./project-folder-import-dialog.js";
+export type { ProjectFolderImportDialogProps } from "./project-folder-import-dialog.js";
 export type {
   AiWorkflowObservabilityProps,
   AiWorkflowObservedStepKind,
@@ -232,6 +234,7 @@ export type {
   ProjectWorkflowRecoveryReviewProps,
   ProjectWorkflowProps,
   ProjectWorkflowFeedback,
+  ProjectFolderImportPreviewProps,
   StoryBibleConsistencyIssueProps,
   StoryBibleConsistencyProps,
   StoryBibleConsistencyRefProps,

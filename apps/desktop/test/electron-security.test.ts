@@ -40,6 +40,8 @@ describe("Electron security baseline", () => {
       "application:list-commands",
       "application:execute-command",
       "application:project:choose-open-creative-directory",
+      "application:project:inspect-open-creative-directory",
+      "application:project:confirm-creative-folder",
       "application:project:choose-create-parent-directory",
       "application:project:get-active-workspace",
       "application:project:refresh-active-workspace",

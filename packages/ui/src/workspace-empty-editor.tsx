@@ -1,4 +1,4 @@
-import { FilePlus } from "lucide-react";
+import { FilePlus, Sparkles } from "lucide-react";
 import type { ProjectWorkflowProps } from "./workspace-shell-types.js";
 
 export function WorkspaceEmptyEditor({
@@ -23,6 +23,9 @@ export function WorkspaceEmptyEditor({
     );
   }
 
+  const emptyActiveProject = hasActiveProject && projectWorkflow?.chapters.length === 0;
+  const brainstorming = emptyActiveProject ? projectWorkflow?.brainstorming : undefined;
+
   return (
     <section className="ns-empty-editor" aria-label="空章节工作区">
       <div>
@@ -31,22 +34,44 @@ export function WorkspaceEmptyEditor({
         </div>
         <p>
           {hasActiveProject
-            ? "创建第一章后开始写正文。"
+            ? emptyActiveProject
+              ? "先构思故事方向，或直接创建第一章开始写正文。"
+              : "从章节列表选择要继续编辑的章节。"
             : "新建一个创作项目，或打开已有项目继续编辑。"}
         </p>
       </div>
-      {hasActiveProject ? (
-        <button
-          aria-label="新建第一章"
-          className="ns-icon-text-button"
-          disabled={projectWorkflow === undefined || isProjectWorkflowBusy(projectWorkflow)}
-          onClick={projectWorkflow?.onCreateChapter}
-          type="button"
-        >
-          <FilePlus aria-hidden="true" size={14} />
-          新建第一章
-        </button>
-      ) : (
+      {emptyActiveProject ? (
+        <div className="ns-empty-editor-actions">
+          {brainstorming === undefined ? null : (
+            <button
+              aria-label="开始构思"
+              className="ns-icon-text-button"
+              disabled={brainstorming.disabledReason !== undefined}
+              onClick={brainstorming.onStart}
+              title={brainstorming.disabledReason}
+              type="button"
+            >
+              <Sparkles aria-hidden="true" size={14} />
+              开始构思
+            </button>
+          )}
+          <button
+            aria-label="新建第一章"
+            className="ns-icon-text-button"
+            disabled={projectWorkflow === undefined || isProjectWorkflowBusy(projectWorkflow)}
+            onClick={projectWorkflow?.onCreateChapter}
+            type="button"
+          >
+            <FilePlus aria-hidden="true" size={14} />
+            新建第一章
+          </button>
+          {brainstorming?.disabledReason === undefined ? null : (
+            <p className="ns-empty-editor-action-status" role="status">
+              {brainstorming.disabledReason}
+            </p>
+          )}
+        </div>
+      ) : hasActiveProject ? null : (
         <div className="ns-empty-editor-actions">
           <button
             aria-label="新建创作项目"

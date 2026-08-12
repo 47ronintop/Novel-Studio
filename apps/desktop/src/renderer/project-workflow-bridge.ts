@@ -16,6 +16,9 @@ export interface ProjectWorkflowBridge {
   setProjectFolderNameInput(folderName: string): ProjectWorkflowProps;
   chooseCreateParentDirectory(): Promise<ProjectWorkflowProps>;
   openProject(): Promise<ProjectWorkflowProps>;
+  setFolderImportCandidateSelected(relativePath: string, selected: boolean): ProjectWorkflowProps;
+  cancelFolderImport(): ProjectWorkflowProps;
+  confirmFolderImport(): Promise<ProjectWorkflowProps>;
   createProject(): Promise<ProjectWorkflowProps>;
   createExampleProject(): Promise<ProjectWorkflowProps>;
   createChapter(): Promise<ProjectWorkflowProps>;
@@ -58,6 +61,13 @@ export function createProjectWorkflowBridge(
   let selectedParentSelectionId: string | undefined;
   let selectedParentDisplayName: string | undefined;
   let creationPreview: ProjectWorkflowProps["creationPreview"] | undefined;
+  let folderImport:
+    | {
+        readonly selectionId: string;
+        readonly preview: NonNullable<ProjectWorkflowProps["folderImportPreview"]>;
+        readonly selectedPaths: ReadonlySet<string>;
+      }
+    | undefined;
   let previewRevision = 0;
   let status: ProjectWorkflowProps["status"] = "idle";
   let feedback: ProjectWorkflowProps["feedback"] | undefined;
@@ -141,6 +151,34 @@ export function createProjectWorkflowBridge(
           feedback = { kind: "info", message: "Project opening was canceled." };
           return toProps();
         }
+        const inspected = await api.project.inspectOpenCreativeDirectory(
+          selected.value.selectionId
+        );
+        if (!inspected.ok) {
+          return fail(inspected.error.message, previousStatus);
+        }
+        if (inspected.value.kind === "creative-folder") {
+          const selectedPaths = new Set(
+            inspected.value.preview.candidates.map((candidate) => candidate.relativePath)
+          );
+          folderImport = {
+            selectionId: selected.value.selectionId,
+            preview: {
+              sourceDisplayName: inspected.value.preview.sourceDisplayName,
+              targetDisplayName: inspected.value.preview.targetDisplayName,
+              candidates: inspected.value.preview.candidates.map((candidate) => ({
+                relativePath: candidate.relativePath,
+                sizeBytes: candidate.sizeBytes,
+                defaultTitle: candidate.defaultTitle,
+                selected: true
+              })),
+              busy: false
+            },
+            selectedPaths
+          };
+          status = previousStatus;
+          return toProps();
+        }
         const opened = await api.project.openCreativeProject(selected.value.selectionId);
         if (!opened.ok) {
           return fail(opened.error.message, previousStatus);
@@ -154,6 +192,67 @@ export function createProjectWorkflowBridge(
         return toProps();
       } catch (error) {
         return fail(toErrorMessage(error), previousStatus);
+      }
+    },
+    setFolderImportCandidateSelected(relativePath, selected) {
+      if (
+        folderImport === undefined ||
+        !folderImport.preview?.candidates.some(
+          (candidate) => candidate.relativePath === relativePath
+        )
+      ) {
+        return toProps();
+      }
+      const selectedPaths = new Set(folderImport.selectedPaths);
+      if (selected) selectedPaths.add(relativePath);
+      else selectedPaths.delete(relativePath);
+      folderImport = { ...folderImport, selectedPaths };
+      feedback = undefined;
+      return toProps();
+    },
+    cancelFolderImport() {
+      folderImport = undefined;
+      feedback = undefined;
+      return toProps();
+    },
+    async confirmFolderImport() {
+      if (folderImport === undefined || folderImport.preview === undefined) return toProps();
+      const pendingImport = folderImport;
+      if (pendingImport.selectedPaths.size === 0) {
+        feedback = { kind: "error", message: "请至少选择一份章节文件。" };
+        return toProps();
+      }
+      status = "creating";
+      folderImport = {
+        ...pendingImport,
+        preview: { ...pendingImport.preview, busy: true }
+      };
+      try {
+        const copied = await api.project.confirmCreativeFolder({
+          selectionId: pendingImport.selectionId,
+          relativePaths: pendingImport.preview.candidates
+            .filter((candidate) => pendingImport.selectedPaths.has(candidate.relativePath))
+            .map((candidate) => candidate.relativePath)
+        });
+        folderImport = undefined;
+        if (!copied.ok)
+          return fail(copied.error.message, snapshot === undefined ? "idle" : "ready");
+        if (!("creativeProject" in copied.value.activation)) {
+          return fail(
+            "The imported folder could not be activated as a creative project.",
+            snapshot === undefined ? "idle" : "ready"
+          );
+        }
+        adoptSnapshot(copied.value.activation.creativeProject);
+        status = "ready";
+        feedback = {
+          kind: "info",
+          message: `项目已创建在 ${copied.value.targetLocationLabel}，源文件夹未被修改。`
+        };
+        return toProps();
+      } catch (error) {
+        folderImport = undefined;
+        return fail(toErrorMessage(error), snapshot === undefined ? "idle" : "ready");
       }
     },
     async createProject() {
@@ -387,6 +486,17 @@ export function createProjectWorkflowBridge(
       ...(selectedParentSelectionId === undefined ? {} : { selectedParentSelectionId }),
       ...(selectedParentDisplayName === undefined ? {} : { selectedParentDisplayName }),
       ...(creationPreview === undefined ? {} : { creationPreview }),
+      ...(folderImport?.preview === undefined
+        ? {}
+        : {
+            folderImportPreview: {
+              ...folderImport.preview,
+              candidates: folderImport.preview.candidates.map((candidate) => ({
+                ...candidate,
+                selected: folderImport?.selectedPaths.has(candidate.relativePath) ?? false
+              }))
+            }
+          }),
       status: status ?? "idle",
       ...(feedback === undefined ? {} : { feedback }),
       chapters: snapshot?.chapters ?? [],

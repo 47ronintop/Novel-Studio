@@ -35,13 +35,17 @@ describe("project workflow bridge", () => {
     expect(refreshed).toMatchObject({ projectId: "prj_m12", status: "ready" });
   });
 
-  test("opens a creative project explicitly without an ordinary-folder fallback", async () => {
+  test("inspects and opens an existing creative project", async () => {
+    const inspectOpenCreativeDirectory = vi.fn(async () =>
+      ok({ kind: "existing-project" as const })
+    );
     const openCreativeProject = vi.fn(async () => ok(creativeActivation()));
-    const api = createApi({ openCreativeProject });
+    const api = createApi({ inspectOpenCreativeDirectory, openCreativeProject });
     const bridge = createProjectWorkflowBridge(api);
 
     const opened = await bridge.openProject();
 
+    expect(inspectOpenCreativeDirectory).toHaveBeenCalledWith("selection_open");
     expect(openCreativeProject).toHaveBeenCalledWith("selection_open");
     expect(opened).toMatchObject({
       projectId: "prj_m12",
@@ -52,6 +56,78 @@ describe("project workflow bridge", () => {
     expect(opened).not.toHaveProperty("fileTree");
     expect(opened).not.toHaveProperty("canInitializeProject");
     expect(JSON.stringify(opened)).not.toContain("D:/");
+  });
+
+  test("previews an ordinary folder and imports only selected relative paths", async () => {
+    const openCreativeProject = vi.fn(async () => ok(creativeActivation()));
+    const confirmCreativeFolder = vi.fn(async () =>
+      ok({
+        schemaVersion: "1.0" as const,
+        projectId: "prj_imported",
+        importedChapterIds: ["chapter_1"],
+        lastImportedChapterId: "chapter_1",
+        targetLocationLabel: "Books / Draft - ShanHai",
+        activation: creativeActivation("prj_imported", "Draft")
+      })
+    );
+    const bridge = createProjectWorkflowBridge(
+      createApi({
+        inspectOpenCreativeDirectory: async () =>
+          ok({
+            kind: "creative-folder" as const,
+            preview: {
+              schemaVersion: "1.0" as const,
+              sourceDisplayName: "Draft",
+              targetDisplayName: "Draft - ShanHai",
+              defaultProjectTitle: "Draft",
+              language: "zh-CN" as const,
+              candidates: [
+                {
+                  relativePath: "01.md",
+                  sizeBytes: 12,
+                  modifiedAt: "2026-08-12T00:00:00.000Z",
+                  sha256: "a".repeat(64),
+                  defaultTitle: "01",
+                  naturalOrder: 1
+                },
+                {
+                  relativePath: "02.txt",
+                  sizeBytes: 24,
+                  modifiedAt: "2026-08-12T00:00:00.000Z",
+                  sha256: "b".repeat(64),
+                  defaultTitle: "02",
+                  naturalOrder: 2
+                }
+              ]
+            }
+          }),
+        confirmCreativeFolder,
+        openCreativeProject
+      })
+    );
+
+    const previewed = await bridge.openProject();
+    expect(
+      previewed.folderImportPreview?.candidates.map((candidate) => candidate.selected)
+    ).toEqual([true, true]);
+    expect(openCreativeProject).not.toHaveBeenCalled();
+
+    bridge.setFolderImportCandidateSelected("02.txt", false);
+    const imported = await bridge.confirmFolderImport();
+
+    expect(confirmCreativeFolder).toHaveBeenCalledWith({
+      selectionId: "selection_open",
+      relativePaths: ["01.md"]
+    });
+    expect(imported).toMatchObject({
+      projectId: "prj_imported",
+      status: "ready",
+      feedback: {
+        kind: "info",
+        message: "项目已创建在 Books / Draft - ShanHai，源文件夹未被修改。"
+      }
+    });
+    expect(imported.folderImportPreview).toBeUndefined();
   });
 
   test("keeps the current project when an explicit creative open fails", async () => {
@@ -319,6 +395,10 @@ function createApi(overrides: Record<string, unknown> = {}): NovelStudioApi {
     getActiveWorkspace: async () => ok(creativeSnapshot()),
     chooseOpenCreativeDirectory: async () =>
       ok({ canceled: false, selectionId: "selection_open", displayName: "M12" }),
+    inspectOpenCreativeDirectory: async () => ok({ kind: "existing-project" as const }),
+    confirmCreativeFolder: async () => {
+      throw new Error("not used");
+    },
     chooseCreateParentDirectory: async () =>
       ok({ canceled: false, selectionId: "selection_parent", displayName: "Books" }),
     openCreativeProject: async () => ok(creativeActivation()),

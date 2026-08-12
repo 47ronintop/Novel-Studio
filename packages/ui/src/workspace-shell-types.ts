@@ -177,6 +177,7 @@ export interface ProjectWorkflowProps {
     readonly parentDisplayName: string;
     readonly targetDisplayName: string;
   };
+  readonly folderImportPreview?: ProjectFolderImportPreviewProps;
   readonly status?: ProjectWorkflowStatus;
   readonly feedback?: ProjectWorkflowFeedback;
   readonly chapters: readonly ChapterSummary[];
@@ -185,6 +186,10 @@ export interface ProjectWorkflowProps {
   readonly dirtyChapterIds?: readonly string[];
   readonly recovery?: ProjectWorkflowRecoveryProps;
   readonly health?: ProjectWorkspaceHealth;
+  readonly brainstorming?: {
+    readonly disabledReason?: string;
+    readonly onStart: () => void;
+  };
   readonly onProjectTitleChange?: ((title: string) => void) | undefined;
   readonly onProjectFolderNameChange?: ((folderName: string) => void) | undefined;
   readonly onChooseCreateParentDirectory?: (() => void) | undefined;
@@ -200,6 +205,18 @@ export interface ProjectWorkflowProps {
   readonly onPreviewRecoveryDraft?: (sessionId: string) => void;
   readonly onApplyRecoveryDraft?: (sessionId: string) => void;
   readonly onDiscardRecoveryDraft?: (sessionId: string) => void;
+}
+
+export interface ProjectFolderImportPreviewProps {
+  readonly sourceDisplayName: string;
+  readonly targetDisplayName: string;
+  readonly candidates: readonly {
+    readonly relativePath: string;
+    readonly sizeBytes: number;
+    readonly defaultTitle: string;
+    readonly selected: boolean;
+  }[];
+  readonly busy: boolean;
 }
 
 export interface PlainFileEditorProps {
@@ -328,6 +345,8 @@ export interface AgentComposerProps {
   readonly active: boolean;
   readonly disabled?: boolean;
   readonly disabledReason?: string;
+  /** Monotonic Renderer-owned request used to focus the controlled draft input. */
+  readonly focusRequestId?: number;
   /** Presentation-only context filtering; the underlying Stage 5 enum remains unchanged. */
   readonly availableContextModes?: readonly AgentContextMode[];
   /** Optional selection/style actions rendered in the existing Composer toolbar. */

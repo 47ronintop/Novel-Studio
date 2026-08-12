@@ -345,6 +345,9 @@ function createProjectWorkspaceSessionStub(initialProjectRoot: string): ProjectW
     async createProjectInParent() {
       throw new Error("not used");
     },
+    async importProjectInParent() {
+      throw new Error("not used");
+    },
     async refreshFromRepository() {
       return ok(snapshot);
     },

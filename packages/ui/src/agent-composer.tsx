@@ -268,6 +268,7 @@ function operationModeLabel(mode: AgentComposerProps["operationMode"]): string {
 }
 
 export function AgentComposer(props: AgentComposerProps) {
+  const requestInputRef = useRef<HTMLTextAreaElement>(null);
   const planningOptionRef = useRef<HTMLButtonElement>(null);
   const executionOptionRef = useRef<HTMLButtonElement>(null);
   const draftDisabled = props.disabled === true || props.active;
@@ -301,6 +302,11 @@ export function AgentComposer(props: AgentComposerProps) {
       ? selectedModelLabel
       : `${selectedModelLabel} · ${reasoningLabel(reasoning.current)}`;
 
+  useEffect(() => {
+    if (props.focusRequestId === undefined) return;
+    requestInputRef.current?.focus();
+  }, [props.focusRequestId]);
+
   return (
     <section className="ns-agent-conversation-composer ns-agent-composer" aria-label="会话输入区">
       {props.disabledReason === undefined ? null : (
@@ -311,6 +317,7 @@ export function AgentComposer(props: AgentComposerProps) {
       )}
       <div className="ns-agent-composer-surface">
         <textarea
+          ref={requestInputRef}
           aria-label="Agent 请求"
           disabled={draftDisabled}
           onChange={(event) => props.onRequestChange(event.currentTarget.value)}

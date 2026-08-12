@@ -59,6 +59,10 @@ export type {
 } from "./agent-conversation-session.js";
 export type {
   AiWritingSuggestionStreamOptions,
+  CreativeFolderCandidate,
+  CreativeFolderConfirmationRequest,
+  CreativeFolderCopyResult,
+  CreativeFolderPreview,
   CreateCreativeProjectRequest,
   ForeshadowAnalysisCandidateDto,
   ForeshadowAnalysisEvidenceDto,
@@ -68,6 +72,7 @@ export type {
   ForeshadowPayoffCandidateDto,
   ForeshadowProgressCandidateDto,
   NovelStudioApi,
+  OpenCreativeDirectoryInspection,
   StoryAnalysisCompletionEvent,
   ProjectConventionsCreateResult,
   ReadAgentPermissionSummaryQuery,
@@ -105,6 +110,7 @@ export type {
   DesktopShellState,
   NavigatorSection,
   PreparedWorkspaceActivation,
+  PreparedCreativeProjectImport,
   ProjectChapterSelectionDto,
   ProjectCreationPreviewDto,
   ProjectRecoveryApplyResultDto,
@@ -175,6 +181,8 @@ export {
 } from "./desktop-application.js";
 export type {
   CreateCreativeProjectInput,
+  ImportCreativeProjectInput,
+  CreativeProjectImportResult,
   ProjectInitializationInput,
   DeleteChapterInput,
   DuplicateChapterInput,

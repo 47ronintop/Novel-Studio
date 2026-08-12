@@ -13,6 +13,17 @@ import type { AgentComposerProps } from "../src/workspace-shell-types.js";
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("AgentComposer", () => {
+  test("focuses its controlled input when the focus request changes", () => {
+    const { host, rerender } = renderComposer({ request: "" });
+    const input = host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]');
+    expect(document.activeElement).not.toBe(input);
+
+    rerender({ request: "预填构思", focusRequestId: 1 });
+
+    expect(document.activeElement).toBe(input);
+    expect(input?.value).toBe("预填构思");
+  });
+
   afterEach(() => document.body.replaceChildren());
 
   test("renders one draft input and the approved single-row controls", () => {

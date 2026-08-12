@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
@@ -22,6 +22,11 @@ describe("Task 5 explicit workspace IPC", () => {
     await api.project.getActiveWorkspace();
     await api.project.refreshActiveWorkspace();
     await api.project.chooseOpenCreativeDirectory();
+    await api.project.inspectOpenCreativeDirectory("selection_1");
+    await api.project.confirmCreativeFolder({
+      selectionId: "selection_1",
+      relativePaths: ["chapter-1.txt"]
+    });
     await api.project.openCreativeProject("selection_1");
     await api.project.chooseCreateParentDirectory();
     await api.project.previewCreativeProject({
@@ -56,6 +61,8 @@ describe("Task 5 explicit workspace IPC", () => {
       "application:project:get-active-workspace",
       "application:project:refresh-active-workspace",
       "application:project:choose-open-creative-directory",
+      "application:project:inspect-open-creative-directory",
+      "application:project:confirm-creative-folder",
       "application:project:open-creative-project",
       "application:project:choose-create-parent-directory",
       "application:project:preview-creative-project",
@@ -139,6 +146,220 @@ describe("Task 5 explicit workspace IPC", () => {
 
       await handlers["application:project:open-creative-project"](selectionId);
       expect(coordinator.openCreativeProject).toHaveBeenCalledWith(canonicalRoot);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("classifies valid project metadata and consumes the token only when opened", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-existing-project-"));
+    try {
+      await Promise.all([
+        writeFile(
+          join(root, "project.json"),
+          JSON.stringify({
+            schemaVersion: "1.0",
+            projectId: "prj_existing",
+            title: "Existing",
+            projectType: "novel",
+            language: "zh-CN",
+            createdAt: "2026-08-12T00:00:00.000Z",
+            updatedAt: "2026-08-12T00:00:00.000Z"
+          }),
+          "utf8"
+        ),
+        writeFile(
+          join(root, "settings.json"),
+          JSON.stringify({
+            schemaVersion: "1.0",
+            autosave: { enabled: true, intervalMs: 30_000 },
+            history: { snapshotPolicy: "manual-and-interval" },
+            models: { defaultProfileId: "model_default", profiles: [] }
+          }),
+          "utf8"
+        )
+      ]);
+      const coordinator = { openCreativeProject: vi.fn(async () => ok({})) };
+      const handlers = createApplicationIpcHandlers(undefined, {
+        chooseOpenProjectDirectory: async () => root,
+        workspaceActivationCoordinator: coordinator as never
+      });
+      const selected = (await handlers["application:project:choose-open-creative-directory"]()) as {
+        value: { selectionId: string };
+      };
+
+      await expect(
+        handlers["application:project:inspect-open-creative-directory"](selected.value.selectionId)
+      ).resolves.toEqual({ ok: true, value: { kind: "existing-project" } });
+      await handlers["application:project:open-creative-project"](selected.value.selectionId);
+      expect(coordinator.openCreativeProject).toHaveBeenCalledWith(await realpath(root));
+      await expect(
+        handlers["application:project:open-creative-project"](selected.value.selectionId)
+      ).resolves.toMatchObject({ ok: false, error: { code: "DIRECTORY_SELECTION_INVALID" } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("classifies and confirms an ordinary creative folder using main-owned candidates", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "novel-studio-creative-folder-"));
+    const root = join(parent, "Book");
+    await mkdir(root);
+    await Promise.all([
+      writeFile(join(root, "2-second.md"), "second", "utf8"),
+      writeFile(join(root, "1-first.txt"), "first", "utf8")
+    ]);
+    try {
+      const coordinator = {
+        importCreativeProject: vi.fn(async (input: unknown) =>
+          ok({
+            projectId: "prj_import_test",
+            importedChapterIds: ["chapter_1", "chapter_2"],
+            lastImportedChapterId: "chapter_2",
+            activation: { context: {}, creativeProject: {} },
+            input
+          })
+        )
+      };
+      const handlers = createApplicationIpcHandlers(undefined, {
+        chooseOpenProjectDirectory: async () => root,
+        workspaceActivationCoordinator: coordinator as never,
+        createImportedCreativeProjectId: () => "prj_import_test"
+      });
+      const selected = (await handlers["application:project:choose-open-creative-directory"]()) as {
+        value: { selectionId: string };
+      };
+      const selectionId = selected.value.selectionId;
+
+      await expect(
+        handlers["application:project:inspect-open-creative-directory"](selectionId)
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          kind: "creative-folder",
+          preview: {
+            sourceDisplayName: "Book",
+            targetDisplayName: "Book - ShanHai",
+            candidates: [
+              { relativePath: "1-first.txt", defaultTitle: "1-first", naturalOrder: 0 },
+              { relativePath: "2-second.md", defaultTitle: "2-second", naturalOrder: 1 }
+            ]
+          }
+        }
+      });
+      const confirmed = await handlers["application:project:confirm-creative-folder"]({
+        selectionId,
+        relativePaths: ["2-second.md", "1-first.txt"]
+      });
+      expect(confirmed).toMatchObject({
+        ok: true,
+        value: { targetLocationLabel: "Book - ShanHai", lastImportedChapterId: "chapter_2" }
+      });
+      expect(coordinator.importCreativeProject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parentDirectory: await realpath(parent),
+          folderName: "Book - ShanHai",
+          projectId: "prj_import_test",
+          title: "Book",
+          language: "zh-CN",
+          chapters: [
+            { title: "1-first", body: "first" },
+            { title: "2-second", body: "second" }
+          ]
+        })
+      );
+      await expect(
+        handlers["application:project:confirm-creative-folder"]({
+          selectionId,
+          relativePaths: ["1-first.txt"]
+        })
+      ).resolves.toMatchObject({ ok: false, error: { code: "DIRECTORY_SELECTION_INVALID" } });
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reinterpret incomplete project metadata as an ordinary folder", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-suspicious-folder-"));
+    try {
+      await Promise.all([
+        writeFile(join(root, "project.json"), "{broken", "utf8"),
+        writeFile(join(root, "chapter.txt"), "text", "utf8")
+      ]);
+      const handlers = createApplicationIpcHandlers(undefined, {
+        chooseOpenProjectDirectory: async () => root
+      });
+      const selected = (await handlers["application:project:choose-open-creative-directory"]()) as {
+        value: { selectionId: string };
+      };
+      await expect(
+        handlers["application:project:inspect-open-creative-directory"](selected.value.selectionId)
+      ).resolves.toMatchObject({ ok: false, error: { code: "CREATIVE_FOLDER_INVALID" } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("consumes the selection when a candidate changes before confirmation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-mutated-folder-"));
+    const chapterPath = join(root, "chapter.txt");
+    try {
+      await writeFile(chapterPath, "before", "utf8");
+      const handlers = createApplicationIpcHandlers(undefined, {
+        chooseOpenProjectDirectory: async () => root
+      });
+      const selected = (await handlers["application:project:choose-open-creative-directory"]()) as {
+        value: { selectionId: string };
+      };
+      await handlers["application:project:inspect-open-creative-directory"](
+        selected.value.selectionId
+      );
+      await writeFile(chapterPath, "after", "utf8");
+
+      await expect(
+        handlers["application:project:confirm-creative-folder"]({
+          selectionId: selected.value.selectionId,
+          relativePaths: ["chapter.txt"]
+        })
+      ).resolves.toMatchObject({ ok: false, error: { code: "CREATIVE_FOLDER_INVALID" } });
+      await expect(
+        handlers["application:project:confirm-creative-folder"]({
+          selectionId: selected.value.selectionId,
+          relativePaths: ["chapter.txt"]
+        })
+      ).resolves.toMatchObject({ ok: false, error: { code: "DIRECTORY_SELECTION_INVALID" } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a folder that gains managed project data after preview", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-late-project-marker-"));
+    try {
+      await writeFile(join(root, "chapter.txt"), "source stays unchanged", "utf8");
+      const coordinator = { importCreativeProject: vi.fn() };
+      const handlers = createApplicationIpcHandlers(undefined, {
+        chooseOpenProjectDirectory: async () => root,
+        workspaceActivationCoordinator: coordinator as never
+      });
+      const selected = (await handlers["application:project:choose-open-creative-directory"]()) as {
+        value: { selectionId: string };
+      };
+      await handlers["application:project:inspect-open-creative-directory"](
+        selected.value.selectionId
+      );
+      await mkdir(join(root, "memories"));
+
+      await expect(
+        handlers["application:project:confirm-creative-folder"]({
+          selectionId: selected.value.selectionId,
+          relativePaths: ["chapter.txt"]
+        })
+      ).resolves.toMatchObject({ ok: false, error: { code: "CREATIVE_FOLDER_INVALID" } });
+      expect(coordinator.importCreativeProject).not.toHaveBeenCalled();
+      await expect(readFile(join(root, "chapter.txt"), "utf8")).resolves.toBe(
+        "source stays unchanged"
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

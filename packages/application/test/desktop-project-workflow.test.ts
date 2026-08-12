@@ -306,6 +306,114 @@ describe("M12 desktop project workflow", () => {
     expect(application.getShellState().projectTitle).toBe("Old Project");
   });
 
+  test("prepares an imported project without replacing the active workspace and cleans it on discard", async () => {
+    const oldSnapshot = projectSnapshot("D:/Novel/Old", "prj_old", "Old Project");
+    const candidateSnapshot = {
+      ...projectSnapshot("D:/Novel/Parent/source - ShanHai", "prj_import", "source"),
+      activeChapterId: "ch_last"
+    };
+    const order: string[] = [];
+    const candidateSession = fakeProjectSession(candidateSnapshot, order);
+    candidateSession.importProjectInParent = async () => {
+      order.push(`import:${candidateSnapshot.projectRoot}`);
+      return ok({
+        projectRoot: candidateSnapshot.projectRoot,
+        workspace: candidateSnapshot,
+        importedChapterIds: ["ch_first", "ch_last"],
+        lastImportedChapterId: "ch_last"
+      });
+    };
+    const application = createDesktopApplication({
+      projectWorkspaceSession: fakeProjectSession(oldSnapshot),
+      createProjectWorkspaceSession: () => candidateSession,
+      projectCreationRepository: fakeCreationRepository(order),
+      createWorkspaceActivationId: () => "activation_import"
+    });
+
+    const prepared = await application.prepareImportCreativeProject({
+      parentDirectory: "D:/Novel/Parent",
+      folderName: "source - ShanHai",
+      projectId: "prj_import",
+      title: "source",
+      language: "zh-CN",
+      chapters: [
+        { title: "第一章", body: "one\n" },
+        { title: "第二章", body: "two\n" }
+      ]
+    });
+
+    expect(prepared).toMatchObject({
+      ok: true,
+      value: {
+        projectId: "prj_import",
+        importedChapterIds: ["ch_first", "ch_last"],
+        lastImportedChapterId: "ch_last",
+        activation: {
+          activationId: "activation_import",
+          context: { activeChapterId: "ch_last" }
+        }
+      }
+    });
+    expect(application.getShellState().projectTitle).toBe("Old Project");
+    if (!prepared.ok) throw new Error(prepared.error.message);
+
+    const discarded = await application.discardWorkspaceActivation(
+      prepared.value.activation.activationId
+    );
+
+    expect(discarded).toEqual(ok(undefined));
+    expect(order).toEqual([
+      "import:D:/Novel/Parent/source - ShanHai",
+      "release:D:/Novel/Parent/source - ShanHai",
+      "cleanup:D:/Novel/Parent/source - ShanHai"
+    ]);
+    expect(application.getShellState().projectTitle).toBe("Old Project");
+  });
+
+  test("commits an imported candidate with the last imported chapter active", async () => {
+    const oldSnapshot = projectSnapshot("D:/Novel/Old", "prj_old", "Old Project");
+    const candidateSnapshot = {
+      ...projectSnapshot("D:/Novel/Parent/source - ShanHai", "prj_import", "source"),
+      activeChapterId: "ch_last"
+    };
+    const candidateSession = fakeProjectSession(candidateSnapshot);
+    candidateSession.importProjectInParent = async () =>
+      ok({
+        projectRoot: candidateSnapshot.projectRoot,
+        workspace: candidateSnapshot,
+        importedChapterIds: ["ch_first", "ch_last"],
+        lastImportedChapterId: "ch_last"
+      });
+    const application = createDesktopApplication({
+      projectWorkspaceSession: fakeProjectSession(oldSnapshot),
+      createProjectWorkspaceSession: () => candidateSession,
+      projectCreationRepository: fakeCreationRepository(),
+      createWorkspaceActivationId: () => "activation_import_commit"
+    });
+    const prepared = await application.prepareImportCreativeProject({
+      parentDirectory: "D:/Novel/Parent",
+      folderName: "source - ShanHai",
+      projectId: "prj_import",
+      title: "source",
+      language: "zh-CN",
+      chapters: [{ title: "第二章", body: "two\n" }]
+    });
+    if (!prepared.ok) throw new Error(prepared.error.message);
+
+    const activation = application.commitWorkspaceActivation(
+      prepared.value.activation.activationId
+    );
+
+    expect(activation).toMatchObject({
+      context: { projectId: "prj_import" },
+      creativeProject: { project: { projectId: "prj_import" }, activeChapterId: "ch_last" }
+    });
+    expect(application.getShellState().projectTitle).toBe("source");
+    await expect(
+      application.finalizeWorkspaceActivation(prepared.value.activation.activationId)
+    ).resolves.toEqual(ok(undefined));
+  });
+
   test("reports the first discard cleanup failure after attempting every cleanup step", async () => {
     const candidateSnapshot = projectSnapshot(
       "D:/Novel/Parent/new-book",
