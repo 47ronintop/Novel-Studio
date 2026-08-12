@@ -76,8 +76,7 @@ describe("WorkspaceShell", () => {
     expect(groups.projectActivities.map((activity) => activity.id)).toEqual([
       "workspace",
       "storyBible",
-      "search",
-      "timeline"
+      "search"
     ]);
     expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["settings"]);
 
@@ -903,8 +902,9 @@ describe("WorkspaceShell", () => {
     );
 
     expect(html).toContain('aria-label="工作区"');
+    expect(html).toContain('aria-label="故事资料"');
     expect(html).toContain('aria-label="搜索"');
-    expect(html).toContain('aria-label="时间线"');
+    expect(html).not.toContain('data-activity-id="timeline"');
     expect(html).not.toContain('aria-label="创作系统"');
     expect(html).toContain('aria-label="设置"');
     expect(html).toContain('data-activity-id="workspace"');
