@@ -560,7 +560,7 @@ function createState(overrides: Partial<DesktopShellState> = {}) {
       activeBottomPanelTab: "problems",
       focusMode: false,
       workspaceLayout: {
-        splitView: false,
+        conversationPanelMode: "docked",
         navigatorWidth: 280,
         inspectorWidth: 360,
         bottomPanelHeight: 220

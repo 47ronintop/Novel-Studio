@@ -1,4 +1,15 @@
-import { PanelBottom, PanelRight, Search } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  PanelBottom,
+  PanelRight,
+  PanelRightClose,
+  PanelRightOpen,
+  Search
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { ConversationPanelMode } from "@novel-studio/shared";
+import type { ApplicationCommandId } from "@novel-studio/application";
 
 import { WorkbenchSwitcher } from "./workbench-switcher.js";
 import type { WorkspaceShellProps } from "./workspace-shell-types.js";
@@ -18,6 +29,20 @@ export function WorkspaceShellTitlebar({
   settingsMode,
   shellState
 }: WorkspaceShellTitlebarProps) {
+  const [conversationMenuOpen, setConversationMenuOpen] = useState(false);
+  const conversationControlRef = useRef<HTMLDivElement>(null);
+  const conversationPanelMode = shellState.workspaceLayout.conversationPanelMode;
+
+  useEffect(() => {
+    if (!conversationMenuOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!conversationControlRef.current?.contains(event.target as Node)) {
+        setConversationMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [conversationMenuOpen]);
   return (
     <header className="ns-titlebar">
       <div className="ns-project-status">
@@ -55,20 +80,113 @@ export function WorkspaceShellTitlebar({
             >
               <PanelBottom aria-hidden="true" size={14} />
             </button>
-            <button
-              aria-label="切换 Split View"
-              className="ns-icon-button"
-              onClick={() => onCommandExecute?.("workspace.toggle-split-view")}
-              title="切换 Split View"
-              type="button"
-            >
-              <PanelRight aria-hidden="true" size={14} />
-            </button>
+            <div className="ns-conversation-layout-control" ref={conversationControlRef}>
+              <button
+                aria-label={conversationPanelAriaLabel(conversationPanelMode)}
+                className="ns-icon-button ns-conversation-layout-primary"
+                onClick={() => onCommandExecute?.("workspace.toggle-split-view")}
+                title={conversationPanelTitle(conversationPanelMode)}
+                type="button"
+              >
+                {conversationPanelMode === "collapsed" ? (
+                  <PanelRightOpen aria-hidden="true" size={14} />
+                ) : conversationPanelMode === "expanded" ? (
+                  <PanelRightClose aria-hidden="true" size={14} />
+                ) : (
+                  <PanelRight aria-hidden="true" size={14} />
+                )}
+              </button>
+              <button
+                aria-expanded={conversationMenuOpen}
+                aria-haspopup="menu"
+                aria-label="选择会话面板布局"
+                className="ns-icon-button ns-conversation-layout-menu-trigger"
+                onClick={() => setConversationMenuOpen((open) => !open)}
+                title="选择会话面板布局"
+                type="button"
+              >
+                <ChevronDown aria-hidden="true" size={12} />
+              </button>
+              {conversationMenuOpen ? (
+                <div aria-label="会话面板布局" className="ns-conversation-layout-menu" role="menu">
+                  {conversationPanelModes.map((entry) => (
+                    <button
+                      aria-checked={entry.mode === conversationPanelMode}
+                      className="ns-conversation-layout-menu-item"
+                      key={entry.mode}
+                      onClick={() => {
+                        onCommandExecute?.(entry.commandId);
+                        setConversationMenuOpen(false);
+                      }}
+                      role="menuitemradio"
+                      type="button"
+                    >
+                      <span>{entry.label}</span>
+                      {entry.mode === conversationPanelMode ? (
+                        <Check aria-hidden="true" size={13} />
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
       </div>
     </header>
   );
+}
+
+const conversationPanelModes: readonly {
+  readonly mode: ConversationPanelMode;
+  readonly label: string;
+  readonly commandId: ApplicationCommandId;
+}[] = [
+  {
+    mode: "docked",
+    label: "停靠",
+    commandId: "workspace.set-conversation-panel-docked"
+  },
+  {
+    mode: "collapsed",
+    label: "收起",
+    commandId: "workspace.set-conversation-panel-collapsed"
+  },
+  {
+    mode: "expanded",
+    label: "展开",
+    commandId: "workspace.set-conversation-panel-expanded"
+  }
+];
+
+function conversationPanelTitle(
+  mode: WorkspaceShellProps["shellState"]["workspaceLayout"]["conversationPanelMode"]
+): string {
+  switch (mode) {
+    case "collapsed":
+      return "恢复会话面板（当前已收起）";
+    case "expanded":
+      return "恢复编辑器（当前会话面板已展开）";
+    case "docked":
+      return "收起会话面板";
+    default:
+      return "收起会话面板";
+  }
+}
+
+function conversationPanelAriaLabel(
+  mode: WorkspaceShellProps["shellState"]["workspaceLayout"]["conversationPanelMode"]
+): string {
+  switch (mode) {
+    case "collapsed":
+      return "恢复会话面板并展开布局";
+    case "expanded":
+      return "恢复停靠会话面板布局";
+    case "docked":
+      return "收起会话面板并展开布局";
+    default:
+      return "收起会话面板并展开布局";
+  }
 }
 
 function saveStatusLabel(status: WorkspaceShellProps["shellState"]["saveStatus"]): string {

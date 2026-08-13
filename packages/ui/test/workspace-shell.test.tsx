@@ -1435,7 +1435,7 @@ describe("WorkspaceShell", () => {
     expect(html).not.toContain("标签切换会在后续里程碑补齐");
   });
 
-  test("renders split view layout controls and shell-owned panel dimensions", () => {
+  test("renders conversation panel layout controls and shell-owned panel dimensions", () => {
     const application = createDesktopApplication();
     const executedCommands: ApplicationCommandId[] = [];
     const tree = WorkspaceShell({
@@ -1444,7 +1444,7 @@ describe("WorkspaceShell", () => {
         inspectorCollapsed: false,
         bottomPanelVisible: true,
         workspaceLayout: {
-          splitView: true,
+          conversationPanelMode: "expanded",
           navigatorWidth: 300,
           inspectorWidth: 360,
           bottomPanelHeight: 240
@@ -1454,18 +1454,117 @@ describe("WorkspaceShell", () => {
       commandPaletteOpen: false,
       onCommandExecute: (commandId) => executedCommands.push(commandId)
     });
-    const splitToggle = findElementByAriaLabel(tree, "切换 Split View");
+    const splitToggle = findElementByAriaLabel(tree, "恢复停靠会话面板布局");
+    const layoutMenuToggle = findElementByAriaLabel(tree, "选择会话面板布局");
 
     expect(splitToggle).toBeDefined();
+    expect(layoutMenuToggle).toBeDefined();
     splitToggle?.props.onClick?.();
     expect(executedCommands).toEqual(["workspace.toggle-split-view"]);
 
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain('data-split-view="true"');
+    expect(html).toContain('data-conversation-panel-mode="expanded"');
     expect(html).toContain("--ns-navigator-width:300px");
     expect(html).toContain("--ns-ai-panel-width:360px");
     expect(html).toContain("--ns-bottom-panel-height:240px");
-    expect(html).toContain('aria-label="拆分参考窗格"');
+    expect(html).toContain('aria-label="章节编辑器表面"');
+    expect(html).toContain('aria-label="AI 对话面板"');
+    expect(html).not.toContain("拆分参考窗格");
+  });
+
+  test("selects an explicit conversation panel mode from the layout menu", () => {
+    const application = createDesktopApplication();
+    const executedCommands: ApplicationCommandId[] = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    act(() => {
+      root.render(
+        <WorkspaceShell
+          shellState={application.getShellState()}
+          commands={application.listCommands()}
+          commandPaletteOpen={false}
+          onCommandExecute={(commandId) => executedCommands.push(commandId)}
+        />
+      );
+    });
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="选择会话面板布局"]')?.click());
+
+    expect(host.querySelector('[aria-label="会话面板布局"]')).not.toBeNull();
+    const expandItem = Array.from(
+      host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')
+    ).find((element) => element.textContent?.includes("展开"));
+    act(() => expandItem?.click());
+
+    expect(executedCommands).toEqual(["workspace.set-conversation-panel-expanded"]);
+    expect(host.querySelector('[aria-label="会话面板布局"]')).toBeNull();
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  test("keeps expanded conversation content readable and history bounded", () => {
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+    const expandedContent = css.slice(
+      css.indexOf(
+        '.ns-workspace-grid[data-conversation-panel-mode="expanded"] .ns-agent-conversation-summary'
+      ),
+      css.indexOf(".ns-agent-conversation-view-empty")
+    );
+
+    expect(expandedContent).toMatch(
+      /\.ns-agent-conversation-summary,[\s\S]*\.ns-agent-review-summary\s*\{[^}]*padding-inline:\s*max\(16px,\s*calc\(\(100% - 900px\) \/ 2\)\)/s
+    );
+    expect(expandedContent).toMatch(
+      /\.ns-agent-conversation-turns,[\s\S]*max-width:\s*900px[\s\S]*width:\s*calc\(100% - 32px\)/s
+    );
+    expect(expandedContent).toMatch(
+      /\.ns-agent-conversation-user-message\s*\{[^}]*max-width:\s*760px[^}]*width:\s*100%/s
+    );
+    expect(expandedContent).toMatch(
+      /\.ns-agent-conversation-run-panel\s+\.ns-agent-run\s*\{[^}]*max-width:\s*900px[^}]*width:\s*calc\(100% - 32px\)/s
+    );
+    expect(css).toMatch(
+      /\.ns-workspace-grid\[data-conversation-panel-mode="expanded"\] \.ns-agent-history-drawer-content\s*\{[^}]*width:\s*clamp\(320px,\s*28%,\s*400px\)/s
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*640px\)[\s\S]*?\.ns-workspace-grid\[data-conversation-panel-mode="expanded"\] \.ns-agent-history-drawer-content\s*\{[^}]*width:\s*100%/s
+    );
+  });
+
+  test("keeps conversation modes hidden correctly in the desktop responsive layout", () => {
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+    const responsiveStart = css.indexOf("@media (max-width: 1279px)");
+    const desktopResponsiveRules = css.slice(
+      responsiveStart,
+      css.indexOf("@media (max-width: 900px)", responsiveStart)
+    );
+
+    expect(desktopResponsiveRules).toMatch(
+      /data-conversation-panel-mode="collapsed"\][\s\S]*?\.ns-ai-panel,[\s\S]*?data-conversation-panel-mode="collapsed"\][\s\S]*?\.ns-resize-handle-ai,[\s\S]*?data-conversation-panel-mode="expanded"\][\s\S]*?\.ns-resize-handle-ai\s*\{\s*display:\s*none/s
+    );
+  });
+
+  test("uses a recoverable docked layout while settings are open", () => {
+    const application = createDesktopApplication();
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        shellState={{
+          ...application.getShellState(),
+          activeActivity: "settings",
+          workspaceLayout: {
+            ...application.getShellState().workspaceLayout,
+            conversationPanelMode: "expanded"
+          }
+        }}
+        commands={application.listCommands()}
+        commandPaletteOpen={false}
+      />
+    );
+
+    expect(html).toContain('data-region="settings-workspace"');
+    expect(html).toContain('data-conversation-panel-mode="docked"');
+    expect(html).not.toContain('data-conversation-panel-mode="expanded"');
   });
 
   test("renders plugin command disabled reasons in the command palette", () => {

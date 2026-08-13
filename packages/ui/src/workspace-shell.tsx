@@ -58,7 +58,7 @@ const bottomPanelLabels: ReadonlyMap<string, string> = new Map([
 ]);
 
 const defaultWorkspaceLayout: DesktopShellState["workspaceLayout"] = {
-  splitView: false,
+  conversationPanelMode: "docked",
   navigatorWidth: 260,
   inspectorWidth: 320,
   bottomPanelHeight: 220
@@ -124,11 +124,14 @@ function WorkspaceShellContent({
       ? shellState.activeBottomPanelTab
       : (shellState.bottomPanelTabs[0] ?? "工作流运行");
   const workspaceLayout = shellState.workspaceLayout ?? defaultWorkspaceLayout;
+  const conversationPanelMode = settingsMode ? "docked" : workspaceLayout.conversationPanelMode;
   const workspaceGridStyle = {
     "--ns-navigator-width":
       focusMode || shellState.navigatorCollapsed ? "0px" : `${workspaceLayout.navigatorWidth}px`,
     "--ns-ai-panel-width":
-      focusMode || shellState.inspectorCollapsed ? "0px" : `${workspaceLayout.inspectorWidth}px`,
+      focusMode || conversationPanelMode === "collapsed"
+        ? "0px"
+        : `${workspaceLayout.inspectorWidth}px`,
     "--ns-bottom-panel-height":
       !focusMode && shellState.bottomPanelVisible ? `${workspaceLayout.bottomPanelHeight}px` : "0px"
   } as CSSProperties;
@@ -163,8 +166,8 @@ function WorkspaceShellContent({
         className="ns-workspace-grid"
         data-active-activity={shellState.activeActivity}
         data-agent-conversation={agentConversationWorkspace !== undefined}
+        data-conversation-panel-mode={conversationPanelMode}
         data-focus-mode={focusMode}
-        data-split-view={workspaceLayout.splitView}
         style={workspaceGridStyle}
       >
         <WorkspaceActivityBar
@@ -214,7 +217,6 @@ function WorkspaceShellContent({
               fileEditor={fileEditor}
               onboarding={visibleOnboarding}
               projectWorkflow={projectWorkflow}
-              splitView={workspaceLayout.splitView}
               onFileSelectionChange={setFileSelection}
             />
           ) : (
@@ -228,7 +230,7 @@ function WorkspaceShellContent({
           )}
         </main>
 
-        {shellState.inspectorCollapsed ? null : (
+        {focusMode || conversationPanelMode === "collapsed" ? null : (
           <div
             aria-label="AI panel resize handle"
             aria-orientation="vertical"
@@ -532,7 +534,6 @@ function WorkspaceEditorSurface({
   fileEditor,
   onboarding,
   projectWorkflow,
-  splitView,
   onFileSelectionChange
 }: {
   readonly chapterEditor: ChapterEditorProps | undefined;
@@ -540,7 +541,6 @@ function WorkspaceEditorSurface({
   readonly fileEditor: PlainFileEditorProps | undefined;
   readonly onboarding: OnboardingProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
-  readonly splitView: boolean;
   readonly onFileSelectionChange: (selection: {
     readonly anchor: number;
     readonly head: number;
@@ -686,7 +686,7 @@ function WorkspaceEditorSurface({
           )}
         </div>
       ) : null}
-      <div className="ns-editor-panes" data-editor-layout="ide" data-split-view={splitView}>
+      <div className="ns-editor-panes" data-editor-layout="ide">
         <section className="ns-editor-surface" aria-label="章节编辑器表面">
           <OnboardingQuickStart onboarding={onboarding} />
           <AutosaveRecoveryNotice projectWorkflow={activeProjectWorkflow} />
@@ -714,15 +714,6 @@ function WorkspaceEditorSurface({
             />
           )}
         </section>
-        {splitView ? (
-          <aside className="ns-split-reference-pane" aria-label="拆分参考窗格">
-            <div className="ns-editor-panel-header">
-              <span>参考窗格</span>
-              <span className="ns-muted">Split View</span>
-            </div>
-            <p>保留当前章节编辑器，同时为故事圣经、搜索结果或版本对照预留并排空间。</p>
-          </aside>
-        ) : null}
       </div>
     </div>
   );

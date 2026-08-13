@@ -97,10 +97,31 @@ export const rendererCommands: readonly ApplicationCommand[] = [
   },
   {
     id: "workspace.toggle-split-view",
-    title: "切换拆分视图",
+    title: "切换会话面板布局",
     scope: "workspace",
     riskLevel: "safe",
     defaultShortcut: "Ctrl/Cmd+\\"
+  },
+  {
+    id: "workspace.set-conversation-panel-docked",
+    title: "停靠会话面板",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: ""
+  },
+  {
+    id: "workspace.set-conversation-panel-collapsed",
+    title: "收起会话面板",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: ""
+  },
+  {
+    id: "workspace.set-conversation-panel-expanded",
+    title: "展开会话面板",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: ""
   },
   {
     id: "workspace.narrow-navigator",
@@ -237,6 +258,7 @@ export function createOnboardingProps(input: {
 export function shellPreferencesFromState(
   shellState: DesktopShellState
 ): NonNullable<UserPreferencesSaveInput["shell"]> {
+  const conversationPanelMode = shellState.workspaceLayout.conversationPanelMode;
   return {
     workbenchMode: shellState.workbenchMode,
     creativeNavigatorMode: shellState.creativeNavigatorMode,
@@ -253,7 +275,12 @@ export function shellPreferencesFromState(
     // Focus mode no longer has a user-facing entry point; persist the safe default
     // so legacy preferences are cleared on the next normal shell save.
     focusMode: false,
-    workspaceLayout: shellState.workspaceLayout
+    workspaceLayout: {
+      conversationPanelMode,
+      navigatorWidth: shellState.workspaceLayout.navigatorWidth,
+      inspectorWidth: shellState.workspaceLayout.inspectorWidth,
+      bottomPanelHeight: shellState.workspaceLayout.bottomPanelHeight
+    }
   };
 }
 
@@ -262,6 +289,9 @@ export function applyShellPreferences(
   preferences: NonNullable<UserPreferencesSaveInput["shell"]>
 ): DesktopShellState {
   const preferredWorkbenchMode = preferences.workbenchMode ?? shellState.workbenchMode;
+  const conversationPanelMode =
+    preferences.workspaceLayout?.conversationPanelMode ??
+    shellState.workspaceLayout.conversationPanelMode;
   return {
     ...shellState,
     workbenchMode: resolveWorkbenchModeForContext(
@@ -283,9 +313,7 @@ export function applyShellPreferences(
     ...(preferences.navigatorExpandedSectionIds === undefined
       ? {}
       : { navigatorExpandedSectionIds: preferences.navigatorExpandedSectionIds }),
-    ...(preferences.inspectorCollapsed === undefined
-      ? {}
-      : { inspectorCollapsed: preferences.inspectorCollapsed }),
+    inspectorCollapsed: conversationPanelMode === "collapsed",
     ...(preferences.bottomPanelVisible === undefined
       ? {}
       : { bottomPanelVisible: preferences.bottomPanelVisible }),
@@ -294,8 +322,14 @@ export function applyShellPreferences(
       : { activeBottomPanelTab: preferences.activeBottomPanelTab }),
     focusMode: false,
     workspaceLayout: {
-      ...shellState.workspaceLayout,
-      ...preferences.workspaceLayout
+      navigatorWidth:
+        preferences.workspaceLayout?.navigatorWidth ?? shellState.workspaceLayout.navigatorWidth,
+      inspectorWidth:
+        preferences.workspaceLayout?.inspectorWidth ?? shellState.workspaceLayout.inspectorWidth,
+      bottomPanelHeight:
+        preferences.workspaceLayout?.bottomPanelHeight ??
+        shellState.workspaceLayout.bottomPanelHeight,
+      conversationPanelMode
     }
   };
 }

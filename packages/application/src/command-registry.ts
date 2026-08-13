@@ -4,6 +4,9 @@ export type WorkspaceApplicationCommandId =
   | "workspace.toggle-inspector"
   | "workspace.toggle-bottom-panel"
   | "workspace.toggle-split-view"
+  | "workspace.set-conversation-panel-docked"
+  | "workspace.set-conversation-panel-collapsed"
+  | "workspace.set-conversation-panel-expanded"
   | "workspace.narrow-navigator"
   | "workspace.widen-navigator"
   | "workspace.narrow-inspector"
@@ -73,10 +76,31 @@ export const DEFAULT_APPLICATION_COMMANDS: readonly (ApplicationCommand & {
   },
   {
     id: "workspace.toggle-split-view",
-    title: "切换拆分视图",
+    title: "切换会话面板布局",
     scope: "workspace",
     riskLevel: "safe",
     defaultShortcut: "Ctrl/Cmd+\\"
+  },
+  {
+    id: "workspace.set-conversation-panel-docked",
+    title: "停靠会话面板",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: ""
+  },
+  {
+    id: "workspace.set-conversation-panel-collapsed",
+    title: "收起会话面板",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: ""
+  },
+  {
+    id: "workspace.set-conversation-panel-expanded",
+    title: "展开会话面板",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: ""
   },
   {
     id: "workspace.narrow-navigator",

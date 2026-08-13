@@ -2,8 +2,10 @@ import type { UnifiedError } from "./errors.js";
 import type { Result } from "./result.js";
 import type { CreativeNavigatorMode, WorkbenchMode } from "./workspace-context.js";
 
+export type ConversationPanelMode = "docked" | "collapsed" | "expanded";
+
 export interface UserWorkspaceLayoutPreferences {
-  readonly splitView: boolean;
+  readonly conversationPanelMode: ConversationPanelMode;
   readonly navigatorWidth: number;
   readonly inspectorWidth: number;
   readonly bottomPanelHeight: number;
@@ -54,7 +56,7 @@ export const DEFAULT_USER_SHELL_PREFERENCES: UserShellPreferences = {
   activeBottomPanelTab: "工作流运行",
   focusMode: false,
   workspaceLayout: {
-    splitView: false,
+    conversationPanelMode: "docked",
     navigatorWidth: 260,
     inspectorWidth: 320,
     bottomPanelHeight: 180
@@ -73,8 +75,11 @@ export type UserPreferencesSaveInput = Partial<{
   readonly onboarding: Partial<UserOnboardingPreferences>;
   readonly editor: Partial<UserEditorPreferences>;
   readonly appearance: Partial<UserAppearancePreferences>;
-  readonly shell: Partial<UserShellPreferences> & {
-    readonly workspaceLayout?: Partial<UserWorkspaceLayoutPreferences>;
+  readonly shell: Omit<Partial<UserShellPreferences>, "workspaceLayout"> & {
+    readonly workspaceLayout?: Partial<UserWorkspaceLayoutPreferences> & {
+      /** Legacy input accepted for one migration cycle; normalized preferences do not write it. */
+      readonly splitView?: boolean;
+    };
   };
 }>;
 

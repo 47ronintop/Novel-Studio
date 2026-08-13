@@ -486,7 +486,7 @@ describe("Electron security baseline", () => {
     await expect(handlers["application:get-shell-state"]()).resolves.toMatchObject({
       projectTitle: "未打开项目"
     });
-    await expect(handlers["application:list-commands"]()).resolves.toHaveLength(11);
+    await expect(handlers["application:list-commands"]()).resolves.toHaveLength(13);
     await expect(
       handlers["application:execute-command"]("workspace.toggle-inspector")
     ).resolves.toMatchObject({
@@ -498,7 +498,7 @@ describe("Electron security baseline", () => {
       ok: true,
       value: {
         workspaceLayout: {
-          splitView: true
+          conversationPanelMode: "docked"
         }
       }
     });

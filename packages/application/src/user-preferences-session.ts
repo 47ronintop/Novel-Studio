@@ -11,6 +11,7 @@ import type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot
 } from "@novel-studio/shared";
+import type { ConversationPanelMode } from "@novel-studio/shared";
 
 export type {
   UserAppearancePreferences,
@@ -34,6 +35,12 @@ export interface UserPreferencesSessionOptions {
 
 type AppearancePreferenceInput = Partial<UserAppearancePreferences> & {
   readonly density?: unknown;
+};
+
+type WorkspaceLayoutPreferenceInput = Partial<
+  UserPreferencesSnapshot["shell"]["workspaceLayout"]
+> & {
+  readonly splitView?: unknown;
 };
 
 export function createUserPreferencesSession(
@@ -149,9 +156,11 @@ function normalizeShellPreferences(
     navigatorCollapsed:
       preferences?.navigatorCollapsed ?? DEFAULT_USER_SHELL_PREFERENCES.navigatorCollapsed,
     navigatorExpandedSectionIds: normalizeStringArray(preferences?.navigatorExpandedSectionIds),
-    inspectorCollapsed: legacyShell
-      ? false
-      : (preferences.inspectorCollapsed ?? DEFAULT_USER_SHELL_PREFERENCES.inspectorCollapsed),
+    inspectorCollapsed:
+      normalizeConversationPanelMode(
+        preferences?.workspaceLayout,
+        legacyShell ? false : preferences?.inspectorCollapsed
+      ) === "collapsed",
     bottomPanelVisible:
       preferences?.bottomPanelVisible ?? DEFAULT_USER_SHELL_PREFERENCES.bottomPanelVisible,
     activeBottomPanelTab:
@@ -159,11 +168,37 @@ function normalizeShellPreferences(
     // Focus mode was removed from the shell UI. Normalize legacy saved values
     // so an old session cannot reopen with its panels hidden.
     focusMode: DEFAULT_USER_SHELL_PREFERENCES.focusMode,
-    workspaceLayout: {
-      ...DEFAULT_USER_SHELL_PREFERENCES.workspaceLayout,
-      ...preferences?.workspaceLayout
-    }
+    workspaceLayout: normalizeWorkspaceLayoutPreferences(
+      preferences?.workspaceLayout,
+      legacyShell ? false : preferences?.inspectorCollapsed
+    )
   };
+}
+
+function normalizeWorkspaceLayoutPreferences(
+  layout: WorkspaceLayoutPreferenceInput | undefined,
+  legacyInspectorCollapsed?: boolean
+): UserPreferencesSnapshot["shell"]["workspaceLayout"] {
+  return {
+    conversationPanelMode: normalizeConversationPanelMode(layout, legacyInspectorCollapsed),
+    navigatorWidth:
+      layout?.navigatorWidth ?? DEFAULT_USER_SHELL_PREFERENCES.workspaceLayout.navigatorWidth,
+    inspectorWidth:
+      layout?.inspectorWidth ?? DEFAULT_USER_SHELL_PREFERENCES.workspaceLayout.inspectorWidth,
+    bottomPanelHeight:
+      layout?.bottomPanelHeight ?? DEFAULT_USER_SHELL_PREFERENCES.workspaceLayout.bottomPanelHeight
+  };
+}
+
+function normalizeConversationPanelMode(
+  layout: WorkspaceLayoutPreferenceInput | undefined,
+  legacyInspectorCollapsed?: boolean
+): ConversationPanelMode {
+  const mode = layout?.conversationPanelMode;
+  if (mode === "docked" || mode === "collapsed" || mode === "expanded") {
+    return mode;
+  }
+  return legacyInspectorCollapsed === true ? "collapsed" : "docked";
 }
 
 function normalizeWorkbenchMode(value: unknown): UserPreferencesSnapshot["shell"]["workbenchMode"] {

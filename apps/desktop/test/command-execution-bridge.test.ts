@@ -13,7 +13,7 @@ const nextShellState: DesktopShellState = {
   bottomPanelVisible: true,
   activeBottomPanelTab: "工作流运行",
   workspaceLayout: {
-    splitView: true,
+    conversationPanelMode: "expanded",
     navigatorWidth: 300,
     inspectorWidth: 320,
     bottomPanelHeight: 220

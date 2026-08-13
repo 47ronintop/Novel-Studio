@@ -65,7 +65,8 @@ export type {
   UserPreferencesSaveInput,
   UserPreferencesSnapshot,
   UserShellPreferences,
-  UserWorkspaceLayoutPreferences
+  UserWorkspaceLayoutPreferences,
+  ConversationPanelMode
 } from "./user-preferences.js";
 export { DEFAULT_USER_SHELL_PREFERENCES } from "./user-preferences.js";
 export type {

@@ -19,7 +19,8 @@ import type {
   UnifiedError,
   WorkspaceContextDto,
   WorkbenchMode,
-  CreativeNavigatorMode
+  CreativeNavigatorMode,
+  ConversationPanelMode
 } from "@novel-studio/shared";
 
 import {
@@ -160,7 +161,7 @@ export interface NavigatorSection {
 }
 
 export interface WorkspaceLayoutState {
-  readonly splitView: boolean;
+  readonly conversationPanelMode: ConversationPanelMode;
   readonly navigatorWidth: number;
   readonly inspectorWidth: number;
   readonly bottomPanelHeight: number;
@@ -2312,17 +2313,23 @@ function reduceShellState(
     case "workspace.toggle-navigator":
       return { ...shellState, navigatorCollapsed: !shellState.navigatorCollapsed };
     case "workspace.toggle-inspector":
-      return { ...shellState, inspectorCollapsed: !shellState.inspectorCollapsed };
+      return setConversationPanelMode(
+        shellState,
+        shellState.workspaceLayout.conversationPanelMode === "collapsed" ? "docked" : "collapsed"
+      );
     case "workspace.toggle-bottom-panel":
       return { ...shellState, bottomPanelVisible: !shellState.bottomPanelVisible };
     case "workspace.toggle-split-view":
-      return {
-        ...shellState,
-        workspaceLayout: {
-          ...shellState.workspaceLayout,
-          splitView: !shellState.workspaceLayout.splitView
-        }
-      };
+      return setConversationPanelMode(
+        shellState,
+        nextConversationPanelMode(shellState.workspaceLayout.conversationPanelMode)
+      );
+    case "workspace.set-conversation-panel-docked":
+      return setConversationPanelMode(shellState, "docked");
+    case "workspace.set-conversation-panel-collapsed":
+      return setConversationPanelMode(shellState, "collapsed");
+    case "workspace.set-conversation-panel-expanded":
+      return setConversationPanelMode(shellState, "expanded");
     case "workspace.narrow-navigator":
       return {
         ...shellState,
@@ -2358,6 +2365,31 @@ function reduceShellState(
     default:
       return shellState;
   }
+}
+
+function nextConversationPanelMode(mode: ConversationPanelMode): ConversationPanelMode {
+  switch (mode) {
+    case "docked":
+      return "collapsed";
+    case "collapsed":
+      return "docked";
+    case "expanded":
+      return "docked";
+  }
+}
+
+function setConversationPanelMode(
+  shellState: DesktopShellState,
+  mode: ConversationPanelMode
+): DesktopShellState {
+  return {
+    ...shellState,
+    inspectorCollapsed: mode === "collapsed",
+    workspaceLayout: {
+      ...shellState.workspaceLayout,
+      conversationPanelMode: mode
+    }
+  };
 }
 
 function clampPanelWidth(value: number, min: number, max: number): number {

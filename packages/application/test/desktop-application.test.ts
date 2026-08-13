@@ -165,10 +165,31 @@ describe("desktop application command bridge", () => {
       },
       {
         id: "workspace.toggle-split-view",
-        title: "切换拆分视图",
+        title: "切换会话面板布局",
         scope: "workspace",
         riskLevel: "safe",
         defaultShortcut: "Ctrl/Cmd+\\"
+      },
+      {
+        id: "workspace.set-conversation-panel-docked",
+        title: "停靠会话面板",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: ""
+      },
+      {
+        id: "workspace.set-conversation-panel-collapsed",
+        title: "收起会话面板",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: ""
+      },
+      {
+        id: "workspace.set-conversation-panel-expanded",
+        title: "展开会话面板",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: ""
       },
       {
         id: "workspace.narrow-navigator",
@@ -239,17 +260,49 @@ describe("desktop application command bridge", () => {
     const application = createDesktopApplication();
 
     const split = application.executeCommand("workspace.toggle-split-view");
+    expect(application.getShellState()).toMatchObject({
+      inspectorCollapsed: true,
+      workspaceLayout: { conversationPanelMode: "collapsed" }
+    });
+    const docked = application.executeCommand("workspace.toggle-split-view");
+    expect(application.getShellState()).toMatchObject({
+      inspectorCollapsed: false,
+      workspaceLayout: { conversationPanelMode: "docked" }
+    });
     const widerNavigator = application.executeCommand("workspace.widen-navigator");
     const narrowInspector = application.executeCommand("workspace.narrow-inspector");
 
     expect(split.ok).toBe(true);
+    expect(docked.ok).toBe(true);
     expect(widerNavigator.ok).toBe(true);
     expect(narrowInspector.ok).toBe(true);
     expect(application.getShellState().workspaceLayout).toEqual({
-      splitView: true,
+      conversationPanelMode: "docked",
       navigatorWidth: 300,
       inspectorWidth: 280,
       bottomPanelHeight: 180
+    });
+  });
+
+  test("sets each conversation panel mode explicitly", () => {
+    const application = createDesktopApplication();
+
+    application.executeCommand("workspace.set-conversation-panel-expanded");
+    expect(application.getShellState()).toMatchObject({
+      inspectorCollapsed: false,
+      workspaceLayout: { conversationPanelMode: "expanded" }
+    });
+
+    application.executeCommand("workspace.set-conversation-panel-collapsed");
+    expect(application.getShellState()).toMatchObject({
+      inspectorCollapsed: true,
+      workspaceLayout: { conversationPanelMode: "collapsed" }
+    });
+
+    application.executeCommand("workspace.set-conversation-panel-docked");
+    expect(application.getShellState()).toMatchObject({
+      inspectorCollapsed: false,
+      workspaceLayout: { conversationPanelMode: "docked" }
     });
   });
 

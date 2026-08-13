@@ -52,7 +52,7 @@ describe("UserPreferencesFileRepository", () => {
         activeBottomPanelTab: "问题",
         focusMode: false,
         workspaceLayout: {
-          splitView: true,
+          conversationPanelMode: "expanded",
           navigatorWidth: 300,
           inspectorWidth: 280,
           bottomPanelHeight: 220

@@ -125,7 +125,7 @@ describe("UserPreferencesSession", () => {
     expect(loaded.ok).toBe(true);
     if (loaded.ok) {
       expect(loaded.value.onboarding.dismissed).toBe(true);
-      expect(loaded.value.shell.workspaceLayout.splitView).toBe(true);
+      expect(loaded.value.shell.workspaceLayout.conversationPanelMode).toBe("docked");
       expect(loaded.value.shell.activeBottomPanelTab).toBe("搜索");
       expect(loaded.value.shell.navigatorExpandedSectionIds).toEqual(["chapters", "prompts"]);
       expect(loaded.value.editor).toEqual({
@@ -227,7 +227,12 @@ describe("UserPreferencesSession", () => {
           bottomPanelVisible: true,
           activeBottomPanelTab: "搜索",
           focusMode: false,
-          workspaceLayout: persisted.shell.workspaceLayout
+          workspaceLayout: {
+            conversationPanelMode: "docked",
+            navigatorWidth: 300,
+            inspectorWidth: 280,
+            bottomPanelHeight: 220
+          }
         }
       }
     });
@@ -341,7 +346,11 @@ describe("UserPreferencesSession", () => {
         workbenchMode: "creative",
         creativeNavigatorMode: "writing",
         engineeringExpandedPathIds: [],
-        inspectorCollapsed: true
+        inspectorCollapsed: true,
+        workspaceLayout: {
+          ...defaults.shell.workspaceLayout,
+          conversationPanelMode: "collapsed"
+        }
       }
     } as UserPreferencesSnapshot;
     const session = createUserPreferencesSession({
