@@ -47,46 +47,33 @@ describe("UserPreferencesSession", () => {
     });
   });
 
-  test("preserves explicit empty expansion state when preferences round-trip", async () => {
-    let saved: UserPreferencesSnapshot | undefined;
-    const session = createUserPreferencesSession({
-      preferencesPort: {
-        readUserPreferences: async () => ok(saved),
-        writeUserPreferences: async (preferences) => {
-          saved = preferences;
-          return ok(preferences);
-        }
-      }
-    });
-
-    const saveResult = await session.save({
+  test("normalizes the legacy files mode while preserving creative file expansion state", async () => {
+    const defaults = createDefaultUserPreferences();
+    const persisted = {
+      ...defaults,
       shell: {
+        ...defaults.shell,
         creativeNavigatorMode: "files",
         creativeFileExpandedPathIds: ["notes", "notes"],
         engineeringExpandedPathIds: [],
         navigatorExpandedSectionIds: [],
         standaloneSelectedConversationId: "standalone-conversation-01"
       }
-    });
-    const loaded = await session.load();
-
-    expect(saveResult).toMatchObject({
-      ok: true,
-      value: {
-        shell: {
-          creativeNavigatorMode: "files",
-          creativeFileExpandedPathIds: ["notes"],
-          engineeringExpandedPathIds: [],
-          navigatorExpandedSectionIds: [],
-          standaloneSelectedConversationId: "standalone-conversation-01"
-        }
+    } as unknown as UserPreferencesSnapshot;
+    const session = createUserPreferencesSession({
+      preferencesPort: {
+        readUserPreferences: async () => ok(persisted),
+        writeUserPreferences: async (preferences) => ok(preferences)
       }
     });
+
+    const loaded = await session.load();
+
     expect(loaded).toMatchObject({
       ok: true,
       value: {
         shell: {
-          creativeNavigatorMode: "files",
+          creativeNavigatorMode: "writing",
           creativeFileExpandedPathIds: ["notes"],
           engineeringExpandedPathIds: [],
           navigatorExpandedSectionIds: [],

@@ -1,6 +1,7 @@
 import type { CreativeNavigatorMode } from "@novel-studio/shared";
 import {
   BookOpenText,
+  ChevronRight,
   Clock3,
   FilePlus2,
   FileText,
@@ -15,7 +16,7 @@ import {
   UserRound,
   type LucideIcon
 } from "lucide-react";
-import { useId, type KeyboardEvent, type MouseEvent } from "react";
+import { useId, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import { ProjectFileTree, type ProjectFileTreeNode } from "./project-file-tree.js";
 import type {
@@ -118,10 +119,8 @@ export function CreativeWorkspaceNavigator(props: CreativeWorkspaceNavigatorProp
   const instanceId = useId().replaceAll(":", "");
   const writingTabId = `${instanceId}-creative-writing-tab`;
   const storyTabId = `${instanceId}-creative-story-tab`;
-  const filesTabId = `${instanceId}-creative-files-tab`;
   const writingPanelId = `${instanceId}-creative-writing-panel`;
   const storyPanelId = `${instanceId}-creative-story-panel`;
-  const filesPanelId = `${instanceId}-creative-files-panel`;
 
   return (
     <nav
@@ -163,20 +162,6 @@ export function CreativeWorkspaceNavigator(props: CreativeWorkspaceNavigatorProp
         >
           故事资料
         </button>
-        <button
-          aria-controls={filesPanelId}
-          aria-selected={props.mode === "files"}
-          className="ns-creative-mode-tab"
-          data-creative-mode="files"
-          id={filesTabId}
-          onClick={() => props.onModeSelect("files")}
-          onKeyDown={(event) => handleModeTabKeyDown(event, "files", props.onModeSelect)}
-          role="tab"
-          tabIndex={props.mode === "files" ? 0 : -1}
-          type="button"
-        >
-          项目文件
-        </button>
       </div>
       <section
         aria-labelledby={writingTabId}
@@ -196,15 +181,10 @@ export function CreativeWorkspaceNavigator(props: CreativeWorkspaceNavigatorProp
       >
         <StoryProjection {...props} />
       </section>
-      <section
-        aria-labelledby={filesTabId}
-        className="ns-creative-panel"
-        hidden={props.mode !== "files"}
-        id={filesPanelId}
-        role="tabpanel"
-      >
-        {props.mode === "files" ? <ProjectFilesProjection {...props} /> : null}
-      </section>
+      <OtherFilesSection
+        key={props.projectWorkflow?.projectId ?? props.projectTitle}
+        props={props}
+      />
     </nav>
   );
 }
@@ -334,12 +314,77 @@ function StoryProjection(props: CreativeWorkspaceNavigatorProps) {
   );
 }
 
-function ProjectFilesProjection(props: CreativeWorkspaceNavigatorProps) {
+function OtherFilesSection({ props }: { readonly props: CreativeWorkspaceNavigatorProps }) {
+  const [expanded, setExpanded] = useState(false);
+  const [fileSearchQuery, setFileSearchQuery] = useState("");
+  const fileCount =
+    props.projectFiles === undefined
+      ? undefined
+      : collectProjectFileNodes(filterProjectFileTreeNodes(props.projectFiles.nodes, "")).filter(
+          (node) => node.kind === "file"
+        ).length;
+  const fileCountLabel =
+    props.projectFiles?.loading === true
+      ? "加载中"
+      : props.projectFiles?.errorMessage !== undefined
+        ? "不可用"
+        : fileCount === undefined
+          ? "加载中"
+          : props.projectFiles?.truncated === true
+            ? `${fileCount}+`
+            : String(fileCount);
+  const fileCountDescriptionId = `${useId().replaceAll(":", "")}-other-files-count`;
+
+  return (
+    <section className="ns-creative-other-files" data-expanded={expanded}>
+      <button
+        aria-describedby={fileCountDescriptionId}
+        aria-expanded={expanded}
+        aria-label="其他文件"
+        className="ns-creative-other-files-toggle"
+        onClick={() => setExpanded((current) => !current)}
+        type="button"
+      >
+        <span className="ns-creative-row-label">
+          <ChevronRight
+            aria-hidden="true"
+            className="ns-creative-other-files-chevron"
+            data-expanded={expanded}
+            size={14}
+          />
+          <span>其他文件</span>
+        </span>
+        <span className="ns-creative-row-count" id={fileCountDescriptionId}>
+          {fileCountLabel}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="ns-creative-other-files-content">
+          <ProjectFilesProjection
+            fileSearchQuery={fileSearchQuery}
+            onFileSearchQueryChange={setFileSearchQuery}
+            props={props}
+          />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ProjectFilesProjection({
+  fileSearchQuery,
+  onFileSearchQueryChange,
+  props
+}: {
+  readonly fileSearchQuery: string;
+  readonly onFileSearchQueryChange: (query: string) => void;
+  readonly props: CreativeWorkspaceNavigatorProps;
+}) {
   const files = props.projectFiles;
   if (files === undefined || files.loading === true) {
     return (
       <div className="ns-creative-empty" role="status">
-        正在加载项目文件…
+        正在加载其他文件…
       </div>
     );
   }
@@ -349,7 +394,7 @@ function ProjectFilesProjection(props: CreativeWorkspaceNavigatorProps) {
       <div className="ns-creative-empty" role="alert">
         <span>{safeProjectFileFeedback(files.errorMessage)}</span>
         <button
-          aria-label="重新加载项目文件"
+          aria-label="重新加载其他文件"
           className="ns-icon-text-button"
           onClick={files.onRefresh}
           type="button"
@@ -362,7 +407,7 @@ function ProjectFilesProjection(props: CreativeWorkspaceNavigatorProps) {
   }
 
   const visibleNodes = filterProjectFileTreeNodes(files.nodes, "");
-  const normalizedQuery = normalizeQuery(props.searchQuery);
+  const normalizedQuery = normalizeQuery(fileSearchQuery);
   const filteredNodes = filterProjectFileTreeNodes(visibleNodes, normalizedQuery);
   const knownNodes = collectProjectFileNodes(visibleNodes);
   const knownNodePaths = new Set(knownNodes.map((node) => node.path));
@@ -379,48 +424,45 @@ function ProjectFilesProjection(props: CreativeWorkspaceNavigatorProps) {
       : Array.from(
           new Set([...files.expandedPathIds, ...collectExpandedDirectoryPathIds(filteredNodes)])
         );
-  const fileCount = knownNodes.filter((node) => node.kind === "file").length;
-
   return (
     <>
       <NavigatorSearch
-        ariaLabel="筛选项目文件"
-        onChange={props.onSearchQueryChange}
-        placeholder="筛选项目文件"
-        value={props.searchQuery}
+        ariaLabel="筛选其他文件"
+        onChange={onFileSearchQueryChange}
+        placeholder="筛选其他文件"
+        value={fileSearchQuery}
       />
-      <div className="ns-creative-section-header">
-        <span>项目文件 {fileCount}</span>
+      <div className="ns-creative-section-header ns-creative-other-files-toolbar">
         <div className="ns-navigator-header-actions">
           <button
-            aria-label="刷新项目文件"
+            aria-label="刷新其他文件"
             className="ns-icon-button"
             onClick={files.onRefresh}
-            title="刷新项目文件"
+            title="刷新其他文件"
             type="button"
           >
             <RefreshCw aria-hidden="true" size={14} />
           </button>
           <button
-            aria-label="新建项目文件"
+            aria-label="新建其他文件"
             className="ns-icon-button"
             onClick={() => createProjectTextFile(files)}
-            title="新建项目文件"
+            title="新建其他文件"
             type="button"
           >
             <FilePlus2 aria-hidden="true" size={14} />
           </button>
           <button
-            aria-label="新建项目目录"
+            aria-label="新建其他文件目录"
             className="ns-icon-button"
             onClick={() => createProjectDirectory(files)}
-            title="新建项目目录"
+            title="新建其他文件目录"
             type="button"
           >
             <FolderPlus aria-hidden="true" size={14} />
           </button>
           <details className="ns-navigator-actions" data-project-file-actions="true">
-            <summary aria-label="项目文件更多操作" title="项目文件更多操作">
+            <summary aria-label="其他文件更多操作" title="其他文件更多操作">
               <MoreHorizontal aria-hidden="true" size={14} />
             </summary>
             <div className="ns-navigator-action-menu">
@@ -444,11 +486,11 @@ function ProjectFilesProjection(props: CreativeWorkspaceNavigatorProps) {
         </div>
       </div>
       {files.truncated === true ? (
-        <p className="ns-engineering-truncated">项目文件列表已截断，请缩小目录范围</p>
+        <p className="ns-engineering-truncated">其他文件列表已截断，请缩小目录范围</p>
       ) : null}
       {filteredNodes.length === 0 ? (
         <div className="ns-creative-empty">
-          <span>{normalizedQuery.length === 0 ? "还没有项目文件" : "未找到匹配项目文件"}</span>
+          <span>{normalizedQuery.length === 0 ? "还没有其他文件" : "未找到匹配其他文件"}</span>
           {normalizedQuery.length === 0 ? (
             <button
               className="ns-icon-text-button"
@@ -460,9 +502,9 @@ function ProjectFilesProjection(props: CreativeWorkspaceNavigatorProps) {
             </button>
           ) : (
             <button
-              aria-label="清除项目文件筛选"
+              aria-label="清除其他文件筛选"
               className="ns-icon-text-button"
-              onClick={() => props.onSearchQueryChange("")}
+              onClick={() => onFileSearchQueryChange("")}
               type="button"
             >
               清除筛选
@@ -472,7 +514,7 @@ function ProjectFilesProjection(props: CreativeWorkspaceNavigatorProps) {
       ) : (
         <ProjectFileTree
           {...(activeFilePath === undefined ? {} : { activeFilePath })}
-          ariaLabel="项目文件列表"
+          ariaLabel="其他文件列表"
           expandedPathIds={expandedPathIds}
           nodes={filteredNodes}
           onExpandedPathIdsChange={files.onExpandedPathIdsChange}
@@ -569,7 +611,7 @@ function handleModeTabKeyDown(
   currentMode: CreativeNavigatorMode,
   onModeSelect: (mode: CreativeNavigatorMode) => void
 ): void {
-  const modes: readonly CreativeNavigatorMode[] = ["writing", "story", "files"];
+  const modes: readonly CreativeNavigatorMode[] = ["writing", "story"];
   const currentIndex = modes.indexOf(currentMode);
   let nextMode: CreativeNavigatorMode | undefined;
 

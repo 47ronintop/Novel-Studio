@@ -488,7 +488,7 @@ export function App() {
     workspaceKind: shellState.workspaceContext.kind,
     surfaceContextMode:
       shellState.workspaceContext.kind === "creativeProject"
-        ? shellState.workbenchMode === "engineering" || shellState.creativeNavigatorMode === "files"
+        ? shellState.workbenchMode === "engineering" || fileEditorScope === "creativeProjectFile"
           ? "general_file"
           : "writing"
         : undefined,

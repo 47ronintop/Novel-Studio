@@ -62,8 +62,8 @@ export async function configureLocalModelThroughUi(
 export async function selectCreativeProjectFilesContextThroughUi(
   application: PackagedAgentApplication
 ): Promise<void> {
-  await click(application.processId, mainWindowTitle, "项目文件");
-  await waitForControl(application, "项目文件列表");
+  await click(application.processId, mainWindowTitle, "其他文件");
+  await waitForControl(application, "其他文件列表");
 }
 
 export async function expandCreativeProjectDirectoryThroughUi(

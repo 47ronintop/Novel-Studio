@@ -410,7 +410,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
     const navigator = page.getByRole("navigation", { name: "项目导航" });
     const modeTabs = page.getByRole("tablist", { name: "创作导航模式" });
     await expect(modeTabs).toBeVisible();
-    await modeTabs.getByRole("tab", { name: "项目文件" }).click();
+    await navigator.getByRole("button", { name: "其他文件" }).click();
     const notesToggle = navigator.getByRole("button", { name: "展开目录：notes" });
     await expect(notesToggle).toBeVisible();
     if ((await notesToggle.getAttribute("aria-expanded")) !== "true") await notesToggle.click();

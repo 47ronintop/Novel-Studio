@@ -1,5 +1,5 @@
 export type WorkbenchMode = "creative" | "engineering";
-export type CreativeNavigatorMode = "writing" | "story" | "files";
+export type CreativeNavigatorMode = "writing" | "story";
 
 export type WorkspaceCapability =
   | "creativeWorkbench"

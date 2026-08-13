@@ -47,11 +47,13 @@ test("keeps creative project files inside the creative workbench through lifecyc
     const modeTabs = page.getByRole("tablist", { name: "创作导航模式" });
     await expect(modeTabs.getByRole("tab", { name: "写作" })).toBeVisible();
     await expect(modeTabs.getByRole("tab", { name: "故事资料" })).toBeVisible();
-    await expect(modeTabs.getByRole("tab", { name: "项目文件" })).toBeVisible();
+    await expect(modeTabs.getByRole("tab", { name: "项目文件" })).toHaveCount(0);
 
-    await modeTabs.getByRole("tab", { name: "项目文件" }).click();
+    const otherFiles = navigator.getByRole("button", { name: "其他文件" });
+    await expect(otherFiles).toHaveAttribute("aria-expanded", "false");
+    await otherFiles.click();
     await expect(
-      navigator.getByLabel("项目文件列表").or(navigator.getByText("还没有项目文件"))
+      navigator.getByLabel("其他文件列表").or(navigator.getByText("还没有其他文件"))
     ).toBeVisible();
     await expect(navigator.locator('[aria-label*="project.json"]')).toHaveCount(0);
     await expect(navigator.locator('[aria-label*="settings.json"]')).toHaveCount(0);
@@ -59,12 +61,12 @@ test("keeps creative project files inside the creative workbench through lifecyc
     await expectCreativeWorkbench(page);
 
     await acceptPromptFromClick(page, "notes", () =>
-      navigator.getByRole("button", { name: "新建项目目录" }).click()
+      navigator.getByRole("button", { name: "新建其他文件目录" }).click()
     );
     await expect(navigator.getByRole("button", { name: "展开目录：notes" })).toBeVisible();
 
     await acceptPromptFromClick(page, sourcePath, () =>
-      navigator.getByRole("button", { name: "新建项目文件" }).click()
+      navigator.getByRole("button", { name: "新建其他文件", exact: true }).click()
     );
     await navigator.getByRole("button", { name: "展开目录：notes" }).click();
     const sourceFileButton = navigator.getByRole("button", { name: "打开文件：draft.md" });
@@ -81,8 +83,8 @@ test("keeps creative project files inside the creative workbench through lifecyc
     await expect.poll(() => readFile(sourceFile, "utf8")).toBe(savedContent);
     await expectCreativeWorkbench(page);
 
-    // All three navigator views remain within the creative workbench. Returning to files must
-    // not route this project file through the engineering navigator.
+    // Both navigator modes remain within the creative workbench, and opening a file preserves
+    // the selected mode instead of routing through a dedicated files mode.
     await modeTabs.getByRole("tab", { name: "写作" }).click();
     await expect(modeTabs.getByRole("tab", { name: "写作" })).toHaveAttribute(
       "aria-selected",
@@ -95,14 +97,12 @@ test("keeps creative project files inside the creative workbench through lifecyc
       "true"
     );
     await expectCreativeWorkbench(page);
-    await modeTabs.getByRole("tab", { name: "项目文件" }).click();
-    await expect(modeTabs.getByRole("tab", { name: "项目文件" })).toHaveAttribute(
+
+    await openProjectFile(page, navigator, "notes", "draft.md");
+    await expect(modeTabs.getByRole("tab", { name: "故事资料" })).toHaveAttribute(
       "aria-selected",
       "true"
     );
-    await expectCreativeWorkbench(page);
-
-    await openProjectFile(page, navigator, "notes", "draft.md");
     await replacePlainFileBody(page, "Unsaved content must not be renamed.\n");
     await cancelDirtyRename(page, navigator, sourcePath, renamedPath);
     await expectNativeDialogCalls(page, [
@@ -279,7 +279,7 @@ async function confirmDelete(page: Page, navigator: Locator, path: string): Prom
 async function openProjectFileActionMenu(navigator: Locator): Promise<void> {
   const menu = navigator.locator('[data-project-file-actions="true"]');
   if ((await menu.getAttribute("open")) !== "") {
-    await navigator.getByLabel("项目文件更多操作").click();
+    await navigator.getByLabel("其他文件更多操作").click();
   }
 }
 

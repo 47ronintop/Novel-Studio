@@ -171,7 +171,7 @@ function normalizeWorkbenchMode(value: unknown): UserPreferencesSnapshot["shell"
 function normalizeCreativeNavigatorMode(
   value: unknown
 ): UserPreferencesSnapshot["shell"]["creativeNavigatorMode"] {
-  return value === "story" || value === "files" ? value : "writing";
+  return value === "story" ? value : "writing";
 }
 
 function normalizeAppearancePreferences(

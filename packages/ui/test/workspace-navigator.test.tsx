@@ -34,7 +34,7 @@ describe("CreativeWorkspaceNavigator", () => {
     vi.restoreAllMocks();
   });
 
-  test("renders writing, story, and project-file tabs without legacy project-tree groups", () => {
+  test("renders two creative modes with other files collapsed at the bottom", () => {
     render(<CreativeWorkspaceNavigator {...createCreativeProps()} />);
 
     const tablist = requiredElement<HTMLElement>(
@@ -43,11 +43,14 @@ describe("CreativeWorkspaceNavigator", () => {
     );
     const tabs = tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]');
 
-    expect(tabs).toHaveLength(3);
+    expect(tabs).toHaveLength(2);
     expect(tabs[0]?.textContent).toContain("写作");
     expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
     expect(tabs[1]?.textContent).toContain("故事资料");
-    expect(tabs[2]?.textContent).toContain("项目文件");
+    expect(tablist.textContent).not.toContain("项目文件");
+    expect(
+      requiredElement(host, 'button[aria-label="其他文件"]').getAttribute("aria-expanded")
+    ).toBe("false");
     expect(host.textContent).not.toContain("Novel Studio");
     expect(host.textContent).not.toContain("提示词");
     expect(host.textContent).not.toContain("Agent");
@@ -159,6 +162,55 @@ describe("CreativeWorkspaceNavigator", () => {
     expect(host.querySelector('[role="status"]')?.textContent).toContain("正在加载故事资料");
   });
 
+  test("does not report an exact other-file count while loading or truncated", () => {
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          projectFiles: {
+            nodes: [],
+            expandedPathIds: [],
+            loading: true,
+            onExpandedPathIdsChange: () => undefined,
+            onFileOpen: () => undefined,
+            onRefresh: () => undefined,
+            onCreateTextFile: () => undefined,
+            onCreateDirectory: () => undefined,
+            onRenamePath: () => undefined,
+            onDeletePath: () => undefined
+          }
+        })}
+      />
+    );
+    expect(requiredElement(host, 'button[aria-label="其他文件"]').textContent).toContain("加载中");
+
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          projectFiles: {
+            nodes: [
+              {
+                id: "file:notes.md",
+                name: "notes.md",
+                kind: "file",
+                path: "notes.md"
+              }
+            ],
+            expandedPathIds: [],
+            truncated: true,
+            onExpandedPathIdsChange: () => undefined,
+            onFileOpen: () => undefined,
+            onRefresh: () => undefined,
+            onCreateTextFile: () => undefined,
+            onCreateDirectory: () => undefined,
+            onRenamePath: () => undefined,
+            onDeletePath: () => undefined
+          }
+        })}
+      />
+    );
+    expect(requiredElement(host, 'button[aria-label="其他文件"]').textContent).toContain("1+");
+  });
+
   test("opens story categories without rendering the active category entry list", () => {
     const calls: string[] = [];
     render(
@@ -193,14 +245,13 @@ describe("CreativeWorkspaceNavigator", () => {
       '[role="tablist"][aria-label="创作导航模式"]'
     );
     const firstTabs = tablists[0]?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    if (firstTabs === undefined || firstTabs.length !== 3) {
-      throw new Error("Expected three creative navigator tabs.");
+    if (firstTabs === undefined || firstTabs.length !== 2) {
+      throw new Error("Expected two creative navigator tabs.");
     }
     const writingTab = firstTabs[0];
     const storyTab = firstTabs[1];
-    const filesTab = firstTabs[2];
-    if (writingTab === undefined || storyTab === undefined || filesTab === undefined) {
-      throw new Error("Expected writing, story, and project-file tabs.");
+    if (writingTab === undefined || storyTab === undefined) {
+      throw new Error("Expected writing and story tabs.");
     }
 
     writingTab.focus();
@@ -209,17 +260,13 @@ describe("CreativeWorkspaceNavigator", () => {
     expect(document.activeElement).toBe(storyTab);
 
     keydown(storyTab, "ArrowRight");
-    expect(calls).toEqual(["story", "files"]);
-    expect(document.activeElement).toBe(filesTab);
-
-    keydown(filesTab, "ArrowRight");
-    expect(calls).toEqual(["story", "files", "writing"]);
+    expect(calls).toEqual(["story", "writing"]);
     expect(document.activeElement).toBe(writingTab);
 
-    keydown(filesTab, "Home");
+    keydown(storyTab, "Home");
     keydown(writingTab, "End");
-    keydown(filesTab, "ArrowLeft");
-    expect(calls).toEqual(["story", "files", "writing", "writing", "files", "story"]);
+    keydown(writingTab, "ArrowLeft");
+    expect(calls).toEqual(["story", "writing", "writing", "story", "story"]);
 
     const controls = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).map(
       (tab) => tab.getAttribute("aria-controls")
@@ -230,14 +277,13 @@ describe("CreativeWorkspaceNavigator", () => {
     );
   });
 
-  test("uses the generic project-file tree while hiding managed and unsafe paths", () => {
+  test("expands the other-files section and keeps the safe project-file tree actions", () => {
     const calls: string[] = [];
     const prompt = vi.spyOn(window, "prompt");
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(
       <CreativeWorkspaceNavigator
         {...createCreativeProps({
-          mode: "files",
           projectFiles: {
             nodes: [
               {
@@ -302,6 +348,11 @@ describe("CreativeWorkspaceNavigator", () => {
       />
     );
 
+    const toggle = requiredElement(host, 'button[aria-label="其他文件"]');
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector('[data-navigator-group="files"]')).toBeNull();
+    click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelector('[data-navigator-group="files"]')).not.toBeNull();
     expect(host.textContent).toContain("outline.md");
     expect(host.textContent).not.toContain("project.json");
@@ -311,12 +362,12 @@ describe("CreativeWorkspaceNavigator", () => {
     expect(host.textContent).not.toContain("outside.md");
 
     click(requiredElement(host, 'button[aria-label="打开文件：outline.md"]'));
-    click(requiredElement(host, 'button[aria-label="刷新项目文件"]'));
+    click(requiredElement(host, 'button[aria-label="刷新其他文件"]'));
     prompt.mockReturnValueOnce("notes/new.md");
-    click(requiredElement(host, 'button[aria-label="新建项目文件"]'));
+    click(requiredElement(host, 'button[aria-label="新建其他文件"]'));
     prompt.mockReturnValueOnce("notes/assets");
-    click(requiredElement(host, 'button[aria-label="新建项目目录"]'));
-    click(requiredElement(host, 'summary[aria-label="项目文件更多操作"]'));
+    click(requiredElement(host, 'button[aria-label="新建其他文件目录"]'));
+    click(requiredElement(host, 'summary[aria-label="其他文件更多操作"]'));
     prompt.mockReturnValueOnce("notes/outline.md").mockReturnValueOnce("notes/renamed.md");
     click(
       requiredElement(

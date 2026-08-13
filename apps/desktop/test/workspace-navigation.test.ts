@@ -327,7 +327,7 @@ describe("workspace navigation", () => {
   test("keeps the creative workbench unchanged when the dirty-file guard cancels an engineering switch", async () => {
     const state = createState({
       workbenchMode: "creative",
-      creativeNavigatorMode: "files",
+      creativeNavigatorMode: "writing",
       activeActivity: "workspace"
     });
     const previousShell = state.shellState;
@@ -349,7 +349,7 @@ describe("workspace navigation", () => {
   test("keeps the engineering workbench unchanged when the dirty-file guard cancels a creative switch", async () => {
     const state = createState({
       workbenchMode: "engineering",
-      creativeNavigatorMode: "files",
+      creativeNavigatorMode: "writing",
       activeActivity: "workspace"
     });
     const previousShell = state.shellState;
@@ -369,7 +369,7 @@ describe("workspace navigation", () => {
   test("does not open an engineering file when the dirty-file guard is canceled", async () => {
     const state = createState({
       workbenchMode: "creative",
-      creativeNavigatorMode: "files",
+      creativeNavigatorMode: "writing",
       activeActivity: "workspace"
     });
     const previousShell = state.shellState;
@@ -395,7 +395,7 @@ describe("workspace navigation", () => {
   test("does not open a creative file when the dirty-file guard is canceled", async () => {
     const state = createState({
       workbenchMode: "creative",
-      creativeNavigatorMode: "files",
+      creativeNavigatorMode: "story",
       activeActivity: "workspace"
     });
     const previousShell = state.shellState;
@@ -429,6 +429,42 @@ describe("workspace navigation", () => {
     expect(state.fileEditor).toBe(previousFile);
     expect(state.chapterEditor).toBe(previousChapter);
   });
+
+  test.each(["writing", "story"] as const)(
+    "opens a creative file without changing the %s navigation mode",
+    async (creativeNavigatorMode) => {
+      const state = createState({
+        workbenchMode: "creative",
+        creativeNavigatorMode,
+        activeActivity: "storyBible"
+      });
+      const setCreativeFileEditor = vi.fn();
+      const navigation = createWorkspaceNavigation({
+        ...state.dependencies([]),
+        creativeProjectFilesBridge: {
+          requestOpenFile: vi.fn(async () => true),
+          clearActiveFile: vi.fn()
+        },
+        creativePlainFileBridge: {
+          openFile: vi.fn(async (path: string) => fileEditor(path)),
+          clear: vi.fn()
+        },
+        setCreativeFileEditor
+      });
+
+      await navigation.navigateToCreativeFile("notes/target.md");
+
+      expect(setCreativeFileEditor).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "notes/target.md" })
+      );
+      expect(state.shellState).toMatchObject({
+        workbenchMode: "creative",
+        creativeNavigatorMode,
+        activeActivity: "workspace"
+      });
+      expect(state.chapterEditor).toBeUndefined();
+    }
+  );
 
   test("delegates workspace lifecycle intents and rejects creative mode in engineering context", () => {
     const state = createState({

@@ -106,7 +106,7 @@ export function createCreativeProjectFileShellBindings(input: {
             onFileOpen: input.onFileOpen
           },
     onNavigatorModeSelect: (mode) => {
-      if (mode === "files" || input.fileEditorScope !== "creativeProjectFile") {
+      if (input.fileEditorScope !== "creativeProjectFile") {
         input.onNavigatorModeSelect(mode);
         return;
       }

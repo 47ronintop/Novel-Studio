@@ -194,7 +194,11 @@ export function createWorkspaceNavigation(
         const next = await editor.openFile(path);
         (dependencies.setCreativeFileEditor ?? dependencies.setFileEditor)(next);
         dependencies.setChapterEditor(undefined);
-        commitCreativeSurface(dependencies.setShellState, "files", "workspace");
+        dependencies.setShellState((current) => ({
+          ...current,
+          workbenchMode: "creative",
+          activeActivity: "workspace"
+        }));
       } catch (error) {
         files.clearActiveFile();
         dependencies.onNavigationFeedback?.(toErrorMessage(error));
