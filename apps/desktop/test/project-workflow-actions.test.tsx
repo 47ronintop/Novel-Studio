@@ -116,6 +116,67 @@ describe("useProjectWorkflowActions", () => {
     expect(storyBibleEditorStates).toEqual([]);
   });
 
+  test("publishes a folder import preview without loading project-bound dependencies", async () => {
+    const currentWorkflow = createWorkflow();
+    const previewWorkflow: ProjectWorkflowProps = {
+      ...currentWorkflow,
+      status: "idle",
+      folderImportPreview: {
+        sourceDisplayName: "Draft",
+        targetDisplayName: "Draft - ShanHai",
+        candidates: [
+          {
+            relativePath: "01.txt",
+            sizeBytes: 12,
+            defaultTitle: "01",
+            selected: true
+          }
+        ],
+        busy: false
+      }
+    };
+    const opened = Promise.resolve(previewWorkflow);
+    const loadSettings = vi.fn(async () => {
+      throw new Error("No creative project is active.");
+    });
+    const workflowStates: Array<ProjectWorkflowProps | undefined> = [];
+    const bridge = {
+      getProps: () => currentWorkflow,
+      openProject: () => opened
+    } as unknown as ProjectWorkflowBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: bridge,
+        settingsBridge: { load: loadSettings } as never,
+        storyBibleBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: (next) => workflowStates.push(resolveState(next)),
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      await opened;
+    });
+
+    expect(workflowStates.at(-1)).toBe(previewWorkflow);
+    expect(loadSettings).not.toHaveBeenCalled();
+  });
+
   test("does not start project transitions when the dirty-file guard is canceled", async () => {
     const currentWorkflow = {
       ...createWorkflow(),

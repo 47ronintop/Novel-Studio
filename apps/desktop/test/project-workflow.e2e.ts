@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expectCreativeWorkspaceReady } from "./helpers/workspace-readiness.js";
+import { BRAINSTORMING_REQUEST } from "../src/renderer/brainstorming-entry.js";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
@@ -101,6 +102,142 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
     await expect
       .poll(() => readFile(join(projectRoot, "chapters", chapterFile), "utf8"))
       .toContain("E2E opening line.");
+  } finally {
+    await electronApp.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("imports selected text files as naturally ordered chapters without changing the source", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-folder-import-e2e-"));
+  const sourceRoot = join(tempRoot, "Imported Novel");
+  const targetRoot = join(tempRoot, "Imported Novel - ShanHai");
+  const sourceFiles = new Map([
+    ["01-opening.txt", "Imported opening.\n"],
+    ["02-middle.md", "Excluded middle.\n"],
+    ["10-ending.txt", "Imported ending.\n"]
+  ]);
+  await mkdir(sourceRoot);
+  await Promise.all(
+    [...sourceFiles].map(([fileName, body]) => writeFile(join(sourceRoot, fileName), body, "utf8"))
+  );
+  const electronApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
+    }
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
+    await queueDirectorySelections(electronApp, [sourceRoot]);
+
+    await triggerFileMenuItem(electronApp, "openCreativeProject");
+
+    const dialog = page.getByRole("dialog", { name: "接入普通小说文件夹" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Imported Novel - ShanHai");
+    await expect(dialog).toContainText("源文件夹不会被修改");
+    await dialog.getByRole("checkbox", { name: /02-middle/u }).uncheck();
+    await dialog.getByRole("button", { name: "创建项目并导入 2 章" }).click();
+
+    await expect(dialog).toHaveCount(0);
+    await expectCreativeWorkspaceReady(page);
+    await expect(page.locator(".ns-project-title")).toHaveText("Imported Novel");
+    await expect(page.getByRole("tab", { name: "10-ending.md" })).toBeVisible();
+    await expect(chapterBody(page)).toContainText("Imported ending.");
+    await expect(
+      page.getByText("项目已创建在 Imported Novel - ShanHai，源文件夹未被修改。")
+    ).toBeVisible();
+
+    const chapterRows = page.getByLabel("章节列表").locator(".ns-creative-row-main");
+    await expect(chapterRows).toHaveCount(2);
+    const chapterRowText = await chapterRows.allTextContents();
+    expect(chapterRowText[0]).toContain("01-opening");
+    expect(chapterRowText[1]).toContain("10-ending");
+    await expect(chapterRows.nth(1)).toHaveAttribute("aria-current", "page");
+
+    expect((await readdir(sourceRoot)).sort()).toEqual([...sourceFiles.keys()].sort());
+    for (const [fileName, expectedBody] of sourceFiles) {
+      expect(await readFile(join(sourceRoot, fileName), "utf8")).toBe(expectedBody);
+    }
+    const projectMetadata = JSON.parse(
+      await readFile(join(targetRoot, "project.json"), "utf8")
+    ) as {
+      title?: string;
+      language?: string;
+    };
+    expect(projectMetadata).toMatchObject({
+      title: "Imported Novel",
+      language: "zh-CN"
+    });
+    const chapterFiles = (await readdir(join(targetRoot, "chapters"))).filter((entry) =>
+      entry.endsWith(".md")
+    );
+    expect(chapterFiles).toHaveLength(2);
+    const chapterDocuments = await Promise.all(
+      chapterFiles.map((fileName) => readFile(join(targetRoot, "chapters", fileName), "utf8"))
+    );
+    const orderedChapters = chapterDocuments
+      .map((document) => ({
+        document,
+        order: Number(/\norder:\s+(\d+)/u.exec(document)?.[1] ?? Number.NaN),
+        title: /\ntitle:\s+['"]?([^'"\r\n]+)['"]?/u.exec(document)?.[1]
+      }))
+      .sort((left, right) => left.order - right.order);
+    expect(orderedChapters.map((chapter) => chapter.title)).toEqual(["01-opening", "10-ending"]);
+    expect(orderedChapters[0]?.document).toContain("Imported opening.");
+    expect(orderedChapters[1]?.document).toContain("Imported ending.");
+    expect(chapterDocuments.join("\n")).not.toContain("Excluded middle.");
+  } finally {
+    await electronApp.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("prefills and focuses brainstorming for an empty project without sending or replacing a draft", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-brainstorming-e2e-"));
+  const electronApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
+    }
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
+    await queueDirectorySelections(electronApp, [tempRoot]);
+
+    await triggerFileMenuItem(electronApp, "createCreativeProject");
+    await page.getByLabel("项目标题").fill("Brainstorm Smoke");
+    await page.getByLabel("项目文件夹名称").fill("Brainstorm Smoke");
+    await page.getByRole("button", { name: "选择项目父文件夹" }).click();
+    await page.getByRole("button", { name: "创建项目", exact: true }).click();
+    await expectCreativeWorkspaceReady(page);
+
+    const startBrainstorming = page.getByRole("button", { name: "开始构思" });
+    const request = page.getByLabel("Agent 请求");
+    await expect(startBrainstorming).toBeEnabled();
+    await request.fill("保留这份草稿");
+    await expect(startBrainstorming).toBeDisabled();
+    await expect(startBrainstorming).toHaveAttribute("title", "请先发送或清空当前 Agent 草稿。");
+    await expect(request).toHaveValue("保留这份草稿");
+
+    await request.fill("");
+    await expect(startBrainstorming).toBeEnabled();
+    await startBrainstorming.click();
+
+    await expect(request).toHaveValue(BRAINSTORMING_REQUEST);
+    await expect(request).toBeFocused();
+    await expect(page.getByRole("button", { name: "停止 Agent 运行" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "启动 Agent 运行" })).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "空章节工作区" }).getByRole("button", { name: "新建第一章" })
+    ).toBeVisible();
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });
@@ -305,7 +442,7 @@ test("reviews and applies an autosave recovery draft from disk", async () => {
   }
 });
 
-test("switches visible beta activity views from the left activity bar", async () => {
+test("switches visible beta activity views without a duplicate timeline activity", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-activity-e2e-"));
   const electronApp = await electron.launch({
     args: [electronMain],
@@ -323,8 +460,18 @@ test("switches visible beta activity views from the left activity bar", async ()
     await activityBar.getByRole("button", { name: "搜索" }).click();
     await expect(page.getByRole("heading", { name: "搜索项目" })).toBeVisible();
 
-    await activityBar.getByRole("button", { name: "时间线" }).click();
-    await expect(page.getByRole("heading", { name: "时间线" })).toBeVisible();
+    await expect(activityBar.getByRole("button", { name: "时间线" })).toHaveCount(0);
+    await activityBar.getByRole("button", { name: "故事资料" }).click();
+    await expect(page.getByLabel("故事圣经")).toBeVisible();
+    await page
+      .getByRole("tablist", { name: "创作导航模式" })
+      .getByRole("tab", { name: "故事资料" })
+      .click();
+    const storyKinds = page.getByLabel("故事资料分类");
+    await expect(storyKinds.getByRole("button", { name: /时间线/u })).toBeVisible();
+
+    await activityBar.getByRole("button", { name: "工作区" }).click();
+    await expect(page.getByLabel("编辑区")).toBeVisible();
 
     await activityBar.getByRole("button", { name: "设置" }).click();
     await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();

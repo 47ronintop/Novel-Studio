@@ -179,7 +179,12 @@ export function useProjectWorkflowActions({
       if (previous === undefined) return;
       setProjectWorkflow({ ...previous, status });
       try {
-        await refreshWorkspaceTransition(await operation(), previous.projectId);
+        const nextWorkflow = await operation();
+        if (nextWorkflow.folderImportPreview !== undefined) {
+          setProjectWorkflow(nextWorkflow);
+          return;
+        }
+        await refreshWorkspaceTransition(nextWorkflow, previous.projectId);
       } catch (error) {
         restoreWorkspaceTransition(previous, error);
       }
