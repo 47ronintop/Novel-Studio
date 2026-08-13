@@ -156,7 +156,9 @@ function normalizeShellPreferences(
       preferences?.bottomPanelVisible ?? DEFAULT_USER_SHELL_PREFERENCES.bottomPanelVisible,
     activeBottomPanelTab:
       preferences?.activeBottomPanelTab ?? DEFAULT_USER_SHELL_PREFERENCES.activeBottomPanelTab,
-    focusMode: preferences?.focusMode ?? DEFAULT_USER_SHELL_PREFERENCES.focusMode,
+    // Focus mode was removed from the shell UI. Normalize legacy saved values
+    // so an old session cannot reopen with its panels hidden.
+    focusMode: DEFAULT_USER_SHELL_PREFERENCES.focusMode,
     workspaceLayout: {
       ...DEFAULT_USER_SHELL_PREFERENCES.workspaceLayout,
       ...preferences?.workspaceLayout

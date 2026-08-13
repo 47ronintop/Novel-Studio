@@ -616,7 +616,6 @@ function WorkspaceEditorSurface({
     fileEditor?.saveStatus === "Saving" || chapterEditor?.saveStatus === "Saving";
   const activeSave =
     fileEditor?.conflict === undefined ? (fileEditor?.onSave ?? chapterEditor?.onSave) : undefined;
-  const activeFocusModeToggle = fileEditor?.onFocusModeToggle ?? chapterEditor?.onFocusModeToggle;
   const selectionAiPreviewCommand = chapterEditor?.runtime?.selectionAiPreviewCommand;
   const selectionAction =
     fileEditor === undefined &&
@@ -654,9 +653,6 @@ function WorkspaceEditorSurface({
           : { onChapterStatusChange: chapterEditor.onStatusChange })}
         {...(selectionAction === undefined ? {} : { selectionAction })}
         {...(activeSave === undefined ? {} : { onSave: activeSave })}
-        {...(activeFocusModeToggle === undefined
-          ? {}
-          : { onFocusModeToggle: activeFocusModeToggle })}
       />
       {hasEditorNotice ? (
         <div className="ns-editor-notices">

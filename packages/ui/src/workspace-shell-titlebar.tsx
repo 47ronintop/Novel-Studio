@@ -1,4 +1,4 @@
-import { Maximize2, PanelBottom, PanelRight, Search } from "lucide-react";
+import { PanelBottom, PanelRight, Search } from "lucide-react";
 
 import { WorkbenchSwitcher } from "./workbench-switcher.js";
 import type { WorkspaceShellProps } from "./workspace-shell-types.js";
@@ -63,15 +63,6 @@ export function WorkspaceShellTitlebar({
               type="button"
             >
               <PanelRight aria-hidden="true" size={14} />
-            </button>
-            <button
-              aria-label="切换专注模式"
-              className="ns-icon-button"
-              onClick={() => onCommandExecute?.("workspace.toggle-focus-mode")}
-              title="切换专注模式"
-              type="button"
-            >
-              <Maximize2 aria-hidden="true" size={14} />
             </button>
           </div>
         )}

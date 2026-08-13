@@ -182,7 +182,6 @@ describe("ChapterEditor", () => {
           lineHeight: 1.8
         }}
         onEditorPreferencesChange={() => undefined}
-        onFocusModeToggle={() => undefined}
       />
     );
 

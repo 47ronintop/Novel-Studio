@@ -103,13 +103,6 @@ export const rendererCommands: readonly ApplicationCommand[] = [
     defaultShortcut: "Ctrl/Cmd+\\"
   },
   {
-    id: "workspace.toggle-focus-mode",
-    title: "切换专注模式",
-    scope: "workspace",
-    riskLevel: "safe",
-    defaultShortcut: "Ctrl/Cmd+Shift+F"
-  },
-  {
     id: "workspace.narrow-navigator",
     title: "收窄项目导航",
     scope: "workspace",
@@ -257,7 +250,9 @@ export function shellPreferencesFromState(
     inspectorCollapsed: shellState.inspectorCollapsed,
     bottomPanelVisible: shellState.bottomPanelVisible,
     activeBottomPanelTab: shellState.activeBottomPanelTab,
-    focusMode: shellState.focusMode,
+    // Focus mode no longer has a user-facing entry point; persist the safe default
+    // so legacy preferences are cleared on the next normal shell save.
+    focusMode: false,
     workspaceLayout: shellState.workspaceLayout
   };
 }
@@ -297,7 +292,7 @@ export function applyShellPreferences(
     ...(preferences.activeBottomPanelTab === undefined
       ? {}
       : { activeBottomPanelTab: preferences.activeBottomPanelTab }),
-    ...(preferences.focusMode === undefined ? {} : { focusMode: preferences.focusMode }),
+    focusMode: false,
     workspaceLayout: {
       ...shellState.workspaceLayout,
       ...preferences.workspaceLayout

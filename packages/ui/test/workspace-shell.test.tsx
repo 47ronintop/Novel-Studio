@@ -41,6 +41,7 @@ describe("WorkspaceShell", () => {
     expect(html.indexOf('aria-label="当前工作台：创作工作台"')).toBeLessThan(
       html.indexOf('aria-label="打开命令面板"')
     );
+    expect(html).not.toContain('aria-label="切换专注模式"');
   });
 
   test("routes command palette close actions to the close callback", () => {

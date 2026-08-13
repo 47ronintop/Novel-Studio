@@ -226,7 +226,7 @@ describe("UserPreferencesSession", () => {
           inspectorCollapsed: false,
           bottomPanelVisible: true,
           activeBottomPanelTab: "搜索",
-          focusMode: true,
+          focusMode: false,
           workspaceLayout: persisted.shell.workspaceLayout
         }
       }

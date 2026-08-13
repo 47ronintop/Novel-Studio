@@ -60,8 +60,6 @@ export interface WorkspaceFileEditorRuntime {
   readonly editorPreferences: EditorPreferences;
   readonly setEditorPreferences: Dispatch<SetStateAction<EditorPreferences>>;
   readonly onEditorPreferencesChange: (preferences: EditorPreferences) => void;
-  readonly onFocusModeToggle: () => void;
-  readonly focusModeToggleRef: MutableRefObject<() => void>;
   readonly activeCreativeFileRef: Extract<
     ContextDraftRef,
     { readonly kind: "project_file" }
@@ -138,8 +136,6 @@ export function useWorkspaceFileEditorRuntime(
   const [editorPreferences, setEditorPreferences] = useState<EditorPreferences>(
     DEFAULT_EDITOR_PREFERENCES
   );
-  const focusModeToggleRef = useRef<() => void>(() => undefined);
-  const onFocusModeToggle = useCallback(() => focusModeToggleRef.current(), []);
   const onEditorPreferencesChange = useCallback(
     (preferences: EditorPreferences) => {
       setEditorPreferences(preferences);
@@ -584,8 +580,7 @@ export function useWorkspaceFileEditorRuntime(
           nextFileEditor.onKeepDraft?.();
           setFileEditor(decorateFileEditor(bridge, bridge.getProps()));
         },
-        onEditorPreferencesChange,
-        onFocusModeToggle
+        onEditorPreferencesChange
       };
     },
     [
@@ -595,7 +590,6 @@ export function useWorkspaceFileEditorRuntime(
       creativeProjectFilesBridge,
       editorPreferences,
       onEditorPreferencesChange,
-      onFocusModeToggle,
       projectWorkflowBridge,
       setChapterEditor,
       updateVisibleFileEditor
@@ -639,8 +633,6 @@ export function useWorkspaceFileEditorRuntime(
     editorPreferences,
     setEditorPreferences,
     onEditorPreferencesChange,
-    onFocusModeToggle,
-    focusModeToggleRef,
     activeCreativeFileRef,
     setEngineeringFileEditor,
     setCreativeFileEditor,

@@ -67,7 +67,6 @@ export interface ChapterEditorProps {
   readonly onFindModeChange?: ((mode: EditorFindMode) => void) | undefined;
   readonly onSelectionChange?: (selection: ChapterEditorSelection) => void;
   readonly onEditorPreferencesChange?: (preferences: EditorPreferences) => void;
-  readonly onFocusModeToggle?: () => void;
   readonly onSave?: () => void;
   readonly onStatusChange?: (status: ChapterStatus) => void;
   readonly onSelectionReviewAccept?: () => void;

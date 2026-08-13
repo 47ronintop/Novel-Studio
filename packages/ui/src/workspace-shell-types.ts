@@ -239,7 +239,6 @@ export interface PlainFileEditorProps {
   readonly onReloadFromDisk?: (() => void) | undefined;
   readonly onKeepDraft?: (() => void) | undefined;
   readonly onEditorPreferencesChange?: ((preferences: EditorPreferences) => void) | undefined;
-  readonly onFocusModeToggle?: (() => void) | undefined;
 }
 
 export interface ProjectFileTreeItemProps {

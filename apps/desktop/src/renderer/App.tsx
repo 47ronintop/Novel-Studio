@@ -166,8 +166,6 @@ export function App() {
     editorPreferences,
     setEditorPreferences,
     onEditorPreferencesChange,
-    onFocusModeToggle,
-    focusModeToggleRef,
     activeCreativeFileRef,
     setEngineeringFileEditor,
     setCreativeFileEditor,
@@ -664,8 +662,6 @@ export function App() {
       persistUserPreferences
     ]
   );
-  focusModeToggleRef.current = () => handleCommandExecute("workspace.toggle-focus-mode");
-
   const workspaceNavigation = createWorkspaceNavigation({
     getWorkspaceContext: () => shellState.workspaceContext,
     projectWorkflowBridge,
@@ -842,7 +838,6 @@ export function App() {
           onBodyChange: handleBodyChange,
           onSelectionChange: handleSelectionChange,
           onEditorPreferencesChange,
-          onFocusModeToggle,
           onSelectionReviewAccept: handleApplyAiSuggestion,
           onSelectionReviewReject: handleRejectSelectionReview,
           onSelectionReviewUndo: handleUndoSelectionReview,

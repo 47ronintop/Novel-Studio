@@ -171,13 +171,6 @@ describe("desktop application command bridge", () => {
         defaultShortcut: "Ctrl/Cmd+\\"
       },
       {
-        id: "workspace.toggle-focus-mode",
-        title: "切换专注模式",
-        scope: "workspace",
-        riskLevel: "safe",
-        defaultShortcut: "Ctrl/Cmd+Shift+F"
-      },
-      {
         id: "workspace.narrow-navigator",
         title: "收窄项目导航",
         scope: "workspace",
@@ -218,20 +211,15 @@ describe("desktop application command bridge", () => {
     expect(application.getShellState().navigatorCollapsed).toBe(true);
   });
 
-  test("toggles focus mode as a safe workspace command", () => {
+  test("does not expose the removed focus mode command", () => {
     const application = createDesktopApplication();
 
-    const enabled = application.executeCommand("workspace.toggle-focus-mode");
-    const disabled = application.executeCommand("workspace.toggle-focus-mode");
+    expect(application.listCommands()).not.toContainEqual(
+      expect.objectContaining({ id: "workspace.toggle-focus-mode" })
+    );
+    const result = application.executeCommand("workspace.toggle-focus-mode");
 
-    expect(enabled.ok).toBe(true);
-    expect(disabled.ok).toBe(true);
-    expect(enabled).toMatchObject({
-      ok: true,
-      value: {
-        focusMode: true
-      }
-    });
+    expect(result.ok).toBe(false);
     expect(application.getShellState().focusMode).toBe(false);
   });
 

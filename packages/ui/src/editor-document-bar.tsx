@@ -1,5 +1,5 @@
 import type { ChapterStatus } from "@novel-studio/shared";
-import { Maximize2, Save, Search, Sparkles, X } from "lucide-react";
+import { Save, Search, Sparkles, X } from "lucide-react";
 
 export interface EditorDocumentTab {
   readonly id: string;
@@ -16,10 +16,7 @@ export interface EditorDocumentBarProps {
   readonly saving: boolean;
   readonly onSave?: (() => void) | undefined;
   readonly onFind?: (() => void) | undefined;
-  readonly onFocusModeToggle?: (() => void) | undefined;
-  readonly selectionAction?:
-    | { readonly label: string; readonly onInvoke: () => void }
-    | undefined;
+  readonly selectionAction?: { readonly label: string; readonly onInvoke: () => void } | undefined;
   readonly chapterStatus?: ChapterStatus | undefined;
   readonly chapterStatusBusy?: boolean | undefined;
   readonly onChapterStatusChange?: ((status: ChapterStatus) => void) | undefined;
@@ -31,7 +28,6 @@ export function EditorDocumentBar({
   saving,
   onSave,
   onFind,
-  onFocusModeToggle,
   selectionAction,
   chapterStatus,
   chapterStatusBusy = false,
@@ -127,17 +123,6 @@ export function EditorDocumentBar({
             type="button"
           >
             <Save aria-hidden="true" size={14} />
-          </button>
-        )}
-        {onFocusModeToggle === undefined ? null : (
-          <button
-            aria-label="切换专注模式"
-            className="ns-icon-button"
-            onClick={onFocusModeToggle}
-            title="切换专注模式"
-            type="button"
-          >
-            <Maximize2 aria-hidden="true" size={14} />
           </button>
         )}
       </div>

@@ -2323,8 +2323,6 @@ function reduceShellState(
           splitView: !shellState.workspaceLayout.splitView
         }
       };
-    case "workspace.toggle-focus-mode":
-      return { ...shellState, focusMode: !shellState.focusMode };
     case "workspace.narrow-navigator":
       return {
         ...shellState,

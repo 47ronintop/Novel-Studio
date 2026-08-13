@@ -67,6 +67,22 @@ describe("renderer app shell editor runtime support", () => {
     expect(shellPreferencesFromState(applied)).not.toHaveProperty("workspaceContext");
   });
 
+  test("does not restore the removed focus mode preference", () => {
+    const applied = applyShellPreferences(
+      {
+        ...rendererShellState,
+        focusMode: true
+      },
+      {
+        ...DEFAULT_USER_SHELL_PREFERENCES,
+        focusMode: true
+      }
+    );
+
+    expect(applied.focusMode).toBe(false);
+    expect(shellPreferencesFromState(applied).focusMode).toBe(false);
+  });
+
   test("does not restore a creative preference into an engineering workspace", () => {
     const applied = applyShellPreferences(
       {
