@@ -3151,6 +3151,7 @@ textarea:focus-visible,
   display: grid;
   grid-area: ai;
   grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
   min-width: 280px;
   overflow: hidden;
   position: relative;
@@ -5790,7 +5791,7 @@ textarea:focus-visible,
 .ns-agent-composer-model-trigger {
   color: var(--ns-muted);
   font-weight: 500;
-  justify-content: flex-start;
+  justify-content: flex-end;
   max-width: 100%;
   min-width: 0;
   width: 100%;
@@ -5805,8 +5806,10 @@ textarea:focus-visible,
 .ns-agent-composer-model-popover-root {
   display: flex;
   grid-column: 4;
-  min-width: 0;
-  width: 100%;
+  justify-self: end;
+  max-width: min(100%, 180px);
+  min-width: min(72px, 100%);
+  width: fit-content;
 }
 
 .ns-agent-context-trigger {

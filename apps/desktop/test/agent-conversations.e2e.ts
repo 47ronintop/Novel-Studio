@@ -666,6 +666,7 @@ async function assertComposerLayout(composer: Locator): Promise<void> {
   expect(modeBox.x + modeBox.width, metrics).toBeLessThanOrEqual(contextBox.x + 1);
   expect(contextBox.x + contextBox.width, metrics).toBeLessThanOrEqual(modelBox.x + 1);
   expect(modelBox.x + modelBox.width, metrics).toBeLessThanOrEqual(commandBox.x + 1);
+  expect(commandBox.x - (modelBox.x + modelBox.width), metrics).toBeLessThanOrEqual(6);
   expect(modelBox.width, metrics).toBeGreaterThanOrEqual(72);
   expect(commandBox.width, metrics).toBeGreaterThanOrEqual(30);
   for (const box of [footerBox, addBox, modeBox, contextBox, modelBox, commandBox]) {
