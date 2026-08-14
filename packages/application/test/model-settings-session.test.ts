@@ -11,6 +11,7 @@ import {
 
 import {
   createModelSettingsSession,
+  createModelDiscoverySnapshot,
   MODEL_PROVIDER_CATALOG,
   resolveDefaultModelRuntimeProfile,
   reasoningStrengthForModel,
@@ -116,6 +117,63 @@ describe("model settings session", () => {
         "https://api.hostcentral.cc/v1"
       )
     ).toMatchObject({ status: "hidden" });
+  });
+
+  test("keeps DeepSeek models hidden when no reasoning tiers are declared", () => {
+    expect(
+      reasoningStrengthForModel(
+        "openai-compatible",
+        "deepseek-chat",
+        "https://api.deepseek.com/v1",
+        true
+      )
+    ).toEqual({
+      status: "hidden",
+      reason: "This DeepSeek model does not declare reasoning_effort tiers."
+    });
+    expect(
+      reasoningStrengthForModel(
+        "openai-compatible",
+        "deepseek-reasoner",
+        "https://api.deepseek.com/v1",
+        true
+      )
+    ).toEqual({
+      status: "hidden",
+      reason:
+        "DeepSeek reasoner models use fixed reasoning and do not expose reasoning_effort tiers."
+    });
+  });
+
+  test("prefers discovered reasoning metadata over the DeepSeek fallback", () => {
+    const snapshot = createModelDiscoverySnapshot({
+      profile: {
+        id: "model_deepseek",
+        provider: "deepseek",
+        modelName: "deepseek-reasoner",
+        baseUrl: "https://api.deepseek.com/v1",
+        reasoningEffortEnabled: false
+      },
+      models: [
+        {
+          id: "deepseek-reasoner",
+          displayName: "deepseek-reasoner",
+          reasoningStrength: {
+            status: "available",
+            providerParamName: "reasoning_effort",
+            allowedValues: ["low", "high", "max"],
+            defaultValue: "max"
+          }
+        }
+      ]
+    });
+
+    expect(snapshot.reasoningStrength).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["low", "high", "max"],
+      defaultValue: "max"
+    });
   });
 
   test("uses model-specific reasoning effort values for official OpenAI endpoints", () => {

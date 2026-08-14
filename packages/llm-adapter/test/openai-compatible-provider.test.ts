@@ -684,34 +684,93 @@ describe("OpenAI-compatible provider", () => {
     expect(calls[1]?.body).not.toHaveProperty("reasoning_effort");
   });
 
-  test("retries streaming requests when the rejected reasoning parameter is outside the message", async () => {
+  test("preserves non-streaming reasoning_effort value rejection errors", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        throw new OpenAiCompatibleHttpError({
+          status: 400,
+          message: "Provider returned HTTP 400.",
+          body: {
+            error: {
+              message: "Unsupported value: 'ultra'.",
+              param: "reasoning_effort",
+              code: "unsupported_value"
+            }
+          }
+        });
+      }
+    });
+    const adapter = createLlmAdapter({ provider });
+
+    const result = await adapter.complete({
+      ...request,
+      parameters: { ...request.parameters, reasoningEffort: "ultra" }
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({
+        code: "LLM_PROVIDER_ERROR",
+        message: "Unsupported value: 'ultra'."
+      })
+    });
+  });
+
+  test("preserves invalid reasoning_effort parameter-value errors", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        throw new OpenAiCompatibleHttpError({
+          status: 400,
+          message: "Provider returned HTTP 400.",
+          body: {
+            error: {
+              message: "Invalid parameter value for reasoning_effort.",
+              code: "invalid_parameter_value"
+            }
+          }
+        });
+      }
+    });
+    const adapter = createLlmAdapter({ provider });
+
+    const result = await adapter.complete({
+      ...request,
+      parameters: { ...request.parameters, reasoningEffort: "ultra" }
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({
+        code: "LLM_PROVIDER_ERROR",
+        message: "Invalid parameter value for reasoning_effort."
+      })
+    });
+  });
+
+  test("preserves streaming reasoning_effort value rejection errors", async () => {
     const calls: OpenAiCompatibleTransportRequest[] = [];
     const provider = createOpenAiCompatibleProvider({
       transport: async () => readFixture("openai-compatible-chat-success.json"),
       streamTransport: async function* (transportRequest) {
         calls.push(transportRequest);
-        if (calls.length === 1) {
-          throw new OpenAiCompatibleHttpError({
-            status: 400,
-            message: "Provider returned HTTP 400.",
-            body: {
-              error: {
-                message: "Unsupported value: 'ultra'.",
-                param: "reasoning_effort",
-                code: "unsupported_value"
-              }
+        throw new OpenAiCompatibleHttpError({
+          status: 400,
+          message: "Provider returned HTTP 400.",
+          body: {
+            error: {
+              message: "Unsupported value: 'ultra'.",
+              param: "reasoning_effort",
+              code: "unsupported_value"
             }
-          });
-        }
-        yield {
-          choices: [
-            {
-              delta: {
-                content: "Retried without reasoning."
-              }
-            }
-          ]
-        };
+          }
+        });
+        yield {};
       }
     });
     const adapter = createLlmAdapter({
@@ -730,27 +789,64 @@ describe("OpenAI-compatible provider", () => {
       })
     );
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     expect(calls[0]?.body).toMatchObject({
       reasoning_effort: "ultra"
     });
+    expect(events).toContainEqual({
+      ok: false,
+      error: expect.objectContaining({
+        code: "LLM_PROVIDER_ERROR",
+        message: "Unsupported value: 'ultra'."
+      })
+    });
+  });
+
+  test("retries streaming requests when the provider does not recognize reasoning_effort", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => readFixture("openai-compatible-chat-success.json"),
+      streamTransport: async function* (transportRequest) {
+        calls.push(transportRequest);
+        if (calls.length === 1) {
+          throw new OpenAiCompatibleHttpError({
+            status: 400,
+            message: "Provider returned HTTP 400.",
+            body: {
+              error: {
+                message: "Unknown parameter: reasoning_effort",
+                param: "reasoning_effort",
+                code: "unknown_parameter"
+              }
+            }
+          });
+        }
+        yield { choices: [{ delta: { content: "Retried without reasoning." } }] };
+        yield { choices: [{ delta: {}, finish_reason: "stop" }] };
+      }
+    });
+    const adapter = createLlmAdapter({ provider, clock: () => "2026-07-08T00:00:00.000Z" });
+
+    const events = await collectStream(
+      adapter.stream({
+        ...request,
+        mode: "streaming",
+        parameters: { ...request.parameters, reasoningEffort: "high" }
+      })
+    );
+
+    expect(calls).toHaveLength(2);
     expect(calls[1]?.body).not.toHaveProperty("reasoning_effort");
     expect(events).toContainEqual({
       ok: true,
-      value: {
-        type: "delta",
-        value: "Retried without reasoning."
-      }
+      value: { type: "delta", value: "Retried without reasoning." }
     });
-    expect(events).toContainEqual({
-      ok: true,
-      value: {
-        type: "warning",
-        code: "LLM_REASONING_EFFORT_IGNORED",
-        message:
-          "The model endpoint does not support reasoning strength controls. reasoning_effort was removed and the request was retried."
-      }
-    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({ type: "warning", code: "LLM_REASONING_EFFORT_IGNORED" })
+      })
+    );
   });
   test("fails closed on duplicate authority for both generic and official OpenAI profiles", async () => {
     const provider = createOpenAiCompatibleProvider({

@@ -560,7 +560,7 @@ async function discoverProviderModels(
     headers: { authorization: `Bearer ${secret}` },
     timeoutMs: profile.timeoutMs
   });
-  return normalizeOpenAiCompatibleModels(payload);
+  return normalizeOpenAiCompatibleModels(payload, profile.provider);
 }
 
 async function postAnthropicJson(
@@ -901,7 +901,10 @@ async function getOpenAiCompatibleJson(
   }
 }
 
-function normalizeOpenAiCompatibleModels(payload: unknown): readonly {
+function normalizeOpenAiCompatibleModels(
+  payload: unknown,
+  provider: string
+): readonly {
   readonly id: string;
   readonly displayName: string;
   readonly contextWindow?: number;
@@ -943,7 +946,7 @@ function normalizeOpenAiCompatibleModels(payload: unknown): readonly {
         "supports_structured_arguments",
         "supportsStructuredArguments"
       ]);
-      const reasoningStrength = reasoningStrengthFromModelMetadata(entry);
+      const reasoningStrength = reasoningStrengthFromModelMetadata(entry, provider);
       return {
         id,
         displayName: id,
@@ -1035,58 +1038,127 @@ function capabilityBooleanFromModelMetadata(
 
 /** Normalize common provider metadata spellings into one model capability shape. */
 function reasoningStrengthFromModelMetadata(
-  entry: JsonObject
+  entry: JsonObject,
+  provider: string
 ): ModelReasoningStrengthControl | undefined {
+  // OpenRouter exposes reasoning capabilities through a native `reasoning` request object, while
+  // the OpenAI-compatible adapter currently serializes only `reasoning_effort`. Do not advertise
+  // a control that cannot reach the provider until that native mapping is implemented.
+  if (provider.trim().toLowerCase() === "openrouter") return undefined;
+
+  const reasoningValueKeys = [
+    "reasoning_efforts",
+    "supported_reasoning_efforts",
+    "reasoningEfforts",
+    "supportedReasoningEfforts",
+    "reasoning_effort_values",
+    "reasoningEffortValues",
+    "reasoning_effort_options",
+    "reasoningEffortOptions",
+    "reasoning_options",
+    "reasoningOptions"
+  ] as const;
   const candidates: unknown[] = [
     entry["reasoning_efforts"],
     entry["supported_reasoning_efforts"],
     entry["reasoningEfforts"],
+    entry["supportedReasoningEfforts"],
     entry["reasoning_effort_values"],
     entry["reasoningEffortValues"],
-    entry["reasoning_effort"]
+    entry["reasoning_effort_options"],
+    entry["reasoningEffortOptions"],
+    entry["reasoning_options"],
+    entry["reasoningOptions"],
+    entry["reasoning_effort"],
+    entry["reasoning"]
   ];
-  let nestedDefault: string | undefined;
+  const nestedDefaults: string[] = [];
   for (const nestedKey of [
     "reasoning",
     "reasoning_effort",
     "reasoningEffort",
     "capabilities",
-    "metadata"
+    "metadata",
+    "reasoning_capabilities",
+    "reasoningCapabilities",
+    "thinking"
   ]) {
     const nested = entry[nestedKey];
     if (!isJsonRecord(nested)) continue;
     candidates.push(
       nested["allowedValues"],
       nested["allowed_values"],
-      nested["reasoning_efforts"],
-      nested["supported_reasoning_efforts"],
-      nested["reasoningEfforts"]
+      nested["values"],
+      nested["options"],
+      nested["levels"],
+      nested["efforts"],
+      ...reasoningValueKeys.map((key) => nested[key])
     );
-    nestedDefault ??=
+    const defaultParameters = nested["default_parameters"] ?? nested["defaultParameters"];
+    const nestedDefault =
       stringValue(nested["defaultValue"]) ??
       stringValue(nested["default_value"]) ??
-      stringValue(nested["default"]);
+      stringValue(nested["default"]) ??
+      stringValue(nested["defaultReasoningEffort"]) ??
+      stringValue(nested["default_reasoning_effort"]) ??
+      (isJsonRecord(defaultParameters)
+        ? (stringValue(defaultParameters["reasoning_effort"]) ??
+          stringValue(defaultParameters["reasoningEffort"]))
+        : undefined);
+    if (nestedDefault !== undefined) nestedDefaults.push(nestedDefault);
+
+    for (const childKey of ["reasoning", "thinking", "reasoning_effort", "reasoningEffort"]) {
+      const child = nested[childKey];
+      if (!isJsonRecord(child)) continue;
+      candidates.push(
+        child["allowedValues"],
+        child["allowed_values"],
+        child["values"],
+        child["options"],
+        child["levels"],
+        child["efforts"],
+        ...reasoningValueKeys.map((key) => child[key])
+      );
+      const childDefault =
+        stringValue(child["defaultValue"]) ??
+        stringValue(child["default_value"]) ??
+        stringValue(child["default"]) ??
+        stringValue(child["defaultReasoningEffort"]) ??
+        stringValue(child["default_reasoning_effort"]);
+      if (childDefault !== undefined) nestedDefaults.push(childDefault);
+    }
   }
 
   const allowedValues = candidates.map(readReasoningValues).find((values) => values.length > 0);
   if (allowedValues === undefined) return undefined;
-  const defaultCandidate =
+  const itemDefaults = candidates
+    .map(readReasoningDefault)
+    .filter((value): value is string => value !== undefined);
+  const topLevelDefault =
     stringValue(entry["default_reasoning_effort"]) ??
     stringValue(entry["defaultReasoningEffort"]) ??
     stringValue(entry["reasoning_effort_default"]) ??
-    nestedDefault;
-  const defaultValue =
-    defaultCandidate !== undefined && allowedValues.includes(defaultCandidate)
-      ? defaultCandidate
-      : allowedValues.includes("medium")
-        ? "medium"
-        : allowedValues[0];
-  if (defaultValue === undefined) return undefined;
+    stringValue(entry["reasoningEffortDefault"]) ??
+    (isJsonRecord(entry["default_parameters"])
+      ? (stringValue(entry["default_parameters"]["reasoning_effort"]) ??
+        stringValue(entry["default_parameters"]["reasoningEffort"]))
+      : undefined) ??
+    (isJsonRecord(entry["defaultParameters"])
+      ? (stringValue(entry["defaultParameters"]["reasoning_effort"]) ??
+        stringValue(entry["defaultParameters"]["reasoningEffort"]))
+      : undefined);
+  const defaultCandidates = [topLevelDefault, ...nestedDefaults, ...itemDefaults].filter(
+    (value): value is string => value !== undefined
+  );
+  const uniqueDefaults = [...new Set(defaultCandidates)];
+  if (uniqueDefaults.length !== 1) return undefined;
+  const defaultCandidate = uniqueDefaults[0];
+  if (defaultCandidate === undefined || !allowedValues.includes(defaultCandidate)) return undefined;
   return {
     status: "available",
     providerParamName: "reasoning_effort",
     allowedValues,
-    defaultValue
+    defaultValue: defaultCandidate
   };
 }
 
@@ -1104,6 +1176,20 @@ function readReasoningValues(value: unknown): string[] {
     })
     .filter((item): item is string => item !== undefined && item.length > 0);
   return [...new Set(values)];
+}
+
+function readReasoningDefault(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const item of value) {
+    if (!isJsonRecord(item)) continue;
+    if (item["default"] !== true && item["is_default"] !== true && item["isDefault"] !== true) {
+      continue;
+    }
+    return (
+      stringValue(item["value"]) ?? stringValue(item["id"]) ?? stringValue(item["reasoning_effort"])
+    );
+  }
+  return undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

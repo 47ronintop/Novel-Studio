@@ -535,6 +535,123 @@ describe("M95 real provider runtime", () => {
     expect(JSON.stringify(discovered)).not.toContain("secret://model_deepseek/api_key");
   });
 
+  test.each([
+    {
+      provider: "openrouter" as const,
+      baseUrl: "https://openrouter.ai/api/v1",
+      modelName: "openrouter/declared-reasoning",
+      payload: {
+        data: [
+          {
+            id: "openrouter/declared-reasoning",
+            reasoning: { values: ["low", "high"], default: "high" }
+          },
+          {
+            id: "openrouter/flag-only",
+            supported_parameters: ["reasoning"]
+          }
+        ]
+      },
+      modelId: "openrouter/declared-reasoning",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    },
+    {
+      provider: "openai-compatible" as const,
+      baseUrl: "https://api.example.com/v1",
+      modelName: "conflicting-reasoning",
+      payload: {
+        data: [
+          {
+            id: "conflicting-reasoning",
+            supported_reasoning_efforts: ["low", "high"],
+            default_reasoning_effort: "low",
+            reasoning: { values: ["low", "high"], default: "high" }
+          }
+        ]
+      },
+      modelId: "conflicting-reasoning",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    }
+  ])(
+    "normalizes provider reasoning metadata conservatively for $provider",
+    async ({ provider, baseUrl, modelName, payload, modelId, expectedReasoning }) => {
+      const userDataRoot = await mkdtemp(join(tmpdir(), `novel-studio-${provider}-models-`));
+      tempRoots.push(userDataRoot);
+      const secretRef = `secret://model_${provider}/api_key`;
+      const secretStore = createEncryptedFileModelSecretStore({
+        userDataRoot,
+        cipher: testCipher
+      });
+      await secretStore.saveSecret(secretRef, "provider-declared-reasoning-key");
+      const runtime = createDesktopModelRuntime({
+        userDataRoot,
+        secretStore,
+        fetch: createModelsFetch([], payload)
+      });
+
+      const discovered = await runtime.modelDiscoveryPort.discoverModels({
+        id: `model_${provider}`,
+        provider,
+        displayName: provider,
+        baseUrl,
+        apiKeyRef: secretRef,
+        modelName,
+        timeoutMs: 60_000
+      });
+
+      assertOk(discovered);
+      const model = discovered.value.models.find((entry) => entry.id === modelId);
+      expect(model).toMatchObject({ reasoningStrength: expectedReasoning });
+    }
+  );
+
+  test("keeps reasoning hidden when metadata omits an explicit default", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-reasoning-default-"));
+    tempRoots.push(userDataRoot);
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(apiKeyRef, "sk-real-deepseek-key");
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore,
+      fetch: createModelsFetch([], {
+        data: [
+          {
+            id: "deepseek-reasoner",
+            supported_reasoning_efforts: ["low", "high"]
+          },
+          {
+            id: "deepseek-flag-only",
+            capabilities: { supports_reasoning: true }
+          }
+        ]
+      })
+    });
+
+    const discovered = await runtime.modelDiscoveryPort.discoverModels(createDeepSeekProfile());
+
+    assertOk(discovered);
+    expect(discovered.value.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "deepseek-reasoner",
+          reasoningStrength: expect.objectContaining({ status: "hidden" })
+        }),
+        expect.objectContaining({
+          id: "deepseek-flag-only",
+          reasoningStrength: expect.objectContaining({ status: "hidden" })
+        })
+      ])
+    );
+    expect(JSON.stringify(discovered)).not.toContain('"defaultValue":"medium"');
+  });
+
   test("falls back to manual model entry when provider model discovery fails", async () => {
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-runtime-models-fallback-"));
     tempRoots.push(userDataRoot);

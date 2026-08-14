@@ -277,16 +277,75 @@ function shouldRetryWithoutReasoningEffort(
     return false;
   }
   const message = `${error.message}\n${readProviderErrorMessage(error.body) ?? ""}`;
+  const code = readProviderErrorCode(error.body);
   const parameter = readProviderErrorParameter(error.body);
-  if (error.status >= 400 && error.status < 500 && parameter === "reasoning_effort") {
-    return true;
+  if (error.status < 400 || error.status >= 500) return false;
+
+  // Value validation failures must reach the caller. Retrying without the
+  // parameter would silently turn an invalid requested value into a weaker
+  // request, which is materially different behavior.
+  if (
+    code !== undefined &&
+    /^(?:unsupported|invalid|not_supported|not-supported)[_. -]?value$/i.test(code)
+  ) {
+    return false;
   }
-  return (
-    error.status >= 400 &&
-    error.status < 500 &&
-    /reasoning[_ .-]?effort/i.test(message) &&
-    /(unrecognized|unknown|unsupported|not supported|invalid|not accept)/i.test(message)
-  );
+  if (
+    code !== undefined &&
+    /^(?:unsupported|invalid|not_supported|not-supported)[_. -]?(?:parameter|param|field|argument|property|option)[_. -]?value$/i.test(
+      code
+    )
+  ) {
+    return false;
+  }
+  if (
+    /(?:unsupported|invalid)\s+value\b|value\s+(?:is\s+)?(?:unsupported|invalid|not supported)/i.test(
+      message
+    )
+  ) {
+    return false;
+  }
+  if (
+    /(?:invalid|not a valid|unsupported|not supported|unknown|unrecognized|unrecognised)\b[^\n]{0,80}(?:parameter|param|field|argument|property|option)\b[^\n]{0,80}(?:value|setting|level)\b/i.test(
+      message
+    ) ||
+    /(?:value|setting|level)\b[^\n]{0,80}(?:for|of)\s+(?:the\s+)?(?:request\s+)?(?:parameter|param|field|argument|property|option)\b[^\n]{0,80}reasoning[_ .-]?effort/i.test(
+      message
+    )
+  ) {
+    return false;
+  }
+
+  const hasReasoningName =
+    /reasoning[_ .-]?effort/i.test(message) || parameter === "reasoning_effort";
+  if (!hasReasoningName) return false;
+
+  // Only retry errors that identify the field itself as unknown/unsupported.
+  // A parameter field alone is insufficient because many providers reuse it
+  // for value validation errors (for example, `unsupported_value`).
+  const parameterCode =
+    code !== undefined &&
+    /^(?:unknown|unrecognized|unsupported)[_. -]?(?:parameter|param|field|argument|property|option|request_argument)$/i.test(
+      code
+    );
+  const parameterMessage =
+    /(?:unknown|unrecognized|unrecognised|unexpected|not allowed|unsupported|not supported)\s+(?:request\s+)?(?:parameter|param|field|argument|property|option)\b/i.test(
+      message
+    ) ||
+    /(?:request\s+)?(?:parameter|param|field|argument|property|option)\b[^\n]{0,80}(?:unknown|unrecognized|unrecognised|unexpected|not allowed|unsupported|not supported)/i.test(
+      message
+    ) ||
+    /(?:invalid|not a valid)\s+(?:request\s+)?(?:parameter|param|field|argument|property|option)\b[^\n]{0,80}reasoning[_ .-]?effort/i.test(
+      message
+    ) ||
+    /reasoning[_ .-]?effort[^\n]{0,80}(?:invalid|not a valid)\s+(?:request\s+)?(?:parameter|param|field|argument|property|option)\b/i.test(
+      message
+    ) ||
+    /reasoning[_ .-]?effort\s+(?:is\s+)?(?:unknown|unrecognized|unrecognised|unexpected|not allowed|unsupported|not supported)/i.test(
+      message
+    );
+
+  return parameterCode || parameterMessage;
 }
 
 function hasReasoningEffort(body: JsonObject): boolean {
@@ -723,6 +782,15 @@ function readProviderErrorParameter(body: unknown): string | undefined {
   const candidates: unknown[] = [body.param, body.parameter];
   if (isRecord(body.error)) {
     candidates.push(body.error.param, body.error.parameter);
+  }
+  return candidates.find((value): value is string => typeof value === "string")?.trim();
+}
+
+function readProviderErrorCode(body: unknown): string | undefined {
+  if (!isRecord(body)) return undefined;
+  const candidates: unknown[] = [body.code, body.error_code];
+  if (isRecord(body.error)) {
+    candidates.push(body.error.code, body.error.error_code);
   }
   return candidates.find((value): value is string => typeof value === "string")?.trim();
 }
