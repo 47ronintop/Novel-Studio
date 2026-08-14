@@ -7,9 +7,17 @@ import {
   type Result,
   type UnifiedError
 } from "@novel-studio/shared";
-import type { LlmModelProfile, LlmParameters } from "@novel-studio/llm-adapter";
+import type {
+  LlmModelProfile,
+  LlmParameters,
+  LlmReasoningCapability
+} from "@novel-studio/llm-adapter";
 import { createModelDiscoveryFallback } from "./model-discovery-session.js";
-import type { ModelDiscoveryPort, ModelDiscoverySnapshot } from "./model-discovery-session.js";
+import type {
+  ModelDiscoveryPort,
+  ModelDiscoveryRequestOptions,
+  ModelDiscoverySnapshot
+} from "./model-discovery-session.js";
 import { isModelProvider, type ModelProvider } from "./model-provider-catalog.js";
 
 export interface ModelProfile extends JsonObject {
@@ -129,7 +137,10 @@ export interface ModelSettingsSession {
   testModelProfileConnection(
     profileId: string
   ): Promise<Result<ModelConnectionResult, UnifiedError>>;
-  discoverModelOptions(profileId: string): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
+  discoverModelOptions(
+    profileId: string,
+    options?: ModelDiscoveryRequestOptions
+  ): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
 }
 
 export interface ModelSettingsSessionOptions {
@@ -263,7 +274,7 @@ export function createModelSettingsSession(
       );
     },
 
-    async discoverModelOptions(profileId) {
+    async discoverModelOptions(profileId, discoveryOptions) {
       const profileResult = await readModelProfile(options.settingsPort, profileId);
       if (!profileResult.ok) {
         return profileResult;
@@ -278,7 +289,7 @@ export function createModelSettingsSession(
         );
       }
 
-      const result = await options.discoveryPort.discoverModels(profile);
+      const result = await options.discoveryPort.discoverModels(profile, discoveryOptions);
       if (result.ok) {
         return result;
       }
@@ -302,7 +313,8 @@ function isStoryAnalysisSettings(value: unknown): value is StoryAnalysisSettings
 }
 
 export function resolveDefaultModelRuntimeProfile(
-  settings: ProjectSettings
+  settings: ProjectSettings,
+  reasoningCapability?: LlmReasoningCapability | null
 ): Result<ModelRuntimeProfile, UnifiedError> {
   const profile = settings.models.profiles.find(
     (entry) => entry.id === settings.models.defaultProfileId
@@ -336,7 +348,9 @@ export function resolveDefaultModelRuntimeProfile(
     ...modelProfileBase,
     ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
     apiKeyRef: profile.apiKeyRef,
-    timeoutMs: profile.timeoutMs
+    timeoutMs: profile.timeoutMs,
+    ...(profile.reasoningEffortEnabled === true ? { reasoningEffortEnabled: true } : {}),
+    ...(reasoningCapability === undefined ? {} : { reasoningCapability })
   };
   const parameters: LlmParameters = {
     temperature: profile.temperature,

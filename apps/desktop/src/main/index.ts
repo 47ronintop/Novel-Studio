@@ -1313,14 +1313,42 @@ async function resolveDesktopAgentModelProfile(
   if (profiles === undefined || !profiles.ok) return undefined;
   const profile = profiles.value.profiles.find((entry) => entry.id === profileId);
   if (profile === undefined) return undefined;
+  const selectedModelName = modelNameOverride ?? profile.modelName;
+  const discovery = await application?.discoverModelOptions(profileId);
+  const reasoningStrength =
+    discovery !== undefined && discovery.ok
+      ? (discovery.value.models.find((model) => model.id === selectedModelName)
+          ?.reasoningStrength ??
+        (selectedModelName === profile.modelName
+          ? discovery.value.reasoningStrength
+          : reasoningStrengthForModel(
+              profile.provider,
+              selectedModelName,
+              profile.baseUrl,
+              profile.reasoningEffortEnabled
+            )))
+      : undefined;
   const modelProfile: LlmModelProfile = {
     id: profile.id,
     provider: profile.provider as LlmProviderId,
     displayName: profile.displayName,
-    modelName: modelNameOverride ?? profile.modelName,
+    modelName: selectedModelName,
     ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
     ...(profile.apiKeyRef.length === 0 ? {} : { apiKeyRef: profile.apiKeyRef }),
-    timeoutMs: profile.timeoutMs
+    timeoutMs: profile.timeoutMs,
+    ...(profile.reasoningEffortEnabled === true ? { reasoningEffortEnabled: true } : {}),
+    ...(reasoningStrength === undefined
+      ? {}
+      : {
+          reasoningCapability:
+            reasoningStrength.status === "available"
+              ? {
+                  providerParamName: reasoningStrength.providerParamName,
+                  allowedValues: reasoningStrength.allowedValues,
+                  defaultValue: reasoningStrength.defaultValue
+                }
+              : null
+        })
   };
   return {
     modelProfile,

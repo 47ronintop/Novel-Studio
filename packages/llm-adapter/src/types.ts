@@ -14,6 +14,22 @@ export type LlmProviderId =
   | "lm-studio"
   | "vllm";
 
+/** Provider request field represented by the normalized reasoning control. */
+export type LlmReasoningProviderParamName =
+  | "reasoning_effort"
+  | "reasoning"
+  | "anthropic_effort"
+  | "anthropic_thinking_budget"
+  | "gemini_thinking_level"
+  | "gemini_thinking_budget";
+
+/** Main-authored, model-specific reasoning contract accepted by a provider adapter. */
+export interface LlmReasoningCapability {
+  readonly providerParamName: LlmReasoningProviderParamName;
+  readonly allowedValues: readonly string[];
+  readonly defaultValue: string;
+}
+
 export type LlmMode = "streaming" | "non-streaming";
 
 export type LlmMessageRole = "system" | "developer" | "user" | "assistant" | "tool";
@@ -50,6 +66,10 @@ export interface LlmModelProfile {
   readonly baseUrl?: string;
   readonly apiKeyRef?: string;
   readonly timeoutMs?: number;
+  /** Explicitly enables generic reasoning controls for an endpoint without model metadata. */
+  readonly reasoningEffortEnabled?: boolean;
+  /** Frozen capability resolved by Main; null explicitly forbids static or manual fallback. */
+  readonly reasoningCapability?: LlmReasoningCapability | null;
   readonly tokenPricing?: LlmTokenPricing;
 }
 

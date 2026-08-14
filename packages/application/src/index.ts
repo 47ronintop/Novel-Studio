@@ -301,6 +301,7 @@ export type {
   ModelDiscoveryOption,
   ModelDiscoveryModelInput,
   ModelDiscoveryPort,
+  ModelDiscoveryRequestOptions,
   ModelDiscoverySnapshot,
   ModelDiscoveryStatus,
   ModelReasoningStrengthAvailable,

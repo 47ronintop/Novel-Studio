@@ -695,8 +695,27 @@ export function createProjectDesktopApplication(
           if (!settings.ok) {
             return settings;
           }
-
-          return resolveDefaultModelRuntimeProfile(settings.value);
+          const runtime = resolveDefaultModelRuntimeProfile(settings.value);
+          if (!runtime.ok || options.modelDiscoveryPort === undefined) return runtime;
+          const profile = settings.value.models.profiles.find(
+            (entry) => entry.id === settings.value.models.defaultProfileId
+          );
+          if (profile === undefined) return runtime;
+          const discovery = await options.modelDiscoveryPort.discoverModels(profile);
+          if (!discovery.ok) return runtime;
+          const control =
+            discovery.value.models.find((model) => model.id === profile.modelName)
+              ?.reasoningStrength ?? discovery.value.reasoningStrength;
+          return resolveDefaultModelRuntimeProfile(
+            settings.value,
+            control.status === "available"
+              ? {
+                  providerParamName: control.providerParamName,
+                  allowedValues: control.allowedValues,
+                  defaultValue: control.defaultValue
+                }
+              : null
+          );
         },
         ...(options.now === undefined ? {} : { now: options.now }),
         workflowRunHistory: {

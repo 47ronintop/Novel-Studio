@@ -8,7 +8,9 @@ import type {
   CreateLlmAgentRunModelDriverOptions,
   ModelDiscoveryModelInput,
   ModelDiscoveryPort,
+  ModelDiscoverySnapshot,
   ModelConnectionTester,
+  ModelReasoningStrengthAvailable,
   ModelReasoningStrengthControl,
   ModelProfile
 } from "@novel-studio/application";
@@ -228,6 +230,7 @@ export function createDesktopModelRuntime(
     fetch: fetchImpl
   });
   const pendingPromptCacheCleanup = new Set<Promise<void>>();
+  const modelDiscoveryCache = new Map<string, ModelDiscoverySnapshot>();
   const schedulePromptCacheCleanup = (operation: Promise<void>): void => {
     const tracked = operation.catch(() => undefined);
     pendingPromptCacheCleanup.add(tracked);
@@ -300,7 +303,7 @@ export function createDesktopModelRuntime(
       }
     },
     modelDiscoveryPort: {
-      async discoverModels(profile) {
+      async discoverModels(profile, discoveryOptions) {
         const secret = await readProfileSecret(secretStore, profile);
         if (!secret.ok) {
           return ok(createModelDiscoveryFallback(profile, secret.error.message));
@@ -314,14 +317,19 @@ export function createDesktopModelRuntime(
           );
         }
 
+        const cacheKey = modelDiscoveryCacheKey(profile, secret.value);
+        const cached = modelDiscoveryCache.get(cacheKey);
+        if (discoveryOptions?.forceRefresh !== true && cached !== undefined) return ok(cached);
+
         try {
           const models = await discoverProviderModels(fetchImpl, profile, secret.value);
-          return ok(
-            createModelDiscoverySnapshot({
-              profile,
-              models
-            })
-          );
+          const snapshot = createModelDiscoverySnapshot({ profile, models });
+          if (modelDiscoveryCache.size >= 64) {
+            const oldestKey = modelDiscoveryCache.keys().next().value as string | undefined;
+            if (oldestKey !== undefined) modelDiscoveryCache.delete(oldestKey);
+          }
+          modelDiscoveryCache.set(cacheKey, snapshot);
+          return ok(snapshot);
         } catch (error) {
           return ok(createModelDiscoveryFallback(profile, connectionFailureMessage(error)));
         }
@@ -448,12 +456,29 @@ export function createDesktopModelRuntime(
       schedulePromptCacheCleanup(promptCacheResources.releaseScope(scopeKey));
     },
     async dispose() {
+      modelDiscoveryCache.clear();
       await promptCacheResources.dispose().catch(() => undefined);
       await Promise.all(pendingPromptCacheCleanup);
     }
   };
 
   return runtime;
+}
+
+function modelDiscoveryCacheKey(profile: ModelProfile, secret: string): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        id: profile.id,
+        provider: profile.provider,
+        modelName: profile.modelName,
+        baseUrl: profile.baseUrl ?? null,
+        reasoningEffortEnabled: profile.reasoningEffortEnabled === true,
+        secret
+      }),
+      "utf8"
+    )
+    .digest("hex");
 }
 
 function promptCacheBypass(
@@ -951,9 +976,9 @@ function normalizeOpenAiCompatibleModels(
         id,
         displayName: id,
         ...(contextWindow === undefined ? {} : { contextWindow }),
-        ...(streaming === undefined ? {} : { streaming }),
-        ...(toolCalling === undefined ? {} : { toolCalling }),
-        ...(structuredArguments === undefined ? {} : { structuredArguments }),
+        ...(typeof streaming === "boolean" ? { streaming } : {}),
+        ...(typeof toolCalling === "boolean" ? { toolCalling } : {}),
+        ...(typeof structuredArguments === "boolean" ? { structuredArguments } : {}),
         ...(reasoningStrength === undefined ? {} : { reasoningStrength })
       };
     })
@@ -1022,18 +1047,21 @@ function normalizeGeminiModels(payload: unknown): readonly ModelDiscoveryModelIn
 function capabilityBooleanFromModelMetadata(
   entry: JsonObject,
   keys: readonly string[]
-): boolean | undefined {
+): boolean | "conflicting" | undefined {
+  const declarations: boolean[] = [];
   for (const key of keys) {
-    if (typeof entry[key] === "boolean") return entry[key];
+    if (typeof entry[key] === "boolean") declarations.push(entry[key]);
   }
   for (const nestedKey of ["capabilities", "metadata"]) {
     const nested = entry[nestedKey];
     if (!isJsonRecord(nested)) continue;
     for (const key of keys) {
-      if (typeof nested[key] === "boolean") return nested[key];
+      if (typeof nested[key] === "boolean") declarations.push(nested[key]);
     }
   }
-  return undefined;
+  const uniqueDeclarations = [...new Set(declarations)];
+  if (uniqueDeclarations.length > 1) return "conflicting";
+  return uniqueDeclarations[0];
 }
 
 /** Normalize common provider metadata spellings into one model capability shape. */
@@ -1041,10 +1069,7 @@ function reasoningStrengthFromModelMetadata(
   entry: JsonObject,
   provider: string
 ): ModelReasoningStrengthControl | undefined {
-  // OpenRouter exposes reasoning capabilities through a native `reasoning` request object, while
-  // the OpenAI-compatible adapter currently serializes only `reasoning_effort`. Do not advertise
-  // a control that cannot reach the provider until that native mapping is implemented.
-  if (provider.trim().toLowerCase() === "openrouter") return undefined;
+  const normalizedProvider = provider.trim().toLowerCase();
 
   const reasoningValueKeys = [
     "reasoning_efforts",
@@ -1072,6 +1097,36 @@ function reasoningStrengthFromModelMetadata(
     entry["reasoning_effort"],
     entry["reasoning"]
   ];
+  const supportedParameters = consistentStringArrayMetadata(entry, [
+    "supported_parameters",
+    "supportedParameters"
+  ]);
+  if (supportedParameters.conflicting) return hiddenProviderReasoningMetadata();
+  const declaresReasoningParameter = supportedParameters.values.some((value) =>
+    /^(?:reasoning|reasoning_effort)$/i.test(value)
+  );
+  if (
+    normalizedProvider === "openrouter" &&
+    supportedParameters.declared &&
+    !declaresReasoningParameter
+  ) {
+    return hiddenProviderReasoningMetadata("Provider metadata marks reasoning as unsupported.");
+  }
+  const reasoningSupported = capabilityBooleanFromModelMetadata(entry, [
+    "supports_reasoning",
+    "supportsReasoning",
+    "reasoning_supported",
+    "reasoningSupported",
+    "supports_thinking",
+    "supportsThinking"
+  ]);
+  if (reasoningSupported === "conflicting") {
+    return hiddenProviderReasoningMetadata();
+  }
+  if (reasoningSupported === false) {
+    return hiddenProviderReasoningMetadata("Provider metadata marks reasoning as unsupported.");
+  }
+  let sawReasoningMetadata = hasReasoningMetadataKeys(entry, reasoningValueKeys);
   const nestedDefaults: string[] = [];
   for (const nestedKey of [
     "reasoning",
@@ -1085,31 +1140,37 @@ function reasoningStrengthFromModelMetadata(
   ]) {
     const nested = entry[nestedKey];
     if (!isJsonRecord(nested)) continue;
+    const semanticContainer = nestedKey !== "capabilities" && nestedKey !== "metadata";
+    if (semanticContainer || hasReasoningMetadataKeys(nested, reasoningValueKeys)) {
+      sawReasoningMetadata = true;
+    }
     candidates.push(
-      nested["allowedValues"],
-      nested["allowed_values"],
-      nested["values"],
-      nested["options"],
-      nested["levels"],
-      nested["efforts"],
+      ...(semanticContainer
+        ? [
+            nested["allowedValues"],
+            nested["allowed_values"],
+            nested["values"],
+            nested["options"],
+            nested["levels"],
+            nested["efforts"],
+            nested["supported_values"],
+            nested["supportedValues"]
+          ]
+        : []),
       ...reasoningValueKeys.map((key) => nested[key])
     );
-    const defaultParameters = nested["default_parameters"] ?? nested["defaultParameters"];
-    const nestedDefault =
-      stringValue(nested["defaultValue"]) ??
-      stringValue(nested["default_value"]) ??
-      stringValue(nested["default"]) ??
-      stringValue(nested["defaultReasoningEffort"]) ??
-      stringValue(nested["default_reasoning_effort"]) ??
-      (isJsonRecord(defaultParameters)
-        ? (stringValue(defaultParameters["reasoning_effort"]) ??
-          stringValue(defaultParameters["reasoningEffort"]))
-        : undefined);
-    if (nestedDefault !== undefined) nestedDefaults.push(nestedDefault);
+    nestedDefaults.push(
+      ...(semanticContainer
+        ? stringDeclarations(nested, ["defaultValue", "default_value", "default"])
+        : []),
+      ...stringDeclarations(nested, ["defaultReasoningEffort", "default_reasoning_effort"]),
+      ...defaultParameterDeclarations(nested)
+    );
 
     for (const childKey of ["reasoning", "thinking", "reasoning_effort", "reasoningEffort"]) {
       const child = nested[childKey];
       if (!isJsonRecord(child)) continue;
+      sawReasoningMetadata = true;
       candidates.push(
         child["allowedValues"],
         child["allowed_values"],
@@ -1117,49 +1178,135 @@ function reasoningStrengthFromModelMetadata(
         child["options"],
         child["levels"],
         child["efforts"],
+        child["supported_values"],
+        child["supportedValues"],
         ...reasoningValueKeys.map((key) => child[key])
       );
-      const childDefault =
-        stringValue(child["defaultValue"]) ??
-        stringValue(child["default_value"]) ??
-        stringValue(child["default"]) ??
-        stringValue(child["defaultReasoningEffort"]) ??
-        stringValue(child["default_reasoning_effort"]);
-      if (childDefault !== undefined) nestedDefaults.push(childDefault);
+      nestedDefaults.push(
+        ...stringDeclarations(child, [
+          "defaultValue",
+          "default_value",
+          "default",
+          "defaultReasoningEffort",
+          "default_reasoning_effort"
+        ]),
+        ...defaultParameterDeclarations(child)
+      );
     }
   }
 
-  const allowedValues = candidates.map(readReasoningValues).find((values) => values.length > 0);
-  if (allowedValues === undefined) return undefined;
+  const allowedValueCandidates = candidates
+    .map(readReasoningValues)
+    .filter((values) => values.length > 0);
+  const uniqueAllowedValueSets = [
+    ...new Set(allowedValueCandidates.map((values) => JSON.stringify(values)))
+  ];
+  if (uniqueAllowedValueSets.length === 0) {
+    return sawReasoningMetadata
+      ? hiddenProviderReasoningMetadata()
+      : undefined;
+  }
+  if (uniqueAllowedValueSets.length > 1) return hiddenProviderReasoningMetadata();
+  const allowedValues = allowedValueCandidates[0];
+  if (allowedValues === undefined) return hiddenProviderReasoningMetadata();
   const itemDefaults = candidates
     .map(readReasoningDefault)
     .filter((value): value is string => value !== undefined);
-  const topLevelDefault =
-    stringValue(entry["default_reasoning_effort"]) ??
-    stringValue(entry["defaultReasoningEffort"]) ??
-    stringValue(entry["reasoning_effort_default"]) ??
-    stringValue(entry["reasoningEffortDefault"]) ??
-    (isJsonRecord(entry["default_parameters"])
-      ? (stringValue(entry["default_parameters"]["reasoning_effort"]) ??
-        stringValue(entry["default_parameters"]["reasoningEffort"]))
-      : undefined) ??
-    (isJsonRecord(entry["defaultParameters"])
-      ? (stringValue(entry["defaultParameters"]["reasoning_effort"]) ??
-        stringValue(entry["defaultParameters"]["reasoningEffort"]))
-      : undefined);
-  const defaultCandidates = [topLevelDefault, ...nestedDefaults, ...itemDefaults].filter(
-    (value): value is string => value !== undefined
-  );
+  const defaultCandidates = [
+    ...stringDeclarations(entry, [
+      "default_reasoning_effort",
+      "defaultReasoningEffort",
+      "reasoning_effort_default",
+      "reasoningEffortDefault"
+    ]),
+    ...defaultParameterDeclarations(entry),
+    ...nestedDefaults,
+    ...itemDefaults
+  ];
   const uniqueDefaults = [...new Set(defaultCandidates)];
-  if (uniqueDefaults.length !== 1) return undefined;
+  if (uniqueDefaults.length !== 1) return hiddenProviderReasoningMetadata();
   const defaultCandidate = uniqueDefaults[0];
-  if (defaultCandidate === undefined || !allowedValues.includes(defaultCandidate)) return undefined;
+  if (defaultCandidate === undefined || !allowedValues.includes(defaultCandidate)) {
+    return hiddenProviderReasoningMetadata();
+  }
+  const providerParamName = reasoningProviderParamName(entry, normalizedProvider);
+  if (providerParamName === undefined) {
+    return hiddenProviderReasoningMetadata(
+      "Provider reasoning metadata does not match the configured adapter protocol."
+    );
+  }
   return {
     status: "available",
-    providerParamName: "reasoning_effort",
+    providerParamName,
     allowedValues,
     defaultValue: defaultCandidate
   };
+}
+
+function hasReasoningMetadataKeys(
+  value: JsonObject,
+  reasoningValueKeys: readonly string[]
+): boolean {
+  return [
+    ...reasoningValueKeys,
+    "reasoning",
+    "reasoning_effort",
+    "reasoningEffort",
+    "thinking",
+    "reasoning_capabilities",
+    "reasoningCapabilities",
+    "default_reasoning_effort",
+    "defaultReasoningEffort",
+    "reasoning_effort_default",
+    "reasoningEffortDefault",
+    "providerParamName",
+    "provider_param_name",
+    "reasoningProviderParamName",
+    "reasoning_provider_param_name"
+  ].some((key) => Object.hasOwn(value, key));
+}
+
+function hiddenProviderReasoningMetadata(
+  reason = "Provider reasoning metadata is incomplete or conflicting."
+): ModelReasoningStrengthControl {
+  return { status: "hidden", reason };
+}
+
+function reasoningProviderParamName(
+  entry: JsonObject,
+  provider: string
+): ModelReasoningStrengthAvailable["providerParamName"] | undefined {
+  const explicit =
+    [
+      stringValue(entry["providerParamName"]),
+      stringValue(entry["provider_param_name"]),
+      stringValue(entry["reasoningProviderParamName"]),
+      stringValue(entry["reasoning_provider_param_name"])
+    ].filter((value): value is string => value !== undefined);
+  const uniqueExplicitValues = [...new Set(explicit)];
+  if (uniqueExplicitValues.length > 1) return undefined;
+  const explicitValue = uniqueExplicitValues[0];
+  if (explicitValue !== undefined) {
+    if (
+      explicitValue === "reasoning_effort" ||
+      explicitValue === "reasoning"
+    ) {
+      return reasoningProviderParamMatchesAdapter(provider, explicitValue)
+        ? explicitValue
+        : undefined;
+    }
+    return undefined;
+  }
+  if (provider === "openrouter") return "reasoning";
+  return "reasoning_effort";
+}
+
+function reasoningProviderParamMatchesAdapter(
+  provider: string,
+  providerParamName: ModelReasoningStrengthAvailable["providerParamName"]
+): boolean {
+  if (provider === "openrouter") return providerParamName === "reasoning";
+  return providerParamName === "reasoning_effort";
 }
 
 function readReasoningValues(value: unknown): string[] {
@@ -1171,7 +1318,9 @@ function readReasoningValues(value: unknown): string[] {
       return (
         stringValue(item["value"]) ??
         stringValue(item["id"]) ??
-        stringValue(item["reasoning_effort"])
+        stringValue(item["reasoning_effort"]) ??
+        stringValue(item["effort"]) ??
+        stringValue(item["level"])
       );
     })
     .filter((item): item is string => item !== undefined && item.length > 0);
@@ -1186,10 +1335,64 @@ function readReasoningDefault(value: unknown): string | undefined {
       continue;
     }
     return (
-      stringValue(item["value"]) ?? stringValue(item["id"]) ?? stringValue(item["reasoning_effort"])
+      stringValue(item["value"]) ??
+      stringValue(item["id"]) ??
+      stringValue(item["reasoning_effort"]) ??
+      stringValue(item["effort"]) ??
+      stringValue(item["level"])
     );
   }
   return undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim())
+    : [];
+}
+
+function consistentStringArrayMetadata(
+  value: JsonObject,
+  keys: readonly string[]
+): { readonly declared: boolean; readonly conflicting: boolean; readonly values: string[] } {
+  const declarations = keys.flatMap((key) =>
+    Object.hasOwn(value, key) ? [value[key]] : []
+  );
+  if (declarations.length === 0) {
+    return { declared: false, conflicting: false, values: [] };
+  }
+  if (
+    declarations.some(
+      (declaration) =>
+        !Array.isArray(declaration) || declaration.some((item) => typeof item !== "string")
+    )
+  ) {
+    return { declared: true, conflicting: true, values: [] };
+  }
+  const normalized = declarations.map((declaration) =>
+    [...new Set(readStringArray(declaration).map((item) => item.toLowerCase()))].sort()
+  );
+  const signatures = new Set(normalized.map((declaration) => JSON.stringify(declaration)));
+  return {
+    declared: true,
+    conflicting: signatures.size > 1,
+    values: normalized[0] ?? []
+  };
+}
+
+function stringDeclarations(value: JsonObject, keys: readonly string[]): string[] {
+  return keys
+    .map((key) => stringValue(value[key]))
+    .filter((item): item is string => item !== undefined);
+}
+
+function defaultParameterDeclarations(value: JsonObject): string[] {
+  return ["default_parameters", "defaultParameters"].flatMap((key) => {
+    const parameters = value[key];
+    return isJsonRecord(parameters)
+      ? stringDeclarations(parameters, ["reasoning_effort", "reasoningEffort", "reasoning"])
+      : [];
+  });
 }
 
 function stringValue(value: unknown): string | undefined {

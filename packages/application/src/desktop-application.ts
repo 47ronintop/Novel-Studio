@@ -51,7 +51,10 @@ import type {
   StoryAnalysisSettings
 } from "./model-settings-session.js";
 import { DEFAULT_STORY_ANALYSIS_SETTINGS } from "./model-settings-session.js";
-import type { ModelDiscoverySnapshot } from "./model-discovery-session.js";
+import type {
+  ModelDiscoveryRequestOptions,
+  ModelDiscoverySnapshot
+} from "./model-discovery-session.js";
 import type { AgentUsageSession } from "./agent-usage-session.js";
 import type {
   AgentUsageQuery,
@@ -439,7 +442,10 @@ export interface DesktopApplication {
     nextBody: string
   ): Result<ChapterSuggestionDiffPreview, UnifiedError>;
   listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
-  discoverModelOptions(profileId: string): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
+  discoverModelOptions(
+    profileId: string,
+    options?: ModelDiscoveryRequestOptions
+  ): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
   saveModelProfile(
     profile: ModelProfile,
     options?: { readonly makeDefault?: boolean }
@@ -1484,12 +1490,12 @@ export function createDesktopApplication(
 
       return modelSettingsSession.listModelProfiles();
     },
-    async discoverModelOptions(profileId) {
+    async discoverModelOptions(profileId, discoveryOptions) {
       if (modelSettingsSession === undefined) {
         return modelSettingsUnavailable();
       }
 
-      return modelSettingsSession.discoverModelOptions(profileId);
+      return modelSettingsSession.discoverModelOptions(profileId, discoveryOptions);
     },
     async saveModelProfile(profile, saveOptions) {
       if (modelSettingsSession === undefined) {

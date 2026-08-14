@@ -450,6 +450,9 @@ function ModelProfileSettingsSection({
                   );
                   onDraftChange?.({
                     provider: event.currentTarget.value,
+                    ...(provider?.agentAdapter === "openai-compatible"
+                      ? {}
+                      : { reasoningEffortEnabled: false }),
                     ...(provider?.defaultBaseUrl === undefined
                       ? {}
                       : { baseUrl: provider.defaultBaseUrl }),
@@ -586,19 +589,24 @@ function ModelProfileSettingsSection({
             <details className="model-settings-advanced" aria-label="高级模型设置">
               <summary>高级设置</summary>
               <div className="model-profile-form-grid" data-field-layout="stacked">
-                <ModelField label="推理强度" note="声明该端点是否支持 reasoning_effort 参数。">
-                  <label className="model-settings-checkbox">
-                    <input
-                      aria-label="确认该端点支持 reasoning_effort"
-                      checked={draft.reasoningEffortEnabled}
-                      onChange={(event) =>
-                        onDraftChange?.({ reasoningEffortEnabled: event.currentTarget.checked })
-                      }
-                      type="checkbox"
-                    />
-                    <span>该第三方端点支持 reasoning_effort</span>
-                  </label>
-                </ModelField>
+                {selectedProviderOption?.agentAdapter === "openai-compatible" ? (
+                  <ModelField
+                    label="推理强度"
+                    note="模型列表未提供完整档位时，仅在确认端点兼容后手动启用通用档位。"
+                  >
+                    <label className="model-settings-checkbox">
+                      <input
+                        aria-label="手动启用兼容端点推理强度"
+                        checked={draft.reasoningEffortEnabled}
+                        onChange={(event) =>
+                          onDraftChange?.({ reasoningEffortEnabled: event.currentTarget.checked })
+                        }
+                        type="checkbox"
+                      />
+                      <span>手动启用兼容端点推理强度</span>
+                    </label>
+                  </ModelField>
+                ) : null}
                 <ModelField label="Profile ID" note="当前模型配置在项目中的稳定标识。">
                   <input
                     aria-label="模型 Profile ID"

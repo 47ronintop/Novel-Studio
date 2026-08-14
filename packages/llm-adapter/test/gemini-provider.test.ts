@@ -276,6 +276,75 @@ describe("Gemini provider", () => {
     });
   });
 
+  test("serializes Gemini 2.5 reasoning as a thinking budget", async () => {
+    const calls: GeminiTransportRequest[] = [];
+    const provider = createGeminiProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return {
+          candidates: [{ content: { role: "model", parts: [{ text: "Budget response." }] } }]
+        };
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: { ...request.modelProfile, modelName: "gemini-2.5-flash" },
+      parameters: { ...request.parameters, reasoningEffort: "low" }
+    });
+
+    expect(isOk(result)).toBe(true);
+    expect(calls[0]?.body).toMatchObject({
+      generationConfig: {
+        thinkingConfig: { thinkingBudget: 1024 }
+      }
+    });
+  });
+
+  test("serializes Gemini 3 reasoning as a thinking level", async () => {
+    const calls: GeminiTransportRequest[] = [];
+    const provider = createGeminiProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return {
+          candidates: [{ content: { role: "model", parts: [{ text: "Level response." }] } }]
+        };
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: { ...request.modelProfile, modelName: "gemini-3-pro-preview" },
+      parameters: { ...request.parameters, reasoningEffort: "high" }
+    });
+
+    expect(isOk(result)).toBe(true);
+    expect(calls[0]?.body).toMatchObject({
+      generationConfig: {
+        thinkingConfig: { thinkingLevel: "high" }
+      }
+    });
+  });
+
+  test("rejects an unsupported Gemini reasoning value before transport", async () => {
+    const calls: GeminiTransportRequest[] = [];
+    const provider = createGeminiProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return { candidates: [] };
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: { ...request.modelProfile, modelName: "gemini-3-pro-preview" },
+      parameters: { ...request.parameters, reasoningEffort: "medium" }
+    });
+
+    expect(isErr(result)).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
   test("maps tool history and streams function calls, usage, and tool completion", async () => {
     const calls: GeminiTransportRequest[] = [];
     const provider = createGeminiProvider({

@@ -670,6 +670,7 @@ describe("OpenAI-compatible provider", () => {
 
     const result = await adapter.complete({
       ...request,
+      modelProfile: { ...request.modelProfile, reasoningEffortEnabled: true },
       parameters: {
         ...request.parameters,
         reasoningEffort: "high"
@@ -682,6 +683,148 @@ describe("OpenAI-compatible provider", () => {
       reasoning_effort: "high"
     });
     expect(calls[1]?.body).not.toHaveProperty("reasoning_effort");
+  });
+
+  test("serializes OpenRouter reasoning with its native object", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return readFixture("openai-compatible-chat-success.json");
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        provider: "openrouter",
+        modelName: "anthropic/claude-sonnet-4",
+        reasoningEffortEnabled: true
+      },
+      parameters: { ...request.parameters, reasoningEffort: "high" }
+    });
+
+    expect(isOk(result)).toBe(true);
+    expect(calls[0]?.body).toMatchObject({ reasoning: { effort: "high" } });
+    expect(calls[0]?.body).not.toHaveProperty("reasoning_effort");
+  });
+
+  test.each(["deepseek", "zhipu", "tongyi-qianwen", "ollama", "lm-studio", "vllm"] as const)(
+    "uses the explicit generic reasoning opt-in for %s",
+    async (providerId) => {
+      const calls: OpenAiCompatibleTransportRequest[] = [];
+      const provider = createOpenAiCompatibleProvider({
+        transport: async (transportRequest) => {
+          calls.push(transportRequest);
+          return readFixture("openai-compatible-chat-success.json");
+        }
+      });
+
+      const result = await createLlmAdapter({ provider }).complete({
+        ...request,
+        modelProfile: {
+          ...request.modelProfile,
+          provider: providerId,
+          reasoningEffortEnabled: true
+        },
+        parameters: { ...request.parameters, reasoningEffort: "high" }
+      });
+
+      expect(isOk(result)).toBe(true);
+      expect(calls[0]?.body).toMatchObject({ reasoning_effort: "high" });
+    }
+  );
+
+  test.each([
+    "openai-compatible",
+    "openrouter",
+    "deepseek",
+    "zhipu",
+    "tongyi-qianwen",
+    "ollama",
+    "lm-studio",
+    "vllm"
+  ] as const)("rejects undeclared generic reasoning for %s before transport", async (providerId) => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return readFixture("openai-compatible-chat-success.json");
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: { ...request.modelProfile, provider: providerId },
+      parameters: { ...request.parameters, reasoningEffort: "high" }
+    });
+
+    expect(isErr(result)).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("does not restore static reasoning when Main explicitly hides the capability", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return readFixture("openai-compatible-chat-success.json");
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        provider: "openai",
+        modelName: "gpt-5",
+        reasoningEffortEnabled: true,
+        reasoningCapability: null
+      },
+      parameters: { ...request.parameters, reasoningEffort: "high" }
+    });
+
+    expect(isErr(result)).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("retries OpenRouter requests without the native reasoning object when unsupported", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        if (calls.length === 1) {
+          throw new OpenAiCompatibleHttpError({
+            status: 400,
+            message: "Provider returned HTTP 400.",
+            body: {
+              error: {
+                message: "Unknown parameter: reasoning",
+                param: "reasoning",
+                code: "unknown_parameter"
+              }
+            }
+          });
+        }
+        return readFixture("openai-compatible-chat-success.json");
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        provider: "openrouter",
+        reasoningEffortEnabled: true
+      },
+      parameters: { ...request.parameters, reasoningEffort: "high" }
+    });
+
+    expect(isOk(result)).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.body).toHaveProperty("reasoning");
+    expect(calls[1]?.body).not.toHaveProperty("reasoning");
   });
 
   test("preserves non-streaming reasoning_effort value rejection errors", async () => {
@@ -706,6 +849,14 @@ describe("OpenAI-compatible provider", () => {
 
     const result = await adapter.complete({
       ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        reasoningCapability: {
+          providerParamName: "reasoning_effort",
+          allowedValues: ["ultra"],
+          defaultValue: "ultra"
+        }
+      },
       parameters: { ...request.parameters, reasoningEffort: "ultra" }
     });
 
@@ -740,6 +891,14 @@ describe("OpenAI-compatible provider", () => {
 
     const result = await adapter.complete({
       ...request,
+      modelProfile: {
+        ...request.modelProfile,
+        reasoningCapability: {
+          providerParamName: "reasoning_effort",
+          allowedValues: ["ultra"],
+          defaultValue: "ultra"
+        }
+      },
       parameters: { ...request.parameters, reasoningEffort: "ultra" }
     });
 
@@ -782,6 +941,14 @@ describe("OpenAI-compatible provider", () => {
       adapter.stream({
         ...request,
         mode: "streaming",
+        modelProfile: {
+          ...request.modelProfile,
+          reasoningCapability: {
+            providerParamName: "reasoning_effort",
+            allowedValues: ["ultra"],
+            defaultValue: "ultra"
+          }
+        },
         parameters: {
           ...request.parameters,
           reasoningEffort: "ultra"
@@ -831,6 +998,7 @@ describe("OpenAI-compatible provider", () => {
       adapter.stream({
         ...request,
         mode: "streaming",
+        modelProfile: { ...request.modelProfile, reasoningEffortEnabled: true },
         parameters: { ...request.parameters, reasoningEffort: "high" }
       })
     );

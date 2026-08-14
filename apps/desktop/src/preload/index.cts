@@ -50,6 +50,7 @@ import type {
   DesktopShellState,
   MemoryRecord,
   ModelConnectionResult,
+  ModelDiscoveryRequestOptions,
   ModelDiscoverySnapshot,
   ModelProfile,
   ModelSettingsSnapshot,
@@ -574,10 +575,11 @@ const api: NovelStudioApi = {
       invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
         "application:settings:list-model-profiles"
       ),
-    discoverModelOptions: (profileId: string) =>
+    discoverModelOptions: (profileId: string, options?: ModelDiscoveryRequestOptions) =>
       invokeTyped<Result<ModelDiscoverySnapshot, UnifiedError>>(
         "application:settings:discover-models",
-        profileId
+        profileId,
+        options
       ),
     saveModelProfile: (profile: ModelProfile, options?: { readonly makeDefault?: boolean }) =>
       invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(

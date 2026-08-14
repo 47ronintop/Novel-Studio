@@ -8,6 +8,7 @@ import {
   withLlmPromptCacheUsage,
   type ResolvedLlmPromptCacheRequest
 } from "./prompt-cache.js";
+import { serializeLlmReasoningEffort } from "./reasoning-capabilities.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -213,11 +214,29 @@ async function createTransportRequest(
   }
 
   const generationConfig: JsonObject = {};
+  const reasoning =
+    request.parameters.reasoningEffort === undefined
+      ? undefined
+      : serializeLlmReasoningEffort(request.modelProfile, request.parameters.reasoningEffort);
+  if (request.parameters.reasoningEffort !== undefined && reasoning === undefined) {
+    throw new LlmProviderFailure({
+      code: "LLM_PROVIDER_ERROR",
+      message: "The selected Gemini model does not expose the requested reasoning strength.",
+      retryable: false
+    });
+  }
   if (request.parameters.temperature !== undefined)
     generationConfig["temperature"] = request.parameters.temperature;
   if (request.parameters.maxTokens !== undefined)
     generationConfig["maxOutputTokens"] = request.parameters.maxTokens;
   if (request.parameters.topP !== undefined) generationConfig["topP"] = request.parameters.topP;
+  if (reasoning?.providerParamName === "gemini_thinking_level") {
+    generationConfig["thinkingConfig"] = { thinkingLevel: reasoning.value } as unknown as JsonValue;
+  } else if (reasoning?.providerParamName === "gemini_thinking_budget") {
+    generationConfig["thinkingConfig"] = {
+      thinkingBudget: reasoning.value
+    } as unknown as JsonValue;
+  }
   if (Object.keys(generationConfig).length > 0) body["generationConfig"] = generationConfig;
 
   if (promptCache.resolution.active && promptCache.resolution.config?.resourceRef !== undefined) {

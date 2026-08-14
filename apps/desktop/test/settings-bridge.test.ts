@@ -83,6 +83,17 @@ describe("M22 settings bridge", () => {
     });
   });
 
+  test("forces provider discovery when the user explicitly refreshes the model list", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls));
+    await bridge.load();
+    calls.length = 0;
+
+    await bridge.discoverModelOptions("model_default");
+
+    expect(calls).toEqual(["settings.discoverModelOptions:model_default:force"]);
+  });
+
   test("saves edited profile drafts and can make them default through the preload API", async () => {
     const calls: string[] = [];
     const bridge = createSettingsBridge(createApi(calls));
@@ -652,8 +663,10 @@ function createApi(
         };
         return ok(result);
       },
-      discoverModelOptions: async (profileId) => {
-        calls.push(`settings.discoverModelOptions:${profileId}`);
+      discoverModelOptions: async (profileId, discoveryOptions) => {
+        calls.push(
+          `settings.discoverModelOptions:${profileId}${discoveryOptions?.forceRefresh === true ? ":force" : ""}`
+        );
         const profile = snapshot.profiles.find((entry) => entry.id === profileId) ?? defaultProfile;
         const result: ModelDiscoverySnapshot = {
           profileId,

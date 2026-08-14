@@ -1,8 +1,13 @@
 import { describe, expect, test } from "vitest";
 
-import { isErr, isOk } from "@novel-studio/shared";
+import { isErr, isOk, type JsonObject } from "@novel-studio/shared";
 
-import { createLlmAdapter, isSha256Checksum, type LlmRequest } from "../src/index.js";
+import {
+  createLlmAdapter,
+  isSha256Checksum,
+  type LlmProviderStreamEvent,
+  type LlmRequest
+} from "../src/index.js";
 import {
   AnthropicHttpError,
   createAnthropicProvider,
@@ -154,6 +159,72 @@ describe("Anthropic provider", () => {
     });
   });
 
+  test("serializes Claude 3.7 reasoning as enabled budget thinking", async () => {
+    const calls: AnthropicTransportRequest[] = [];
+    const provider = createAnthropicProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return { content: [{ type: "text", text: "Budget response." }], usage: {} };
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: { ...request.modelProfile, modelName: "claude-3-7-sonnet-20250219" },
+      parameters: { ...request.parameters, reasoningEffort: "high" }
+    });
+
+    expect(isOk(result)).toBe(true);
+    expect(calls[0]?.body).toMatchObject({
+      model: "claude-3-7-sonnet-20250219",
+      thinking: { type: "enabled", budget_tokens: 8192 },
+      max_tokens: 9216
+    });
+    expect(calls[0]?.body).not.toHaveProperty("temperature");
+    expect(calls[0]?.body).not.toHaveProperty("top_p");
+  });
+
+  test("serializes Claude 4.6 reasoning as adaptive thinking with output effort", async () => {
+    const calls: AnthropicTransportRequest[] = [];
+    const provider = createAnthropicProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return { content: [{ type: "text", text: "Adaptive response." }], usage: {} };
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: { ...request.modelProfile, modelName: "claude-opus-4-6" },
+      parameters: { ...request.parameters, reasoningEffort: "max" }
+    });
+
+    expect(isOk(result)).toBe(true);
+    expect(calls[0]?.body).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max" }
+    });
+  });
+
+  test("rejects an unsupported Claude reasoning value before transport", async () => {
+    const calls: AnthropicTransportRequest[] = [];
+    const provider = createAnthropicProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return { content: [], usage: {} };
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      modelProfile: { ...request.modelProfile, modelName: "claude-sonnet-4-20250514" },
+      parameters: { ...request.parameters, reasoningEffort: "max" }
+    });
+
+    expect(isErr(result)).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
   test("maps tool results and streams text, tool JSON deltas, usage, and stop reasons", async () => {
     const calls: AnthropicTransportRequest[] = [];
     const provider = createAnthropicProvider({
@@ -280,6 +351,298 @@ describe("Anthropic provider", () => {
       { ok: true, value: { type: "round_completed", finishReason: "tool_calls" } },
       expect.objectContaining({ ok: true, value: expect.objectContaining({ type: "done" }) })
     ]);
+  });
+
+  test("preserves the exact Anthropic assistant block order across a streamed tool round", async () => {
+    const provider = createAnthropicProvider({
+      transport: async () => ({ content: [], usage: {} }),
+      streamTransport: async function* () {
+        yield { type: "message_start", message: { usage: { input_tokens: 4 } } };
+        yield {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "" }
+        };
+        yield {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "thinking_delta", thinking: "Inspect the chapter." }
+        };
+        yield {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "signed-thinking-state" }
+        };
+        yield { type: "content_block_stop", index: 0 };
+        yield {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "text", text: "" }
+        };
+        yield {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "text_delta", text: "I will inspect both." }
+        };
+        yield { type: "content_block_stop", index: 1 };
+        yield {
+          type: "content_block_start",
+          index: 2,
+          content_block: {
+            type: "tool_use",
+            id: "toolu_chapter",
+            name: "read_chapter",
+            input: {}
+          }
+        };
+        yield {
+          type: "content_block_delta",
+          index: 2,
+          delta: { type: "input_json_delta", partial_json: '{"chapter":1}' }
+        };
+        yield { type: "content_block_stop", index: 2 };
+        yield {
+          type: "content_block_start",
+          index: 3,
+          content_block: { type: "thinking", thinking: "Inspect the outline." }
+        };
+        yield {
+          type: "content_block_delta",
+          index: 3,
+          delta: { type: "signature_delta", signature: "signed-second-thinking-state" }
+        };
+        yield { type: "content_block_stop", index: 3 };
+        yield {
+          type: "content_block_start",
+          index: 4,
+          content_block: {
+            type: "tool_use",
+            id: "toolu_outline",
+            name: "search_project",
+            input: { query: "motive" }
+          }
+        };
+        yield { type: "content_block_stop", index: 4 };
+        yield {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { output_tokens: 3 }
+        };
+      }
+    });
+    const rawEvents: LlmProviderStreamEvent[] = [];
+    for await (const event of provider.stream({
+      ...request,
+      mode: "streaming",
+      modelProfile: { ...request.modelProfile, modelName: "claude-sonnet-4-20250514" },
+      parameters: { ...request.parameters, reasoningEffort: "high" }
+    })) {
+      rawEvents.push(event);
+    }
+    const metadataEvents = rawEvents.filter(
+      (
+        event
+      ): event is Extract<LlmProviderStreamEvent, { readonly type: "tool_call_delta" }> =>
+        event.type === "tool_call_delta" && event.providerMetadata !== undefined
+    );
+    expect(metadataEvents).toHaveLength(2);
+    expect(metadataEvents[0]).toMatchObject({
+      providerMetadata: {
+        anthropicAssistantBlocks: [
+          {
+            type: "thinking",
+            thinking: "Inspect the chapter.",
+            signature: "signed-thinking-state"
+          },
+          { type: "text", text: "I will inspect both." },
+          {
+            type: "tool_use",
+            id: "toolu_chapter",
+            name: "read_chapter",
+            input: { chapter: 1 }
+          },
+          {
+            type: "thinking",
+            thinking: "Inspect the outline.",
+            signature: "signed-second-thinking-state"
+          },
+          {
+            type: "tool_use",
+            id: "toolu_outline",
+            name: "search_project",
+            input: { query: "motive" }
+          }
+        ]
+      }
+    });
+    expect(metadataEvents[1]).toMatchObject({
+      providerMetadata: metadataEvents[0]?.providerMetadata
+    });
+    const providerMetadata = metadataEvents[0];
+    if (
+      providerMetadata?.type !== "tool_call_delta" ||
+      providerMetadata.providerMetadata === undefined
+    ) {
+      return;
+    }
+
+    const replayCalls: AnthropicTransportRequest[] = [];
+    const replayProvider = createAnthropicProvider({
+      transport: async (transportRequest) => {
+        replayCalls.push(transportRequest);
+        return { content: [{ type: "text", text: "Continued." }], usage: {} };
+      }
+    });
+    await createLlmAdapter({ provider: replayProvider }).complete({
+      ...request,
+      modelProfile: { ...request.modelProfile, modelName: "claude-sonnet-4-20250514" },
+      messages: [
+        {
+          role: "assistant",
+          content: "I will inspect both.",
+          toolCalls: [
+            {
+              id: "toolu_chapter",
+              name: "read_chapter",
+              arguments: '{"chapter":1}',
+              providerMetadata: providerMetadata.providerMetadata
+            },
+            {
+              id: "toolu_outline",
+              name: "search_project",
+              arguments: '{"query":"motive"}',
+              providerMetadata: providerMetadata.providerMetadata
+            }
+          ]
+        },
+        { role: "tool", toolCallId: "toolu_chapter", content: "Chapter body" },
+        { role: "tool", toolCallId: "toolu_outline", content: "Outline matches" },
+        { role: "user", content: "Continue." }
+      ],
+      parameters: { ...request.parameters, reasoningEffort: "high" }
+    });
+
+    expect(replayCalls[0]?.body).toMatchObject({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "Inspect the chapter.",
+              signature: "signed-thinking-state"
+            },
+            { type: "text", text: "I will inspect both." },
+            {
+              type: "tool_use",
+              id: "toolu_chapter",
+              name: "read_chapter",
+              input: { chapter: 1 }
+            },
+            {
+              type: "thinking",
+              thinking: "Inspect the outline.",
+              signature: "signed-second-thinking-state"
+            },
+            {
+              type: "tool_use",
+              id: "toolu_outline",
+              name: "search_project",
+              input: { query: "motive" }
+            }
+          ]
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_chapter" }]
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_outline" }]
+        },
+        { role: "user", content: "Continue." }
+      ]
+    });
+  });
+
+  test("rejects Anthropic continuation state that diverges from the normalized message", async () => {
+    const baseBlocks: JsonObject[] = [
+      {
+        type: "thinking",
+        thinking: "Inspect the chapter.",
+        signature: "signed-thinking-state"
+      },
+      { type: "text", text: "I will inspect it." },
+      {
+        type: "tool_use",
+        id: "toolu_chapter",
+        name: "read_chapter",
+        input: { chapter: 1 }
+      }
+    ];
+    const cases: readonly {
+      readonly label: string;
+      readonly content: string;
+      readonly blocks: JsonObject[];
+    }[] = [
+      { label: "text", content: "Different text.", blocks: baseBlocks },
+      {
+        label: "tool id",
+        content: "I will inspect it.",
+        blocks: baseBlocks.map((block) =>
+          block["type"] === "tool_use" ? { ...block, id: "toolu_other" } : block
+        )
+      },
+      {
+        label: "tool name",
+        content: "I will inspect it.",
+        blocks: baseBlocks.map((block) =>
+          block["type"] === "tool_use" ? { ...block, name: "search_project" } : block
+        )
+      },
+      {
+        label: "tool input",
+        content: "I will inspect it.",
+        blocks: baseBlocks.map((block) =>
+          block["type"] === "tool_use" ? { ...block, input: { chapter: 2 } } : block
+        )
+      }
+    ];
+
+    for (const testCase of cases) {
+      let transportCalls = 0;
+      const provider = createAnthropicProvider({
+        transport: async () => {
+          transportCalls += 1;
+          return { content: [{ type: "text", text: "unused" }], usage: {} };
+        }
+      });
+      const result = await createLlmAdapter({ provider }).complete({
+        ...request,
+        modelProfile: { ...request.modelProfile, modelName: "claude-sonnet-4-20250514" },
+        messages: [
+          {
+            role: "assistant",
+            content: testCase.content,
+            toolCalls: [
+              {
+                id: "toolu_chapter",
+                name: "read_chapter",
+                arguments: '{"chapter":1}',
+                providerMetadata: { anthropicAssistantBlocks: testCase.blocks }
+              }
+            ]
+          },
+          { role: "tool", toolCallId: "toolu_chapter", content: "Chapter body" },
+          { role: "user", content: "Continue." }
+        ],
+        parameters: { ...request.parameters, reasoningEffort: "high" }
+      });
+
+      expect(isErr(result), testCase.label).toBe(true);
+      if (!result.ok) expect(result.error.code, testCase.label).toBe("LLM_PROVIDER_ERROR");
+      expect(transportCalls, testCase.label).toBe(0);
+    }
   });
 
   test("emits an empty JSON object for a zero-argument streamed tool call", async () => {

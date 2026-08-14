@@ -8,6 +8,7 @@ import {
   withLlmPromptCacheUsage,
   type ResolvedLlmPromptCacheRequest
 } from "./prompt-cache.js";
+import { serializeLlmReasoningEffort } from "./reasoning-capabilities.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -194,7 +195,29 @@ function createTransportRequest(
     body.top_p = request.parameters.topP;
   }
   if (request.parameters.reasoningEffort !== undefined) {
-    body.reasoning_effort = request.parameters.reasoningEffort;
+    const reasoning = serializeLlmReasoningEffort(
+      request.modelProfile,
+      request.parameters.reasoningEffort
+    );
+    if (reasoning === undefined) {
+      throw new LlmProviderFailure({
+        code: "LLM_PROVIDER_ERROR",
+        message: "The selected model does not expose the requested reasoning strength.",
+        retryable: false
+      });
+    }
+    if (reasoning.providerParamName === "reasoning_effort") {
+      body.reasoning_effort = reasoning.value;
+    } else if (reasoning.providerParamName === "reasoning") {
+      body.reasoning = { effort: reasoning.value } as unknown as JsonObject;
+    } else {
+      throw new LlmProviderFailure({
+        code: "LLM_PROVIDER_ERROR",
+        message:
+          "The selected model uses a native reasoning protocol that this adapter cannot serialize.",
+        retryable: false
+      });
+    }
   }
   if (request.tools !== undefined && request.tools.length > 0) {
     body.tools = request.tools as unknown as JsonObject;
@@ -265,7 +288,7 @@ function reasoningEffortIgnoredWarning(): LlmProviderWarning {
     type: "warning",
     code: "LLM_REASONING_EFFORT_IGNORED",
     message:
-      "The model endpoint does not support reasoning strength controls. reasoning_effort was removed and the request was retried."
+      "The model endpoint does not support reasoning strength controls. The reasoning parameter was removed and the request was retried."
   };
 }
 
@@ -317,7 +340,10 @@ function shouldRetryWithoutReasoningEffort(
   }
 
   const hasReasoningName =
-    /reasoning[_ .-]?effort/i.test(message) || parameter === "reasoning_effort";
+    /\breasoning(?:[_ .-]?effort)?\b/i.test(message) ||
+    parameter === "reasoning_effort" ||
+    parameter === "reasoning" ||
+    parameter === "reasoning.effort";
   if (!hasReasoningName) return false;
 
   // Only retry errors that identify the field itself as unknown/unsupported.
@@ -335,13 +361,13 @@ function shouldRetryWithoutReasoningEffort(
     /(?:request\s+)?(?:parameter|param|field|argument|property|option)\b[^\n]{0,80}(?:unknown|unrecognized|unrecognised|unexpected|not allowed|unsupported|not supported)/i.test(
       message
     ) ||
-    /(?:invalid|not a valid)\s+(?:request\s+)?(?:parameter|param|field|argument|property|option)\b[^\n]{0,80}reasoning[_ .-]?effort/i.test(
+    /(?:invalid|not a valid)\s+(?:request\s+)?(?:parameter|param|field|argument|property|option)\b[^\n]{0,80}reasoning(?:[_ .-]?effort)?\b/i.test(
       message
     ) ||
-    /reasoning[_ .-]?effort[^\n]{0,80}(?:invalid|not a valid)\s+(?:request\s+)?(?:parameter|param|field|argument|property|option)\b/i.test(
+    /reasoning(?:[_ .-]?effort)?\b[^\n]{0,80}(?:invalid|not a valid)\s+(?:request\s+)?(?:parameter|param|field|argument|property|option)\b/i.test(
       message
     ) ||
-    /reasoning[_ .-]?effort\s+(?:is\s+)?(?:unknown|unrecognized|unrecognised|unexpected|not allowed|unsupported|not supported)/i.test(
+    /reasoning(?:[_ .-]?effort)?\b\s+(?:is\s+)?(?:unknown|unrecognized|unrecognised|unexpected|not allowed|unsupported|not supported)/i.test(
       message
     );
 
@@ -349,7 +375,7 @@ function shouldRetryWithoutReasoningEffort(
 }
 
 function hasReasoningEffort(body: JsonObject): boolean {
-  return Object.hasOwn(body, "reasoning_effort");
+  return Object.hasOwn(body, "reasoning_effort") || Object.hasOwn(body, "reasoning");
 }
 
 function omitReasoningEffort(
@@ -357,6 +383,7 @@ function omitReasoningEffort(
 ): OpenAiCompatibleTransportRequest {
   const body = { ...request.body };
   delete body.reasoning_effort;
+  delete body.reasoning;
   return {
     ...request,
     body

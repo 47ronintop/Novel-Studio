@@ -8,6 +8,7 @@ import {
   withLlmPromptCacheUsage,
   type ResolvedLlmPromptCacheRequest
 } from "./prompt-cache.js";
+import { serializeLlmReasoningEffort } from "./reasoning-capabilities.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -88,15 +89,10 @@ async function* streamMessages(
   try {
     throwIfAborted(request);
     const transportRequest = await createTransportRequest(request, options, true);
-    const toolCalls = new Map<
-      number,
-      {
-        readonly id: string;
-        readonly name: string;
-        readonly initialInput?: JsonObject;
-        sawArgumentsDelta: boolean;
-      }
-    >();
+    const toolCalls = new Map<number, AnthropicStreamToolCall>();
+    const thinkingStates = new Map<number, AnthropicThinkingBlock>();
+    const thinkingBlocks: { readonly index: number; readonly block: JsonObject }[] = [];
+    const textBlocks = new Map<number, string>();
     let usage: Partial<AnthropicUsage> | undefined;
     let sawRoundCompleted = false;
 
@@ -115,7 +111,19 @@ async function* streamMessages(
       if (eventType === "content_block_start") {
         const index = requiredIndex(event);
         const block = requireRecord(event["content_block"]);
-        if (block["type"] === "tool_use") {
+        if (block["type"] === "thinking") {
+          thinkingStates.set(index, {
+            type: "thinking",
+            thinking: optionalString(block["thinking"]) ?? "",
+            signature: optionalString(block["signature"]) ?? ""
+          });
+        } else if (block["type"] === "redacted_thinking") {
+          const data = stringValue(block["data"]);
+          if (data === undefined) throw malformedResponse(event);
+          thinkingStates.set(index, { type: "redacted_thinking", data });
+        } else if (block["type"] === "text") {
+          textBlocks.set(index, optionalString(block["text"]) ?? "");
+        } else if (block["type"] === "tool_use") {
           const id = stringValue(block["id"]);
           const name = stringValue(block["name"]);
           if (id === undefined || name === undefined) throw malformedResponse(event);
@@ -124,7 +132,8 @@ async function* streamMessages(
             id,
             name,
             ...(initialInput === undefined ? {} : { initialInput }),
-            sawArgumentsDelta: false
+            sawArgumentsDelta: false,
+            argumentsText: ""
           });
           yield { type: "tool_call_delta", toolCallId: id, name };
         }
@@ -132,28 +141,54 @@ async function* streamMessages(
       }
 
       if (eventType === "content_block_delta") {
+        const index = requiredIndex(event);
         const delta = requireRecord(event["delta"]);
         const deltaType = stringValue(delta["type"]);
         if (deltaType === "text_delta") {
           const text = stringValue(delta["text"]);
           if (text === undefined) throw malformedResponse(event);
+          textBlocks.set(index, `${textBlocks.get(index) ?? ""}${text}`);
           yield { type: "delta", value: text };
         } else if (deltaType === "input_json_delta") {
-          const call = toolCalls.get(requiredIndex(event));
+          const call = toolCalls.get(index);
           const argumentsDelta = stringValue(delta["partial_json"]);
           if (call === undefined || argumentsDelta === undefined) throw malformedResponse(event);
           call.sawArgumentsDelta = true;
+          call.argumentsText += argumentsDelta;
           yield {
             type: "tool_call_delta",
             toolCallId: call.id,
             argumentsDelta
           };
+        } else if (deltaType === "thinking_delta") {
+          const state = thinkingStates.get(index);
+          const thinkingDelta = optionalString(delta["thinking"]);
+          if (state?.type !== "thinking" || thinkingDelta === undefined) {
+            throw malformedResponse(event);
+          }
+          state.thinking += thinkingDelta;
+        } else if (deltaType === "signature_delta") {
+          const state = thinkingStates.get(index);
+          const signatureDelta = optionalString(delta["signature"]);
+          if (state?.type !== "thinking" || signatureDelta === undefined) {
+            throw malformedResponse(event);
+          }
+          state.signature += signatureDelta;
         }
         continue;
       }
 
       if (eventType === "content_block_stop") {
-        const call = toolCalls.get(requiredIndex(event));
+        const index = requiredIndex(event);
+        const thinkingState = thinkingStates.get(index);
+        if (thinkingState !== undefined) {
+          thinkingStates.delete(index);
+          if (thinkingState.type === "thinking" && thinkingState.signature.length === 0) {
+            throw malformedResponse(event);
+          }
+          thinkingBlocks.push({ index, block: { ...thinkingState } });
+        }
+        const call = toolCalls.get(index);
         if (call !== undefined && !call.sawArgumentsDelta) {
           yield {
             type: "tool_call_delta",
@@ -172,7 +207,20 @@ async function* streamMessages(
         const stopReason = stringValue(delta["stop_reason"]);
         if (stopReason !== undefined) {
           if (sawRoundCompleted) throw malformedResponse(event);
+          if (thinkingStates.size > 0) throw malformedResponse(event);
           sawRoundCompleted = true;
+          if (stopReason === "tool_use" && thinkingBlocks.length > 0) {
+            const providerMetadata = {
+              anthropicAssistantBlocks: anthropicAssistantBlockSequence(
+                thinkingBlocks,
+                textBlocks,
+                toolCalls
+              ) as unknown as JsonValue
+            };
+            for (const call of toolCalls.values()) {
+              yield { type: "tool_call_delta", toolCallId: call.id, providerMetadata };
+            }
+          }
           yield { type: "round_completed", finishReason: normalizeFinishReason(stopReason) };
         }
         continue;
@@ -193,6 +241,56 @@ async function* streamMessages(
   } catch (error) {
     throw normalizeAnthropicError(error, request.abortSignal);
   }
+}
+
+type AnthropicThinkingBlock =
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string };
+
+interface AnthropicStreamToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly initialInput?: JsonObject;
+  sawArgumentsDelta: boolean;
+  argumentsText: string;
+}
+
+function anthropicAssistantBlockSequence(
+  thinkingBlocks: readonly { readonly index: number; readonly block: JsonObject }[],
+  textBlocks: ReadonlyMap<number, string>,
+  toolCalls: ReadonlyMap<number, AnthropicStreamToolCall>
+): readonly JsonObject[] {
+  const blocks = new Map<number, JsonObject>();
+  const addBlock = (index: number, block: JsonObject): void => {
+    if (blocks.has(index)) throw malformedResponse({});
+    blocks.set(index, block);
+  };
+
+  for (const { index, block } of thinkingBlocks) addBlock(index, block);
+  for (const [index, text] of textBlocks) addBlock(index, { type: "text", text });
+  for (const [index, call] of toolCalls) {
+    addBlock(index, {
+      type: "tool_use",
+      id: call.id,
+      name: call.name,
+      input: streamToolInput(call)
+    });
+  }
+
+  return [...blocks.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, block]) => block);
+}
+
+function streamToolInput(call: AnthropicStreamToolCall): JsonObject {
+  if (!call.sawArgumentsDelta) return call.initialInput ?? {};
+  try {
+    const value: unknown = JSON.parse(call.argumentsText);
+    if (isRecord(value)) return value;
+  } catch {
+    // The provider response is normalized below without exposing its argument payload.
+  }
+  throw malformedResponse({});
 }
 
 function unsupportedStream(): AsyncIterable<LlmProviderStreamEvent> {
@@ -223,9 +321,26 @@ async function createTransportRequest(
     (message) => message.role === "system" || message.role === "developer"
   );
   const system = authority?.content;
+  const reasoning =
+    request.parameters.reasoningEffort === undefined
+      ? undefined
+      : serializeLlmReasoningEffort(request.modelProfile, request.parameters.reasoningEffort);
+  if (request.parameters.reasoningEffort !== undefined && reasoning === undefined) {
+    throw new LlmProviderFailure({
+      code: "LLM_PROVIDER_ERROR",
+      message: "The selected Anthropic model does not expose the requested reasoning strength.",
+      retryable: false
+    });
+  }
+  const thinkingBudget =
+    reasoning?.providerParamName === "anthropic_thinking_budget" ? reasoning.value : undefined;
+  const requestedMaxTokens = request.parameters.maxTokens ?? 1024;
   const body: JsonObject = {
     model: request.modelProfile.modelName,
-    max_tokens: request.parameters.maxTokens ?? 1024,
+    max_tokens:
+      thinkingBudget === undefined
+        ? requestedMaxTokens
+        : Math.max(requestedMaxTokens, thinkingBudget + 1024),
     messages: request.messages.flatMap((message, index) =>
       message.role === "system" || message.role === "developer"
         ? []
@@ -239,6 +354,12 @@ async function createTransportRequest(
     ),
     stream: streaming
   };
+  if (reasoning?.providerParamName === "anthropic_effort") {
+    body.thinking = { type: "adaptive" } as unknown as JsonValue;
+    body.output_config = { effort: reasoning.value } as unknown as JsonValue;
+  } else if (thinkingBudget !== undefined) {
+    body.thinking = { type: "enabled", budget_tokens: thinkingBudget } as unknown as JsonValue;
+  }
   if (system !== undefined) {
     const boundary = promptCache.resolution.config?.stablePrefixMessageCount;
     const boundaryMessage = boundary === undefined ? undefined : request.messages[boundary - 1];
@@ -248,9 +369,12 @@ async function createTransportRequest(
         ? [withAnthropicCacheControl({ type: "text", text: system })]
         : system;
   }
-  if (request.parameters.temperature !== undefined)
+  // Anthropic extended/adaptive thinking requires the provider default temperature. Sending the
+  // user's sampling knobs together with thinking causes a provider validation error.
+  if (reasoning === undefined && request.parameters.temperature !== undefined)
     body.temperature = request.parameters.temperature;
-  if (request.parameters.topP !== undefined) body.top_p = request.parameters.topP;
+  if (reasoning === undefined && request.parameters.topP !== undefined)
+    body.top_p = request.parameters.topP;
   if (request.tools !== undefined && request.tools.length > 0) {
     body.tools = request.tools.map((tool) => ({
       name: tool.function.name,
@@ -375,6 +499,9 @@ function toAnthropicMessage(message: LlmMessage): JsonObject {
   }
 
   if (message.role === "assistant" && message.toolCalls !== undefined) {
+    const replayBlocks = anthropicAssistantBlocks(message);
+    if (replayBlocks !== undefined) return { role: "assistant", content: [...replayBlocks] };
+
     const content: JsonObject[] = [];
     if (message.content.length > 0) content.push({ type: "text", text: message.content });
     for (const toolCall of message.toolCalls) {
@@ -392,6 +519,128 @@ function toAnthropicMessage(message: LlmMessage): JsonObject {
     role: message.role === "assistant" ? "assistant" : "user",
     content: message.content
   };
+}
+
+function anthropicAssistantBlocks(message: LlmMessage): readonly JsonObject[] | undefined {
+  const toolCalls = message.toolCalls ?? [];
+  const declarations = toolCalls.flatMap((toolCall) => {
+    const value = toolCall.providerMetadata?.["anthropicAssistantBlocks"];
+    return value === undefined ? [] : [value];
+  });
+  if (declarations.length === 0) return undefined;
+  const canonical = JSON.stringify(declarations[0]);
+  if (declarations.some((value) => JSON.stringify(value) !== canonical)) {
+    throw providerContractFailure("Anthropic tool calls contain conflicting assistant state.");
+  }
+  const blocks = declarations[0];
+  if (!Array.isArray(blocks) || blocks.length === 0) return malformedAnthropicAssistantState();
+
+  const callsById = new Map(toolCalls.map((call) => [call.id, call]));
+  const seenCalls = new Set<string>();
+  let replayedText = "";
+  let hasThinking = false;
+  const validated = blocks.map((value): JsonObject => {
+    if (!isRecord(value)) return malformedAnthropicAssistantState();
+    if (
+      value["type"] === "thinking" &&
+      hasOnlyKeys(value, ["type", "thinking", "signature"]) &&
+      typeof value["thinking"] === "string" &&
+      typeof value["signature"] === "string" &&
+      value["signature"].length > 0
+    ) {
+      hasThinking = true;
+      return {
+        type: "thinking",
+        thinking: value["thinking"],
+        signature: value["signature"]
+      };
+    }
+    if (
+      value["type"] === "redacted_thinking" &&
+      hasOnlyKeys(value, ["type", "data"]) &&
+      typeof value["data"] === "string"
+    ) {
+      hasThinking = true;
+      return { type: "redacted_thinking", data: value["data"] };
+    }
+    if (
+      value["type"] === "text" &&
+      hasOnlyKeys(value, ["type", "text"]) &&
+      typeof value["text"] === "string"
+    ) {
+      replayedText += value["text"];
+      return { type: "text", text: value["text"] };
+    }
+    if (
+      value["type"] === "tool_use" &&
+      hasOnlyKeys(value, ["type", "id", "name", "input"]) &&
+      typeof value["id"] === "string" &&
+      typeof value["name"] === "string" &&
+      isRecord(value["input"])
+    ) {
+      const call = callsById.get(value["id"]);
+      if (
+        call === undefined ||
+        seenCalls.has(call.id) ||
+        call.name !== value["name"] ||
+        !jsonValuesEqual(value["input"], parseToolArguments(call.arguments))
+      ) {
+        return malformedAnthropicAssistantState();
+      }
+      seenCalls.add(call.id);
+      return {
+        type: "tool_use",
+        id: call.id,
+        name: call.name,
+        input: value["input"]
+      };
+    }
+    return malformedAnthropicAssistantState();
+  });
+
+  const replayedCallOrder = validated.flatMap((block) =>
+    block["type"] === "tool_use" && typeof block["id"] === "string" ? [block["id"]] : []
+  );
+  if (
+    !hasThinking ||
+    replayedText !== message.content ||
+    seenCalls.size !== toolCalls.length ||
+    replayedCallOrder.some((id, index) => id !== toolCalls[index]?.id)
+  ) {
+    return malformedAnthropicAssistantState();
+  }
+  return validated;
+}
+
+function malformedAnthropicAssistantState(): never {
+  throw providerContractFailure("Anthropic assistant continuation state is malformed.");
+}
+
+function hasOnlyKeys(value: JsonObject, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function jsonValuesEqual(left: JsonValue, right: JsonValue): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index] as JsonValue))
+    );
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        jsonValuesEqual(left[key] as JsonValue, right[key] as JsonValue)
+    )
+  );
 }
 
 function withAnthropicCacheControl(message: JsonObject): JsonObject {
@@ -723,6 +972,10 @@ function isRecord(value: unknown): value is JsonObject {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function numberValue(value: unknown): number | undefined {

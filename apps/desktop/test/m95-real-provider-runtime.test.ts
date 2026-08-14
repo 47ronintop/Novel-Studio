@@ -491,6 +491,10 @@ describe("M95 real provider runtime", () => {
     });
 
     const discovered = await runtime.modelDiscoveryPort.discoverModels(createDeepSeekProfile());
+    const cached = await runtime.modelDiscoveryPort.discoverModels(createDeepSeekProfile());
+    const refreshed = await runtime.modelDiscoveryPort.discoverModels(createDeepSeekProfile(), {
+      forceRefresh: true
+    });
 
     expect(discovered).toMatchObject({
       ok: true,
@@ -532,6 +536,9 @@ describe("M95 real provider runtime", () => {
         authorization: "Bearer sk-real-deepseek-key"
       }
     });
+    expect(cached).toEqual(discovered);
+    expect(refreshed).toEqual(discovered);
+    expect(calls).toHaveLength(2);
     expect(JSON.stringify(discovered)).not.toContain("secret://model_deepseek/api_key");
   });
 
@@ -544,7 +551,8 @@ describe("M95 real provider runtime", () => {
         data: [
           {
             id: "openrouter/declared-reasoning",
-            reasoning: { values: ["low", "high"], default: "high" }
+            reasoning: { values: ["low", "high"], default: "high" },
+            supported_parameters: ["reasoning"]
           },
           {
             id: "openrouter/flag-only",
@@ -554,24 +562,162 @@ describe("M95 real provider runtime", () => {
       },
       modelId: "openrouter/declared-reasoning",
       expectedReasoning: {
-        status: "hidden"
+        status: "available",
+        providerParamName: "reasoning",
+        allowedValues: ["low", "high"],
+        defaultValue: "high"
       }
     },
     {
-      provider: "openai-compatible" as const,
-      baseUrl: "https://api.example.com/v1",
-      modelName: "conflicting-reasoning",
+      provider: "openai" as const,
+      baseUrl: "https://api.openai.com/v1",
+      modelName: "gpt-5",
       payload: {
         data: [
           {
-            id: "conflicting-reasoning",
+            id: "gpt-5",
             supported_reasoning_efforts: ["low", "high"],
             default_reasoning_effort: "low",
             reasoning: { values: ["low", "high"], default: "high" }
           }
         ]
       },
-      modelId: "conflicting-reasoning",
+      modelId: "gpt-5",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    },
+    {
+      provider: "openai-compatible" as const,
+      baseUrl: "https://api.example.com/v1",
+      modelName: "conflicting-reasoning-values",
+      payload: {
+        data: [
+          {
+            id: "conflicting-reasoning-values",
+            supported_reasoning_efforts: ["low", "high"],
+            default_reasoning_effort: "low",
+            reasoning: { values: ["low", "medium", "high"], default: "low" }
+          }
+        ]
+      },
+      modelId: "conflicting-reasoning-values",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    },
+    {
+      provider: "openai" as const,
+      baseUrl: "https://api.openai.com/v1",
+      modelName: "gpt-5-mini",
+      payload: {
+        data: [
+          {
+            id: "gpt-5-mini",
+            supported_reasoning_efforts: ["low", "high"],
+            default_reasoning_effort: "high",
+            supports_reasoning: true,
+            capabilities: { supportsReasoning: false }
+          }
+        ]
+      },
+      modelId: "gpt-5-mini",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    },
+    {
+      provider: "openai" as const,
+      baseUrl: "https://api.openai.com/v1",
+      modelName: "gpt-5-pro",
+      payload: {
+        data: [
+          {
+            id: "gpt-5-pro",
+            supported_reasoning_efforts: ["high"],
+            default_reasoning_effort: "high",
+            providerParamName: "reasoning_effort",
+            provider_param_name: "reasoning"
+          }
+        ]
+      },
+      modelId: "gpt-5-pro",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    },
+    {
+      provider: "openrouter" as const,
+      baseUrl: "https://openrouter.ai/api/v1",
+      modelName: "openai/gpt-5",
+      payload: {
+        data: [
+          {
+            id: "openai/gpt-5",
+            reasoning: { values: ["low", "high"], default: "high" },
+            supported_parameters: ["reasoning"],
+            supportedParameters: ["temperature"]
+          }
+        ]
+      },
+      modelId: "openai/gpt-5",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    },
+    {
+      provider: "openai" as const,
+      baseUrl: "https://api.openai.com/v1",
+      modelName: "gpt-5",
+      payload: {
+        data: [
+          {
+            id: "gpt-5",
+            supported_reasoning_efforts: ["low", "high"],
+            default_reasoning_effort: "low",
+            defaultReasoningEffort: "high"
+          }
+        ]
+      },
+      modelId: "gpt-5",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    },
+    {
+      provider: "openai-compatible" as const,
+      baseUrl: "https://api.example.com/v1",
+      modelName: "nested-default-conflict",
+      payload: {
+        data: [
+          {
+            id: "nested-default-conflict",
+            reasoning: {
+              values: ["low", "high"],
+              default: "low",
+              defaultValue: "high"
+            }
+          }
+        ]
+      },
+      modelId: "nested-default-conflict",
+      expectedReasoning: {
+        status: "hidden"
+      }
+    },
+    {
+      provider: "openai-compatible" as const,
+      baseUrl: "https://api.example.com/v1",
+      modelName: "unrelated-metadata",
+      payload: {
+        data: [
+          {
+            id: "unrelated-metadata",
+            metadata: { supported_values: ["low", "high"], default: "high" }
+          }
+        ]
+      },
+      modelId: "unrelated-metadata",
       expectedReasoning: {
         status: "hidden"
       }

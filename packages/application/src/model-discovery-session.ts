@@ -1,4 +1,8 @@
 import type { JsonObject, Result, UnifiedError } from "@novel-studio/shared";
+import {
+  resolveLlmReasoningCapability,
+  type LlmReasoningProviderParamName
+} from "@novel-studio/llm-adapter";
 import type { ModelProfile } from "./model-settings-session.js";
 
 export type ModelDiscoveryStatus = "loaded" | "fallback";
@@ -7,7 +11,7 @@ export type ModelReasoningStrengthValue = string;
 
 export interface ModelReasoningStrengthAvailable extends JsonObject {
   readonly status: "available";
-  readonly providerParamName: "reasoning_effort";
+  readonly providerParamName: LlmReasoningProviderParamName;
   readonly allowedValues: ModelReasoningStrengthValue[];
   readonly defaultValue: ModelReasoningStrengthValue;
 }
@@ -51,7 +55,14 @@ export interface ModelDiscoverySnapshot extends JsonObject {
 }
 
 export interface ModelDiscoveryPort {
-  discoverModels(profile: ModelProfile): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
+  discoverModels(
+    profile: ModelProfile,
+    options?: ModelDiscoveryRequestOptions
+  ): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
+}
+
+export interface ModelDiscoveryRequestOptions {
+  readonly forceRefresh?: boolean;
 }
 
 type ModelDiscoveryFallbackProfile = Pick<ModelProfile, "id" | "provider"> &
@@ -89,14 +100,7 @@ export function createModelDiscoverySnapshot(input: {
   const models: ModelDiscoveryOption[] = input.models.map((model) => ({
     ...model,
     provider: input.profile.provider,
-    reasoningStrength:
-      model.reasoningStrength ??
-      reasoningStrengthForModel(
-        input.profile.provider,
-        model.id,
-        input.profile.baseUrl,
-        input.profile.reasoningEffortEnabled
-      )
+    reasoningStrength: discoveredReasoningStrength(input.profile, model)
   }));
 
   const configuredModel = models.find((model) => model.id === input.profile.modelName);
@@ -117,6 +121,60 @@ export function createModelDiscoverySnapshot(input: {
   };
 }
 
+function discoveredReasoningStrength(
+  profile: Pick<ModelProfile, "provider" | "baseUrl" | "reasoningEffortEnabled">,
+  model: ModelDiscoveryModelInput
+): ModelReasoningStrengthControl {
+  const declared = model.reasoningStrength;
+  if (declared === undefined || declared.status === "hidden") {
+    return (
+      declared ??
+      reasoningStrengthForModel(
+        profile.provider,
+        model.id,
+        profile.baseUrl,
+        profile.reasoningEffortEnabled
+      )
+    );
+  }
+  const allowedValues = [...new Set(declared.allowedValues.map((value) => value.trim()))].filter(
+    (value) => value.length > 0
+  );
+  const defaultValue = declared.defaultValue.trim();
+  if (allowedValues.length === 0 || !allowedValues.includes(defaultValue)) {
+    return hiddenReasoningStrength("Provider reasoning metadata is incomplete or conflicting.");
+  }
+  const adapterCapability = resolveLlmReasoningCapability(
+    profile.provider,
+    model.id,
+    profile.baseUrl,
+    true
+  );
+  if (
+    adapterCapability === undefined ||
+    adapterCapability.providerParamName !== declared.providerParamName
+  ) {
+    return hiddenReasoningStrength(
+      "Provider reasoning metadata does not match the configured adapter protocol."
+    );
+  }
+  const provider = profile.provider.trim().toLowerCase();
+  if (
+    (provider === "anthropic" || provider === "google-gemini") &&
+    allowedValues.some((value) => !adapterCapability.allowedValues.includes(value))
+  ) {
+    return hiddenReasoningStrength(
+      "Provider reasoning metadata declares values the native adapter cannot serialize."
+    );
+  }
+  return {
+    status: "available",
+    providerParamName: declared.providerParamName,
+    allowedValues,
+    defaultValue
+  };
+}
+
 export function reasoningStrengthForModel(
   provider: string,
   modelId: string,
@@ -125,44 +183,32 @@ export function reasoningStrengthForModel(
 ): ModelReasoningStrengthControl {
   const normalized = modelId.trim().toLowerCase();
 
-  // DeepSeek's reasoning models always reason at the provider-selected setting. They do not
-  // accept the OpenAI-compatible `reasoning_effort` parameter, so an opt-in override must not
-  // manufacture low/medium/high values for these models. The same applies to DeepSeek chat (and
-  // other DeepSeek model aliases) unless discovery supplies explicit reasoning metadata, which is
-  // honored by createModelDiscoverySnapshot before this fallback is reached.
+  const capability = resolveLlmReasoningCapability(
+    provider,
+    modelId,
+    baseUrl,
+    reasoningEffortEnabled
+  );
+  if (capability !== undefined) {
+    return {
+      status: "available",
+      providerParamName: capability.providerParamName,
+      allowedValues: [...capability.allowedValues],
+      defaultValue: capability.defaultValue
+    };
+  }
+
   const deepSeekReason = deepSeekReasoningReason(provider, normalized, baseUrl);
-  if (deepSeekReason !== undefined) {
-    return hiddenReasoningStrength(deepSeekReason);
-  }
+  if (deepSeekReason !== undefined) return hiddenReasoningStrength(deepSeekReason);
 
-  if (provider !== "openai" && provider !== "openai-compatible") {
-    return hiddenReasoningStrength();
-  }
-
-  const spec = reasoningEffortSpecForOpenAiModel(normalized);
-  if (spec !== undefined) {
-    return {
-      status: "available",
-      providerParamName: "reasoning_effort",
-      allowedValues: spec.allowedValues,
-      defaultValue: spec.defaultValue
-    };
-  }
-
-  if (reasoningEffortEnabled) {
-    return {
-      status: "available",
-      providerParamName: "reasoning_effort",
-      allowedValues: ["none", "low", "medium", "high"],
-      defaultValue: "medium"
-    };
-  }
-
-  if (!isOfficialOpenAiEndpoint(provider, baseUrl)) {
+  if (
+    (provider === "openai" || provider === "openai-compatible") &&
+    !isOfficialOpenAiEndpoint(provider, baseUrl)
+  ) {
     return {
       status: "hidden",
       reason:
-        "This custom endpoint uses an unrecognized model name; enable the advanced reasoning_effort override to expose generic values."
+        "This custom endpoint uses an unrecognized model name; enable the advanced reasoning override to expose generic values."
     };
   }
 
@@ -196,10 +242,10 @@ function deepSeekReasoningReason(
     normalizedModelId === "deepseek-r1" ||
     normalizedModelId.startsWith("deepseek-r1-")
   ) {
-    return "DeepSeek reasoner models use fixed reasoning and do not expose reasoning_effort tiers.";
+    return "DeepSeek reasoner models need declared effort tiers or the advanced reasoning override.";
   }
 
-  return "This DeepSeek model does not declare reasoning_effort tiers.";
+  return "This DeepSeek model does not declare effort tiers; enable the advanced reasoning override if the endpoint supports them.";
 }
 
 function isDeepSeekBaseUrl(baseUrl: string | undefined): boolean {
@@ -216,77 +262,6 @@ function redactDiscoveryText(value: string): string {
   return value
     .replace(/\bsk-[A-Za-z0-9_-]+\b/g, "[REDACTED]")
     .replace(/secret:\/\/[^\s"'`]+/g, "[REDACTED]");
-}
-
-interface ReasoningEffortSpec {
-  readonly allowedValues: ModelReasoningStrengthValue[];
-  readonly defaultValue: ModelReasoningStrengthValue;
-}
-
-function reasoningEffortSpecForOpenAiModel(
-  normalizedModelId: string
-): ReasoningEffortSpec | undefined {
-  // These compatible endpoints expose model-specific tiers. Keep the catalog per model instead of
-  // applying one conservative list to every GPT-5.6 alias.
-  if (/^gpt-5\.6-sol(?:-|$)/.test(normalizedModelId)) {
-    return {
-      allowedValues: ["low", "medium", "high", "max", "ultra"],
-      defaultValue: "medium"
-    };
-  }
-  if (/^gpt-5\.6-luna(?:-|$)/.test(normalizedModelId)) {
-    return {
-      allowedValues: ["low", "medium", "high"],
-      defaultValue: "medium"
-    };
-  }
-  if (normalizedModelId === "gpt-5-pro") {
-    return { allowedValues: ["high"], defaultValue: "high" };
-  }
-  if (normalizedModelId === "gpt-5.6" || /^gpt-5\.6-codex(?:-|$)/.test(normalizedModelId)) {
-    return {
-      allowedValues: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
-      defaultValue: "medium"
-    };
-  }
-  if (/^gpt-5\.6-/.test(normalizedModelId)) return undefined;
-  if (normalizedModelId.includes("codex") && normalizedModelId.startsWith("gpt-5")) {
-    return {
-      allowedValues: ["minimal", "low", "medium", "high", "xhigh"],
-      defaultValue: "medium"
-    };
-  }
-  if (normalizedModelId === "gpt-5") {
-    return {
-      allowedValues: ["minimal", "low", "medium", "high"],
-      defaultValue: "medium"
-    };
-  }
-  if (normalizedModelId === "gpt-5.5") {
-    return {
-      allowedValues: ["none", "low", "medium", "high", "xhigh"],
-      defaultValue: "medium"
-    };
-  }
-  if (/^gpt-5\.(?:[2-9]\d*|1\d+)(?:-|$)/.test(normalizedModelId)) {
-    return {
-      allowedValues: ["none", "low", "medium", "high", "xhigh"],
-      defaultValue: "medium"
-    };
-  }
-  if (/^gpt-5\.1(?:-|$)/.test(normalizedModelId)) {
-    return {
-      allowedValues: ["none", "low", "medium", "high"],
-      defaultValue: "none"
-    };
-  }
-  if (/^o[134](?:-|$)/.test(normalizedModelId)) {
-    return {
-      allowedValues: ["low", "medium", "high"],
-      defaultValue: "medium"
-    };
-  }
-  return undefined;
 }
 
 function isOfficialOpenAiEndpoint(provider: string, baseUrl: string | undefined): boolean {

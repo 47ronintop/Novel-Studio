@@ -636,14 +636,14 @@ describe("AI writing workflow bridge", () => {
       calls.push("ai.stream:start");
       yield ok({
         type: "notice",
-        message: "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
+        message: "该模型/端点不支持推理强度调节，已移除推理参数并重试。"
       });
       yield ok({ type: "delta", value: "Opening line.\nAI continuation.\n" });
       yield ok({
         type: "suggestion",
         suggestion: {
           ...suggestion,
-          runtimeNotice: "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
+          runtimeNotice: "该模型/端点不支持推理强度调节，已移除推理参数并重试。"
         }
       });
     };
@@ -660,12 +660,8 @@ describe("AI writing workflow bridge", () => {
     );
 
     expect(finalProps.status).toBe("suggestion-ready");
-    expect(finalProps.runtimeNotice).toBe(
-      "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
-    );
-    expect(updates).toContain(
-      "该模型/端点不支持推理强度调节，已自动忽略 reasoning_effort 并重试。"
-    );
+    expect(finalProps.runtimeNotice).toBe("该模型/端点不支持推理强度调节，已移除推理参数并重试。");
+    expect(updates).toContain("该模型/端点不支持推理强度调节，已移除推理参数并重试。");
   });
 
   test("maps returned chat messages and clears the composer after a successful send", async () => {

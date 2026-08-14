@@ -21,6 +21,7 @@ import type { AgentComposerProps } from "./workspace-shell-types.js";
 
 const REASONING_LABELS: Record<string, string> = {
   none: "关闭",
+  off: "关闭",
   minimal: "极简",
   low: "低",
   medium: "中",

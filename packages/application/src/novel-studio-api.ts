@@ -93,7 +93,10 @@ import type {
   EngineeringTextFileSnapshot,
   EngineeringWorkspaceSnapshot
 } from "./engineering-workspace-session.js";
-import type { ModelDiscoverySnapshot } from "./model-discovery-session.js";
+import type {
+  ModelDiscoveryRequestOptions,
+  ModelDiscoverySnapshot
+} from "./model-discovery-session.js";
 import type {
   ModelConnectionResult,
   ModelProfile,
@@ -527,7 +530,10 @@ export interface NovelStudioApi {
   };
   settings: {
     listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
-    discoverModelOptions(profileId: string): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
+    discoverModelOptions(
+      profileId: string,
+      options?: ModelDiscoveryRequestOptions
+    ): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
     saveModelProfile(
       profile: ModelProfile,
       options?: { readonly makeDefault?: boolean }

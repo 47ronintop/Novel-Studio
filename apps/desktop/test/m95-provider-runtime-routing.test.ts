@@ -75,6 +75,83 @@ describe("M95 desktop provider runtime routing", () => {
       }
     });
   });
+
+  test("carries discovered reasoning tiers into the provider request contract", async () => {
+    const projectRoot = await copyFixtureProject();
+    const requests: LlmRequest[] = [];
+    const compatibleProvider: LlmProvider = {
+      id: "openai-compatible",
+      async complete(request) {
+        requests.push(request);
+        return {
+          content: {
+            type: "json",
+            value: {
+              proposedBody: "Reasoning-aware continuation.\n",
+              summary: "Used the discovered DeepSeek reasoning contract."
+            }
+          }
+        };
+      },
+      async *stream() {}
+    };
+    const application = createProjectDesktopApplication({
+      projectRoot,
+      chapterId,
+      projectTitle: "Minimal Chapter Project",
+      now: () => "2026-07-06T00:00:00.000Z",
+      modelDiscoveryPort: {
+        async discoverModels(profile) {
+          const reasoningStrength = {
+            status: "available" as const,
+            providerParamName: "reasoning_effort" as const,
+            allowedValues: ["low", "high", "max"],
+            defaultValue: "max"
+          };
+          return {
+            ok: true,
+            value: {
+              profileId: profile.id,
+              provider: profile.provider,
+              status: "loaded",
+              models: [
+                {
+                  id: profile.modelName,
+                  displayName: profile.modelName,
+                  provider: profile.provider,
+                  reasoningStrength
+                }
+              ],
+              reasoningStrength
+            }
+          };
+        }
+      },
+      createAiProvider: () =>
+        createProviderRouter({
+          providers: {
+            "openai-compatible": compatibleProvider
+          }
+        })
+    });
+
+    const loaded = await application.loadActiveChapter();
+    assertOk(loaded);
+
+    const generated = await application.generateActiveChapterSuggestion({
+      instruction: "Continue with the discovered provider capability.",
+      reasoningEffort: "max"
+    });
+
+    assertOk<AiWritingSuggestion>(generated);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.modelProfile.reasoningCapability).toEqual({
+      providerParamName: "reasoning_effort",
+      allowedValues: ["low", "high", "max"],
+      defaultValue: "max"
+    });
+    expect(requests[0]?.parameters.reasoningEffort).toBe("max");
+  });
 });
 
 async function copyFixtureProject(): Promise<string> {

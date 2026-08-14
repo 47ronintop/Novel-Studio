@@ -686,11 +686,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:settings:list-model-profiles"
         ),
-      discoverModelOptions: (profileId: string) =>
+      discoverModelOptions: (profileId, options) =>
         invokeTyped<Result<ModelDiscoverySnapshot, UnifiedError>>(
           ipc,
           "application:settings:discover-models",
-          profileId
+          profileId,
+          options
         ),
       saveModelProfile: (profile: ModelProfile, options?: { readonly makeDefault?: boolean }) =>
         invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(

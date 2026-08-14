@@ -9,6 +9,14 @@ export {
 } from "./prompt-cache.js";
 export { createProviderRouter, type ProviderRouterOptions } from "./provider-router.js";
 export {
+  anthropicThinkingBudget,
+  geminiThinkingBudget,
+  resolveLlmReasoningCapability,
+  resolveLlmReasoningCapabilityForProfile,
+  serializeLlmReasoningEffort,
+  type LlmReasoningSerialization
+} from "./reasoning-capabilities.js";
+export {
   createAnthropicProvider,
   AnthropicHttpError,
   type AnthropicProviderOptions,
@@ -57,7 +65,9 @@ export type {
   LlmPromptCacheBypassReason,
   LlmPromptCacheMode,
   LlmPromptCacheRequest,
+  LlmReasoningCapability,
   LlmReasoningEffort,
+  LlmReasoningProviderParamName,
   LlmRequest,
   LlmResponse,
   LlmRoundFinishReason,

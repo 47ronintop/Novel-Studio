@@ -225,7 +225,7 @@ export function createSettingsBridge(
       return toProps();
     },
     async discoverModelOptions(profileId) {
-      await discoverModels(profileId);
+      await discoverModels(profileId, true);
       return toProps();
     },
     updateDraft(nextDraft) {
@@ -668,8 +668,11 @@ export function createSettingsBridge(
     };
   }
 
-  async function discoverModels(profileId: string): Promise<void> {
-    const result = await api.settings.discoverModelOptions(profileId);
+  async function discoverModels(profileId: string, forceRefresh = false): Promise<void> {
+    const result = await api.settings.discoverModelOptions(
+      profileId,
+      forceRefresh ? { forceRefresh: true } : undefined
+    );
     if (!result.ok) {
       modelDiscovery = undefined;
       feedback = { kind: "error", message: result.error.message };

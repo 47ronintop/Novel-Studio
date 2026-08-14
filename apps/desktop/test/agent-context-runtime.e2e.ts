@@ -81,7 +81,7 @@ test("surfaces draft-backed context controls and round-trips a reference through
     await expect(lunaOption).toBeVisible();
     await expect(solOption).toBeVisible();
     await solOption.click();
-    await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5.6-sol · 中");
+    await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5.6-sol · 低");
 
     await modelTrigger.click();
     await modelMenu.locator('[data-model-menu="reasoning"]').click();
@@ -93,6 +93,7 @@ test("surfaces draft-backed context controls and round-trips a reference through
       "低",
       "中",
       "高",
+      "极高",
       "最大",
       "超高"
     ]);
@@ -110,9 +111,11 @@ test("surfaces draft-backed context controls and round-trips a reference through
     await expect(reasoningOptions.locator("[data-reasoning-option]")).toHaveText([
       "低",
       "中",
-      "高"
+      "高",
+      "极高",
+      "最大"
     ]);
-    await expect(reasoningOptions.locator('[data-reasoning-option="max"]')).toHaveCount(0);
+    await expect(reasoningOptions.locator('[data-reasoning-option="max"]')).toHaveCount(1);
     await expect(reasoningOptions.locator('[data-reasoning-option="ultra"]')).toHaveCount(0);
     await reasoningOptions.getByRole("button", { name: "高", exact: true }).click();
     await expect(modelTrigger).toHaveAccessibleName("模型与推理：gpt-5.6-luna · 高");

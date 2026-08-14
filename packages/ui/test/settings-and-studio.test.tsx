@@ -641,6 +641,7 @@ describe("M8 Settings UI", () => {
     expect(html).toContain("Agent 使用 Anthropic Messages 原生协议");
     expect(html).toContain("请填写 Anthropic Messages API 根地址");
     expect(html).not.toContain("请填写兼容 OpenAI 格式的服务端点地址");
+    expect(html).not.toContain('aria-label="手动启用兼容端点推理强度"');
   });
 
   test("keeps provider visible and moves low-frequency model fields into advanced settings", () => {
@@ -651,7 +652,7 @@ describe("M8 Settings UI", () => {
     const providerIndex = html.indexOf('aria-label="模型 Provider"');
     const baseUrlIndex = html.indexOf('aria-label="模型 Base URL"');
     const advancedIndex = html.indexOf('class="model-settings-advanced"');
-    const reasoningEffortIndex = html.indexOf('aria-label="确认该端点支持 reasoning_effort"');
+    const reasoningEffortIndex = html.indexOf('aria-label="手动启用兼容端点推理强度"');
     const profileIdIndex = html.indexOf('aria-label="模型 Profile ID"');
     const temperatureIndex = html.indexOf('aria-label="Temperature"');
 
@@ -701,6 +702,12 @@ function createModelSettingsPanelProps(): Parameters<typeof ModelSettingsPanel>[
       timeoutMs: "60000"
     },
     saveStatus: "idle",
-    providerOptions: [{ id: "openai-compatible", label: "OpenAI Compatible" }]
+    providerOptions: [
+      {
+        id: "openai-compatible",
+        label: "OpenAI Compatible",
+        agentAdapter: "openai-compatible"
+      }
+    ]
   };
 }

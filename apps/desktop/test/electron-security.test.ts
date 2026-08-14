@@ -8,6 +8,7 @@ import { createSecureWebPreferences } from "../src/main/security";
 import { createNovelStudioApi } from "../src/preload/api";
 
 const rendererRoot = join(process.cwd(), "apps", "desktop", "src", "renderer");
+const preloadEntryPath = join(process.cwd(), "apps", "desktop", "src", "preload", "index.cts");
 
 function readRendererFiles(): string[] {
   if (!existsSync(rendererRoot)) {
@@ -21,6 +22,14 @@ function readRendererFiles(): string[] {
 }
 
 describe("Electron security baseline", () => {
+  test("production preload forwards model discovery request options", () => {
+    const preloadSource = readFileSync(preloadEntryPath, "utf8");
+
+    expect(preloadSource).toMatch(
+      /discoverModelOptions:\s*\(profileId:\s*string,\s*options\?:\s*ModelDiscoveryRequestOptions\)\s*=>[\s\S]*?"application:settings:discover-models",\s*profileId,\s*options/
+    );
+  });
+
   test("creates BrowserWindow preferences with renderer Node access disabled", () => {
     const preferences = createSecureWebPreferences("preload.js");
 

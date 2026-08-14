@@ -78,12 +78,24 @@ describe("model settings session", () => {
     expect(result).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
-      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      allowedValues: ["low", "medium", "high", "xhigh"],
       defaultValue: "medium"
     });
   });
 
   test("shows recognized reasoning models on custom endpoints without a Settings opt-in", () => {
+    expect(
+      reasoningStrengthForModel(
+        "openai-compatible",
+        "gpt-5.6-terra",
+        "https://api.hostcentral.cc/v1"
+      )
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultValue: "medium"
+    });
     expect(
       reasoningStrengthForModel(
         "openai-compatible",
@@ -93,7 +105,7 @@ describe("model settings session", () => {
     ).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
-      allowedValues: ["low", "medium", "high"],
+      allowedValues: ["low", "medium", "high", "xhigh", "max"],
       defaultValue: "medium"
     });
   });
@@ -104,8 +116,27 @@ describe("model settings session", () => {
     ).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
-      allowedValues: ["low", "medium", "high", "max", "ultra"],
-      defaultValue: "medium"
+      allowedValues: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultValue: "low"
+    });
+  });
+
+  test("uses model-specific xAI reasoning tiers on compatible endpoints", () => {
+    expect(
+      reasoningStrengthForModel("openai-compatible", "grok-3-mini", "https://api.x.ai/v1")
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["low", "high"],
+      defaultValue: "high"
+    });
+    expect(
+      reasoningStrengthForModel("openrouter", "x-ai/grok-4", "https://openrouter.ai/api/v1", true)
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning",
+      allowedValues: ["low", "medium", "high"],
+      defaultValue: "high"
     });
   });
 
@@ -119,31 +150,85 @@ describe("model settings session", () => {
     ).toMatchObject({ status: "hidden" });
   });
 
-  test("keeps DeepSeek models hidden when no reasoning tiers are declared", () => {
+  test("keeps undeclared DeepSeek tiers hidden until the generic override is enabled", () => {
+    expect(
+      reasoningStrengthForModel("deepseek", "deepseek-chat", "https://api.deepseek.com/v1")
+    ).toMatchObject({ status: "hidden" });
     expect(
       reasoningStrengthForModel(
-        "openai-compatible",
-        "deepseek-chat",
-        "https://api.deepseek.com/v1",
-        true
-      )
-    ).toEqual({
-      status: "hidden",
-      reason: "This DeepSeek model does not declare reasoning_effort tiers."
-    });
-    expect(
-      reasoningStrengthForModel(
-        "openai-compatible",
+        "deepseek",
         "deepseek-reasoner",
         "https://api.deepseek.com/v1",
         true
       )
     ).toEqual({
-      status: "hidden",
-      reason:
-        "DeepSeek reasoner models use fixed reasoning and do not expose reasoning_effort tiers."
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["none", "low", "medium", "high"],
+      defaultValue: "medium"
     });
   });
+
+  test("uses provider-native reasoning controls for Anthropic, Gemini, and OpenRouter", () => {
+    expect(reasoningStrengthForModel("anthropic", "claude-3-7-sonnet-20250219")).toEqual({
+      status: "available",
+      providerParamName: "anthropic_thinking_budget",
+      allowedValues: ["low", "medium", "high"],
+      defaultValue: "medium"
+    });
+    expect(reasoningStrengthForModel("anthropic", "claude-sonnet-4-20250514")).toEqual({
+      status: "available",
+      providerParamName: "anthropic_thinking_budget",
+      allowedValues: ["low", "medium", "high"],
+      defaultValue: "medium"
+    });
+    expect(reasoningStrengthForModel("anthropic", "claude-opus-4-6")).toEqual({
+      status: "available",
+      providerParamName: "anthropic_effort",
+      allowedValues: ["low", "medium", "high", "max"],
+      defaultValue: "high"
+    });
+    expect(reasoningStrengthForModel("google-gemini", "gemini-2.5-flash")).toEqual({
+      status: "available",
+      providerParamName: "gemini_thinking_budget",
+      allowedValues: ["off", "low", "medium", "high"],
+      defaultValue: "medium"
+    });
+    expect(reasoningStrengthForModel("google-gemini", "gemini-3-pro-preview")).toEqual({
+      status: "available",
+      providerParamName: "gemini_thinking_level",
+      allowedValues: ["low", "high"],
+      defaultValue: "high"
+    });
+    expect(
+      reasoningStrengthForModel(
+        "openrouter",
+        "anthropic/claude-sonnet-4",
+        "https://openrouter.ai/api/v1",
+        true
+      )
+    ).toEqual({
+      status: "available",
+      providerParamName: "reasoning",
+      allowedValues: ["low", "medium", "high"],
+      defaultValue: "medium"
+    });
+  });
+
+  test.each(["zhipu", "tongyi-qianwen", "ollama", "lm-studio", "vllm"])(
+    "requires an explicit generic reasoning override for %s",
+    (provider) => {
+      expect(reasoningStrengthForModel(provider, "unknown-model")).toMatchObject({
+        status: "hidden"
+      });
+      expect(reasoningStrengthForModel(provider, "unknown-model", undefined, true)).toEqual({
+        status: "available",
+        providerParamName: "reasoning_effort",
+        allowedValues: ["none", "low", "medium", "high"],
+        defaultValue: "medium"
+      });
+    }
+  );
 
   test("prefers discovered reasoning metadata over the DeepSeek fallback", () => {
     const snapshot = createModelDiscoverySnapshot({
@@ -176,6 +261,52 @@ describe("model settings session", () => {
     });
   });
 
+  test("hides native discovery metadata that the selected adapter cannot serialize", () => {
+    const unknownModel = createModelDiscoverySnapshot({
+      profile: {
+        id: "model_anthropic",
+        provider: "anthropic",
+        modelName: "claude-future",
+        reasoningEffortEnabled: false
+      },
+      models: [
+        {
+          id: "claude-future",
+          displayName: "claude-future",
+          reasoningStrength: {
+            status: "available",
+            providerParamName: "anthropic_effort",
+            allowedValues: ["low", "high"],
+            defaultValue: "high"
+          }
+        }
+      ]
+    });
+    const mismatchedProtocol = createModelDiscoverySnapshot({
+      profile: {
+        id: "model_anthropic",
+        provider: "anthropic",
+        modelName: "claude-sonnet-4-20250514",
+        reasoningEffortEnabled: false
+      },
+      models: [
+        {
+          id: "claude-sonnet-4-20250514",
+          displayName: "claude-sonnet-4-20250514",
+          reasoningStrength: {
+            status: "available",
+            providerParamName: "anthropic_effort",
+            allowedValues: ["low", "high"],
+            defaultValue: "high"
+          }
+        }
+      ]
+    });
+
+    expect(unknownModel.reasoningStrength).toMatchObject({ status: "hidden" });
+    expect(mismatchedProtocol.reasoningStrength).toMatchObject({ status: "hidden" });
+  });
+
   test("uses model-specific reasoning effort values for official OpenAI endpoints", () => {
     expect(reasoningStrengthForModel("openai", "gpt-5", "https://api.openai.com/v1")).toEqual({
       status: "available",
@@ -192,7 +323,7 @@ describe("model settings session", () => {
     expect(reasoningStrengthForModel("openai", "gpt-5.4", "https://api.openai.com/v1")).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
-      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      allowedValues: ["low", "medium", "high", "xhigh"],
       defaultValue: "medium"
     });
     expect(
@@ -200,13 +331,19 @@ describe("model settings session", () => {
     ).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
-      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      allowedValues: ["low", "medium", "high", "xhigh"],
       defaultValue: "medium"
     });
     expect(reasoningStrengthForModel("openai", "gpt-5.5", "https://api.openai.com/v1")).toEqual({
       status: "available",
       providerParamName: "reasoning_effort",
-      allowedValues: ["none", "low", "medium", "high", "xhigh"],
+      allowedValues: ["low", "medium", "high", "xhigh"],
+      defaultValue: "medium"
+    });
+    expect(reasoningStrengthForModel("openai", "gpt-5.2", "https://api.openai.com/v1")).toEqual({
+      status: "available",
+      providerParamName: "reasoning_effort",
+      allowedValues: ["low", "medium", "high", "xhigh"],
       defaultValue: "medium"
     });
     expect(reasoningStrengthForModel("openai", "gpt-5-pro", "https://api.openai.com/v1")).toEqual({
@@ -546,7 +683,7 @@ describe("model settings session", () => {
       reasoningStrength: {
         status: "available",
         providerParamName: "reasoning_effort",
-        allowedValues: ["none", "low", "medium", "high", "xhigh"],
+        allowedValues: ["low", "medium", "high", "xhigh"],
         defaultValue: "medium"
       }
     });
@@ -662,6 +799,14 @@ describe("model settings session", () => {
         topP: 0.9
       }
     });
+  });
+
+  test("preserves an explicitly hidden reasoning capability in the runtime profile", () => {
+    const result = resolveDefaultModelRuntimeProfile(settings, null);
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.modelProfile.reasoningCapability).toBeNull();
   });
 
   test("resolves the default settings profile into an LLM runtime profile", () => {
