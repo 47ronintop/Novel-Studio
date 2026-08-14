@@ -648,6 +648,9 @@ function WorkspaceEditorSurface({
         saving={activeSaving}
         tabs={documentTabs}
         onFind={() => setFindMode("find")}
+        {...(fileEditor === undefined && chapterEditor === undefined
+          ? {}
+          : { narrationBody: fileEditor === undefined ? chapterEditor?.chapter.body : undefined })}
         {...(fileEditor !== undefined || chapterEditor?.onStatusChange === undefined
           ? {}
           : { onChapterStatusChange: chapterEditor.onStatusChange })}

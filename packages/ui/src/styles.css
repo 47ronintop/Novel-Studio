@@ -968,7 +968,9 @@ textarea:focus-visible,
   display: flex;
   flex: 0 0 34px;
   font-size: 12px;
+  height: 34px;
   justify-content: space-between;
+  line-height: 1;
   min-width: 0;
   padding: 0 10px;
   width: 100%;
@@ -1529,7 +1531,9 @@ textarea:focus-visible,
   height: 34px;
   justify-content: space-between;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+  z-index: 2;
 }
 
 .ns-document-tabs {
@@ -1616,6 +1620,26 @@ textarea:focus-visible,
   flex: 0 0 auto;
   gap: 2px;
   padding: 0 4px;
+}
+
+.ns-document-actions > .ns-chapter-narration {
+  align-items: center;
+  gap: 4px;
+  position: relative;
+}
+
+.ns-document-actions > .ns-chapter-narration .ns-chapter-narration-trigger {
+  min-height: 26px;
+  padding-inline: 8px;
+}
+
+.ns-document-actions > .ns-chapter-narration .ns-chapter-narration-player {
+  max-width: min(520px, calc(100vw - 16px));
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  width: max-content;
+  z-index: 20;
 }
 
 .ns-document-actions .ns-icon-button {
@@ -2854,7 +2878,7 @@ textarea:focus-visible,
   border-radius: 6px;
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr);
   min-height: 240px;
   overflow: hidden;
 }
@@ -2944,11 +2968,13 @@ textarea:focus-visible,
   background: color-mix(in oklch, var(--ns-surface) 82%, var(--ns-bg));
   border-right: 1px solid var(--ns-border);
   color: var(--ns-muted);
-  min-width: 52px;
+  min-width: 36px;
 }
 
 .ns-editor-codemirror .cm-lineNumbers .cm-gutterElement {
-  padding: 0 12px 0 0;
+  min-width: 36px;
+  padding: 0;
+  text-align: center;
 }
 
 .ns-editor-codemirror .cm-selectionBackground,
@@ -2962,14 +2988,16 @@ textarea:focus-visible,
   color: var(--ns-muted);
   display: grid;
   font-size: 12px;
-  gap: 4px;
+  gap: 0;
   grid-column: 1;
   grid-row: 1;
-  padding: 18px 10px;
+  line-height: var(--ns-editor-line-height, 1.7);
+  padding: 18px 0;
 }
 
 .ns-editor-line-number {
-  text-align: right;
+  text-align: center;
+  width: 100%;
 }
 
 .ns-editor-panels {

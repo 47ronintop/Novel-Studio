@@ -1,5 +1,6 @@
 import type { ChapterStatus } from "@novel-studio/shared";
 import { Save, Search, Sparkles, X } from "lucide-react";
+import { ChapterNarrationPlayer } from "./chapter-narration-player.js";
 
 export interface EditorDocumentTab {
   readonly id: string;
@@ -17,6 +18,7 @@ export interface EditorDocumentBarProps {
   readonly onSave?: (() => void) | undefined;
   readonly onFind?: (() => void) | undefined;
   readonly selectionAction?: { readonly label: string; readonly onInvoke: () => void } | undefined;
+  readonly narrationBody?: string | undefined;
   readonly chapterStatus?: ChapterStatus | undefined;
   readonly chapterStatusBusy?: boolean | undefined;
   readonly onChapterStatusChange?: ((status: ChapterStatus) => void) | undefined;
@@ -29,6 +31,7 @@ export function EditorDocumentBar({
   onSave,
   onFind,
   selectionAction,
+  narrationBody,
   chapterStatus,
   chapterStatusBusy = false,
   onChapterStatusChange
@@ -71,6 +74,7 @@ export function EditorDocumentBar({
         ))}
       </div>
       <div className="ns-document-actions">
+        {narrationBody === undefined ? null : <ChapterNarrationPlayer body={narrationBody} />}
         {chapterStatus === undefined || onChapterStatusChange === undefined ? null : (
           <label className="ns-document-status-control">
             <span className="ns-visually-hidden">章节状态</span>

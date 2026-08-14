@@ -128,11 +128,6 @@ export function CreativeWorkspaceNavigator(props: CreativeWorkspaceNavigatorProp
       className="ns-navigator ns-creative-navigator"
       data-region="navigator"
     >
-      <div className="ns-panel-header">
-        <span className="ns-creative-project-title" title={props.projectTitle}>
-          {props.projectTitle}
-        </span>
-      </div>
       <div aria-label="创作导航模式" className="ns-creative-mode-tabs" role="tablist">
         <button
           aria-controls={writingPanelId}

@@ -574,6 +574,9 @@ export function App() {
     setCommandPaletteFeedback(undefined);
     setCommandPaletteQuery("");
     setCommandPaletteSelectedCommandId(undefined);
+    setShellState((current) =>
+      current.commandPaletteOpen ? current : { ...current, commandPaletteOpen: true }
+    );
     setShortcutState((current) => ({
       ...current,
       commandPaletteOpen: true
@@ -584,6 +587,9 @@ export function App() {
     setCommandPaletteFeedback(undefined);
     setCommandPaletteQuery("");
     setCommandPaletteSelectedCommandId(undefined);
+    setShellState((current) =>
+      current.commandPaletteOpen ? { ...current, commandPaletteOpen: false } : current
+    );
     setShortcutState((current) => ({
       ...current,
       commandPaletteOpen: false
@@ -632,19 +638,23 @@ export function App() {
           setPendingMainReview(undefined);
         }
 
+        const nextShellState =
+          commandId === "workspace.open-command-palette"
+            ? result.value
+            : { ...result.value, commandPaletteOpen: false };
         setShellState((current) => {
           const transition = resolveActivityTransition(
             current.activeActivity,
             lastNonSettingsActivityRef.current,
-            result.value.activeActivity
+            nextShellState.activeActivity
           );
           lastNonSettingsActivityRef.current = transition.lastNonSettingsActivity;
           return {
-            ...result.value,
+            ...nextShellState,
             activeActivity: transition.activeActivity
           };
         });
-        persistUserPreferences({ shell: shellPreferencesFromState(result.value) });
+        persistUserPreferences({ shell: shellPreferencesFromState(nextShellState) });
         setCommandPaletteFeedback(undefined);
         setCommandPaletteQuery("");
         setCommandPaletteSelectedCommandId(undefined);

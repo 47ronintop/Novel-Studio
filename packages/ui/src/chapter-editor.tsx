@@ -1,7 +1,6 @@
 import type { ChapterDocument, ChapterStatus } from "@novel-studio/shared";
 import { ChevronRight, Eye, History, RotateCcw } from "lucide-react";
 import { useCallback, useMemo, useRef, type CSSProperties } from "react";
-import { ChapterNarrationPlayer } from "./chapter-narration-player.js";
 import {
   CodeMirrorDocumentEditor,
   type CodeMirrorDocumentSelection
@@ -179,8 +178,6 @@ export function ChapterEditor({
         onSelectionChange={requestEditorSelection}
         {...(onBodyChange === undefined ? {} : { onBodyChange })}
       />
-
-      <ChapterNarrationPlayer body={chapter.body} />
 
       <div
         className="ns-editor-body"
