@@ -5118,6 +5118,41 @@ textarea:focus-visible,
   gap: 4px;
 }
 
+.ns-agent-conversation-header-menu {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.ns-agent-conversation-header-menu-panel {
+  background: var(--ns-surface-raised);
+  border: 1px solid var(--ns-border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.34);
+  display: grid;
+  min-width: 128px;
+  padding: 4px;
+}
+
+.ns-agent-conversation-header-menu-panel button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ns-ink);
+  display: flex;
+  font-size: 12px;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ns-agent-conversation-header-menu-panel button:hover,
+.ns-agent-conversation-header-menu-panel button:focus-visible {
+  background: color-mix(in srgb, var(--ns-ink) 8%, transparent);
+}
+
 .ns-agent-conversation-view-header span,
 .ns-agent-conversation-turn-meta,
 .ns-agent-conversation-composer-note,
@@ -5243,6 +5278,12 @@ textarea:focus-visible,
 .ns-agent-conversation-turns-empty {
   margin: 0;
   padding: 18px 16px;
+}
+
+.ns-agent-conversation-end {
+  flex: 0 0 1px;
+  height: 1px;
+  width: 100%;
 }
 
 .ns-agent-conversation-run-panel {
@@ -10540,6 +10581,14 @@ textarea:focus-visible,
       "activity navigator nav-resize editor ai-resize ai"
       "bottom bottom bottom bottom bottom bottom";
     grid-template-columns: 48px minmax(180px, 250px) 4px minmax(0, 1fr) 0 0;
+  }
+
+  /* Non-editor activities already remove the navigator; expanded conversation must reclaim the
+     hidden inspector columns as well instead of leaving an empty strip on the right. */
+  .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"]:not(
+      [data-active-activity="workspace"]
+    )[data-conversation-panel-mode="expanded"] {
+    grid-template-columns: 48px minmax(0, 1fr) 0 0;
   }
 }
 

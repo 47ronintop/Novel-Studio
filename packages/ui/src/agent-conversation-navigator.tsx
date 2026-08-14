@@ -6,6 +6,17 @@ import type {
   AgentConversationNavigatorProps
 } from "./workspace-shell-types.js";
 
+/** Keep already-humanized labels intact while normalizing raw ISO timestamps from the bridge. */
+export function formatConversationTimestamp(label: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}(?:T|\s)\d{2}:\d{2}/.test(label)) return label;
+  const date = new Date(label.includes("T") ? label : label.replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) return label;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
+}
+
 export function AgentConversationNavigator(props: AgentConversationNavigatorProps) {
   const conversations = props.conversations.filter(
     (conversation) => conversation.status === props.filter
@@ -97,6 +108,7 @@ function ConversationRow(
   const selected = conversation.conversationId === props.selectedConversationId;
   const busy = conversation.conversationId === props.busyConversationId;
   const activeRun = conversation.conversationId === props.activeConversationId;
+  const updatedAtLabel = formatConversationTimestamp(conversation.updatedAtLabel);
 
   return (
     <li
@@ -117,7 +129,7 @@ function ConversationRow(
       >
         <span className="ns-agent-conversation-row-heading">
           <span>{conversation.title}</span>
-          <small>{conversation.updatedAtLabel}</small>
+          <small title={updatedAtLabel}>{updatedAtLabel}</small>
         </span>
         <span className="ns-agent-conversation-row-meta">
           {activeRun ? <span className="ns-agent-conversation-active-dot">运行中</span> : null}

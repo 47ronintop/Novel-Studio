@@ -3767,6 +3767,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     expect(confirmCalls).toHaveLength(0);
     expect(prepared.status).toBe("created");
     expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toEqual(preview);
+    expect(bridge.getComposerProps()?.request).toBe("检查当前章节");
 
     const confirmed = await bridge.send("检查当前章节");
     expect(confirmCalls).toEqual([
@@ -3780,6 +3781,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       { entryId: "ledger-01", sentAtLabel: "20:00", previewId: "preview-01" }
     ]);
     expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeUndefined();
+    expect(bridge.getComposerProps()?.request).toBe("");
   });
 
   test("does not treat a second click during preview preparation as confirmation", async () => {

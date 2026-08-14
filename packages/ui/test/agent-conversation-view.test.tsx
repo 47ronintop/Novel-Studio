@@ -48,6 +48,36 @@ describe("AgentConversationView", () => {
     expect(host.querySelectorAll('[data-run-id="run-current"]')).toHaveLength(1);
   });
 
+  test("renders one capability summary next to the composer instead of duplicating it above", () => {
+    const { host } = renderView({
+      agentRun: undefined,
+      composer: composer({
+        capability: {
+          profileId: "writing",
+          operationMode: "execution",
+          contextMode: "writing"
+        }
+      })
+    });
+
+    expect(host.querySelectorAll('[aria-label="Agent 能力摘要"]')).toHaveLength(1);
+  });
+
+  test("keeps the run capability summary as the only summary when a run projection exists", () => {
+    const capability = {
+      profileId: "writing" as const,
+      operationMode: "execution" as const,
+      contextMode: "writing" as const
+    };
+    const { host } = renderView({
+      agentRun: { ...agentRun(), capability },
+      composer: composer({ capability })
+    });
+
+    expect(host.querySelectorAll('[aria-label="运行能力摘要"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[aria-label="Agent 能力摘要"]')).toHaveLength(0);
+  });
+
   test("keeps older messages above newer ones and renders the live request without a user badge", () => {
     const prior = conversation().turns[0];
     if (prior === undefined) throw new Error("Expected a conversation turn fixture");
@@ -74,6 +104,36 @@ describe("AgentConversationView", () => {
         '.ns-agent-conversation-message[data-speaker="user"] .ns-agent-conversation-speaker-name'
       )
     ).toBeNull();
+  });
+
+  test("follows newly rendered messages to the end of the conversation", () => {
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView
+    });
+
+    try {
+      const { rerender } = renderView();
+      const initialCalls = scrollIntoView.mock.calls.length;
+
+      rerender({ agentRun: { ...agentRun(), assistantText: "新的回复" } });
+
+      expect(scrollIntoView.mock.calls.length).toBeGreaterThan(initialCalls);
+    } finally {
+      if (originalScrollIntoView === undefined) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+          configurable: true,
+          value: undefined
+        });
+      } else {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+          configurable: true,
+          value: originalScrollIntoView
+        });
+      }
+    }
   });
 
   test("does not render internal conversation context payloads as a user-facing summary", () => {
@@ -173,6 +233,22 @@ describe("AgentConversationView", () => {
     expect(onSend).toHaveBeenCalledWith("继续检查下一场");
   });
 
+  test("opens archive from the overflow menu instead of archiving on the trigger click", () => {
+    const onArchive = vi.fn();
+    const { host } = renderView({ onArchive });
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="会话操作"]');
+
+    act(() => trigger?.click());
+
+    expect(onArchive).not.toHaveBeenCalled();
+    const archive = document.querySelector<HTMLButtonElement>(
+      '[aria-label="归档会话：修订灯塔场景"]'
+    );
+    expect(archive).not.toBeNull();
+    act(() => archive?.click());
+    expect(onArchive).toHaveBeenCalledWith("conv-current");
+  });
+
   test("keeps exactly one stop slot across every active run surface", () => {
     const statuses: AgentRunPanelProps["status"][] = [
       "planning_model",
@@ -219,13 +295,17 @@ describe("AgentConversationView", () => {
   });
 });
 
-function renderView(overrides: Partial<AgentConversationViewProps> = {}) {
+type ViewOverrides = {
+  [Key in keyof AgentConversationViewProps]?: AgentConversationViewProps[Key] | undefined;
+};
+
+function renderView(overrides: ViewOverrides = {}) {
   const host = document.createElement("div");
   document.body.append(host);
   let root: Root | undefined;
 
-  const render = (nextOverrides: Partial<AgentConversationViewProps> = {}) => {
-    const props: AgentConversationViewProps = {
+  const render = (nextOverrides: ViewOverrides = {}) => {
+    const props = {
       conversation: conversation(),
       activeConversationId: "conv-current",
       agentRun: agentRun(),
@@ -237,7 +317,7 @@ function renderView(overrides: Partial<AgentConversationViewProps> = {}) {
       onReturnToActive: () => undefined,
       ...overrides,
       ...nextOverrides
-    };
+    } as AgentConversationViewProps;
     act(() => {
       if (root === undefined) root = createRoot(host);
       root.render(<AgentConversationView {...props} />);

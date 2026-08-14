@@ -1543,6 +1543,9 @@ describe("WorkspaceShell", () => {
     expect(desktopResponsiveRules).toMatch(
       /data-conversation-panel-mode="collapsed"\][\s\S]*?\.ns-ai-panel,[\s\S]*?data-conversation-panel-mode="collapsed"\][\s\S]*?\.ns-resize-handle-ai,[\s\S]*?data-conversation-panel-mode="expanded"\][\s\S]*?\.ns-resize-handle-ai\s*\{\s*display:\s*none/s
     );
+    expect(desktopResponsiveRules).toMatch(
+      /data-agent-conversation="true"\][\s\S]*?data-conversation-panel-mode="expanded"\]\s*\{\s*grid-template-columns:\s*48px minmax\(0, 1fr\) 0 0/s
+    );
   });
 
   test("uses a recoverable docked layout while settings are open", () => {

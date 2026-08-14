@@ -93,6 +93,39 @@ describe("AgentConversationNavigator", () => {
     expect(onRestore).toHaveBeenCalledWith("conv-archived");
   });
 
+  test("normalizes raw timestamps for active and archived rows", () => {
+    const rawTimestamp = "2026-08-14T04:05:06.000Z";
+    const currentConversation = activeConversations[0];
+    const archivedConversation = activeConversations[3];
+    if (currentConversation === undefined || archivedConversation === undefined) {
+      throw new Error("Expected timestamp fixtures");
+    }
+    const { host, rerender } = renderNavigator({
+      conversations: [
+        {
+          ...currentConversation,
+          updatedAtLabel: rawTimestamp
+        }
+      ]
+    });
+
+    const activeTime = host.querySelector(".ns-agent-conversation-row-heading small");
+    expect(activeTime?.textContent).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(activeTime?.textContent).not.toContain("T");
+
+    rerender({
+      filter: "archived",
+      conversations: [
+        {
+          ...archivedConversation,
+          updatedAtLabel: rawTimestamp
+        }
+      ]
+    });
+    const archivedTime = host.querySelector(".ns-agent-conversation-row-heading small");
+    expect(archivedTime?.textContent).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  });
+
   test("deletes an archived conversation only after confirmation", () => {
     const onDelete = vi.fn();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);

@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArchiveRestore,
   Bot,
   ChevronDown,
@@ -8,13 +9,15 @@ import {
   MoreHorizontal,
   Plus
 } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type UIEvent } from "react";
 
 import { AgentComposer } from "./agent-composer.js";
 import { AgentActivitySummary } from "./agent-activity-summary.js";
 import { AgentCapabilitySummary } from "./agent-capability-summary.js";
 import { AgentConversationHistoryDrawer } from "./agent-conversation-history-drawer.js";
 import { AgentRunPanel } from "./agent-run-panel.js";
+import { AgentPopover } from "./agent-popover.js";
+import { formatConversationTimestamp } from "./agent-conversation-navigator.js";
 import type {
   AgentConversationMainReview,
   AgentConversationDetailProps,
@@ -25,8 +28,16 @@ export function AgentConversationView(props: AgentConversationViewProps) {
   const conversation = props.conversation;
   const contextSummary = visibleContextSummary(conversation?.contextSummary);
   const capability = props.agentRun?.capability ?? props.composer?.capability;
+  // A live run owns the authoritative capability facts; keep the composer focused on drafting.
+  const composer =
+    props.composer === undefined || props.agentRun?.capability === undefined
+      ? props.composer
+      : withoutComposerCapability(props.composer);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
+  const conversationViewRef = useRef<HTMLElement>(null);
+  const conversationEndRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
   const closeHistory = useCallback(() => {
     setHistoryOpen(false);
     historyButtonRef.current?.focus();
@@ -49,12 +60,47 @@ export function AgentConversationView(props: AgentConversationViewProps) {
       <AgentConversationHistoryDrawer navigator={props.navigator} onClose={closeHistory} />
     ) : null;
 
+  const messageVersion = [
+    conversation?.conversationId ?? "",
+    conversation?.turns.length ?? 0,
+    props.agentRun?.runId ?? "",
+    props.agentRun?.status ?? "",
+    props.agentRun?.userRequest ?? "",
+    props.agentRun?.assistantText ?? "",
+    props.agentRun?.events.length ?? 0
+  ].join("\u0000");
+
+  useLayoutEffect(() => {
+    stickToBottomRef.current = true;
+  }, [conversation?.conversationId]);
+
+  useLayoutEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const view = conversationViewRef.current;
+    const end = conversationEndRef.current;
+    if (end?.scrollIntoView !== undefined) {
+      end.scrollIntoView({ behavior: "auto", block: "end" });
+    } else if (view !== null) {
+      view.scrollTop = view.scrollHeight;
+    }
+  }, [messageVersion]);
+
+  const handleConversationScroll = useCallback((event: UIEvent<HTMLElement>) => {
+    const view = event.currentTarget;
+    stickToBottomRef.current = view.scrollHeight - view.scrollTop - view.clientHeight <= 48;
+  }, []);
+
   if (conversation === undefined) {
     const composerDisabledReason = props.loading
       ? "正在准备会话…"
       : (props.composer?.disabledReason ?? "打开工作区后，Agent 会在这里保持可用。");
     return (
-      <section className="ns-agent-conversation-view" aria-label="Agent 会话主视图">
+      <section
+        ref={conversationViewRef}
+        className="ns-agent-conversation-view"
+        aria-label="Agent 会话主视图"
+        onScroll={handleConversationScroll}
+      >
         <header className="ns-agent-conversation-view-header ns-agent-conversation-view-header-empty">
           <div>
             <h1>Agent</h1>
@@ -71,9 +117,9 @@ export function AgentConversationView(props: AgentConversationViewProps) {
           <strong>{props.loading ? "正在准备会话…" : "Agent"}</strong>
           <p>{props.loading ? "正在恢复当前工作区的会话与上下文。" : composerDisabledReason}</p>
         </div>
-        {props.composer === undefined ? null : (
+        {composer === undefined ? null : (
           <AgentComposer
-            {...props.composer}
+            {...composer}
             disabled={true}
             disabledReason={composerDisabledReason}
           />
@@ -86,7 +132,12 @@ export function AgentConversationView(props: AgentConversationViewProps) {
   const disabledReason = conversationComposerDisabledReason(props, conversation);
 
   return (
-    <section className="ns-agent-conversation-view" aria-label="Agent 会话主视图">
+    <section
+      ref={conversationViewRef}
+      className="ns-agent-conversation-view"
+      aria-label="Agent 会话主视图"
+      onScroll={handleConversationScroll}
+    >
       <header className="ns-agent-conversation-view-header">
         <button
           aria-label={`会话：${conversation.title}，点击查看历史`}
@@ -115,24 +166,42 @@ export function AgentConversationView(props: AgentConversationViewProps) {
           </button>
           {historyButton}
           {conversation.virtual ? null : (
-            <button
-              aria-label="更多操作"
-              className="ns-icon-button"
-              title={conversation.status === "archived" ? "恢复会话" : "归档会话"}
-              onClick={() =>
-                conversation.status === "archived"
-                  ? props.onRestore(conversation.conversationId)
-                  : props.onArchive(conversation.conversationId)
-              }
+            <AgentPopover
               disabled={conversation.status !== "archived" && conversation.canArchive === false}
-              type="button"
+              panelClassName="ns-agent-conversation-header-menu-panel"
+              rootClassName="ns-agent-conversation-header-menu"
+              triggerClassName="ns-icon-button"
+              triggerContent={<MoreHorizontal aria-hidden="true" size={15} />}
+              triggerLabel="会话操作"
+              triggerTitle="会话操作"
+              panelLabel="会话操作"
             >
-              {conversation.status === "archived" ? (
-                <ArchiveRestore aria-hidden="true" size={15} />
-              ) : (
-                <MoreHorizontal aria-hidden="true" size={15} />
+              {({ close }) => (
+                <button
+                  aria-label={
+                    conversation.status === "archived"
+                      ? `恢复会话：${conversation.title}`
+                      : `归档会话：${conversation.title}`
+                  }
+                  onClick={() => {
+                    if (conversation.status === "archived") {
+                      props.onRestore(conversation.conversationId);
+                    } else {
+                      props.onArchive(conversation.conversationId);
+                    }
+                    close();
+                  }}
+                  type="button"
+                >
+                  {conversation.status === "archived" ? (
+                    <ArchiveRestore aria-hidden="true" size={13} />
+                  ) : (
+                    <Archive aria-hidden="true" size={13} />
+                  )}
+                  {conversation.status === "archived" ? "恢复会话" : "归档会话"}
+                </button>
               )}
-            </button>
+            </AgentPopover>
           )}
         </div>
       </header>
@@ -143,7 +212,9 @@ export function AgentConversationView(props: AgentConversationViewProps) {
         </p>
       )}
 
-      {props.agentRun !== undefined || capability === undefined ? null : (
+      {props.composer !== undefined ||
+      props.agentRun !== undefined ||
+      capability === undefined ? null : (
         <AgentCapabilitySummary facts={capability} compact />
       )}
 
@@ -184,9 +255,11 @@ export function AgentConversationView(props: AgentConversationViewProps) {
         </div>
       )}
 
-      {props.composer === undefined ? null : (
+      <div aria-hidden="true" className="ns-agent-conversation-end" ref={conversationEndRef} />
+
+      {composer === undefined ? null : (
         <AgentComposer
-          {...props.composer}
+          {...composer}
           disabled={disabledReason !== undefined}
           {...(disabledReason === undefined ? {} : { disabledReason })}
         />
@@ -194,6 +267,14 @@ export function AgentConversationView(props: AgentConversationViewProps) {
       {historyDrawer}
     </section>
   );
+}
+
+function withoutComposerCapability(
+  composer: NonNullable<AgentConversationViewProps["composer"]>
+): Omit<NonNullable<AgentConversationViewProps["composer"]>, "capability"> {
+  const withoutCapability = { ...composer };
+  delete withoutCapability.capability;
+  return withoutCapability;
 }
 
 function visibleContextSummary(summary: string | undefined): string | undefined {
@@ -255,24 +336,6 @@ function mainReviewLabel(kind: AgentConversationMainReview["kind"]): string {
   }
 }
 
-function formatTimestamp(label: string): string {
-  // If the label looks like an ISO timestamp, format it as local time
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(label)) {
-    try {
-      const date = new Date(label);
-      return date.toLocaleString("zh-CN", {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit"
-      });
-    } catch {
-      return label;
-    }
-  }
-  return label;
-}
-
 function ConversationTurns({
   conversation
 }: {
@@ -304,7 +367,7 @@ function ConversationTurns({
           )}
           <div className="ns-agent-conversation-turn-meta">
             <span>{turn.statusLabel}</span>
-            <time>{formatTimestamp(turn.updatedAtLabel)}</time>
+            <time>{formatConversationTimestamp(turn.updatedAtLabel)}</time>
           </div>
         </li>
       ))}

@@ -164,6 +164,8 @@ interface BridgeState {
   /** Last Act approval choice; planning runs never write, so their persisted policy is normalized. */
   readonly executionWritePolicy: AgentWritePolicy;
   readonly writePolicyAcknowledged: boolean;
+  /** Draft currently shown in the composer; the persisted run request is kept separately. */
+  readonly draftRequest: string;
   readonly userRequest: string;
   readonly snapshot: AgentRunSnapshot | undefined;
   readonly events: AgentRunEvent[];
@@ -222,6 +224,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     writePolicy: "write_before_confirmation",
     executionWritePolicy: "write_before_confirmation",
     writePolicyAcknowledged: false,
+    draftRequest: "",
     userRequest: "",
     snapshot: undefined,
     events: [],
@@ -401,13 +404,13 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       state = { ...state, startPending: true, errorMessage: undefined };
       notify();
       try {
-        await applyCommandResult(
-          await confirmSendPreview({
-            schemaVersion: "2.0",
-            previewId: pendingSendPreview.previewId,
-            canonicalPayloadChecksum: pendingSendPreview.canonicalPayloadChecksum
-          })
-        );
+        const result = await confirmSendPreview({
+          schemaVersion: "2.0",
+          previewId: pendingSendPreview.previewId,
+          canonicalPayloadChecksum: pendingSendPreview.canonicalPayloadChecksum
+        });
+        await applyCommandResult(result);
+        if (result.ok) state = { ...state, draftRequest: "" };
         return toProps();
       } finally {
         state = { ...state, startPending: false, sendPreview: undefined };
@@ -435,6 +438,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     }
     state = {
       ...state,
+      draftRequest: request,
       userRequest: request,
       snapshot: undefined,
       events: [],
@@ -553,7 +557,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       if (prepareSendPreview === undefined) {
         // Compatibility for pre-Task-2.3 test hosts. Real desktop hosts expose the typed preview
         // methods and never take this direct-start path.
-        await applyCommandResult(await api.agentRuns.start(command));
+        const result = await api.agentRuns.start(command);
+        await applyCommandResult(result);
+        if (result.ok) state = { ...state, draftRequest: "" };
         return toProps();
       }
       const sendPreview = await prepareSendPreview({
@@ -1683,7 +1689,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   function addReferenceDraft(refId: string): void {
     const ref = [
       ...availableReferenceRefs(context, state.contextDraft),
-      ...suggestedStoryBibleReferenceRefs(context, state.contextDraft, state.userRequest)
+      ...suggestedStoryBibleReferenceRefs(context, state.contextDraft, state.draftRequest)
     ].find((candidate) => candidate.refId === refId);
     if (ref === undefined) return;
     addReferenceValue(ref);
@@ -2113,7 +2119,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const references: AgentComposerReferenceControl = {
       chips: contextDraft.refs.map(refToChip),
       available: availableReferenceRefs(context, contextDraft).map(refToChip),
-      suggested: suggestedStoryBibleReferenceRefs(context, contextDraft, state.userRequest).map(
+      suggested: suggestedStoryBibleReferenceRefs(context, contextDraft, state.draftRequest).map(
         refToChip
       ),
       onAdd: (refId) => addReferenceDraft(refId),
@@ -2467,7 +2473,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   function toComposerProps(): AgentComposerProps {
     const standalone = context !== undefined && isStandaloneScope(context.scope);
     return {
-      request: state.userRequest,
+      request: state.draftRequest,
       operationMode: standalone ? "conversation" : state.operationMode,
       contextMode: standalone ? "standalone_chat" : state.contextMode,
       writePolicy: state.writePolicy,
@@ -2496,7 +2502,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         ? {}
         : { permission: permissionControl() }),
       onRequestChange: (request) => {
-        state = { ...state, userRequest: request, sendPreview: undefined };
+        state = { ...state, draftRequest: request, sendPreview: undefined };
         notify();
       },
       onOperationModeChange: (mode) => {
@@ -2808,6 +2814,7 @@ function resetRunState(state: BridgeState, scope?: AgentContextScope): BridgeSta
     writePolicy: "write_before_confirmation",
     executionWritePolicy: "write_before_confirmation",
     writePolicyAcknowledged: false,
+    draftRequest: "",
     userRequest: "",
     snapshot: undefined,
     events: [],
