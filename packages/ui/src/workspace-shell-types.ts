@@ -55,6 +55,7 @@ export interface WorkspaceShellProps {
   readonly chapterEditor?: ChapterEditorProps;
   readonly fileEditor?: PlainFileEditorProps;
   readonly projectWorkflow?: ProjectWorkflowProps;
+  readonly workspaceTransitionFeedback?: ProjectWorkflowFeedback | undefined;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
   readonly agentConversationWorkspace?: AgentConversationWorkspaceShellProps;
   readonly search?: ProjectSearchProps;
@@ -584,6 +585,7 @@ export interface AgentComposerContextStatusControl {
   readonly fixedBudgetMessage?: string;
   readonly conventions?: AgentComposerConventionsControl;
   readonly onCompact?: (() => void) | undefined;
+  readonly compactDisabledReason?: string | undefined;
   readonly onRefresh?: (() => void) | undefined;
   readonly busy?: boolean | undefined;
 }

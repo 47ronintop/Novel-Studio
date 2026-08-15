@@ -803,7 +803,7 @@ export function createApplicationIpcHandlers(
     directorySelections.delete(request.selectionId);
     creativeFolderInspections.delete(request.selectionId);
     if (inspection === undefined) return err(directorySelectionInvalid());
-    const recovery = await assertEngineeringRecovery(options);
+    const recovery = await assertEngineeringRecovery(options, { allowWorkspaceExit: true });
     if (!recovery.ok) return recovery;
     try {
       const [rootStats, parentStats] = await Promise.all([
@@ -905,7 +905,7 @@ export function createApplicationIpcHandlers(
       }
 
       if (commandId === "workspace.close-current") {
-        const recovery = await assertEngineeringRecovery(options);
+        const recovery = await assertEngineeringRecovery(options, { allowWorkspaceExit: true });
         if (!recovery.ok) return recovery;
         return (
           options.workspaceActivationCoordinator?.closeCurrentWorkspace() ??
@@ -933,7 +933,7 @@ export function createApplicationIpcHandlers(
       if (!selection.ok) return selection;
       directorySelections.delete(selectionId as string);
       creativeFolderInspections.delete(selectionId as string);
-      const recovery = await assertEngineeringRecovery(options);
+      const recovery = await assertEngineeringRecovery(options, { allowWorkspaceExit: true });
       if (!recovery.ok) return recovery;
       if (options.workspaceActivationCoordinator === undefined) {
         return workspaceActivationUnavailable<WorkspaceActivationDto>();
@@ -954,7 +954,7 @@ export function createApplicationIpcHandlers(
       });
     },
     "application:project:create-creative-project": async (input: unknown) => {
-      const recovery = await assertEngineeringRecovery(options);
+      const recovery = await assertEngineeringRecovery(options, { allowWorkspaceExit: true });
       if (!recovery.ok) return recovery;
       const request = toCreateCreativeProjectRequest(input);
       if (request === undefined) return invalidWorkspaceRequest<WorkspaceActivationDto>();
@@ -3601,15 +3601,20 @@ async function saveEngineeringTextFileWithCoordinator(
 }
 
 async function assertEngineeringRecovery(
-  options: ApplicationIpcHandlerOptions
+  options: ApplicationIpcHandlerOptions,
+  transition: { readonly allowWorkspaceExit?: boolean } = {}
 ): Promise<Result<void, UnifiedError>> {
   // Creative and standalone lifecycle remains governed by their existing coordinators. The
   // recovery gate is required only while the active Main runtime is an engineering workspace.
+  // Leaving that workspace is teardown, so it remains available even when the engineering
+  // recovery authority is unavailable. Engineering writes and entering another engineering
+  // workspace continue to require the gate.
   const manager = options.agentRuntimeManager;
   const active = manager?.active();
   if (active?.scope !== "workspace" || active.binding.kind !== "engineeringWorkspace") {
     return ok(undefined);
   }
+  if (transition.allowWorkspaceExit === true) return ok(undefined);
   const assertAllowed = options.assertEngineeringRecoveryAllowed;
   if (assertAllowed !== undefined) return safelyAssertEngineeringRecovery(assertAllowed);
   return options.getActiveEngineeringEditorRootBindingId?.() === undefined

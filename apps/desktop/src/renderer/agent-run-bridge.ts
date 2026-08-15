@@ -2164,6 +2164,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       draftApi.compactContext !== undefined &&
       snapshot !== undefined &&
       snapshot.contextBudgetSnapshotId !== null;
+    const compactDisabledReason =
+      draftApi.compactContext !== undefined && !canCompact
+        ? "启动 Agent 并生成上下文预算后可用。"
+        : undefined;
     const automaticSources = automaticContextSourceRows(state.events);
     const automaticRefIds = new Set(automaticSources.map((source) => source.refId));
     const fallbackSources: AgentComposerContextSourceRow[] = [
@@ -2305,6 +2309,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           : {})
       },
       ...(canCompact ? { onCompact: () => compactActiveContext() } : {}),
+      ...(compactDisabledReason === undefined ? {} : { compactDisabledReason }),
       ...(draftApi.refreshContextDraft === undefined
         ? {}
         : { onRefresh: () => refreshContextDraftSources() }),

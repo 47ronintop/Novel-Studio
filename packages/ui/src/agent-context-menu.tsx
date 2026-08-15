@@ -215,19 +215,23 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
                   control.onRefresh?.();
                   close();
                 }}
+                title="重新读取当前项目资料并生成新的上下文草稿；不会压缩对话"
                 type="button"
               >
                 <RefreshCw aria-hidden="true" size={13} />
                 刷新上下文
               </button>
             )}
-            {control.onCompact === undefined ? null : (
+            {control.onCompact === undefined &&
+            control.compactDisabledReason === undefined ? null : (
               <button
-                disabled={control.busy === true}
+                aria-label="压缩上下文"
+                disabled={control.busy === true || control.onCompact === undefined}
                 onClick={() => {
                   control.onCompact?.();
                   close();
                 }}
+                title={control.compactDisabledReason ?? "压缩当前运行的上下文"}
                 type="button"
               >
                 <Scissors aria-hidden="true" size={13} />

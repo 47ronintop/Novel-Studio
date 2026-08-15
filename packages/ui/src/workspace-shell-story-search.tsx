@@ -6,7 +6,6 @@ import {
   Check,
   Clock3,
   FilePlus,
-  Inbox,
   LoaderCircle,
   Pencil,
   RotateCcw,
@@ -304,24 +303,6 @@ export function StoryBibleEditorView({ editor }: { readonly editor: StoryBibleEd
         </div>
         {analysisReviewOpen ? null : (
           <div className="ns-story-toolbar">
-            {editor.analysisReview === undefined ? null : (
-              <button
-                aria-controls="ns-story-analysis-review"
-                aria-expanded={false}
-                className="ns-icon-text-button ns-story-analysis-trigger"
-                onClick={editor.analysisReview.onOpen}
-                type="button"
-              >
-                <Inbox aria-hidden="true" size={14} />
-                资料更新建议
-                {editor.analysisReview.pendingCount + editor.analysisReview.openIssueCount ===
-                0 ? null : (
-                  <span className="ns-story-analysis-trigger-count">
-                    {editor.analysisReview.pendingCount + editor.analysisReview.openIssueCount}
-                  </span>
-                )}
-              </button>
-            )}
             {editor.viewMode === "list" ? (
               <>
                 <label className="ns-story-search-control">

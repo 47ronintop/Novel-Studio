@@ -206,13 +206,16 @@ describe("engineering workspace save IPC", () => {
 });
 
 describe("engineering workspace recovery lifecycle gate", () => {
-  test("blocks workspace replacement and close while recovery remains pending", async () => {
+  test("allows leaving the workspace but blocks entering another engineering workspace", async () => {
     const workspaceActivationCoordinator = {
-      openCreativeProject: vi.fn(),
-      openEngineeringWorkspace: vi.fn(),
-      closeCurrentWorkspace: vi.fn()
+      openCreativeProject: vi.fn(async () => ok({ kind: "creativeProject" as const })),
+      openEngineeringWorkspace: vi.fn(async () => ok({ kind: "engineeringWorkspace" as const })),
+      closeCurrentWorkspace: vi.fn(async () => ok({ kind: "none" as const }))
     };
+    const applicationRoot = process.cwd();
     const handlers = createApplicationIpcHandlers({ executeCommand: vi.fn() } as never, {
+      chooseOpenProjectDirectory: async () => applicationRoot,
+      chooseEngineeringDirectory: async () => applicationRoot,
       workspaceActivationCoordinator: workspaceActivationCoordinator as never,
       agentRuntimeManager: {
         active: () => ({ scope: "workspace", binding: { kind: "engineeringWorkspace" } }),
@@ -228,22 +231,36 @@ describe("engineering workspace recovery lifecycle gate", () => {
 
     await expect(
       handlers["application:execute-command"]("workspace.close-current")
+    ).resolves.toEqual(ok({ kind: "none" }));
+    expect(workspaceActivationCoordinator.closeCurrentWorkspace).toHaveBeenCalledTimes(1);
+
+    const creativeSelection =
+      await handlers["application:project:choose-open-creative-directory"]();
+    expect(creativeSelection).toMatchObject({ ok: true, value: { canceled: false } });
+    if (!creativeSelection.ok || creativeSelection.value.selectionId === undefined) {
+      throw new Error("expected a creative project directory selection");
+    }
+    await expect(
+      handlers["application:project:open-creative-project"](creativeSelection.value.selectionId)
+    ).resolves.toEqual(ok({ kind: "creativeProject" }));
+    expect(workspaceActivationCoordinator.openCreativeProject).toHaveBeenCalledWith(
+      applicationRoot
+    );
+
+    const engineeringSelection =
+      await handlers["application:workspace:choose-engineering-directory"]();
+    expect(engineeringSelection).toMatchObject({ ok: true, value: { canceled: false } });
+    if (!engineeringSelection.ok || engineeringSelection.value.selectionId === undefined) {
+      throw new Error("expected an engineering workspace directory selection");
+    }
+    await expect(
+      handlers["application:workspace:open-engineering-workspace"](
+        engineeringSelection.value.selectionId
+      )
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "ENGINEERING_STARTUP_RECOVERY_GATE_BLOCKED" }
     });
-    await expect(
-      handlers["application:project:open-creative-project"]("selection_01")
-    ).resolves.toMatchObject({
-      ok: false
-    });
-    await expect(
-      handlers["application:workspace:open-engineering-workspace"]("selection_01")
-    ).resolves.toMatchObject({
-      ok: false
-    });
-    expect(workspaceActivationCoordinator.closeCurrentWorkspace).not.toHaveBeenCalled();
-    expect(workspaceActivationCoordinator.openCreativeProject).not.toHaveBeenCalled();
     expect(workspaceActivationCoordinator.openEngineeringWorkspace).not.toHaveBeenCalled();
   });
 });

@@ -164,6 +164,13 @@ describe("desktop application command bridge", () => {
         defaultShortcut: "Ctrl/Cmd+J"
       },
       {
+        id: "workspace.open-bottom-panel",
+        title: "打开任务面板",
+        scope: "workspace",
+        riskLevel: "safe",
+        defaultShortcut: ""
+      },
+      {
         id: "workspace.toggle-split-view",
         title: "切换会话面板布局",
         scope: "workspace",
@@ -254,6 +261,17 @@ describe("desktop application command bridge", () => {
       bottomPanelVisible: true,
       activeBottomPanelTab: "工作流运行"
     });
+  });
+
+  test("opens the bottom panel without toggling an already visible panel", () => {
+    const application = createDesktopApplication();
+
+    const first = application.executeCommand("workspace.open-bottom-panel");
+    const second = application.executeCommand("workspace.open-bottom-panel");
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(application.getShellState().bottomPanelVisible).toBe(true);
   });
 
   test("executes safe workspace layout commands without filesystem access", () => {

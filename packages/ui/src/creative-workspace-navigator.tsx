@@ -7,6 +7,7 @@ import {
   FileText,
   FolderPlus,
   Globe2,
+  Inbox,
   Milestone,
   MoreHorizontal,
   Plus,
@@ -284,28 +285,47 @@ function StoryProjection(props: CreativeWorkspaceNavigatorProps) {
   const activeKind = storyBible.activeKind;
 
   return (
-    <div aria-label="故事资料分类" className="ns-story-kind-list">
-      {STORY_KINDS.map((kind) => {
-        const KindIcon = storyKindIcons[kind];
-        const count = storyBible.entries.filter((entry) => entry.kind === kind).length;
-        return (
-          <button
-            aria-pressed={kind === activeKind}
-            className="ns-story-kind-button"
-            data-story-kind={kind}
-            key={kind}
-            onClick={() => props.onStoryKindOpen(kind)}
-            type="button"
-          >
-            <span className="ns-creative-row-label">
-              <KindIcon aria-hidden="true" size={14} />
-              <span>{storyKindLabels[kind]}</span>
+    <>
+      <div aria-label="故事资料分类" className="ns-story-kind-list">
+        {STORY_KINDS.map((kind) => {
+          const KindIcon = storyKindIcons[kind];
+          const count = storyBible.entries.filter((entry) => entry.kind === kind).length;
+          return (
+            <button
+              aria-pressed={kind === activeKind}
+              className="ns-story-kind-button"
+              data-story-kind={kind}
+              key={kind}
+              onClick={() => props.onStoryKindOpen(kind)}
+              type="button"
+            >
+              <span className="ns-creative-row-label">
+                <KindIcon aria-hidden="true" size={14} />
+                <span>{storyKindLabels[kind]}</span>
+              </span>
+              <span className="ns-creative-row-count">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+      {storyBible.analysisReview === undefined ? null : (
+        <button
+          aria-label="打开资料更新建议"
+          className="ns-story-analysis-nav-trigger ns-icon-text-button"
+          onClick={storyBible.analysisReview.onOpen}
+          type="button"
+        >
+          <Inbox aria-hidden="true" size={14} />
+          <span>资料更新建议</span>
+          {storyBible.analysisReview.pendingCount + storyBible.analysisReview.openIssueCount ===
+          0 ? null : (
+            <span className="ns-story-analysis-trigger-count">
+              {storyBible.analysisReview.pendingCount + storyBible.analysisReview.openIssueCount}
             </span>
-            <span className="ns-creative-row-count">{count}</span>
-          </button>
-        );
-      })}
-    </div>
+          )}
+        </button>
+      )}
+    </>
   );
 }
 

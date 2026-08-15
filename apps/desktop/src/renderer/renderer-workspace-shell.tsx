@@ -15,6 +15,7 @@ import type {
   CreativeWorkspaceNavigatorProps,
   ModelSettingsPanelProps,
   ProjectSearchProps,
+  ProjectWorkflowFeedback,
   ProjectWorkflowProps,
   PlainFileEditorProps,
   StoryBibleEditorProps,
@@ -33,6 +34,7 @@ export interface RendererWorkspaceShellProps {
   readonly agentConversationWorkspace: AgentConversationWorkspaceShellProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly projectSearch: ProjectSearchProps | undefined;
+  readonly workspaceTransitionFeedback?: ProjectWorkflowFeedback | undefined;
   readonly settings: ModelSettingsPanelProps | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly fileEditor: PlainFileEditorProps | undefined;
@@ -302,6 +304,9 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
               onRebuildIndex: props.onRebuildSearchIndex
             } satisfies ProjectSearchProps
           })}
+      {...(props.workspaceTransitionFeedback === undefined
+        ? {}
+        : { workspaceTransitionFeedback: props.workspaceTransitionFeedback })}
       {...(props.settings === undefined
         ? {}
         : {

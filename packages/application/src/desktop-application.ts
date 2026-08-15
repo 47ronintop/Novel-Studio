@@ -2325,6 +2325,8 @@ function reduceShellState(
       );
     case "workspace.toggle-bottom-panel":
       return { ...shellState, bottomPanelVisible: !shellState.bottomPanelVisible };
+    case "workspace.open-bottom-panel":
+      return { ...shellState, bottomPanelVisible: true };
     case "workspace.toggle-split-view":
       return setConversationPanelMode(
         shellState,

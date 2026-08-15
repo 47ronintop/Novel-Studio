@@ -3,6 +3,7 @@ export type WorkspaceApplicationCommandId =
   | "workspace.toggle-navigator"
   | "workspace.toggle-inspector"
   | "workspace.toggle-bottom-panel"
+  | "workspace.open-bottom-panel"
   | "workspace.toggle-split-view"
   | "workspace.set-conversation-panel-docked"
   | "workspace.set-conversation-panel-collapsed"
@@ -73,6 +74,13 @@ export const DEFAULT_APPLICATION_COMMANDS: readonly (ApplicationCommand & {
     scope: "workspace",
     riskLevel: "safe",
     defaultShortcut: "Ctrl/Cmd+J"
+  },
+  {
+    id: "workspace.open-bottom-panel",
+    title: "打开任务面板",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: ""
   },
   {
     id: "workspace.toggle-split-view",

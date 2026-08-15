@@ -13,6 +13,7 @@ import type {
   ChapterEditorSelection,
   ChapterEditorProps,
   CommandPaletteFeedback,
+  ProjectWorkflowFeedback,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import {
@@ -104,6 +105,8 @@ export function App() {
     api === undefined ? undefined : createCommandExecutionBridge(api)
   );
   const [shellState, setShellState] = useState<DesktopShellState>(rendererShellState);
+  const [workspaceTransitionFeedback, setWorkspaceTransitionFeedback] =
+    useState<ProjectWorkflowFeedback>();
   const [commands, setCommands] = useState<readonly ApplicationCommand[]>(rendererCommands);
   const [chapterEditor, setChapterEditor] = useState<ChapterEditorProps | undefined>();
   const [engineeringWorkspace, setEngineeringWorkspace] = useState<
@@ -465,6 +468,7 @@ export function App() {
     setChapterEditor,
     clearFileEditor,
     setProjectWorkflow,
+    onWorkspaceTransitionFeedback: setWorkspaceTransitionFeedback,
     setSettings,
     setShellState,
     setStoryBible,
@@ -527,7 +531,11 @@ export function App() {
     void (async () => {
       if (!(await guardWorkspaceTransition())) return;
       const next = await engineeringWorkspaceBridge.openEngineeringWorkspace();
-      if (next.status !== "ready" || next.workspace === undefined) return;
+      if (next.status !== "ready" || next.workspace === undefined) {
+        setWorkspaceTransitionFeedback(next.feedback);
+        return;
+      }
+      setWorkspaceTransitionFeedback(undefined);
       setShellState(await api.getShellState());
     })().catch(() => undefined);
   }, [api, engineeringWorkspaceBridge, guardWorkspaceTransition]);
@@ -914,6 +922,7 @@ export function App() {
     <>
       <RendererWorkspaceShell
         appearancePreferences={appearancePreferences}
+        workspaceTransitionFeedback={workspaceTransitionFeedback}
         aiWritingWorkflow={aiWritingWorkflow}
         agentConversationWorkspace={brainstormingEntry.workspace}
         projectWorkflow={projectWorkflow}

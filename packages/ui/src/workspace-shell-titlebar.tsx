@@ -5,6 +5,7 @@ import {
   PanelRight,
   PanelRightClose,
   PanelRightOpen,
+  Maximize2,
   Search
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -72,14 +73,25 @@ export function WorkspaceShellTitlebar({
         {settingsMode ? null : (
           <div className="ns-layout-controls" aria-label="布局控制">
             <button
-              aria-label="切换底部面板"
+              aria-label={shellState.bottomPanelVisible ? "收起任务面板" : "打开任务面板"}
               className="ns-icon-button"
               onClick={() => onCommandExecute?.("workspace.toggle-bottom-panel")}
-              title="切换底部面板"
+              title={shellState.bottomPanelVisible ? "收起任务面板" : "打开任务面板"}
               type="button"
             >
               <PanelBottom aria-hidden="true" size={14} />
             </button>
+            {conversationPanelMode === "docked" ? (
+              <button
+                aria-label="展开会话面板"
+                className="ns-icon-button"
+                onClick={() => onCommandExecute?.("workspace.set-conversation-panel-expanded")}
+                title="展开会话面板"
+                type="button"
+              >
+                <Maximize2 aria-hidden="true" size={14} />
+              </button>
+            ) : null}
             <div className="ns-conversation-layout-control" ref={conversationControlRef}>
               <button
                 aria-label={conversationPanelAriaLabel(conversationPanelMode)}

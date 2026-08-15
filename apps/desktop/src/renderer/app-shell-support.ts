@@ -96,6 +96,13 @@ export const rendererCommands: readonly ApplicationCommand[] = [
     defaultShortcut: "Ctrl/Cmd+J"
   },
   {
+    id: "workspace.open-bottom-panel",
+    title: "打开任务面板",
+    scope: "workspace",
+    riskLevel: "safe",
+    defaultShortcut: ""
+  },
+  {
     id: "workspace.toggle-split-view",
     title: "切换会话面板布局",
     scope: "workspace",

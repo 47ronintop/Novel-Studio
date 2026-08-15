@@ -4,6 +4,7 @@ import type {
   ModelSettingsPanelProps,
   PlainFileEditorProps,
   ProjectWorkflowProps,
+  ProjectWorkflowFeedback,
   StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
@@ -32,6 +33,8 @@ export interface ProjectWorkflowActionInputs {
   readonly clearFileEditor?: (() => void) | undefined;
   readonly setFileEditor?: Dispatch<SetStateAction<PlainFileEditorProps | undefined>> | undefined;
   readonly setProjectWorkflow: Dispatch<SetStateAction<ProjectWorkflowProps | undefined>>;
+  readonly onWorkspaceTransitionFeedback?:
+    ((feedback: ProjectWorkflowFeedback | undefined) => void) | undefined;
   readonly setSettings: Dispatch<SetStateAction<ModelSettingsPanelProps | undefined>>;
   readonly setShellState: Dispatch<SetStateAction<DesktopShellState>>;
   readonly setStoryBible: Dispatch<SetStateAction<StoryBibleSummaryProps | undefined>>;
@@ -54,6 +57,7 @@ export function useProjectWorkflowActions({
   clearFileEditor,
   setFileEditor,
   setProjectWorkflow,
+  onWorkspaceTransitionFeedback,
   setSettings,
   setShellState,
   setStoryBible,
@@ -141,15 +145,19 @@ export function useProjectWorkflowActions({
 
   const restoreWorkspaceTransition = useCallback(
     (previous: ProjectWorkflowProps, error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
       setProjectWorkflow({
         ...previous,
         feedback: {
           kind: "error",
-          message: error instanceof Error ? error.message : String(error)
+          message
         }
       });
+      if (previous.projectId === undefined) {
+        onWorkspaceTransitionFeedback?.({ kind: "error", message });
+      }
     },
-    [setProjectWorkflow]
+    [onWorkspaceTransitionFeedback, setProjectWorkflow]
   );
 
   const guardStoryBibleDraft = useCallback(() => {
@@ -175,6 +183,8 @@ export function useProjectWorkflowActions({
       if (beforeWorkspaceTransition !== undefined && !(await beforeWorkspaceTransition())) return;
       if (!(await guardStoryBibleDraft())) return;
 
+      onWorkspaceTransitionFeedback?.(undefined);
+
       const previous = projectWorkflowBridge?.getProps();
       if (previous === undefined) return;
       setProjectWorkflow({ ...previous, status });
@@ -184,6 +194,7 @@ export function useProjectWorkflowActions({
           setProjectWorkflow(nextWorkflow);
           return;
         }
+        onWorkspaceTransitionFeedback?.(undefined);
         await refreshWorkspaceTransition(nextWorkflow, previous.projectId);
       } catch (error) {
         restoreWorkspaceTransition(previous, error);
@@ -192,6 +203,7 @@ export function useProjectWorkflowActions({
     [
       beforeWorkspaceTransition,
       guardStoryBibleDraft,
+      onWorkspaceTransitionFeedback,
       projectWorkflowBridge,
       refreshWorkspaceTransition,
       restoreWorkspaceTransition,

@@ -278,8 +278,11 @@ textarea:focus-visible,
 
 .ns-settings-workspace {
   background: var(--ns-bg);
+  height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   position: relative;
 }
 
@@ -1103,6 +1106,12 @@ textarea:focus-visible,
 
 .ns-story-kind-button:hover {
   background: color-mix(in srgb, var(--ns-ink) 7%, transparent);
+}
+
+.ns-story-analysis-nav-trigger {
+  align-self: stretch;
+  justify-content: flex-start;
+  margin: 6px 4px 8px;
 }
 
 .ns-creative-empty,
@@ -2004,6 +2013,7 @@ textarea:focus-visible,
   gap: 16px;
   margin: 18px auto;
   max-width: 1120px;
+  min-height: calc(100% - 36px);
   padding: 0 24px 32px;
 }
 
@@ -2037,6 +2047,7 @@ textarea:focus-visible,
 }
 
 .model-settings-grid {
+  align-items: start;
   display: grid;
   gap: 24px;
   grid-template-columns: 190px minmax(0, 1fr);
@@ -2044,6 +2055,7 @@ textarea:focus-visible,
 
 .model-settings-nav {
   align-self: start;
+  background: var(--ns-bg);
   border-right: 1px solid var(--ns-border);
   display: grid;
   gap: 7px;
@@ -2052,6 +2064,7 @@ textarea:focus-visible,
   padding: 4px 12px 4px 0;
   position: sticky;
   top: 12px;
+  z-index: 1;
 }
 
 .model-settings-nav-heading {

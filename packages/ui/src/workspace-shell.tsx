@@ -86,6 +86,7 @@ function WorkspaceShellContent({
   engineeringNavigator,
   fileEditor,
   onboarding,
+  workspaceTransitionFeedback,
   onCommandPaletteOpen,
   onCommandPaletteClose,
   onCommandPaletteQueryChange,
@@ -122,6 +123,7 @@ function WorkspaceShellContent({
     shellState.bottomPanelTabs.includes(shellState.activeBottomPanelTab) === true
       ? shellState.activeBottomPanelTab
       : (shellState.bottomPanelTabs[0] ?? "工作流运行");
+  const bottomPanelActionLabel = shellState.bottomPanelVisible ? "收起任务面板" : "打开任务面板";
   const workspaceLayout = shellState.workspaceLayout ?? defaultWorkspaceLayout;
   const conversationPanelMode = settingsMode ? "docked" : workspaceLayout.conversationPanelMode;
   const workspaceGridStyle = {
@@ -203,6 +205,15 @@ function WorkspaceShellContent({
         />
 
         <main aria-label="编辑区" className="ns-editor-area" data-region="editor-area">
+          {workspaceTransitionFeedback === undefined ? null : (
+            <div
+              className="ns-workspace-transition-feedback ns-global-workspace-feedback"
+              data-kind={workspaceTransitionFeedback.kind}
+              role={workspaceTransitionFeedback.kind === "error" ? "alert" : "status"}
+            >
+              {workspaceTransitionFeedback.message}
+            </div>
+          )}
           {settingsMode ? (
             <div data-region="settings-workspace">
               <SettingsWorkspace onClose={onSettingsClose} settings={settings} />
@@ -294,10 +305,10 @@ function WorkspaceShellContent({
         >
           <div className="ns-bottom-tabs" role="tablist" aria-label="底部面板标签">
             <button
-              aria-label="收起底部面板"
+              aria-label={bottomPanelActionLabel}
               className="ns-icon-button"
               onClick={() => onCommandExecute?.("workspace.toggle-bottom-panel")}
-              title="收起底部面板"
+              title={bottomPanelActionLabel}
               type="button"
             >
               <PanelBottom aria-hidden="true" size={15} />
