@@ -552,7 +552,7 @@ const DEFAULT_SHELL_STATE: DesktopShellState = {
     { id: "agents", title: "Agent", itemCount: 0 },
     { id: "workflows", title: "工作流", itemCount: 0 }
   ],
-  bottomPanelTabs: ["工作流运行", "问题", "搜索", "日志"]
+  bottomPanelTabs: ["工作流运行", "问题"]
 };
 
 export function createDesktopApplication(

@@ -51,10 +51,8 @@ import type {
 } from "./workspace-shell-types.js";
 
 const bottomPanelLabels: ReadonlyMap<string, string> = new Map([
-  ["Workflow Run", "工作流运行"],
-  ["Problems", "问题"],
-  ["Search", "搜索"],
-  ["Logs", "日志"]
+  ["工作流运行", "工作流运行"],
+  ["问题", "问题"]
 ]);
 
 const defaultWorkspaceLayout: DesktopShellState["workspaceLayout"] = {
@@ -323,7 +321,6 @@ function WorkspaceShellContent({
             activeTab={activeBottomPanelTab}
             aiWritingWorkflow={aiWritingWorkflow}
             projectWorkflow={visibleCreativeProjectWorkflow}
-            search={search}
           />
         </section>
       </div>
@@ -352,13 +349,11 @@ function WorkspaceShellContent({
 function BottomPanelContent({
   activeTab,
   aiWritingWorkflow,
-  projectWorkflow,
-  search
+  projectWorkflow
 }: {
   readonly activeTab: string;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
-  readonly search: ProjectSearchProps | undefined;
 }) {
   const label = bottomPanelLabels.get(activeTab) ?? activeTab;
 
@@ -430,33 +425,7 @@ function BottomPanelContent({
     return (
       <div className="ns-bottom-panel-content" aria-label="底部面板内容：问题">
         <strong>问题</strong>
-        <span>底部面板已进入可切换状态。</span>
-        <span>仍待补齐：自动保存恢复、时间线可视化、项目健康诊断。</span>
-        <span>当前问题均为产品化缺口，不阻断章节编辑和保存。</span>
-      </div>
-    );
-  }
-
-  if (activeTab === "搜索") {
-    return (
-      <div className="ns-bottom-panel-content" aria-label="底部面板内容：搜索">
-        <strong>搜索摘要</strong>
-        <span>索引条目 {search?.entryCount ?? 0}</span>
-        <span>
-          当前查询 {search?.query.trim() === "" || search === undefined ? "未输入" : search.query}
-        </span>
-        <span>结果数量 {search?.results.length ?? 0}</span>
-      </div>
-    );
-  }
-
-  if (activeTab === "日志") {
-    return (
-      <div className="ns-bottom-panel-content" aria-label="底部面板内容：日志">
-        <strong>日志</strong>
-        <span>本地 beta 不采集 telemetry。</span>
-        <span>CI 和默认工作流不会访问真实模型 endpoint。</span>
-        <span>安装产物通过 artifact secret scan 后才记录为可用。</span>
+        <span>打开项目后显示项目健康诊断。</span>
       </div>
     );
   }

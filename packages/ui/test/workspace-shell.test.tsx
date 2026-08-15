@@ -736,40 +736,31 @@ describe("WorkspaceShell", () => {
     expect(commands).toEqual(["editor.ai.preview-selection"]);
   });
 
-  test("switches bottom panel tabs and renders the active panel content", () => {
+  test("only exposes bottom panel tabs with implemented content", () => {
     const application = createDesktopApplication();
     const selectedTabs: string[] = [];
     const tree = WorkspaceShell({
       shellState: {
         ...application.getShellState(),
-        activeBottomPanelTab: "搜索"
+        activeBottomPanelTab: "问题"
       },
       commands: application.listCommands(),
       commandPaletteOpen: false,
-      search: {
-        query: "oath",
-        status: "results-ready",
-        entryCount: 4,
-        results: [],
-        onQueryChange: () => undefined,
-        onSearch: () => undefined,
-        onRebuildIndex: () => undefined
-      },
       onBottomPanelTabSelect: (tab) => selectedTabs.push(tab)
     });
-    const searchTab = findElementByAriaLabel(tree, "切换底部面板：搜索");
+    const problemsTab = findElementByAriaLabel(tree, "切换底部面板：问题");
 
-    expect(searchTab).toBeDefined();
-    expect(searchTab?.props.disabled).toBeUndefined();
-    searchTab?.props.onClick?.();
+    expect(problemsTab).toBeDefined();
+    expect(problemsTab?.props.disabled).toBeUndefined();
+    problemsTab?.props.onClick?.();
 
-    expect(selectedTabs).toEqual(["搜索"]);
+    expect(selectedTabs).toEqual(["问题"]);
 
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain('aria-label="底部面板内容：搜索"');
-    expect(html).toContain("搜索摘要");
-    expect(html).toContain("索引条目 4");
-    expect(html).toContain("当前查询 oath");
+    expect(html).toContain('aria-label="底部面板内容：问题"');
+    expect(html).toContain('aria-label="切换底部面板：工作流运行"');
+    expect(html).not.toContain('aria-label="切换底部面板：搜索"');
+    expect(html).not.toContain('aria-label="切换底部面板：日志"');
   });
 
   test("marks navigator, AI panel, and bottom panel hidden in focus mode", () => {

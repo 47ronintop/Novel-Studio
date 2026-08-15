@@ -126,7 +126,7 @@ describe("UserPreferencesSession", () => {
     if (loaded.ok) {
       expect(loaded.value.onboarding.dismissed).toBe(true);
       expect(loaded.value.shell.workspaceLayout.conversationPanelMode).toBe("docked");
-      expect(loaded.value.shell.activeBottomPanelTab).toBe("搜索");
+      expect(loaded.value.shell.activeBottomPanelTab).toBe("工作流运行");
       expect(loaded.value.shell.navigatorExpandedSectionIds).toEqual(["chapters", "prompts"]);
       expect(loaded.value.editor).toEqual({
         fontFamily: "serif",
@@ -225,7 +225,7 @@ describe("UserPreferencesSession", () => {
           navigatorExpandedSectionIds: ["characters", "timeline"],
           inspectorCollapsed: false,
           bottomPanelVisible: true,
-          activeBottomPanelTab: "搜索",
+          activeBottomPanelTab: "工作流运行",
           focusMode: false,
           workspaceLayout: {
             conversationPanelMode: "docked",
