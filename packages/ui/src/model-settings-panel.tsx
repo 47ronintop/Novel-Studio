@@ -4,7 +4,6 @@ import {
   Eye,
   FilePlus,
   PlugZap,
-  Power,
   RefreshCw,
   Save,
   Star
@@ -873,8 +872,10 @@ function PluginSettingsSection({
     <section className="model-settings-section" aria-label="插件管理">
       <div className="model-settings-section-header">
         <div>
-          <h2>插件管理</h2>
-          <p>查看当前项目插件注册表。这里不安装、不下载、不执行第三方插件代码。</p>
+          <h2>插件注册表（仅查看）</h2>
+          <p>
+            查看当前项目插件注册表、权限和安全状态。当前版本不会安装、下载或执行第三方插件代码。
+          </p>
         </div>
         <button
           aria-label="刷新插件注册表"
@@ -905,7 +906,7 @@ function PluginSettingsSection({
                   <strong>{plugin.manifest?.displayName ?? plugin.pluginId}</strong>
                   <span>{plugin.pluginId}</span>
                 </div>
-                <span>{plugin.enabled ? "已启用" : "已禁用"}</span>
+                <span>{plugin.enabled ? "注册表标记：已启用" : "注册表标记：已禁用"}</span>
               </div>
               <div className="plugin-settings-meta">
                 <span>Manifest: {plugin.manifestStatus}</span>
@@ -972,17 +973,6 @@ function PluginSettingsSection({
                   <span>Audit {plugin.security.auditEvents.join(" | ")}</span>
                 </div>
               )}
-              <button
-                aria-label={`${plugin.enabled ? "Disable" : "Enable"} plugin ${
-                  plugin.manifest?.displayName ?? plugin.pluginId
-                }`}
-                className="ns-icon-text-button"
-                onClick={() => plugins?.onSetEnabled?.(plugin.pluginId, !plugin.enabled)}
-                type="button"
-              >
-                <Power aria-hidden="true" size={14} />
-                {plugin.enabled ? "Disable" : "Enable"}
-              </button>
             </li>
           ))}
         </ol>

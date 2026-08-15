@@ -401,7 +401,9 @@ describe("M8 Settings UI", () => {
     expect(pluginHtml).toContain("1.2.3");
     expect(pluginHtml).toContain("timeline.rail");
     expect(pluginHtml).toContain("timeline.open-map");
-    expect(pluginHtml).toContain('aria-label="Disable plugin Timeline Tools"');
+    expect(pluginHtml).toContain("插件注册表（仅查看）");
+    expect(pluginHtml).toContain("当前版本不会安装、下载或执行第三方插件代码");
+    expect(pluginHtml).not.toContain('aria-label="Disable plugin Timeline Tools"');
     expect(pluginHtml).not.toContain('aria-label="模型配置"');
   });
 
