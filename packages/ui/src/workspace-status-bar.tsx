@@ -1,5 +1,6 @@
 import type { ChapterEditorProps } from "./chapter-editor.js";
 import { calculateWritingMetrics } from "./editor-toolbar.js";
+import { editorFileModeLabel } from "./editor-language.js";
 import type { PlainFileEditorProps } from "./workspace-shell-types.js";
 
 export interface WorkspaceStatusBarProps {
@@ -29,7 +30,7 @@ export function WorkspaceStatusBar({
           <span>{formatDocumentCursorLabel(body, fileSelection)}</span>
           <span>UTF-8</span>
           <span>{body.includes("\r\n") ? "CRLF" : "LF"}</span>
-          <span>{fileModeLabel(fileEditor.path)}</span>
+          <span>{editorFileModeLabel(fileEditor.path)}</span>
         </div>
       </footer>
     );
@@ -55,28 +56,6 @@ export function WorkspaceStatusBar({
       </div>
     </footer>
   );
-}
-
-function fileModeLabel(path: string): string {
-  const extension = path.split(".").at(-1)?.toLocaleLowerCase();
-  switch (extension) {
-    case "ts":
-    case "tsx":
-      return "TypeScript";
-    case "js":
-    case "jsx":
-      return "JavaScript";
-    case "json":
-      return "JSON";
-    case "md":
-      return "Markdown";
-    case "css":
-      return "CSS";
-    case "html":
-      return "HTML";
-    default:
-      return extension === undefined ? "Text" : extension.toUpperCase();
-  }
 }
 
 export function formatDocumentCursorLabel(

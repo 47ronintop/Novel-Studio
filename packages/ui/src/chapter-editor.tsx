@@ -190,6 +190,7 @@ export function ChapterEditor({
           <CodeMirrorDocumentEditor
             ariaLabel="章节正文"
             body={chapter.body}
+            language="markdown"
             readOnly={onBodyChange === undefined}
             onEditorFocusRegister={registerEditorFocus}
             onEditorSelectionRegister={registerEditorSelection}

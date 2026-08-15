@@ -25,6 +25,21 @@
   --ns-text-secondary: var(--ns-muted);
   --ns-accent-muted: color-mix(in srgb, var(--ns-primary) 16%, transparent);
   --ns-warning-text: var(--ns-warning);
+  --ns-editor-token-comment: var(--ns-muted);
+  --ns-editor-token-keyword: color-mix(in srgb, var(--ns-primary-strong) 82%, var(--ns-ink));
+  --ns-editor-token-string: color-mix(in srgb, var(--ns-success) 80%, var(--ns-ink));
+  --ns-editor-token-number: color-mix(in srgb, var(--ns-warning) 80%, var(--ns-ink));
+  --ns-editor-token-atom: color-mix(in srgb, var(--ns-accent) 82%, var(--ns-ink));
+  --ns-editor-token-function: color-mix(in srgb, var(--ns-info) 86%, var(--ns-ink));
+  --ns-editor-token-type: color-mix(in srgb, var(--ns-accent) 66%, var(--ns-ink));
+  --ns-editor-token-property: color-mix(in srgb, var(--ns-success) 68%, var(--ns-ink));
+  --ns-editor-token-operator: color-mix(in srgb, var(--ns-warning) 68%, var(--ns-ink));
+  --ns-editor-token-punctuation: color-mix(in srgb, var(--ns-muted) 78%, var(--ns-ink));
+  --ns-editor-token-heading: var(--ns-primary-strong);
+  --ns-editor-token-emphasis: color-mix(in srgb, var(--ns-primary-strong) 76%, var(--ns-ink));
+  --ns-editor-token-link: color-mix(in srgb, var(--ns-info) 90%, var(--ns-ink));
+  --ns-editor-token-meta: color-mix(in srgb, var(--ns-info) 64%, var(--ns-ink));
+  --ns-editor-token-invalid: var(--ns-danger);
   --ns-gilded-accent: none;
 }
 
@@ -2962,6 +2977,77 @@ textarea:focus-visible,
 
 .ns-editor-codemirror .cm-line {
   padding: 0;
+}
+
+.ns-editor-codemirror .ns-editor-token-comment {
+  color: var(--ns-editor-token-comment);
+  font-style: italic;
+}
+
+.ns-editor-codemirror .ns-editor-token-keyword {
+  color: var(--ns-editor-token-keyword);
+  font-weight: 600;
+}
+
+.ns-editor-codemirror .ns-editor-token-string {
+  color: var(--ns-editor-token-string);
+}
+
+.ns-editor-codemirror .ns-editor-token-number {
+  color: var(--ns-editor-token-number);
+}
+
+.ns-editor-codemirror .ns-editor-token-atom {
+  color: var(--ns-editor-token-atom);
+}
+
+.ns-editor-codemirror .ns-editor-token-function {
+  color: var(--ns-editor-token-function);
+}
+
+.ns-editor-codemirror .ns-editor-token-type {
+  color: var(--ns-editor-token-type);
+}
+
+.ns-editor-codemirror .ns-editor-token-property {
+  color: var(--ns-editor-token-property);
+}
+
+.ns-editor-codemirror .ns-editor-token-operator {
+  color: var(--ns-editor-token-operator);
+}
+
+.ns-editor-codemirror .ns-editor-token-punctuation {
+  color: var(--ns-editor-token-punctuation);
+}
+
+.ns-editor-codemirror .ns-editor-token-heading {
+  color: var(--ns-editor-token-heading);
+  font-weight: 700;
+}
+
+.ns-editor-codemirror .ns-editor-token-emphasis {
+  color: var(--ns-editor-token-emphasis);
+  font-style: italic;
+}
+
+.ns-editor-codemirror .ns-editor-token-strong {
+  color: var(--ns-editor-token-emphasis);
+  font-weight: 700;
+}
+
+.ns-editor-codemirror .ns-editor-token-link {
+  color: var(--ns-editor-token-link);
+  text-decoration: underline;
+}
+
+.ns-editor-codemirror .ns-editor-token-meta {
+  color: var(--ns-editor-token-meta);
+}
+
+.ns-editor-codemirror .ns-editor-token-invalid {
+  color: var(--ns-editor-token-invalid);
+  text-decoration: underline wavy var(--ns-editor-token-invalid);
 }
 
 .ns-editor-codemirror .cm-gutters {

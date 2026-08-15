@@ -15,6 +15,7 @@ import { AiSelectionReview } from "./ai-selection-review.js";
 import { AiWorkflowHistoryPanel } from "./ai-workflow-history-panel.js";
 import { PlanArtifactReview } from "./plan-artifact-review.js";
 import { CodeMirrorDocumentEditor } from "./codemirror-document-editor.js";
+import { editorLanguageFromPath } from "./editor-language.js";
 import { CommandPalette } from "./command-palette.js";
 import {
   chapterDocumentLabel,
@@ -776,6 +777,7 @@ function PlainFileEditor({
         <CodeMirrorDocumentEditor
           ariaLabel="普通文件正文"
           body={editor.content}
+          language={editorLanguageFromPath(editor.path)}
           readOnly={editor.onContentChange === undefined}
           onEditorFocusRegister={registerEditorFocus}
           onEditorSelectionRegister={registerEditorSelection}
