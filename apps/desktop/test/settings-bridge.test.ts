@@ -94,6 +94,43 @@ describe("M22 settings bridge", () => {
     expect(calls).toEqual(["settings.discoverModelOptions:model_default:force"]);
   });
 
+  test("does not reuse discovered models after unsaved connection changes", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls));
+    await bridge.load();
+    calls.length = 0;
+
+    bridge.updateDraft({ baseUrl: "https://other.example.com/v1" });
+    expect(bridge.getProps().modelDiscovery).toBeUndefined();
+
+    const refreshed = await bridge.discoverModelOptions("model_default");
+    expect(calls).toEqual([]);
+    expect(refreshed.feedback).toEqual({
+      kind: "info",
+      message: "模型地址、Provider 或密钥有未保存修改，请先保存模型配置后再获取模型列表。"
+    });
+  });
+
+  test("drops a discovery response that finishes after the draft changes", async () => {
+    const calls: string[] = [];
+    const api = createApi(calls);
+    const bridge = createSettingsBridge(api);
+    await bridge.load();
+    const loadedDiscovery = bridge.getProps().modelDiscovery;
+    if (loadedDiscovery === undefined) throw new Error("Expected initial model discovery");
+
+    const pending =
+      deferred<Awaited<ReturnType<NovelStudioApi["settings"]["discoverModelOptions"]>>>();
+    api.settings.discoverModelOptions = async () => pending.promise;
+    const request = bridge.discoverModelOptions("model_default");
+    bridge.updateDraft({ baseUrl: "https://changed.example.com/v1" });
+    pending.resolve(ok(loadedDiscovery));
+
+    const result = await request;
+    expect(result.modelDiscovery).toBeUndefined();
+    expect(result.draft.baseUrl).toBe("https://changed.example.com/v1");
+  });
+
   test("saves edited profile drafts and can make them default through the preload API", async () => {
     const calls: string[] = [];
     const bridge = createSettingsBridge(createApi(calls));
@@ -222,12 +259,12 @@ describe("M22 settings bridge", () => {
       fromLocalDate: "2026-07-11",
       toLocalDate: "2026-07-17"
     });
-    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-07-11:2026-07-17::::");
+    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-07-11:2026-07-17::::2026-07-17");
 
     await bridge.setAgentUsageRange("today");
     expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-07-17:2026-07-17::::2026-07-17");
     await bridge.setAgentUsageRange("30d");
-    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-06-18:2026-07-17::::");
+    expect(calls.at(-1)).toBe("settings.listAgentUsage:2026-06-18:2026-07-17::::2026-07-17");
     await bridge.setAgentUsageRange("7d");
     await bridge.setAgentUsageFilters({
       provider: "openai",
@@ -460,9 +497,7 @@ describe("M22 settings bridge", () => {
 
   test("saves a network provider before its replacement key and preserves the old key on rejection", async () => {
     const calls: string[] = [];
-    const savedSecrets = new Map([
-      ["secret://agent-network/search/api_key", "old-network-key"]
-    ]);
+    const savedSecrets = new Map([["secret://agent-network/search/api_key", "old-network-key"]]);
     const api = createApi(calls, savedSecrets);
     api.agentNetwork.saveProvider = async (profile) => {
       calls.push(`agentNetwork.saveProvider:${profile.providerId}`);

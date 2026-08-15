@@ -98,6 +98,7 @@ export function createSettingsBridge(
   let saveStatus: ModelSettingsPanelProps["saveStatus"] = "idle";
   let connectionStatus: ModelSettingsPanelProps["connectionStatus"] | undefined;
   let modelDiscovery: ModelDiscoverySnapshot | undefined;
+  let modelDiscoveryRequestGeneration = 0;
   let activeSection: SettingsPanelSection = "models";
   let plugins: PluginSettingsPanelProps = {
     status: "idle",
@@ -217,6 +218,7 @@ export function createSettingsBridge(
         return toProps();
       }
 
+      modelDiscoveryRequestGeneration += 1;
       selectedProfileId = profile.id;
       draft = draftFromProfile(profile);
       modelDiscovery = undefined;
@@ -229,14 +231,30 @@ export function createSettingsBridge(
       return toProps();
     },
     updateDraft(nextDraft) {
-      draft = { ...draft, ...nextDraft };
+      modelDiscoveryRequestGeneration += 1;
+      const next = { ...draft, ...nextDraft };
+      const discoveryProfile =
+        modelDiscovery === undefined
+          ? undefined
+          : profiles.find((profile) => profile.id === modelDiscovery?.profileId);
+      const discoveryInvalidated =
+        modelDiscovery !== undefined &&
+        (discoveryProfile === undefined ||
+          selectedProfileId !== modelDiscovery.profileId ||
+          !isSavedModelDiscoveryDraft(next, discoveryProfile));
+      draft = next;
+      if (discoveryInvalidated) {
+        modelDiscovery = undefined;
+      }
       saveStatus = "idle";
       feedback = undefined;
       return toProps();
     },
     newProfile() {
+      modelDiscoveryRequestGeneration += 1;
       selectedProfileId = undefined;
       draft = newDraft(createProfileId());
+      modelDiscovery = undefined;
       saveStatus = "idle";
       feedback = { kind: "info", message: "正在创建新的模型配置。" };
       return toProps();
@@ -501,6 +519,7 @@ export function createSettingsBridge(
   async function saveCurrentDraft(saveOptions: {
     readonly makeDefault?: boolean;
   }): Promise<ModelSettingsPanelProps> {
+    modelDiscoveryRequestGeneration += 1;
     saveStatus = "saving";
     const profile = profileFromDraft(draft);
     if (profile === undefined) {
@@ -669,17 +688,46 @@ export function createSettingsBridge(
   }
 
   async function discoverModels(profileId: string, forceRefresh = false): Promise<void> {
+    const requestGeneration = ++modelDiscoveryRequestGeneration;
+    const profile = profiles.find((entry) => entry.id === profileId);
+    if (profile === undefined) {
+      modelDiscovery = undefined;
+      feedback = { kind: "info", message: "请先保存模型配置，再获取模型列表。" };
+      return;
+    }
+    if (selectedProfileId !== profileId || !isSavedModelDiscoveryDraft(draft, profile)) {
+      modelDiscovery = undefined;
+      feedback = {
+        kind: "info",
+        message: "模型地址、Provider 或密钥有未保存修改，请先保存模型配置后再获取模型列表。"
+      };
+      return;
+    }
+
     const result = await api.settings.discoverModelOptions(
       profileId,
       forceRefresh ? { forceRefresh: true } : undefined
     );
+    if (
+      requestGeneration !== modelDiscoveryRequestGeneration ||
+      selectedProfileId !== profileId ||
+      !isSavedModelDiscoveryDraft(draft, profile)
+    ) {
+      return;
+    }
     if (!result.ok) {
       modelDiscovery = undefined;
       feedback = { kind: "error", message: result.error.message };
       return;
     }
 
-    modelDiscovery = result.value;
+    modelDiscovery =
+      result.value.profileId === profileId && result.value.provider === profile.provider
+        ? result.value
+        : undefined;
+    if (modelDiscovery === undefined) {
+      feedback = { kind: "error", message: "模型列表与当前配置不匹配，请重新获取。" };
+    }
   }
 
   async function loadUsage(detailLocalDate?: string): Promise<ModelSettingsPanelProps> {
@@ -694,8 +742,8 @@ export function createSettingsBridge(
       feedback: { kind: "info", message: "正在读取 Agent 用量..." }
     };
     const range = rangeForPreset(rangePreset, todayLocalDate());
-    const effectiveDetailLocalDate =
-      detailLocalDate ?? (rangePreset === "today" ? range.toLocalDate : undefined);
+    // Keep the request list bounded to one day while making cache details visible on first load.
+    const effectiveDetailLocalDate = detailLocalDate ?? range.toLocalDate;
     const query: AgentUsageQuery = {
       range,
       ...(filters.provider.trim() === "" ? {} : { provider: filters.provider.trim() }),
@@ -835,6 +883,16 @@ function draftFromProfile(profile: ModelProfile): ModelSettingsDraft {
     reasoningEffortEnabled: profile.reasoningEffortEnabled === true,
     timeoutMs: String(profile.timeoutMs)
   };
+}
+
+function isSavedModelDiscoveryDraft(draft: ModelSettingsDraft, profile: ModelProfile): boolean {
+  const apiKeyInput = draft.apiKeyRefInput.trim();
+  return (
+    draft.id.trim() === profile.id &&
+    draft.provider.trim() === profile.provider &&
+    draft.baseUrl.trim() === (profile.baseUrl ?? "").trim() &&
+    (apiKeyInput.length === 0 || apiKeyInput === profile.apiKeyRef)
+  );
 }
 
 function newDraft(profileId: string): ModelSettingsDraft {

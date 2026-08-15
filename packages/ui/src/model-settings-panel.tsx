@@ -477,6 +477,61 @@ function ModelProfileSettingsSection({
             </ModelField>
             <ModelField
               actions={
+                <>
+                  <button
+                    aria-label="测试连接"
+                    className="model-settings-field-button"
+                    disabled={!canRunProfileAction}
+                    onClick={() => onTestConnection?.(activeProfileId)}
+                    type="button"
+                  >
+                    <PlugZap aria-hidden="true" size={13} />
+                    测试连接
+                  </button>
+                  <ModelConnectionInlineStatus connectionStatus={activeConnectionStatus} />
+                </>
+              }
+              label="API 请求地址"
+              note={endpointNote}
+            >
+              <input
+                aria-label="模型 Base URL"
+                className="ns-search-input"
+                onChange={(event) => onDraftChange?.({ baseUrl: event.currentTarget.value })}
+                value={draft.baseUrl}
+              />
+            </ModelField>
+            <ModelField
+              label="API Key"
+              note="粘贴真实 API Key；保存后写入桌面端安全存储，settings.json 只保留 secret:// 引用。留空会继续使用已保存密钥。"
+            >
+              <div className="model-settings-input-with-action">
+                <input
+                  aria-label="密钥引用"
+                  className="ns-search-input"
+                  onChange={(event) =>
+                    onDraftChange?.({ apiKeyRefInput: event.currentTarget.value })
+                  }
+                  placeholder={
+                    selectedProfile === undefined
+                      ? "粘贴真实 API Key，保存后会加密存储"
+                      : "留空则沿用已保存密钥引用"
+                  }
+                  type="password"
+                  value={draft.apiKeyRefInput}
+                />
+                <button
+                  aria-label="显示或隐藏 API Key"
+                  className="model-settings-input-action"
+                  onClick={toggleApiKeyVisibility}
+                  type="button"
+                >
+                  <Eye aria-hidden="true" size={14} />
+                </button>
+              </div>
+            </ModelField>
+            <ModelField
+              actions={
                 <button
                   aria-label="获取模型列表"
                   className="model-settings-field-button"
@@ -530,61 +585,6 @@ function ModelProfileSettingsSection({
                   ) : null}
                 </>
               )}
-            </ModelField>
-            <ModelField
-              actions={
-                <>
-                  <button
-                    aria-label="测试连接"
-                    className="model-settings-field-button"
-                    disabled={!canRunProfileAction}
-                    onClick={() => onTestConnection?.(activeProfileId)}
-                    type="button"
-                  >
-                    <PlugZap aria-hidden="true" size={13} />
-                    测试连接
-                  </button>
-                  <ModelConnectionInlineStatus connectionStatus={activeConnectionStatus} />
-                </>
-              }
-              label="API 请求地址"
-              note={endpointNote}
-            >
-              <input
-                aria-label="模型 Base URL"
-                className="ns-search-input"
-                onChange={(event) => onDraftChange?.({ baseUrl: event.currentTarget.value })}
-                value={draft.baseUrl}
-              />
-            </ModelField>
-            <ModelField
-              label="API Key"
-              note="粘贴真实 API Key；保存后写入桌面端安全存储，settings.json 只保留 secret:// 引用。留空会继续使用已保存密钥。"
-            >
-              <div className="model-settings-input-with-action">
-                <input
-                  aria-label="密钥引用"
-                  className="ns-search-input"
-                  onChange={(event) =>
-                    onDraftChange?.({ apiKeyRefInput: event.currentTarget.value })
-                  }
-                  placeholder={
-                    selectedProfile === undefined
-                      ? "粘贴真实 API Key，保存后会加密存储"
-                      : "留空则沿用已保存密钥引用"
-                  }
-                  type="password"
-                  value={draft.apiKeyRefInput}
-                />
-                <button
-                  aria-label="显示或隐藏 API Key"
-                  className="model-settings-input-action"
-                  onClick={toggleApiKeyVisibility}
-                  type="button"
-                >
-                  <Eye aria-hidden="true" size={14} />
-                </button>
-              </div>
             </ModelField>
             <details className="model-settings-advanced" aria-label="高级模型设置">
               <summary>高级设置</summary>

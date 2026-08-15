@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -72,6 +74,13 @@ describe("M8 Settings UI", () => {
     expect(html).toContain('aria-label="外观编辑器字体"');
     expect(html).toContain('aria-label="外观编辑器字号"');
     expect(html).toContain('aria-label="外观编辑器行高"');
+  });
+
+  test("keeps the desktop settings navigation sticky while its content scrolls", () => {
+    const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
+    expect(css).toMatch(
+      /\.model-settings-nav\s*\{[^}]*max-height:\s*calc\(100vh - 64px\)[^}]*position:\s*sticky[^}]*top:\s*12px/s
+    );
   });
 
   test("filters settings by search query", async () => {
@@ -495,6 +504,9 @@ describe("M8 Settings UI", () => {
     );
 
     expect(html).toContain("Agent 用量");
+    expect(html).toContain("用量摘要");
+    expect(html).toContain("总 Token");
+    expect(html).toContain("缓存节省");
     expect(html).toContain('aria-label="用量日期范围"');
     expect(html).toContain("今日");
     expect(html).toContain("近 7 天");
@@ -509,6 +521,9 @@ describe("M8 Settings UI", () => {
     expect(html).toContain("缓存读取");
     expect(html).toContain("缓存写入");
     expect(html).toContain("可缓存输入");
+    expect(html).toContain("读取 400");
+    expect(html).toContain('aria-label="运行记录分页"');
+    expect(html).toContain("第 1 / 1 页 · 共 2 条");
     expect(html).toContain("命中率");
     expect(html).toContain("80%");
     expect(html).toContain("缓存节省 0.0120");
@@ -550,6 +565,90 @@ describe("M8 Settings UI", () => {
     expect(emptyHtml).toContain("所选范围暂无 Agent 用量记录");
   });
 
+  test("paginates per-request usage and cache details", async () => {
+    const runs = Array.from({ length: 21 }, (_, index) => ({
+      scope: {
+        kind: "workspace" as const,
+        workspaceKind: "creativeProject" as const,
+        workspaceId: "project_01"
+      },
+      usageId: `usage_${index}`,
+      runId: `run_${index}`,
+      conversationId: "conversation_01",
+      provider: "openai",
+      model: "gpt-5",
+      totalTokens: index + 1,
+      cacheReadTokens: index,
+      cacheWriteTokens: 1,
+      cacheEligibleInputTokens: index + 1,
+      cacheHitRate: index / Math.max(1, index + 1),
+      cacheOutcome: "hit" as const,
+      cacheUsageStatus: "actual" as const,
+      cacheInputTokenSemantics: "included_in_input" as const,
+      cacheMode: "automatic_prefix" as const,
+      usageStatus: "actual" as const,
+      cost: { status: "actual" as const, amount: 0, currency: "USD" },
+      timestamp: "2026-07-17T08:00:00.000Z"
+    }));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(
+        <ModelSettingsPanel
+          {...createModelSettingsPanelProps()}
+          activeSection="usage"
+          usage={{
+            status: "loaded",
+            rangePreset: "7d",
+            filters: { provider: "", model: "", projectId: "" },
+            report: {
+              query: {
+                range: { fromLocalDate: "2026-07-11", toLocalDate: "2026-07-17" },
+                detailLocalDate: "2026-07-17"
+              },
+              days: [
+                {
+                  localDate: "2026-07-17",
+                  inputTokens: 21,
+                  outputTokens: 21,
+                  cachedTokens: 20,
+                  reasoningTokens: 0,
+                  totalTokens: 42,
+                  costs: [],
+                  hasUnknownCost: false
+                }
+              ],
+              runs,
+              generatedAt: "2026-07-17T12:00:00.000Z"
+            }
+          }}
+        />
+      );
+    });
+
+    const runTable = host.querySelector<HTMLTableElement>(
+      'table[aria-label="所选日期 Agent 运行记录"]'
+    );
+    expect(runTable?.querySelectorAll("tbody tr")).toHaveLength(20);
+    expect(host.querySelector('[aria-label="运行记录分页"]')?.textContent).toContain(
+      "第 1 / 2 页 · 共 21 条"
+    );
+    expect(runTable?.textContent).toContain("读取 0");
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="下一页运行记录"]')?.click();
+    });
+    expect(runTable?.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(runTable?.textContent).toContain("run_20");
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  });
+
   test("lays out model fields as separated rows with field-level actions", async () => {
     const discoverCalls: string[] = [];
     const testConnectionCalls: string[] = [];
@@ -581,6 +680,12 @@ describe("M8 Settings UI", () => {
     expect(html).toContain('aria-label="获取模型列表"');
     expect(html).toContain('class="model-settings-item-description"');
     expect(html).toContain("请填写兼容 OpenAI 格式的服务端点地址");
+    expect(html.indexOf('aria-label="模型 Base URL"')).toBeLessThan(
+      html.indexOf('aria-label="密钥引用"')
+    );
+    expect(html.indexOf('aria-label="密钥引用"')).toBeLessThan(
+      html.indexOf('aria-label="获取模型列表"')
+    );
 
     const host = document.createElement("div");
     document.body.append(host);

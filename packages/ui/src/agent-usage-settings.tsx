@@ -1,6 +1,6 @@
-import { Trash2 } from "lucide-react";
-import type { CSSProperties } from "react";
-import type { AgentUsageReport } from "@novel-studio/application";
+import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { useEffect, useState, type CSSProperties } from "react";
+import type { AgentUsageDailyBucket, AgentUsageReport } from "@novel-studio/application";
 
 export type AgentUsageRangePreset = "today" | "7d" | "30d";
 export interface AgentUsageFilters {
@@ -88,6 +88,7 @@ export function AgentUsageSettings(props: AgentUsageSettingsProps) {
       ) : null}
       {days.length > 0 && props.report !== undefined ? (
         <>
+          <UsageSummary days={days} />
           <UsageChart report={props.report} />
           <DailyUsageTable report={props.report} onSelectDay={props.onSelectDay} />
           <RunDetails report={props.report} />
@@ -95,6 +96,116 @@ export function AgentUsageSettings(props: AgentUsageSettingsProps) {
       ) : null}
     </section>
   );
+}
+
+function UsageSummary({ days }: { readonly days: readonly AgentUsageDailyBucket[] }) {
+  const summary = summarizeUsage(days);
+  return (
+    <section aria-label="用量摘要" className="agent-usage-summary">
+      <h3>用量摘要</h3>
+      <div className="agent-usage-summary-grid">
+        <UsageSummaryCard label="总 Token" value={summary.totalTokens.toLocaleString()} />
+        <UsageSummaryCard label="输入" value={summary.inputTokens.toLocaleString()} />
+        <UsageSummaryCard label="输出" value={summary.outputTokens.toLocaleString()} />
+        <UsageSummaryCard label="缓存读取" value={formatTokenCount(summary.cacheReadTokens)} />
+        <UsageSummaryCard label="缓存写入" value={formatTokenCount(summary.cacheWriteTokens)} />
+        <UsageSummaryCard
+          label="可缓存输入"
+          value={formatTokenCount(summary.cacheEligibleInputTokens)}
+        />
+        <UsageSummaryCard label="缓存命中率" value={formatCacheHitRate(summary.cacheHitRate)} />
+        <UsageSummaryCard label="缓存节省" value={formatSavings(summary.cacheSavings)} />
+      </div>
+    </section>
+  );
+}
+
+function UsageSummaryCard({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <article className="agent-usage-summary-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+interface UsageSummaryValues {
+  readonly totalTokens: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number | undefined;
+  readonly cacheEligibleInputTokens: number | undefined;
+  readonly cacheHitRate: number | undefined;
+  readonly cacheSavings: ReadonlyMap<string, number>;
+}
+
+function summarizeUsage(days: readonly AgentUsageDailyBucket[]): UsageSummaryValues {
+  let totalTokens = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let cacheEligibleInputTokens = 0;
+  let hasCacheWriteTokens = false;
+  let hasCacheEligibleInputTokens = false;
+  let hitNumerator = 0;
+  let hitDenominator = 0;
+  const cacheSavings = new Map<string, number>();
+
+  for (const day of days) {
+    totalTokens += day.totalTokens;
+    inputTokens += day.inputTokens;
+    outputTokens += day.outputTokens;
+    cacheReadTokens += day.cacheReadTokens ?? day.cachedTokens;
+
+    if (day.cacheWriteTokens !== undefined) {
+      hasCacheWriteTokens = true;
+      cacheWriteTokens += day.cacheWriteTokens;
+    }
+    if (day.cacheEligibleInputTokens !== undefined) {
+      hasCacheEligibleInputTokens = true;
+      cacheEligibleInputTokens += day.cacheEligibleInputTokens;
+    }
+
+    const explicitEligible = day.cacheEligibleInputTokens ?? 0;
+    if (explicitEligible > 0) {
+      const dayHitRate =
+        day.cacheHitRate ?? (day.cacheReadTokens ?? day.cachedTokens) / explicitEligible;
+      hitNumerator += dayHitRate * explicitEligible;
+      hitDenominator += explicitEligible;
+    } else if (day.cacheHitRate !== undefined && day.inputTokens > 0) {
+      hitNumerator += day.cacheHitRate * day.inputTokens;
+      hitDenominator += day.inputTokens;
+    }
+
+    for (const cost of day.costs) {
+      if (cost.estimatedCacheSavings === undefined) continue;
+      cacheSavings.set(
+        cost.currency,
+        (cacheSavings.get(cost.currency) ?? 0) + cost.estimatedCacheSavings
+      );
+    }
+  }
+
+  return {
+    totalTokens,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens: hasCacheWriteTokens ? cacheWriteTokens : undefined,
+    cacheEligibleInputTokens: hasCacheEligibleInputTokens ? cacheEligibleInputTokens : undefined,
+    cacheHitRate: hitDenominator > 0 ? hitNumerator / hitDenominator : undefined,
+    cacheSavings
+  };
+}
+
+function formatSavings(savings: ReadonlyMap<string, number>): string {
+  const values = [...savings.entries()]
+    .filter(([, amount]) => amount !== 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([currency, amount]) => `${currency} ${formatAmount(amount)}`);
+  return values.length === 0 ? "不可用" : values.join(" · ");
 }
 
 function UsageFilter({
@@ -348,7 +459,21 @@ function DailyUsageTable({
 }
 
 function RunDetails({ report }: { readonly report: AgentUsageReport }) {
+  const pageSize = 20;
+  const totalPages = Math.max(1, Math.ceil(report.runs.length / pageSize));
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [report]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
   if (report.query.detailLocalDate === undefined) return null;
+
+  const visibleRuns = report.runs.slice((page - 1) * pageSize, page * pageSize);
   return (
     <section className="agent-usage-runs" aria-labelledby="agent-usage-runs-heading">
       <h3 id="agent-usage-runs-heading">{report.query.detailLocalDate} 运行记录</h3>
@@ -369,7 +494,7 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
               </tr>
             </thead>
             <tbody>
-              {report.runs.map((run) => (
+              {visibleRuns.map((run) => (
                 <tr key={run.usageId}>
                   <th data-label="Run" scope="row">
                     {run.runId}
@@ -414,6 +539,29 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
               ))}
             </tbody>
           </table>
+          <nav aria-label="运行记录分页" className="agent-usage-pagination">
+            <span>
+              第 {page} / {totalPages} 页 · 共 {report.runs.length.toLocaleString()} 条
+            </span>
+            <button
+              aria-label="上一页运行记录"
+              disabled={page <= 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              title="上一页"
+              type="button"
+            >
+              <ChevronLeft aria-hidden="true" size={14} />
+            </button>
+            <button
+              aria-label="下一页运行记录"
+              disabled={page >= totalPages}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              title="下一页"
+              type="button"
+            >
+              <ChevronRight aria-hidden="true" size={14} />
+            </button>
+          </nav>
         </div>
       )}
     </section>
