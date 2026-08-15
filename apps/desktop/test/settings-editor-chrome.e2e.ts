@@ -55,6 +55,46 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     await capture(page, "desktop-settings.png");
 
     await page.locator(".model-settings-category-list").getByText("外观", { exact: true }).click();
+    await page.locator(".model-settings-main").evaluate((element) => {
+      const sentinel = document.createElement("div");
+      sentinel.dataset.testSettingsScrollSentinel = "true";
+      sentinel.style.height = "1200px";
+      element.append(sentinel);
+    });
+    const settingsScrollMetrics = await page.locator(".model-settings-main").evaluate((element) => {
+      const editorArea = element.closest(".ns-editor-area");
+      return {
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        editorOverflow: editorArea === null ? "" : getComputedStyle(editorArea).overflow
+      };
+    });
+    expect(settingsScrollMetrics.overflowY).toBe("auto");
+    expect(settingsScrollMetrics.editorOverflow).toBe("hidden");
+    expect(settingsScrollMetrics.scrollHeight).toBeGreaterThan(settingsScrollMetrics.clientHeight);
+    const settingsNav = page.locator(".model-settings-nav");
+    const settingsGrid = page.locator(".model-settings-grid");
+    const settingsGridBox = await settingsGrid.boundingBox();
+    const settingsNavBox = await settingsNav.boundingBox();
+    expect(settingsGridBox).not.toBeNull();
+    expect(settingsNavBox).not.toBeNull();
+    if (settingsGridBox !== null && settingsNavBox !== null) {
+      expect(Math.abs(settingsNavBox.y - settingsGridBox.y)).toBeLessThanOrEqual(1);
+    }
+    const navTopBeforeScroll = (await settingsNav.boundingBox())?.y;
+    await page.locator(".model-settings-main").evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect
+      .poll(() => page.locator(".model-settings-main").evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    const navTopAfterScroll = (await settingsNav.boundingBox())?.y;
+    expect(navTopBeforeScroll).toBeDefined();
+    expect(navTopAfterScroll).toBeDefined();
+    if (navTopBeforeScroll !== undefined && navTopAfterScroll !== undefined) {
+      expect(Math.abs(navTopAfterScroll - navTopBeforeScroll)).toBeLessThanOrEqual(1);
+    }
     await page.getByRole("button", { name: "浅色主题" }).click();
     const blueAccent = page.getByRole("button", { name: "强调色 蓝色" });
     await blueAccent.click();

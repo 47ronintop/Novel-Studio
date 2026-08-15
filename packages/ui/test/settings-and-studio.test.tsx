@@ -76,10 +76,16 @@ describe("M8 Settings UI", () => {
     expect(html).toContain('aria-label="外观编辑器行高"');
   });
 
-  test("keeps the desktop settings navigation sticky while its content scrolls", () => {
+  test("keeps the desktop settings navigation fixed while only its content scrolls", () => {
     const css = readFileSync(join(process.cwd(), "packages", "ui", "src", "styles.css"), "utf8");
     expect(css).toMatch(
-      /\.model-settings-nav\s*\{[^}]*max-height:\s*calc\(100vh - 64px\)[^}]*position:\s*sticky[^}]*top:\s*12px/s
+      /\.ns-shell\[data-settings-mode="true"\] \.ns-editor-area\s*\{[^}]*overflow:\s*hidden/s
+    );
+    expect(css).toMatch(
+      /\.model-settings-nav\s*\{[^}]*overflow:\s*visible[^}]*position:\s*relative/s
+    );
+    expect(css).toMatch(
+      /\.model-settings-main\s*\{[^}]*overflow-x:\s*hidden[^}]*overflow-y:\s*auto/s
     );
   });
 

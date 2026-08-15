@@ -1,4 +1,4 @@
-import { expect, test, _electron as electron } from "@playwright/test";
+import { expect, test, _electron as electron, type ElectronApplication } from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,3 +74,52 @@ test("switches a creative project into the engineering explorer without losing t
     await rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("opens a creative project from the engineering workspace", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-engineering-project-switch-e2e-"));
+  const initialProjectRoot = join(tempRoot, "Initial Project");
+  const electronApp = await electron.launch({
+    args: [electronMain],
+    env: {
+      ...process.env,
+      NOVEL_STUDIO_PROJECT_ROOT: initialProjectRoot,
+      NOVEL_STUDIO_USER_DATA_ROOT: join(tempRoot, "User Data")
+    }
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expectCreativeWorkspaceReady(page, { requireWritingSurface: false });
+    await page.getByRole("button", { name: "当前工作台：创作工作台" }).click();
+    await page.getByRole("menuitemradio", { name: "工程工作区" }).click();
+    await expectEngineeringWorkspaceReady(page);
+
+    await queueDirectorySelection(electronApp, initialProjectRoot);
+    await triggerFileMenuItem(electronApp, "openCreativeProject");
+    await expectCreativeWorkspaceReady(page, { requireWritingSurface: false });
+    await expect(page.locator(".ns-project-title")).toHaveText("未命名长篇项目");
+  } finally {
+    await electronApp.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+async function queueDirectorySelection(
+  electronApp: ElectronApplication,
+  selectedPath: string
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] });
+  }, selectedPath);
+}
+
+async function triggerFileMenuItem(
+  electronApp: ElectronApplication,
+  commandId: string
+): Promise<void> {
+  await electronApp.evaluate(({ Menu }, id) => {
+    const fileMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "文件");
+    const menuItem = (fileMenu?.submenu?.items ?? []).find((item) => item.id === id);
+    menuItem?.click({ triggerAcceleratorIfAvailable: false } as never);
+  }, commandId);
+}

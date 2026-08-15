@@ -681,7 +681,12 @@ export function createDesktopApplication(
     async closeWorkspace() {
       const allowed = this.canCloseWorkspace();
       if (!allowed.ok) return allowed;
-      if (shellState.workspaceContext.kind === "none") return ok(shellState);
+      const hasActiveWorkspace =
+        shellState.workspaceContext.kind !== "none" ||
+        activeProjectWorkspaceSession !== undefined ||
+        activeEngineeringWorkspaceSession !== undefined ||
+        attachedCreativeEngineeringWorkspaceSession !== undefined;
+      if (!hasActiveWorkspace) return ok(shellState);
 
       const releasedProject = await activeProjectWorkspaceSession?.releaseProjectLock();
       if (releasedProject !== undefined && !releasedProject.ok) return releasedProject;

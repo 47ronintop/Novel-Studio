@@ -45,6 +45,13 @@ test("cycles the conversation panel and adapts expanded content", async () => {
     expect(dockedPanelBox.width).toBeLessThan(dockedEditorBox.width);
     await page.screenshot({ path: join(screenshotRoot, "docked-before.png") });
 
+    await expect(page.getByRole("button", { name: "展开会话面板" })).toBeVisible();
+    await page.getByRole("button", { name: "展开会话面板" }).click();
+    await expect(grid).toHaveAttribute("data-conversation-panel-mode", "expanded");
+    await expect(editor).toBeHidden();
+    await page.getByRole("button", { name: "恢复停靠会话面板布局" }).click();
+    await expect(grid).toHaveAttribute("data-conversation-panel-mode", "docked");
+
     await page.getByRole("button", { name: "收起会话面板并展开布局" }).click();
     await expect(grid).toHaveAttribute("data-conversation-panel-mode", "collapsed");
     await expect(conversationPanel).toBeHidden();

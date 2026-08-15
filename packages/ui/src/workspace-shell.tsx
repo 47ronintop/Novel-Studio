@@ -215,7 +215,7 @@ function WorkspaceShellContent({
             </div>
           )}
           {settingsMode ? (
-            <div data-region="settings-workspace">
+            <div className="ns-settings-view" data-region="settings-workspace">
               <SettingsWorkspace onClose={onSettingsClose} settings={settings} />
             </div>
           ) : mainReview !== undefined ? (
