@@ -1053,6 +1053,20 @@ export function createApplicationIpcHandlers(
       }
       return created;
     },
+    "application:workspace:read-model-sharing-defaults": async () => {
+      const manager = options.agentRuntimeManager;
+      const active = manager?.active();
+      const store = options.workspaceContextPolicyStore;
+      if (manager === undefined || store === undefined || active?.scope !== "workspace") {
+        return err(workspaceContextPolicyUnavailable());
+      }
+      const policy = await store.read({
+        workspaceKind: active.binding.kind,
+        workspaceId: active.binding.workspaceId,
+        contentRoot: active.binding.contentRoot
+      });
+      return ok(policy.sharingDefaults);
+    },
     "application:workspace:update-context-policy": async (input: unknown) => {
       const update = toWorkspaceContextPolicyAction(input);
       const manager = options.agentRuntimeManager;
@@ -1836,10 +1850,7 @@ export function createApplicationIpcHandlers(
         ? notifyAgentSettingsChanged(saved)
         : saved;
     },
-    "application:settings:test-model-profile": (
-      profileId: unknown,
-      profileOverride: unknown
-    ) => {
+    "application:settings:test-model-profile": (profileId: unknown, profileOverride: unknown) => {
       if (typeof profileId !== "string") {
         return application.testModelProfileConnection(
           "",

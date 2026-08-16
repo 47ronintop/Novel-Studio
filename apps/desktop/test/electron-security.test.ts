@@ -69,6 +69,7 @@ describe("Electron security baseline", () => {
       "application:workspace:save-text-file",
       "application:workspace:complete-engineering-mutation-sync",
       "application:workspace:create-project-conventions",
+      "application:workspace:read-model-sharing-defaults",
       "application:workspace:update-context-policy",
       "application:creative-project-files:refresh",
       "application:creative-project-files:read-text-file",
@@ -213,6 +214,7 @@ describe("Electron security baseline", () => {
     expect(isApplicationIpcChannel("application:workspace:update-context-policy")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:read-text-file")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:save-text-file")).toBe(true);
+    expect(isApplicationIpcChannel("application:workspace:read-model-sharing-defaults")).toBe(true);
     expect(isApplicationIpcChannel("application:creative-project-files:execute-lifecycle")).toBe(
       true
     );
@@ -245,6 +247,7 @@ describe("Electron security baseline", () => {
     await api.workspace.chooseEngineeringDirectory();
     await api.workspace.chooseTextFile();
     await api.workspace.createProjectConventions();
+    await api.workspace.readModelSharingDefaults();
     await api.workspace.updateContextPolicy("disable_conventions");
     await api.workspace.updateContextPolicy({
       action: "set_source_preference",
@@ -432,6 +435,7 @@ describe("Electron security baseline", () => {
       "application:workspace:choose-engineering-directory",
       "application:workspace:choose-text-file",
       "application:workspace:create-project-conventions",
+      "application:workspace:read-model-sharing-defaults",
       "application:workspace:update-context-policy",
       "application:workspace:update-context-policy",
       "application:creative-project-files:refresh",

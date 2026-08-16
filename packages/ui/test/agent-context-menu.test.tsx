@@ -134,6 +134,21 @@ describe("AgentContextMenu", () => {
     expect(sources?.textContent).toContain("自动选择");
     expect(sources?.textContent).toContain("自动");
   });
+
+  test("keeps context refresh and compaction as separate actions", () => {
+    const onRefresh = vi.fn();
+    const onCompact = vi.fn();
+    const { host } = render({ ...createControl(), onRefresh, onCompact });
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label^="上下文"]')?.click());
+
+    const refresh = document.querySelector<HTMLButtonElement>(
+      'button[title^="重新读取当前项目资料"]'
+    );
+    const compact = document.querySelector<HTMLButtonElement>('button[aria-label="压缩上下文"]');
+    expect(refresh?.textContent).toContain("刷新上下文");
+    expect(compact?.textContent).toContain("压缩上下文");
+    expect(compact?.disabled).toBe(false);
+  });
 });
 
 interface ControlOverrides {

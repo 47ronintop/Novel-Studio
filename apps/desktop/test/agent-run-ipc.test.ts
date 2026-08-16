@@ -9,6 +9,20 @@ import { createNovelStudioApi } from "../src/preload/api.js";
 
 describe("Agent Run IPC", () => {
   test("updates workspace context policy through the active runtime binding", async () => {
+    const sharingDefaults = {
+      outlineMetadata: "automatic" as const,
+      activeResource: "off" as const,
+      conversationSummary: "ask" as const,
+      toolReadResults: "deny" as const
+    };
+    const readPolicy = vi.fn(async () => ({
+      workspaceTrust: "trusted" as const,
+      projectConventionsEnabled: false,
+      sourcePreferences: [],
+      sharingDefaults,
+      sharingDefaultsRevision: "sharing-01",
+      policyRevision: "policy-01"
+    }));
     const disableConventions = vi.fn(async () =>
       ok({
         workspaceTrust: "trusted" as const,
@@ -57,6 +71,7 @@ describe("Agent Run IPC", () => {
       {
         agentRuntimeManager: manager,
         workspaceContextPolicyStore: {
+          read: readPolicy,
           disableConventions,
           revokeTrust,
           setSourcePreference
@@ -64,7 +79,16 @@ describe("Agent Run IPC", () => {
       } as never
     ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
     const update = handlers["application:workspace:update-context-policy"];
+    const readSharing = handlers["application:workspace:read-model-sharing-defaults"];
     if (update === undefined) throw new Error("Missing workspace policy handler");
+    if (readSharing === undefined) throw new Error("Missing workspace policy read handler");
+
+    await expect(readSharing()).resolves.toEqual({ ok: true, value: sharingDefaults });
+    expect(readPolicy).toHaveBeenCalledWith({
+      workspaceKind: "engineeringWorkspace",
+      workspaceId: "workspace-active",
+      contentRoot: "C:/workspace-active"
+    });
 
     await expect(
       update({ action: "disable_conventions", workspaceId: "renderer-controlled" })

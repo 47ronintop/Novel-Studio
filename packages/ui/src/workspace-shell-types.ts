@@ -363,6 +363,8 @@ export interface AgentComposerProps {
   readonly permission?: AgentComposerPermissionControl;
   /** Frozen profile and Permission Summary projection used for user-facing capability labels. */
   readonly capability?: AgentCapabilityFacts;
+  /** Opens the project-persisted model disclosure policy editor. */
+  readonly onOpenModelSharing?: (() => void) | undefined;
   readonly onRequestChange: (request: string) => void;
   readonly onOperationModeChange: (mode: AgentOperationMode) => void;
   readonly onContextModeChange: (mode: AgentContextMode) => void;

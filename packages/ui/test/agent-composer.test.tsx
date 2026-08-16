@@ -131,6 +131,53 @@ describe("AgentComposer", () => {
     );
   });
 
+  test("shows an explicit confirmation state after the send preview is prepared", () => {
+    const { host } = renderComposer({
+      contextStatus: {
+        state: "normal",
+        usageLabel: "1k / 128k",
+        precision: "reported",
+        sources: [],
+        sendPreview: {
+          schemaVersion: "2.0",
+          previewId: "preview-01",
+          createdAt: "2026-08-16T00:00:00.000Z",
+          expiresAt: "2026-08-16T00:05:00.000Z",
+          canonicalPayloadChecksum: "a".repeat(64),
+          target: {
+            providerLabel: "OpenAI",
+            modelLabel: "test-model",
+            connectionLabel: "Default",
+            adapterPolicyLabel: "OpenAI compatible"
+          },
+          guidance: { version: "3.0", profileId: "writing", runtimeFacts: {}, content: "" },
+          tools: [],
+          sources: [],
+          retainedLocalProvenanceKinds: [],
+          providerNativeSemanticChecksum: null
+        }
+      }
+    });
+
+    expect(host.textContent).toContain("发送预览待确认");
+    expect(host.textContent).toContain("再次点击发送以确认");
+    expect(host.querySelector('[aria-label="确认并发送 Agent 请求"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="启动 Agent 运行"]')).toBeNull();
+  });
+
+  test("exposes a persistent model sharing entry in the add menu", () => {
+    const onOpenModelSharing = vi.fn();
+    const { host } = renderComposer({ onOpenModelSharing });
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="添加引用与执行审批"]')?.click());
+    const entry = document.querySelector<HTMLButtonElement>(
+      ".ns-agent-composer-add-file:last-child"
+    );
+    expect(entry?.textContent).toContain("模型共享范围");
+    act(() => entry?.click());
+    expect(onOpenModelSharing).toHaveBeenCalledOnce();
+  });
+
   test("blocks button and Enter submission when fixed context exceeds the budget", () => {
     const onSend = vi.fn();
     const { host } = renderComposer({

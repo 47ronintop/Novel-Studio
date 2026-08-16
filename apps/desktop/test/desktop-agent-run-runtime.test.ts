@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   checksumChangeSetSelection,
   checksumChangeSetText,
+  computeAgentToolDescriptorDigest,
   createProviderSemanticVersionSetV1,
   createApprovalBindingV2,
   createAgentRunCoordinator,
@@ -6766,6 +6767,182 @@ describe("desktop Agent Run runtime", () => {
     expect(secondManifest.sharing.runGrantRevision).not.toBe(
       firstManifest.sharing.runGrantRevision
     );
+  });
+
+  test("continues an approved external tool call with a valid subsequent send ledger entry", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-external-ledger-"));
+    roots.push(projectRoot);
+    const descriptorBase = {
+      id: "mcp:trusted/send_message",
+      name: "mcp__trusted__send_message",
+      providerName: "mcp__trusted__send_message",
+      displayName: "Send message",
+      description: "Send a message to the trusted remote MCP server.",
+      kind: "external_tool" as const,
+      effect: "external_action" as const,
+      dataEgress: "remote_tool_arguments" as const,
+      destructive: false,
+      retrySemantics: "never_automatic" as const,
+      source: { kind: "mcp" as const, id: "trusted" },
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["message"],
+        properties: { message: { type: "string", minLength: 1, maxLength: 100 } }
+      }
+    };
+    const descriptor = {
+      ...descriptorBase,
+      descriptorDigest: computeAgentToolDescriptorDigest(descriptorBase)
+    };
+    let modelRounds = 0;
+    let externalCalls = 0;
+    const runtime = runtimeExports.createDesktopAgentRuntime({
+      workspaceKind: "creativeProject",
+      projectId: "project-01",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      featureFlags: createAgentFeatureFlags({
+        agentGuidanceV3: true,
+        phaseD_networkReadEnabled: true,
+        phaseE_remoteMcpEnabled: true,
+        revision: "desktop-external-ledger-test"
+      }),
+      sharingDefaults: {
+        outlineMetadata: "automatic",
+        activeResource: "automatic",
+        conversationSummary: "allow",
+        toolReadResults: "allow"
+      },
+      sharingDefaultsRevision: "c".repeat(64),
+      verifyCreativeGeneralActiveResource: async () => ok(undefined),
+      resolveModelStartFacts: async () => ({
+        profileId: "profile-desktop-external-ledger",
+        provider: "demo",
+        modelName: "desktop-external-ledger-model",
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredArguments: true,
+          contextWindow: 128000
+        },
+        requiredContextTokens: 8000,
+        reasoningStrength: { status: "hidden" as const, reason: "test model" }
+      }),
+      externalToolDescriptors: [descriptor],
+      externalToolExecutor: {
+        async callTool() {
+          externalCalls += 1;
+          return { ok: true, value: { status: "completed" as const, result: { delivered: true } } };
+        }
+      },
+      modelDriver: {
+        async *streamRound(input) {
+          modelRounds += 1;
+          if (modelRounds === 1) {
+            yield runtimeToolCall("desktop-external-send", "mcp__trusted__send_message", {
+              message: "hello"
+            });
+          } else {
+            const evidenceRef = `run-event/${String(
+              input.snapshot.lastSequence
+            )}/tool_completed/desktop-external-send`;
+            yield runtimeToolCall("desktop-external-finish", "finish", {
+              outcome: "completed",
+              report: {
+                result: "External message sent.",
+                appliedChanges: [],
+                verification: [evidenceRef],
+                residualRisks: []
+              },
+              evidenceRefs: [evidenceRef]
+            });
+          }
+          yield { type: "round_completed", finishReason: "tool_calls" };
+        }
+      }
+    });
+
+    const conversation = await runtime.agentConversationSession.createConversation({
+      projectId: "project-01",
+      commandId: "create-desktop-external-ledger-conversation"
+    });
+    expect(conversation).toMatchObject({ ok: true });
+    if (!conversation.ok) return;
+    const prepared = await runtime.agentRunDraftSession.syncStartDraft({
+      projectId: "project-01",
+      conversationId: conversation.value.conversationId,
+      commandId: "prepare-desktop-external-ledger",
+      userRequest: "Send the external message.",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "write_before_confirmation",
+      writePolicyAcknowledged: false,
+      modelProfileId: "profile-desktop-external-ledger",
+      contextRefs: []
+    });
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) return;
+    const packedPreview = await previewDraftStart(
+      runtime,
+      prepared.value,
+      "preview-desktop-external-ledger-context"
+    );
+    const preview = await runtime.prepareAgentSendPreview({
+      schemaVersion: "2.0",
+      commandId: "prepare-desktop-external-ledger-send",
+      startCommand: { ...packedPreview.command, commandId: "start-desktop-external-ledger" }
+    });
+    expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true });
+    if (!preview.ok) return;
+    const confirmed = await runtime.confirmAgentSendPreview({
+      schemaVersion: "2.0",
+      previewId: preview.value.previewId,
+      canonicalPayloadChecksum: preview.value.canonicalPayloadChecksum
+    });
+    expect(confirmed, JSON.stringify(confirmed)).toMatchObject({ ok: true });
+    if (!confirmed.ok) return;
+
+    await waitForDesktopRuntime(async () => {
+      const read = await runtime.agentRunSession.readAgentRun(confirmed.value.runId);
+      expect(read).toMatchObject({
+        ok: true,
+        value: { snapshot: { status: "awaiting_tool_approval" } }
+      });
+    });
+    const pendingRead = await runtime.agentRunSession.readAgentRun(confirmed.value.runId);
+    expect(pendingRead).toMatchObject({ ok: true });
+    if (!pendingRead.ok || pendingRead.value.snapshot.pendingToolApproval == null) return;
+    const pending = pendingRead.value.snapshot.pendingToolApproval;
+    const approved = await runtime.agentRunSession.decideToolApproval({
+      projectId: "project-01",
+      runId: confirmed.value.runId,
+      commandId: "approve-desktop-external-ledger",
+      expectedRunRevision: pendingRead.value.snapshot.runRevision,
+      bindingId: pending.binding.bindingId,
+      decision: "approve"
+    });
+    expect(approved).toMatchObject({ ok: true });
+    if (!approved.ok) return;
+
+    await waitForDesktopRuntime(async () => {
+      const read = await runtime.agentRunSession.readAgentRun(confirmed.value.runId);
+      expect(read).toMatchObject({ ok: true, value: { snapshot: { status: "completed" } } });
+    });
+    expect(externalCalls).toBe(1);
+    expect(modelRounds).toBe(2);
+    const ledger = await runtime.readAgentSendLedger(confirmed.value.runId);
+    expect(ledger).toMatchObject({
+      ok: true,
+      value: [
+        { roundNumber: 0, roundKind: "first_send" },
+        {
+          roundNumber: 1,
+          roundKind: "subsequent_send",
+          additions: [{ kind: "assistant" }, { kind: "remote_result" }]
+        }
+      ]
+    });
   });
 
   test("inherits the Plan sharing state before its execution run reads project content", async () => {

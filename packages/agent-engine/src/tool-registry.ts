@@ -828,6 +828,7 @@ export function validateAgentToolArguments(input: {
 
 function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
   if (name === "finish_plan") return finishPlanInputSchema();
+  if (name === "request_user_input") return requestUserInputSchema();
   if (name === "list_chapters") return listChaptersSchema();
   if (name === "read_resource") return strictStableRefObject("ref");
   if (name === "search_project") return v2SearchSchema();
@@ -1186,6 +1187,34 @@ function inputSchemaFor(name: AgentToolName | StaticAgentToolName): JsonObject {
     };
   }
   return { type: "object", additionalProperties: true };
+}
+
+function requestUserInputSchema(): JsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["questionId", "prompt", "reason", "options"],
+    properties: {
+      questionId: { type: "string", minLength: 1, maxLength: 256 },
+      prompt: { type: "string", minLength: 1, maxLength: 10_000 },
+      reason: { type: "string", minLength: 1, maxLength: 10_000 },
+      options: {
+        type: "array",
+        minItems: 2,
+        maxItems: 3,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "label"],
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 256 },
+            label: { type: "string", minLength: 1, maxLength: 1_000 }
+          }
+        }
+      },
+      allowFreeText: { type: "boolean" }
+    }
+  };
 }
 
 function listChaptersSchema(): JsonObject {

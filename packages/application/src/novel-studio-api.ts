@@ -367,6 +367,7 @@ export interface NovelStudioApi {
       completion: EngineeringMutationRendererSyncCompletionV2
     ): Promise<Result<void, UnifiedError>>;
     createProjectConventions(): Promise<Result<ProjectConventionsCreateResult, UnifiedError>>;
+    readModelSharingDefaults(): Promise<Result<WorkspaceModelSharingDefaults | null, UnifiedError>>;
     updateContextPolicy(update: WorkspaceContextPolicyUpdate): Promise<Result<void, UnifiedError>>;
   };
   creativeProjectFiles: {

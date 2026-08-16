@@ -38,6 +38,7 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
         <AgentCapabilitySummary
           ariaLabel="运行能力摘要"
           blockedTargets={changeSetBlockers(props.changeSetReview)}
+          compact
           facts={props.capability}
         />
       )}
@@ -261,9 +262,7 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
   );
 }
 
-function changeSetBlockers(
-  review: AgentRunPanelProps["changeSetReview"]
-): readonly string[] {
+function changeSetBlockers(review: AgentRunPanelProps["changeSetReview"]): readonly string[] {
   if (review === undefined) return [];
   return [
     ...(review.dirtyTargetPaths ?? []).map((path) => `${path} · 未保存`),

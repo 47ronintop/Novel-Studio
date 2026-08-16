@@ -8,6 +8,7 @@ import {
   FilePlus2,
   Plus,
   Send,
+  ShieldCheck,
   Square,
   X
 } from "lucide-react";
@@ -275,6 +276,7 @@ export function AgentComposer(props: AgentComposerProps) {
   const draftDisabled = props.disabled === true || props.active;
   const fixedBudgetExceeded = props.contextStatus?.fixedBudgetExceeded === true;
   const canSend = !draftDisabled && !fixedBudgetExceeded && props.request.trim().length > 0;
+  const sendPreviewPending = props.contextStatus?.sendPreview !== undefined;
 
   function sendRequest(): void {
     if (!canSend) return;
@@ -365,6 +367,13 @@ export function AgentComposer(props: AgentComposerProps) {
             </ul>
           </div>
         ) : null}
+        {sendPreviewPending ? (
+          <div className="ns-agent-composer-send-confirmation" role="status">
+            <Check aria-hidden="true" size={13} />
+            <span>发送预览待确认</span>
+            <small>再次点击发送以确认</small>
+          </div>
+        ) : null}
         <div className="ns-agent-composer-toolbar">
           <div aria-label="会话工具栏" className="ns-agent-composer-footer" role="toolbar">
             {isStandaloneConversation ? null : (
@@ -448,6 +457,20 @@ export function AgentComposer(props: AgentComposerProps) {
                               : props.writePolicy
                           }
                         />
+                        {props.onOpenModelSharing === undefined ? null : (
+                          <button
+                            className="ns-agent-composer-add-file"
+                            disabled={draftDisabled}
+                            onClick={() => {
+                              props.onOpenModelSharing?.();
+                              close();
+                            }}
+                            type="button"
+                          >
+                            <ShieldCheck aria-hidden="true" size={14} />
+                            模型共享范围
+                          </button>
+                        )}
                       </>
                     </div>
                   )}
@@ -555,18 +578,24 @@ export function AgentComposer(props: AgentComposerProps) {
                 </button>
               ) : (
                 <button
-                  aria-label="启动 Agent 运行"
+                  aria-label={sendPreviewPending ? "确认并发送 Agent 请求" : "启动 Agent 运行"}
                   className="ns-ai-send-button"
                   disabled={!canSend}
                   onClick={sendRequest}
                   title={
                     fixedBudgetExceeded
                       ? (props.contextStatus?.fixedBudgetMessage ?? "固定项超过安全输入预算")
-                      : "发送"
+                      : sendPreviewPending
+                        ? "确认并发送"
+                        : "发送"
                   }
                   type="button"
                 >
-                  <Send aria-hidden="true" size={14} />
+                  {sendPreviewPending ? (
+                    <Check aria-hidden="true" size={14} />
+                  ) : (
+                    <Send aria-hidden="true" size={14} />
+                  )}
                 </button>
               )}
             </div>

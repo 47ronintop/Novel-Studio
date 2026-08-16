@@ -976,6 +976,51 @@ describe("Agent Run Coordinator", () => {
     ).toBe(true);
   });
 
+  test("accepts the namespaced idempotency key used by external tool approvals", () => {
+    const coordinator = engineExports.createAgentRunCoordinator({
+      now: () => "2026-08-04T00:00:00.000Z",
+      createRunId: () => "run_external_approval_v20"
+    });
+    const started = coordinator.startRun(strictStartInput());
+    expect(started.ok).toBe(true);
+    if (!started.ok || started.value.schemaVersion !== "2.0") return;
+
+    const approval: engineExports.PendingToolApproval = {
+      binding: {
+        kind: "external",
+        bindingId: "binding_external_01",
+        runId: started.value.runId,
+        runRevision: started.value.runRevision,
+        toolCallId: "external_call_01",
+        sourceId: "trusted",
+        descriptorDigest: "2".repeat(64),
+        argumentDigest: "3".repeat(64),
+        idempotencyKey: `agent:${started.value.runId}:external_call_01:${"4".repeat(24)}`,
+        effectiveCapabilityRevision: 1,
+        expiresAt: "2026-08-04T00:05:00.000Z"
+      },
+      canonicalToolId: "mcp:trusted/send_message",
+      providerToolName: "mcp__trusted__send_message",
+      argumentsText: '{"message":"hello"}',
+      requestedAt: "2026-08-04T00:00:00.000Z"
+    };
+    const requested = coordinator.recordRunEvent({
+      runId: started.value.runId,
+      status: "awaiting_tool_approval",
+      type: "tool_approval_requested",
+      snapshotPatch: { pendingToolApproval: approval },
+      detail: {
+        toolCallId: approval.binding.toolCallId,
+        binding: approval.binding as unknown as Record<string, never>
+      }
+    });
+
+    expect(requested).toMatchObject({
+      ok: true,
+      value: { pendingToolApproval: approval }
+    });
+  });
+
   test("allows evidence-backed blocked after retryable failure but rejects completed and mixed histories", () => {
     const coordinator = engineExports.createAgentRunCoordinator({
       now: () => "2026-08-04T00:00:00.000Z",

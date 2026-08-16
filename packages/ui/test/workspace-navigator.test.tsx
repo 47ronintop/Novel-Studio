@@ -151,6 +151,27 @@ describe("CreativeWorkspaceNavigator", () => {
     expect(host.querySelector('button[aria-label="新建人物"]')).toBeNull();
   });
 
+  test("shows one project-level story analysis entry instead of repeating it per kind", () => {
+    const onOpen = vi.fn();
+    const storyBible = createStoryBible({
+      analysisReview: {
+        pendingCount: 2,
+        openIssueCount: 1,
+        onOpen
+      } as unknown as NonNullable<StoryBibleEditorProps["analysisReview"]>
+    });
+    render(<CreativeWorkspaceNavigator {...createCreativeProps({ mode: "story", storyBible })} />);
+
+    const entries = host.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label="打开资料更新建议"]'
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.textContent).toContain("资料更新建议");
+    expect(entries[0]?.textContent).toContain("3");
+    click(entries[0] as HTMLButtonElement);
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
   test("keeps project navigation available while story data is loading", () => {
     render(
       <CreativeWorkspaceNavigator

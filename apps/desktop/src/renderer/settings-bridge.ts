@@ -28,6 +28,8 @@ export interface SettingsBridgeOptions {
 
 type UsageProps = NonNullable<ModelSettingsPanelProps["usage"]>;
 
+const DEFAULT_MODEL_MAX_TOKENS = 4096;
+
 export interface SettingsBridge {
   getProps(): ModelSettingsPanelProps;
   load(): Promise<ModelSettingsPanelProps>;
@@ -578,7 +580,10 @@ export function createSettingsBridge(
 
   function profileFromDraft(nextDraft: ModelSettingsDraft): ModelProfile | undefined {
     const temperature = parseNumber(nextDraft.temperature);
-    const maxTokens = parseInteger(nextDraft.maxTokens);
+    const maxTokens =
+      nextDraft.maxTokens.trim().length === 0
+        ? DEFAULT_MODEL_MAX_TOKENS
+        : parsePositiveInteger(nextDraft.maxTokens);
     const contextWindow =
       nextDraft.contextWindow.trim().length === 0
         ? undefined
@@ -793,8 +798,7 @@ export function createSettingsBridge(
       return profiles.some((entry) => sameModelDiscoveryProfile(entry, profile));
     }
     return (
-      draft.apiKeyRefInput.trim() === requestApiKeyInput &&
-      isModelDiscoveryDraft(draft, profile)
+      draft.apiKeyRefInput.trim() === requestApiKeyInput && isModelDiscoveryDraft(draft, profile)
     );
   }
 
@@ -982,7 +986,7 @@ function newDraft(profileId: string): ModelSettingsDraft {
     contextWindow: "",
     apiKeyRefInput: "",
     temperature: "0.7",
-    maxTokens: "4096",
+    maxTokens: "",
     topP: "1",
     reasoningEffortEnabled: false,
     timeoutMs: "60000"

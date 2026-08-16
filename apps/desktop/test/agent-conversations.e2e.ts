@@ -120,6 +120,17 @@ test("isolates multi-run conversation context and restores project-scoped conver
     await chooseWorkspaceModelSharing(page);
     const conversationA = await selectedConversation(page);
     const composer = page.getByLabel("会话输入区");
+    await composer.getByLabel("添加引用与执行审批").click();
+    const addMenu = page.getByRole("dialog", { name: "添加引用与执行审批" });
+    const sharingEntry = addMenu.getByRole("button", { name: "模型共享范围" });
+    await expect(sharingEntry).toBeVisible();
+    await sharingEntry.click();
+    const sharingDialog = page.getByRole("dialog", { name: "设置模型共享范围" });
+    await expect(sharingDialog).toContainText("控制当前项目的哪些内容可以发送给模型。");
+    await expect(sharingDialog.getByLabel("项目结构摘要")).toHaveValue("automatic");
+    await expect(sharingDialog.getByLabel("会话摘要")).toHaveValue("allow");
+    await sharingDialog.getByRole("button", { name: "稍后设置" }).click();
+    await expect(sharingDialog).toHaveCount(0);
     await expect(composer.getByLabel(/^模型与推理：/)).toBeVisible();
     await assertComposerLayout(composer);
     await assertComposerPopover(
@@ -503,7 +514,7 @@ async function sendConversationRequest(page: Page, request: string): Promise<voi
   const start = composer.getByRole("button", { name: "启动 Agent 运行" });
   await start.click();
   await waitForExactSendPreview(page, composer);
-  await start.click();
+  await composer.getByRole("button", { name: "确认并发送 Agent 请求" }).click();
   await expect(
     page
       .getByLabel("Agent 会话主视图")

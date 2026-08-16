@@ -1491,7 +1491,7 @@ function isToolApprovalBinding(value: unknown): value is ToolApprovalBinding {
       isSafeId(value.sourceId) &&
       isSha256(value.descriptorDigest) &&
       isSha256(value.argumentDigest) &&
-      isSafeId(value.idempotencyKey)
+      isSafeIdempotencyKey(value.idempotencyKey)
     );
   }
   return false;
@@ -1562,6 +1562,10 @@ function hasOnlyFields(value: JsonObject, fields: readonly string[]): boolean {
 
 function isSafeId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value);
+}
+
+function isSafeIdempotencyKey(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u.test(value);
 }
 
 function isNonEmptyString(value: unknown): value is string {

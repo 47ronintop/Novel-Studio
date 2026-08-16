@@ -62,10 +62,7 @@ import { useModelSettingsActions, useSettingsPanelActions } from "./settings-pan
 import { useShellPreferenceActions } from "./shell-preference-actions.js";
 import { createWorkspaceNavigation, type WorkspaceNavigation } from "./workspace-navigation.js";
 import { useStoryAnalysisWorkspace } from "./story-analysis-workspace.js";
-import {
-  saveWorkspaceModelSharingDefaults,
-  shouldRequestWorkspaceModelSharingDefaults
-} from "./model-sharing-defaults.js";
+import { useModelSharingDialog } from "./use-model-sharing-dialog.js";
 import {
   createCreativeProjectFileShellBindings,
   useWorkspaceFileEditorRuntime
@@ -134,6 +131,12 @@ export function App() {
     workspaceContext.kind === "creativeProject" ? workspaceContext.projectId : undefined;
   const activeCreativeWorkspaceId =
     workspaceContext.kind === "creativeProject" ? workspaceContext.workspaceId : undefined;
+  const modelSharingDialog = useModelSharingDialog({
+    api,
+    workspaceId: activeProjectId,
+    workspaceKind: workspaceContext.kind,
+    ...(agentRun?.errorMessage === undefined ? {} : { agentErrorMessage: agentRun.errorMessage })
+  });
 
   const persistUserPreferences = useCallback(
     (input: UserPreferencesSaveInput) => {
@@ -215,7 +218,6 @@ export function App() {
   const [navigatorSearchQuery, setNavigatorSearchQuery] = useState("");
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [projectCreateDialogOpen, setProjectCreateDialogOpen] = useState(false);
-  const [modelSharingDialogOpen, setModelSharingDialogOpen] = useState(false);
   const [appearancePreferences, setAppearancePreferences] = useState<UserAppearancePreferences>({
     theme: "dark",
     accentColor: "teal"
@@ -251,21 +253,6 @@ export function App() {
       setProjectCreateDialogOpen(false);
     }
   }, [projectCreateDialogOpen, projectWorkflow?.status, projectWorkflow?.feedback]);
-
-  useEffect(() => {
-    setModelSharingDialogOpen(false);
-  }, [activeProjectId]);
-
-  useEffect(() => {
-    if (
-      shouldRequestWorkspaceModelSharingDefaults({
-        workspaceKind: shellState.workspaceContext.kind,
-        ...(agentRun?.errorMessage === undefined ? {} : { errorMessage: agentRun.errorMessage })
-      })
-    ) {
-      setModelSharingDialogOpen(true);
-    }
-  }, [agentRun?.errorMessage, shellState.workspaceContext.kind]);
 
   useEffect(() => {
     const next = ensureCreativeWorkspaceContext(shellState, projectWorkflow?.projectId);
@@ -815,7 +802,8 @@ export function App() {
     onReviewSelectionStyle: handleReviewSelectionStyle,
     onApplySelection: handleApplyAiSuggestion,
     onRejectSelection: handleRejectSelectionReview,
-    onUndoSelection: handleUndoSelectionReview
+    onUndoSelection: handleUndoSelectionReview,
+    onOpenModelSharing: () => modelSharingDialog.openDialog(false)
   });
   const brainstormingEntry = useBrainstormingEntry(
     agentConversationWorkspaceForShell,
@@ -1039,11 +1027,7 @@ export function App() {
           onConfirm={handleFolderImportConfirm}
         />
       )}
-      <AgentModelSharingDialog
-        open={modelSharingDialogOpen}
-        onClose={() => setModelSharingDialogOpen(false)}
-        onSave={(defaults) => saveWorkspaceModelSharingDefaults(api, defaults)}
-      />
+      <AgentModelSharingDialog {...modelSharingDialog.dialogProps} />
     </>
   );
 }

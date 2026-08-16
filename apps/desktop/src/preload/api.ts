@@ -100,6 +100,7 @@ import type {
   StoryAnalysisSettings,
   UserPreferencesSaveInput,
   UserPreferencesSnapshot,
+  WorkspaceModelSharingDefaults,
   WorkspaceContextPolicyUpdate,
   EngineeringEditorStateReport,
   EngineeringEditorStateReportResult,
@@ -343,6 +344,11 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
         invokeTyped<Result<ProjectConventionsCreateResult, UnifiedError>>(
           ipc,
           "application:workspace:create-project-conventions"
+        ),
+      readModelSharingDefaults: () =>
+        invokeTyped<Result<WorkspaceModelSharingDefaults | null, UnifiedError>>(
+          ipc,
+          "application:workspace:read-model-sharing-defaults"
         ),
       updateContextPolicy: (update: WorkspaceContextPolicyUpdate) =>
         invokeTyped<Result<void, UnifiedError>>(

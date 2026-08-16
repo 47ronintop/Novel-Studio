@@ -208,6 +208,60 @@ describe("Agent run tool catalog snapshots", () => {
     }
   });
 
+  test("round-trips a namespaced MCP descriptor in Catalog 2.0", () => {
+    const computeDigest = (engineExports as unknown as Record<string, unknown>)[
+      "computeAgentToolDescriptorDigest"
+    ] as (descriptor: Record<string, unknown>) => string;
+    const create = (engineExports as unknown as Record<string, unknown>)[
+      "createAgentRunToolCatalogSnapshotV2"
+    ] as (input: Record<string, unknown>) => Record<string, unknown>;
+    const validate = (engineExports as unknown as Record<string, unknown>)[
+      "validateAgentRunToolCatalogSnapshot"
+    ] as (value: Record<string, unknown>) => { readonly ok: boolean };
+    const base = {
+      id: "mcp:trusted/send_message",
+      name: "mcp__trusted__send_message",
+      providerName: "mcp__trusted__send_message",
+      displayName: "Send message",
+      description: "Send a message through the trusted MCP server.",
+      kind: "external_tool",
+      effect: "external_action",
+      dataEgress: "remote_tool_arguments",
+      destructive: false,
+      retrySemantics: "never_automatic",
+      source: { kind: "mcp", id: "trusted" },
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["message"],
+        properties: { message: { type: "string", minLength: 1 } }
+      }
+    };
+    const descriptor = { ...base, descriptorDigest: computeDigest(base) };
+    const catalog = create({
+      runId: "run_catalog_v2_mcp",
+      descriptors: [descriptor],
+      createdAt: "2026-08-16T00:00:00.000Z"
+    });
+
+    expect(validate(JSON.parse(JSON.stringify(catalog)) as Record<string, unknown>)).toMatchObject({
+      ok: true
+    });
+    expect(() =>
+      create({
+        runId: "run_catalog_v2_mcp_wrong_source",
+        descriptors: [
+          {
+            ...descriptor,
+            source: { kind: "mcp", id: "other" },
+            descriptorDigest: computeDigest({ ...base, source: { kind: "mcp", id: "other" } })
+          }
+        ],
+        createdAt: "2026-08-16T00:00:00.000Z"
+      })
+    ).toThrow("AGENT_TOOL_CATALOG_V2_INVALID");
+  });
+
   test("normalizes no-mutation Catalog 2.0 runs to a not-applicable approval projection", () => {
     const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
       input: Record<string, unknown>

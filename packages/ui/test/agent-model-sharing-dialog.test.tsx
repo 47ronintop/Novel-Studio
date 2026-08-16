@@ -26,6 +26,27 @@ describe("AgentModelSharingDialog", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  test("opens with the project selection that was already saved", () => {
+    const { host } = renderDialog({
+      initialDefaults: {
+        outlineMetadata: "off",
+        activeResource: "off",
+        conversationSummary: "allow",
+        toolReadResults: "deny"
+      }
+    });
+
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="项目结构摘要"]')?.value).toBe(
+      "off"
+    );
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="会话摘要"]')?.value).toBe(
+      "allow"
+    );
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="工具读取结果"]')?.value).toBe(
+      "deny"
+    );
+  });
+
   test("saves the author's exact selection and offers a manual retry", async () => {
     const onSave = vi.fn(async () => undefined);
     const onClose = vi.fn();

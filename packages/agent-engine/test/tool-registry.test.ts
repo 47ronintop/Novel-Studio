@@ -133,6 +133,46 @@ describe("Agent tool registry", () => {
     expect(validates({ ...validArguments, unexpected: true })).toBe(false);
   });
 
+  test("publishes and enforces the request_user_input contract", () => {
+    const descriptor = engineExports
+      .listAgentTools({
+        operationMode: "execution",
+        contextMode: "general_file",
+        writePolicy: "write_before_confirmation"
+      })
+      .find((tool) => tool.name === "request_user_input");
+    if (descriptor === undefined) throw new Error("Missing request_user_input descriptor.");
+
+    expect(descriptor.inputSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["questionId", "prompt", "reason", "options"]
+    });
+    const validArguments = {
+      questionId: "choose-target",
+      prompt: "请选择修改范围",
+      reason: "两个范围会产生不同结果。",
+      options: [
+        { id: "current", label: "当前文件" },
+        { id: "all", label: "全部文件" }
+      ],
+      allowFreeText: true
+    };
+    const validates = (argumentsValue: JsonObject) =>
+      engineExports.validateAgentToolArguments({
+        descriptor,
+        arguments: argumentsValue,
+        argumentsText: JSON.stringify(argumentsValue)
+      }).ok;
+
+    expect(validates(validArguments)).toBe(true);
+    expect(validates({ options: validArguments.options })).toBe(false);
+    expect(validates({ ...validArguments, options: validArguments.options.slice(0, 1) })).toBe(
+      false
+    );
+    expect(validates({ ...validArguments, unexpected: true })).toBe(false);
+  });
+
   test("publishes and enforces bounded proposal argument schemas", () => {
     const listTools = (engineExports as unknown as Record<string, unknown>)["listAgentTools"] as (
       input: Record<string, unknown>

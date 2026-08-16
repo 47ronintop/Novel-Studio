@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import { createUnifiedError, err, ok } from "@novel-studio/shared";
 import {
   AGENT_MODEL_SHARING_DEFAULTS_REQUIRED_MESSAGE,
+  loadWorkspaceModelSharingDefaults,
   saveWorkspaceModelSharingDefaults,
   shouldRequestWorkspaceModelSharingDefaults
 } from "../src/renderer/model-sharing-defaults.js";
@@ -45,6 +46,21 @@ describe("workspace model sharing defaults", () => {
       action: "set_sharing_defaults",
       defaults
     });
+  });
+
+  test("loads the current project selection through the Main-owned read API", async () => {
+    const defaults = {
+      outlineMetadata: "off" as const,
+      activeResource: "automatic" as const,
+      conversationSummary: "deny" as const,
+      toolReadResults: "allow" as const
+    };
+    const readModelSharingDefaults = vi.fn(async () => ok(defaults));
+
+    await expect(
+      loadWorkspaceModelSharingDefaults({ workspace: { readModelSharingDefaults } } as never)
+    ).resolves.toEqual({ ok: true, value: defaults });
+    expect(readModelSharingDefaults).toHaveBeenCalledOnce();
   });
 
   test("returns actionable Chinese feedback without treating failure as saved", async () => {

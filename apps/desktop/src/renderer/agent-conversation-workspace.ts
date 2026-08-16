@@ -180,6 +180,7 @@ export function decorateAgentConversationWorkspace(input: {
   readonly onApplySelection: () => void;
   readonly onRejectSelection: () => void;
   readonly onUndoSelection: () => void;
+  readonly onOpenModelSharing?: (() => void) | undefined;
 }): AgentConversationWorkspaceShellProps | undefined {
   const workspace = input.workspace;
   if (workspace === undefined) return undefined;
@@ -251,6 +252,9 @@ export function decorateAgentConversationWorkspace(input: {
               ? baseComposer.contextMode
               : "general_file",
             availableContextModes,
+            ...(input.onOpenModelSharing === undefined
+              ? {}
+              : { onOpenModelSharing: input.onOpenModelSharing }),
             ...(quickActions === undefined ? {} : { quickActions })
           };
   const workflowNotice =
@@ -275,12 +279,14 @@ function standaloneComposer(base: AgentComposerProps): AgentComposerProps {
     references: _references,
     contextStatus: _contextStatus,
     permission: _permission,
+    onOpenModelSharing: _onOpenModelSharing,
     ...rest
   } = base;
   void _quickActions;
   void _references;
   void _contextStatus;
   void _permission;
+  void _onOpenModelSharing;
   return {
     ...rest,
     operationMode: "conversation",

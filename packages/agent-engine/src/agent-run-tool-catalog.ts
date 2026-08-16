@@ -65,6 +65,8 @@ export type AgentRunToolCatalogValidation =
 
 const safeId = /^[A-Za-z0-9_-]{1,256}$/u;
 const sha256 = /^[a-f0-9]{64}$/u;
+const externalToolId =
+  /^(plugin|mcp):([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/u;
 const V2_FIELDS = Object.freeze([
   "schemaVersion",
   "toolCatalogSnapshotId",
@@ -469,14 +471,19 @@ function parseCatalogV2Descriptor(value: unknown): AgentToolDescriptor | undefin
     ) {
       return undefined;
     }
-  } else if (
-    id !== `${source["kind"]}:${source["id"]}` ||
-    name !== providerName ||
-    kind !== "external_tool" ||
-    (effect !== "external_read" && effect !== "external_action") ||
-    dataEgress !== "remote_tool_arguments"
-  ) {
-    return undefined;
+  } else {
+    const externalIdentity = externalToolId.exec(id);
+    if (
+      externalIdentity === null ||
+      externalIdentity[1] !== source["kind"] ||
+      externalIdentity[2] !== source["id"] ||
+      name !== providerName ||
+      kind !== "external_tool" ||
+      (effect !== "external_read" && effect !== "external_action") ||
+      dataEgress !== "remote_tool_arguments"
+    ) {
+      return undefined;
+    }
   }
   if (
     (effect === "propose" && !isProviderVisibleWriteOperation(value["writeOperation"])) ||

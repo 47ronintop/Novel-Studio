@@ -1,13 +1,4 @@
-import {
-  Check,
-  CheckCircle,
-  Eye,
-  FilePlus,
-  PlugZap,
-  RefreshCw,
-  Save,
-  Star
-} from "lucide-react";
+import { Check, CheckCircle, Eye, FilePlus, PlugZap, RefreshCw, Save, Star } from "lucide-react";
 import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
 import type { ModelDiscoverySnapshot } from "@novel-studio/application";
 import type { UserAppearancePreferences } from "@novel-studio/shared";
@@ -635,12 +626,18 @@ function ModelProfileSettingsSection({
                     value={draft.temperature}
                   />
                 </ModelField>
-                <ModelField label="Max Tokens" note="限制单次响应可生成的最大 token 数。">
+                <ModelField
+                  label="Max Tokens（可选）"
+                  note="限制单次响应可生成的最大 token 数；留空时使用默认值 4096。"
+                >
                   <input
                     aria-label="Max Tokens"
                     className="ns-search-input"
                     inputMode="numeric"
+                    min={1}
                     onChange={(event) => onDraftChange?.({ maxTokens: event.currentTarget.value })}
+                    placeholder="默认 4096"
+                    type="number"
                     value={draft.maxTokens}
                   />
                 </ModelField>

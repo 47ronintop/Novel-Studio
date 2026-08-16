@@ -176,6 +176,19 @@ describe("M22 settings bridge", () => {
     });
   });
 
+  test("accepts an empty Max Tokens field and saves the compatible default", async () => {
+    const calls: string[] = [];
+    const bridge = createSettingsBridge(createApi(calls));
+    await bridge.load();
+
+    bridge.updateDraft({ maxTokens: "" });
+    const saved = await bridge.saveDraft();
+
+    expect(saved.saveStatus).toBe("saved");
+    expect(saved.profiles[0]?.maxTokens).toBe(4096);
+    expect(calls).toContain("settings.saveModelProfile:model_default:openai-compatible:false");
+  });
+
   test("stores pasted API keys through the secret API and only saves secret refs in settings", async () => {
     const calls: string[] = [];
     const savedSecrets = new Map<string, string>();
@@ -231,10 +244,9 @@ describe("M22 settings bridge", () => {
       tested: [],
       discovered: []
     };
-    const bridge = createSettingsBridge(
-      createApi(calls, savedSecrets, { actionProfiles }),
-      { createProfileId: () => "model_draft" }
-    );
+    const bridge = createSettingsBridge(createApi(calls, savedSecrets, { actionProfiles }), {
+      createProfileId: () => "model_draft"
+    });
     await bridge.load();
     calls.length = 0;
     actionProfiles.discovered.length = 0;
@@ -792,11 +804,7 @@ function createApi(
         };
         return ok(result);
       },
-      discoverModelOptions: async (
-        profileId,
-        discoveryOptions,
-        profileOverride?: ModelProfile
-      ) => {
+      discoverModelOptions: async (profileId, discoveryOptions, profileOverride?: ModelProfile) => {
         calls.push(
           `settings.discoverModelOptions:${profileId}${discoveryOptions?.forceRefresh === true ? ":force" : ""}`
         );

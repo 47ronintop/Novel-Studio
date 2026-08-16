@@ -34,6 +34,19 @@ describe("AgentRunPanel", () => {
     expect(panel?.querySelector('[aria-label="Agent 错误"]')).toBeNull();
   });
 
+  test("keeps the run capability summary compact", () => {
+    const html = renderPanel({
+      capability: {
+        profileId: "engineering",
+        operationMode: "execution",
+        contextMode: "general_file"
+      }
+    });
+
+    expect(html).toContain("ns-agent-capability-summary-compact");
+    expect(html).not.toContain("已公开读取能力");
+  });
+
   test("renders a recoverable inline error with closed details, stable-ID copy, and explicit targets", async () => {
     const writeText = vi.fn(async () => undefined);
     const previousClipboard = navigator.clipboard;
