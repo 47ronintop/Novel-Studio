@@ -36,7 +36,6 @@ export function AgentConversationView(props: AgentConversationViewProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const conversationViewRef = useRef<HTMLElement>(null);
-  const conversationEndRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const closeHistory = useCallback(() => {
     setHistoryOpen(false);
@@ -75,14 +74,16 @@ export function AgentConversationView(props: AgentConversationViewProps) {
   }, [conversation?.conversationId]);
 
   useLayoutEffect(() => {
+    if ((props.agentRun?.userRequest?.trim().length ?? 0) > 0) {
+      stickToBottomRef.current = true;
+    }
+  }, [props.agentRun?.runId, props.agentRun?.userRequest]);
+
+  useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
     const view = conversationViewRef.current;
-    const end = conversationEndRef.current;
-    if (end?.scrollIntoView !== undefined) {
-      end.scrollIntoView({ behavior: "auto", block: "end" });
-    } else if (view !== null) {
-      view.scrollTop = view.scrollHeight;
-    }
+    if (view === null) return;
+    view.scrollTop = Math.max(0, view.scrollHeight - view.clientHeight);
   }, [messageVersion]);
 
   const handleConversationScroll = useCallback((event: UIEvent<HTMLElement>) => {
@@ -118,11 +119,7 @@ export function AgentConversationView(props: AgentConversationViewProps) {
           <p>{props.loading ? "正在恢复当前工作区的会话与上下文。" : composerDisabledReason}</p>
         </div>
         {composer === undefined ? null : (
-          <AgentComposer
-            {...composer}
-            disabled={true}
-            disabledReason={composerDisabledReason}
-          />
+          <AgentComposer {...composer} disabled={true} disabledReason={composerDisabledReason} />
         )}
         {historyDrawer}
       </section>
@@ -254,8 +251,6 @@ export function AgentConversationView(props: AgentConversationViewProps) {
           <AgentRunPanel {...props.agentRun} />
         </div>
       )}
-
-      <div aria-hidden="true" className="ns-agent-conversation-end" ref={conversationEndRef} />
 
       {composer === undefined ? null : (
         <AgentComposer

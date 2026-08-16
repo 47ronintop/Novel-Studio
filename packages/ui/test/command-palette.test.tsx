@@ -14,14 +14,16 @@ describe("CommandPalette", () => {
     expect(isCommandPaletteShortcut({ key: "p", ctrlKey: true, metaKey: false })).toBe(false);
   });
 
-  test("renders only safe commands with visible risk levels", () => {
+  test("renders only useful safe commands with visible risk levels", () => {
     const html = renderToStaticMarkup(
       <CommandPalette commands={DEFAULT_APPLICATION_COMMANDS} open={true} />
     );
 
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-label="命令面板"');
-    expect(html).toContain("打开命令面板");
+    expect(html).not.toContain("打开命令面板");
+    expect(html).not.toContain("打开任务面板");
+    expect(html).toContain("切换底部面板");
     expect(html).toContain("切换项目导航");
     expect(html).toContain("安全");
     expect(html).not.toContain("destructive");

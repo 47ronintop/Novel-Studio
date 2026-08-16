@@ -34,8 +34,11 @@ test("cycles the conversation panel and adapts expanded content", async () => {
     const grid = page.locator(".ns-workspace-grid");
     const editor = page.locator('[data-region="editor-area"]');
     const conversationPanel = page.getByLabel("AI 对话面板");
+    const conversationHeader = page.locator(".ns-agent-conversation-view-header");
     const resizeHandle = page.getByLabel("AI panel resize handle");
     await expect(page.getByLabel("Agent 会话主视图")).toBeVisible();
+    await expect(conversationHeader).toHaveCSS("position", "sticky");
+    await expect(conversationHeader).toHaveCSS("top", "0px");
     await expect(grid).toHaveAttribute("data-conversation-panel-mode", "docked");
     await expect(editor).toBeVisible();
     await expect(conversationPanel).toBeVisible();

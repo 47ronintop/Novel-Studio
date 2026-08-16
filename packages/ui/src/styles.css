@@ -5278,12 +5278,17 @@ textarea:focus-visible,
 
 .ns-agent-conversation-view-header {
   align-items: center;
+  background: var(--ns-surface);
   border-bottom: 1px solid var(--ns-border);
   display: flex;
+  flex: 0 0 auto;
   gap: 8px;
   justify-content: space-between;
   min-height: 44px;
   padding: 6px 12px;
+  position: sticky;
+  top: 0;
+  z-index: 3;
 }
 
 .ns-agent-conversation-title-trigger {
@@ -5488,12 +5493,6 @@ textarea:focus-visible,
 .ns-agent-conversation-turns-empty {
   margin: 0;
   padding: 18px 16px;
-}
-
-.ns-agent-conversation-end {
-  flex: 0 0 1px;
-  height: 1px;
-  width: 100%;
 }
 
 .ns-agent-conversation-run-panel {

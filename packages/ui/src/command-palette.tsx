@@ -24,6 +24,11 @@ export interface CommandPaletteFeedback {
   readonly message: string;
 }
 
+const REDUNDANT_PALETTE_COMMAND_IDS = new Set<ApplicationCommand["id"]>([
+  "workspace.open-command-palette",
+  "workspace.open-bottom-panel"
+]);
+
 export function isCommandPaletteShortcut(event: CommandPaletteShortcutEvent): boolean {
   return event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey);
 }
@@ -44,7 +49,9 @@ export function CommandPalette({
   }
 
   const currentQuery = query ?? "";
-  const safeCommands = commands.filter((command) => command.riskLevel === "safe");
+  const safeCommands = commands.filter(
+    (command) => command.riskLevel === "safe" && !REDUNDANT_PALETTE_COMMAND_IDS.has(command.id)
+  );
   const filteredCommands = filterCommands(safeCommands, currentQuery);
   const activeCommandId = selectedCommandId ?? filteredCommands[0]?.id;
   const groupedCommands = groupCommands(filteredCommands);
@@ -90,54 +97,56 @@ export function CommandPalette({
             <X aria-hidden="true" size={14} />
           </button>
         </div>
-      {executionFeedback === undefined ? null : (
-        <p className="ns-command-feedback" data-kind={executionFeedback.kind} role="status">
-          {executionFeedback.message}
-        </p>
-      )}
-      {groupedCommands.length === 0 ? (
-        <div className="ns-command-empty">没有匹配命令</div>
-      ) : (
-        <div className="ns-command-groups" aria-label="可用命令">
-          {groupedCommands.map((group) => (
-            <section
-              className="ns-command-group"
-              data-command-group={group.scope}
-              key={group.scope}
-            >
-              <h2>{scopeLabel(group.scope)}</h2>
-              <ul className="ns-command-list">
-                {group.commands.map((command) => (
-                  <li className="ns-command-item" key={command.id}>
-                    <button
-                      aria-label={`执行命令：${command.title}`}
-                      className="ns-command-action"
-                      data-active={command.id === activeCommandId}
-                      disabled={command.disabledReason !== undefined}
-                      onClick={() => {
-                        if (command.disabledReason === undefined) {
-                          onCommandExecute?.(command.id);
-                          onClose?.();
-                        }
-                      }}
-                      type="button"
-                    >
-                      <span className="ns-command-title">{command.title}</span>
-                      <span className="ns-command-meta">
-                        <span>{command.defaultShortcut}</span>
-                        <span className="ns-risk-level">{riskLevelLabel(command.riskLevel)}</span>
-                      </span>
-                      {command.disabledReason === undefined ? null : (
-                        <span className="ns-command-disabled-reason">{command.disabledReason}</span>
-                      )}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      )}
+        {executionFeedback === undefined ? null : (
+          <p className="ns-command-feedback" data-kind={executionFeedback.kind} role="status">
+            {executionFeedback.message}
+          </p>
+        )}
+        {groupedCommands.length === 0 ? (
+          <div className="ns-command-empty">没有匹配命令</div>
+        ) : (
+          <div className="ns-command-groups" aria-label="可用命令">
+            {groupedCommands.map((group) => (
+              <section
+                className="ns-command-group"
+                data-command-group={group.scope}
+                key={group.scope}
+              >
+                <h2>{scopeLabel(group.scope)}</h2>
+                <ul className="ns-command-list">
+                  {group.commands.map((command) => (
+                    <li className="ns-command-item" key={command.id}>
+                      <button
+                        aria-label={`执行命令：${command.title}`}
+                        className="ns-command-action"
+                        data-active={command.id === activeCommandId}
+                        disabled={command.disabledReason !== undefined}
+                        onClick={() => {
+                          if (command.disabledReason === undefined) {
+                            onCommandExecute?.(command.id);
+                            onClose?.();
+                          }
+                        }}
+                        type="button"
+                      >
+                        <span className="ns-command-title">{command.title}</span>
+                        <span className="ns-command-meta">
+                          <span>{command.defaultShortcut}</span>
+                          <span className="ns-risk-level">{riskLevelLabel(command.riskLevel)}</span>
+                        </span>
+                        {command.disabledReason === undefined ? null : (
+                          <span className="ns-command-disabled-reason">
+                            {command.disabledReason}
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        )}
       </div>
     </>
   );

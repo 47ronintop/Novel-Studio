@@ -12,7 +12,7 @@ import {
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
 
-test("opens the task panel from the command palette", async () => {
+test("keeps one bottom-panel command in the command palette", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-command-palette-e2e-"));
   const electronApp = await electron.launch({
     args: [electronMain],
@@ -36,8 +36,10 @@ test("opens the task panel from the command palette", async () => {
     await page.getByRole("button", { name: "打开命令面板" }).click();
     const palette = page.getByRole("dialog", { name: "命令面板" });
     await expect(palette).toBeVisible();
-    await palette.getByRole("textbox", { name: "搜索命令" }).fill("打开任务面板");
-    await palette.getByRole("button", { name: "执行命令：打开任务面板" }).click();
+    await expect(palette.getByRole("button", { name: "执行命令：打开命令面板" })).toHaveCount(0);
+    await expect(palette.getByRole("button", { name: "执行命令：打开任务面板" })).toHaveCount(0);
+    await palette.getByRole("textbox", { name: "搜索命令" }).fill("底部面板");
+    await palette.getByRole("button", { name: "执行命令：切换底部面板" }).click();
 
     await expect(taskPanel).toHaveAttribute("data-visible", "true");
     await expect(taskPanel).toBeVisible();

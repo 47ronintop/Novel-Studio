@@ -106,21 +106,82 @@ describe("AgentConversationView", () => {
     ).toBeNull();
   });
 
-  test("follows newly rendered messages to the end of the conversation", () => {
+  test("follows a submitted request and its stream until the user scrolls away", () => {
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
-    const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
-      value: scrollIntoView
+      value: vi.fn()
     });
 
     try {
       const { rerender } = renderView();
-      const initialCalls = scrollIntoView.mock.calls.length;
+      const view = document.querySelector<HTMLElement>('[aria-label="Agent 会话主视图"]');
+      if (view === null) throw new Error("Expected the conversation view");
+      let scrollHeight = 800;
+      let scrollTop = 100;
+      const clientHeight = 300;
+      Object.defineProperties(view, {
+        clientHeight: { configurable: true, get: () => clientHeight },
+        scrollHeight: { configurable: true, get: () => scrollHeight },
+        scrollTop: {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value: number) => {
+            scrollTop = Math.max(0, Math.min(value, scrollHeight - clientHeight));
+          }
+        }
+      });
 
-      rerender({ agentRun: { ...agentRun(), assistantText: "新的回复" } });
+      act(() => view.dispatchEvent(new Event("scroll", { bubbles: true })));
+      rerender({
+        agentRun: {
+          ...agentRun(),
+          runId: "run-submitted",
+          userRequest: "新的请求",
+          status: "planning_model"
+        }
+      });
+      expect(scrollTop).toBe(500);
 
-      expect(scrollIntoView.mock.calls.length).toBeGreaterThan(initialCalls);
+      scrollHeight = 860;
+      rerender({
+        agentRun: {
+          ...agentRun(),
+          runId: "run-submitted",
+          userRequest: "新的请求",
+          assistantText: "流式回复",
+          status: "executing_model"
+        }
+      });
+      expect(scrollTop).toBe(560);
+
+      view.scrollTop = 120;
+      act(() => view.dispatchEvent(new Event("scroll", { bubbles: true })));
+      scrollHeight = 920;
+      rerender({
+        agentRun: {
+          ...agentRun(),
+          runId: "run-submitted",
+          userRequest: "新的请求",
+          assistantText: "流式回复继续",
+          status: "executing_model"
+        }
+      });
+      expect(scrollTop).toBe(120);
+
+      view.scrollTop = scrollHeight - clientHeight;
+      act(() => view.dispatchEvent(new Event("scroll", { bubbles: true })));
+      scrollHeight = 980;
+      rerender({
+        agentRun: {
+          ...agentRun(),
+          runId: "run-submitted",
+          userRequest: "新的请求",
+          assistantText: "流式回复完成",
+          status: "completed"
+        }
+      });
+      expect(scrollTop).toBe(680);
     } finally {
       if (originalScrollIntoView === undefined) {
         Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
