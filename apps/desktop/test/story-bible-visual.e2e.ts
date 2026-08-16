@@ -77,6 +77,14 @@ test("accepts Story Bible views, themes, responsive layouts, and keyboard workfl
 });
 
 async function exerciseKeyboardWorkflow(page: Page): Promise<void> {
+  await page.getByRole("tab", { name: "故事资料", exact: true }).click();
+  const analysisReviewTrigger = page.getByRole("button", { name: "打开资料更新建议" });
+  await expect(analysisReviewTrigger).toBeVisible({ timeout: 15_000 });
+  await analysisReviewTrigger.click();
+  await expect(page.getByRole("heading", { name: "资料更新建议", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "关闭资料更新建议" }).click();
+  await expect(page.getByLabel("人物列表")).toBeVisible();
+
   const storyActivity = page
     .getByLabel("活动栏")
     .getByRole("button", { name: "故事资料", exact: true });
@@ -188,6 +196,7 @@ async function captureStoryViews(page: Page, prefix: string): Promise<void> {
   await captureAndAudit(page, `${prefix}-character-list.png`);
 
   await selectStoryKind(page, "world");
+  await expectStoryHeadingOnOneLine(page, "世界观");
   await page.getByLabel("筛选世界观类型").selectOption("world.location");
   await expect(page.locator('[data-story-entry-id="loc_harbor"]')).toBeVisible();
   await captureAndAudit(page, `${prefix}-world-filter.png`);
@@ -198,6 +207,7 @@ async function captureStoryViews(page: Page, prefix: string): Promise<void> {
   await captureAndAudit(page, `${prefix}-outline-tree.png`);
 
   await selectStoryKind(page, "foreshadow");
+  await expectStoryHeadingOnOneLine(page, "伏笔");
   await expect(page.getByLabel("伏笔列表")).toBeVisible();
   await captureAndAudit(page, `${prefix}-foreshadow-list.png`);
   await page.locator(`[data-story-entry-id="${foreshadowId}"]`).click();
@@ -239,6 +249,21 @@ async function selectTheme(
   await page.getByRole("button", { name: buttonName, exact: true }).click();
   await expect(page.locator(".ns-shell")).toHaveAttribute("data-theme", theme);
   await page.getByRole("button", { name: "关闭设置", exact: true }).click();
+}
+
+async function expectStoryHeadingOnOneLine(page: Page, title: string): Promise<void> {
+  const heading = page.getByRole("heading", { name: title, exact: true });
+  await expect(heading).toBeVisible();
+  const metrics = await heading.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      height: element.getBoundingClientRect().height,
+      lineHeight: Number.parseFloat(style.lineHeight)
+    };
+  });
+  expect(metrics.height, `${title} should not collapse into a vertical title`).toBeLessThanOrEqual(
+    metrics.lineHeight * 1.5
+  );
 }
 
 async function captureAndAudit(page: Page, fileName: string): Promise<void> {

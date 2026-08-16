@@ -689,6 +689,7 @@ export function App() {
     canLeaveCreativeFile: guardWorkspaceFileTransition,
     canLeaveStoryBibleDraft: guardStoryBibleDraft,
     beforeNavigateToChapter: storyAnalysisWorkspace.beforeNavigateToChapter,
+    openStoryAnalysisReview: storyAnalysisWorkspace.storyBibleEditor?.analysisReview?.onOpen,
     setShellState,
     setProjectWorkflow,
     setChapterEditor,

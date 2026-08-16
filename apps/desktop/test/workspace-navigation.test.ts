@@ -142,6 +142,38 @@ describe("workspace navigation", () => {
     expect(state.storyBibleEditor).toBe(nextStory);
   });
 
+  test("opens story analysis directly from the writing surface", () => {
+    const log: string[] = [];
+    const state = createState({ creativeNavigatorMode: "writing", activeActivity: "workspace" });
+    const currentStory = storyEditor("world_note", "world");
+    const selectKind = vi.fn(() => currentStory);
+    const navigation = createWorkspaceNavigation({
+      ...state.dependencies(log),
+      openStoryAnalysisReview: () => log.push("story.analysis.open"),
+      storyBibleBridge: {
+        getEditorProps() {
+          log.push("story.getEditorProps");
+          return currentStory;
+        },
+        selectKind,
+        selectEntry: () => currentStory,
+        beginCreate: () => currentStory,
+        cancelDraft: () => currentStory
+      }
+    });
+
+    navigation.navigateToStoryAnalysis();
+
+    expect(log).toEqual([
+      "story.getEditorProps",
+      "story.analysis.open",
+      "state.navigator:story",
+      "state.activity:storyBible"
+    ]);
+    expect(selectKind).not.toHaveBeenCalled();
+    expect(state.storyBibleEditor).toBe(currentStory);
+  });
+
   test("begins a typed story draft before committing the creative story surface", () => {
     const log: string[] = [];
     const state = createState({

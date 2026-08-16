@@ -188,6 +188,14 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       ? undefined
       : ({
           ...sourceStoryBibleEditor,
+          ...(sourceStoryBibleEditor.analysisReview === undefined
+            ? {}
+            : {
+                analysisReview: {
+                  ...sourceStoryBibleEditor.analysisReview,
+                  onOpen: props.navigation.navigateToStoryAnalysis
+                }
+              }),
           onKindSelect: (kind) => {
             if (props.shellState.activeActivity === "timeline" && kind === "timeline") {
               props.navigation.navigateToTimeline();

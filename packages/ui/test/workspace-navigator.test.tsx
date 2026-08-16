@@ -168,6 +168,11 @@ describe("CreativeWorkspaceNavigator", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.textContent).toContain("资料更新建议");
     expect(entries[0]?.textContent).toContain("3");
+    const reviewSection = requiredElement(host, '[aria-label="待处理事项"]');
+    const kindList = requiredElement(host, '[aria-label="故事资料分类"]');
+    expect(reviewSection.textContent).toContain("待处理");
+    expect(kindList.textContent).toContain("资料分类");
+    expect(reviewSection.nextElementSibling).toBe(kindList);
     click(entries[0] as HTMLButtonElement);
     expect(onOpen).toHaveBeenCalledOnce();
   });

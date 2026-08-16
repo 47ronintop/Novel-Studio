@@ -286,7 +286,28 @@ function StoryProjection(props: CreativeWorkspaceNavigatorProps) {
 
   return (
     <>
+      {storyBible.analysisReview === undefined ? null : (
+        <section aria-label="待处理事项" className="ns-story-review-section">
+          <span className="ns-story-nav-section-label">待处理</span>
+          <button
+            aria-label="打开资料更新建议"
+            className="ns-story-analysis-nav-trigger ns-icon-text-button"
+            onClick={storyBible.analysisReview.onOpen}
+            type="button"
+          >
+            <Inbox aria-hidden="true" size={14} />
+            <span>资料更新建议</span>
+            {storyBible.analysisReview.pendingCount + storyBible.analysisReview.openIssueCount ===
+            0 ? null : (
+              <span className="ns-story-analysis-trigger-count">
+                {storyBible.analysisReview.pendingCount + storyBible.analysisReview.openIssueCount}
+              </span>
+            )}
+          </button>
+        </section>
+      )}
       <div aria-label="故事资料分类" className="ns-story-kind-list">
+        <span className="ns-story-nav-section-label">资料分类</span>
         {STORY_KINDS.map((kind) => {
           const KindIcon = storyKindIcons[kind];
           const count = storyBible.entries.filter((entry) => entry.kind === kind).length;
@@ -308,23 +329,6 @@ function StoryProjection(props: CreativeWorkspaceNavigatorProps) {
           );
         })}
       </div>
-      {storyBible.analysisReview === undefined ? null : (
-        <button
-          aria-label="打开资料更新建议"
-          className="ns-story-analysis-nav-trigger ns-icon-text-button"
-          onClick={storyBible.analysisReview.onOpen}
-          type="button"
-        >
-          <Inbox aria-hidden="true" size={14} />
-          <span>资料更新建议</span>
-          {storyBible.analysisReview.pendingCount + storyBible.analysisReview.openIssueCount ===
-          0 ? null : (
-            <span className="ns-story-analysis-trigger-count">
-              {storyBible.analysisReview.pendingCount + storyBible.analysisReview.openIssueCount}
-            </span>
-          )}
-        </button>
-      )}
     </>
   );
 }

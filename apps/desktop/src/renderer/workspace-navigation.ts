@@ -30,6 +30,7 @@ export interface WorkspaceNavigation {
   createCreativeProject(): void;
   navigateToChapter(chapterId: string): Promise<void>;
   navigateToStoryKind(kind: StoryBibleEditorKind): void;
+  navigateToStoryAnalysis(): void;
   navigateToStoryEntry(entryId: string): void;
   createStoryEntry(kind: StoryBibleEditorKind, assetType?: StoryBibleWorldAssetType): void;
   navigateToTimeline(): void;
@@ -61,6 +62,7 @@ export interface WorkspaceNavigationDependencies {
   readonly canLeaveCreativeFile?: (() => Promise<boolean>) | undefined;
   readonly canLeaveStoryBibleDraft?: (() => Promise<boolean>) | undefined;
   readonly beforeNavigateToChapter?: ((chapterId: string) => Promise<boolean>) | undefined;
+  readonly openStoryAnalysisReview?: (() => void) | undefined;
   readonly setShellState: StateSetter<DesktopShellState>;
   readonly setProjectWorkflow: (next: ProjectWorkflowProps | undefined) => void;
   readonly setChapterEditor: (next: ChapterEditorProps | undefined) => void;
@@ -122,6 +124,16 @@ export function createWorkspaceNavigation(
         const bridge = dependencies.storyBibleBridge;
         if (bridge === undefined) return;
         dependencies.setStoryBibleEditor(bridge.selectKind(kind));
+      });
+    },
+    navigateToStoryAnalysis() {
+      navigateToStory(() => {
+        const bridge = dependencies.storyBibleBridge;
+        if (bridge === undefined || dependencies.openStoryAnalysisReview === undefined) return;
+        dependencies.setStoryBibleEditor(
+          bridge.getEditorProps?.() ?? bridge.selectKind("character")
+        );
+        dependencies.openStoryAnalysisReview();
       });
     },
     navigateToStoryEntry(entryId) {
