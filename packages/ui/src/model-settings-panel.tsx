@@ -290,7 +290,7 @@ export function ModelSettingsPanel({
             ) : null}
             {effectiveSection === "network" && network === undefined ? (
               <section className="model-settings-section" aria-label="Agent 网络">
-                <p style={{ color: "#888", padding: "16px" }}>
+                <p className="model-settings-empty">
                   网络访问设置不可用。请确认 Desktop 运行时已连接。
                 </p>
               </section>
@@ -300,7 +300,7 @@ export function ModelSettingsPanel({
             ) : null}
             {effectiveSection === "mcp" && toolSources === undefined ? (
               <section className="model-settings-section" aria-label="工具来源">
-                <p style={{ color: "#888", padding: "16px" }}>
+                <p className="model-settings-empty">
                   工具来源管理不可用。请确认 Desktop 运行时已连接。
                 </p>
               </section>

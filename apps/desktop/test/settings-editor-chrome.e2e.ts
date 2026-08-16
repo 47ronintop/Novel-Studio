@@ -48,6 +48,9 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     const semanticBefore = await readSemanticTokens(page);
     await page.getByLabel("活动栏").getByRole("button", { name: "设置" }).click();
     await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
+    const closeSettings = page.getByRole("button", { name: "关闭设置" });
+    const newModel = page.getByRole("button", { name: "新建模型" });
+    await expectHorizontalGap(newModel, closeSettings, 8);
     // Chrome regions stay mounted even during settings mode (VS Code-style architecture).
     await expect(page.locator('[data-region="editor-area"]')).toHaveCount(1);
     await expect(page.locator('[data-region="ai-panel"]')).toHaveCount(1);
@@ -95,6 +98,10 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     if (navTopBeforeScroll !== undefined && navTopAfterScroll !== undefined) {
       expect(Math.abs(navTopAfterScroll - navTopBeforeScroll)).toBeLessThanOrEqual(1);
     }
+    await page.locator(".model-settings-main").evaluate((element) => {
+      element.querySelector('[data-test-settings-scroll-sentinel="true"]')?.remove();
+      element.scrollTop = 0;
+    });
     await page.getByRole("button", { name: "浅色主题" }).click();
     const blueAccent = page.getByRole("button", { name: "强调色 蓝色" });
     await blueAccent.click();
@@ -106,6 +113,53 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     expect(semanticAfter.every((token) => token.length > 0)).toBe(true);
     await expectFunctionalContrast(page);
     await expectElementContrast(page.locator('.model-settings-category-item[aria-current="page"]'));
+
+    const desktopCategoryList = page.locator(".model-settings-category-list");
+    const desktopSettingsMain = page.locator(".model-settings-main");
+    const settingsSectionWidths: number[] = [];
+    for (const section of [
+      { label: "插件", locator: page.locator('.model-settings-section[aria-label="插件管理"]') },
+      { label: "Agent 用量", locator: page.locator(".agent-usage-settings") },
+      { label: "工具来源", locator: page.locator(".agent-tool-source-settings") }
+    ]) {
+      await desktopCategoryList.getByText(section.label, { exact: true }).click();
+      await desktopSettingsMain.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await expect(section.locator).toBeVisible();
+      await expectNoHorizontalOverflow(section.locator);
+      settingsSectionWidths.push((await section.locator.boundingBox())?.width ?? 0);
+    }
+    expect(Math.min(...settingsSectionWidths)).toBeGreaterThan(0);
+    expect(
+      Math.max(...settingsSectionWidths) - Math.min(...settingsSectionWidths)
+    ).toBeLessThanOrEqual(1);
+    expect((await page.getByLabel("搜索设置").boundingBox())?.height ?? 0).toBeLessThanOrEqual(44);
+
+    await desktopCategoryList.getByText("Agent 用量", { exact: true }).click();
+    expect(
+      (await page.locator(".agent-usage-range").boundingBox())?.height ?? 0
+    ).toBeLessThanOrEqual(44);
+    const usageHeading = page.getByRole("heading", { name: "Agent 用量" });
+    const usageHeadingColors = await usageHeading.evaluate((element) => {
+      const shell = element.closest(".ns-shell");
+      return {
+        actual: getComputedStyle(element).color,
+        expected: shell === null ? "" : getComputedStyle(shell).color
+      };
+    });
+    expect(usageHeadingColors.actual).toBe(usageHeadingColors.expected);
+    await expectElementContrast(usageHeading);
+    await capture(page, "desktop-light-usage.png");
+
+    await desktopCategoryList.getByText("插件", { exact: true }).click();
+    await capture(page, "desktop-light-plugins.png");
+    await desktopCategoryList.getByText("工具来源", { exact: true }).click();
+    await capture(page, "desktop-light-tool-sources.png");
+    await desktopCategoryList.getByText("外观", { exact: true }).click();
+    await desktopSettingsMain.evaluate((element) => {
+      element.scrollTop = 0;
+    });
     await blueAccent.focus();
     await expect(blueAccent).toBeFocused();
     await expectElementContrast(blueAccent);
@@ -134,7 +188,6 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
     await page.reload();
     await expect(page.locator(".ns-shell")).toHaveAttribute("data-theme", "ink-gold");
 
-    const closeSettings = page.getByRole("button", { name: "关闭设置" });
     if (await closeSettings.isVisible()) await closeSettings.click();
     await browserWindow.evaluate((window) => window.setSize(760, 720));
     expect(await browserWindow.evaluate((window) => window.getSize()[0])).toBe(760);
@@ -167,6 +220,9 @@ test("accepts settings and editor chrome across desktop and narrow Electron wind
       "desktop-replace-overlay.png",
       "desktop-settings.png",
       "desktop-light-blue.png",
+      "desktop-light-usage.png",
+      "desktop-light-plugins.png",
+      "desktop-light-tool-sources.png",
       "desktop-ink-gold.png",
       "narrow-workspace.png",
       "narrow-settings.png"
@@ -196,6 +252,30 @@ async function expectInside(child: Locator, parent: Locator): Promise<void> {
   expect(childBox.y).toBeGreaterThanOrEqual(parentBox.y);
   expect(childBox.x + childBox.width).toBeLessThanOrEqual(parentBox.x + parentBox.width + 1);
   expect(childBox.y + childBox.height).toBeLessThanOrEqual(parentBox.y + parentBox.height + 1);
+}
+
+async function expectHorizontalGap(
+  left: Locator,
+  right: Locator,
+  minimumGap: number
+): Promise<void> {
+  const leftBox = await left.boundingBox();
+  const rightBox = await right.boundingBox();
+  expect(leftBox).not.toBeNull();
+  expect(rightBox).not.toBeNull();
+  if (leftBox === null || rightBox === null) {
+    return;
+  }
+
+  expect(rightBox.x - (leftBox.x + leftBox.width)).toBeGreaterThanOrEqual(minimumGap);
+}
+
+async function expectNoHorizontalOverflow(locator: Locator): Promise<void> {
+  const dimensions = await locator.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth
+  }));
+  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
 }
 
 async function expectEditorFillsSurface(page: Page): Promise<void> {

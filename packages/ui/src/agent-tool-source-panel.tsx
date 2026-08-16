@@ -133,110 +133,117 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
   );
 
   return (
-    <div data-testid="agent-tool-source-panel" style={{ padding: "16px" }}>
-      <h2>工具来源管理</h2>
-      <p style={{ fontSize: "12px", color: "#888", marginBottom: "16px" }}>
-        管理 MCP 服务器连接。来源只在运行开始时冻结；运行中安装或启用不会影响当前运行。
-      </p>
+    <section
+      aria-labelledby="agent-tool-source-heading"
+      className="model-settings-section agent-tool-source-settings"
+      data-testid="agent-tool-source-panel"
+    >
+      <header className="model-settings-section-header">
+        <div>
+          <h2 id="agent-tool-source-heading">工具来源管理</h2>
+          <p>管理 MCP 服务器连接。运行中安装或启用的来源将在下次运行时生效。</p>
+        </div>
+        {!showAddForm && (
+          <button
+            aria-label="添加 MCP 服务器"
+            className="ns-icon-text-button"
+            data-testid="tool-source-add-button"
+            disabled={loading}
+            onClick={() => setShowAddForm(true)}
+            type="button"
+          >
+            + 添加工具来源
+          </button>
+        )}
+      </header>
 
       {/* Server list */}
       {servers.length === 0 && !showAddForm && (
-        <div
-          data-testid="tool-source-empty-state"
-          style={{ color: "#888", fontSize: "13px", marginBottom: "16px" }}
-        >
+        <div className="agent-tool-source-empty" data-testid="tool-source-empty-state">
           暂无工具来源。添加一个 MCP 服务器以扩展 Agent 工具集。
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "16px" }}>
+      <div className="agent-tool-source-list">
         {servers.map(({ config }) => (
           <div
+            className="agent-tool-source-card"
             key={config.serverId}
             data-testid={`tool-source-entry-${config.serverId}`}
-            style={{
-              border: "1px solid #333",
-              borderRadius: "6px",
-              padding: "12px",
-              background: "#1a1a1a"
-            }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <strong style={{ flex: 1 }}>{config.displayName}</strong>
-              <span
-                data-testid={`tool-source-transport-${config.serverId}`}
-                style={{
-                  fontSize: "11px",
-                  color: "#aaa",
-                  background: "#2a2a2a",
-                  borderRadius: "4px",
-                  padding: "2px 6px"
-                }}
-              >
-                远程 HTTP
-              </span>
-              <span
-                data-testid={`tool-source-enabled-${config.serverId}`}
-                style={{
-                  fontSize: "11px",
-                  color: config.enabled ? "#4caf50" : "#f44336"
-                }}
-              >
-                {config.enabled ? "已启用" : "已禁用"}
-              </span>
+            <div className="agent-tool-source-card-header">
+              <div className="agent-tool-source-identity">
+                <strong>{config.displayName}</strong>
+                <span>端点：{config.endpointUrl}</span>
+              </div>
+              <div className="agent-tool-source-badges">
+                <span
+                  className="agent-tool-source-badge"
+                  data-testid={`tool-source-transport-${config.serverId}`}
+                >
+                  远程 HTTP
+                </span>
+                <span
+                  className="agent-tool-source-status"
+                  data-enabled={config.enabled}
+                  data-testid={`tool-source-enabled-${config.serverId}`}
+                >
+                  {config.enabled ? "已启用" : "已禁用"}
+                </span>
+              </div>
             </div>
 
-            <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>
-              端点: {config.endpointUrl}
-            </div>
-
-            <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
+            <div className="agent-tool-source-actions">
               {/* Enable/disable */}
               <button
+                className="ns-icon-text-button"
                 onClick={() => onSetEnabled(config.serverId, !config.enabled)}
                 disabled={loading}
                 aria-label={
                   config.enabled ? `禁用 ${config.displayName}` : `启用 ${config.displayName}`
                 }
-                style={{ fontSize: "12px" }}
                 data-testid={`tool-source-toggle-${config.serverId}`}
+                type="button"
               >
                 {config.enabled ? "禁用" : "启用"}
               </button>
 
               <button
+                className="ns-icon-text-button"
                 onClick={() => handleTestConnection(config.serverId)}
                 disabled={loading || testStatus[config.serverId] === "testing"}
                 aria-label={`测试连接 ${config.displayName}`}
-                style={{ fontSize: "12px" }}
                 data-testid={`tool-source-test-${config.serverId}`}
+                type="button"
               >
                 {testStatus[config.serverId] === "testing" ? "测试中..." : "测试连接"}
               </button>
               {testStatus[config.serverId] === "ok" && (
-                <span style={{ color: "#4caf50", fontSize: "11px", alignSelf: "center" }}>
+                <span className="agent-tool-source-result" data-kind="success">
                   连接成功
                 </span>
               )}
               {testStatus[config.serverId] === "error" && (
-                <span style={{ color: "#f44336", fontSize: "11px", alignSelf: "center" }}>
+                <span className="agent-tool-source-result" data-kind="error">
                   连接失败
                 </span>
               )}
 
               {/* Remove */}
               <button
+                className="ns-icon-text-button"
                 onClick={() => onRemoveServer(config.serverId)}
                 disabled={loading}
                 aria-label={`删除 ${config.displayName}`}
-                style={{ fontSize: "12px" }}
                 data-testid={`tool-source-remove-${config.serverId}`}
+                type="button"
               >
                 删除
               </button>
 
               {/* Revoke (with confirmation) */}
               <button
+                className="ns-icon-text-button"
                 onClick={() => handleRevoke(config.serverId)}
                 disabled={loading}
                 aria-label={
@@ -244,19 +251,18 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
                     ? `确认撤销 ${config.displayName} 的访问权限`
                     : `撤销 ${config.displayName} 的访问权限`
                 }
-                style={{
-                  fontSize: "12px",
-                  color: revokeConfirm === config.serverId ? "#f44336" : undefined
-                }}
+                data-danger={revokeConfirm === config.serverId}
                 data-testid={`tool-source-revoke-${config.serverId}`}
+                type="button"
               >
                 {revokeConfirm === config.serverId ? "确认撤销" : "撤销访问"}
               </button>
               {revokeConfirm === config.serverId && (
                 <button
+                  className="ns-icon-text-button"
                   onClick={() => setRevokeConfirm(undefined)}
-                  style={{ fontSize: "12px" }}
                   aria-label="取消撤销"
+                  type="button"
                 >
                   取消
                 </button>
@@ -268,99 +274,91 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
 
       {/* Add form */}
       {showAddForm && (
-        <div
-          data-testid="tool-source-add-form"
-          style={{
-            border: "1px solid #555",
-            borderRadius: "6px",
-            padding: "12px",
-            marginBottom: "12px",
-            background: "#111"
-          }}
-        >
-          <h3 style={{ margin: "0 0 10px" }}>添加 MCP 服务器</h3>
+        <div className="agent-tool-source-form" data-testid="tool-source-add-form">
+          <h3>添加 MCP 服务器</h3>
 
-          <div style={{ marginBottom: "8px" }}>
-            <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-              显示名称 <span style={{ color: "#f44336" }}>*</span>
+          <div className="agent-tool-source-form-grid">
+            <label className="agent-tool-source-field">
+              <span>
+                显示名称{" "}
+                <span aria-hidden="true" className="agent-tool-source-required">
+                  *
+                </span>
+              </span>
+              <input
+                aria-label="显示名称"
+                className="ns-search-input"
+                data-testid="tool-source-add-name"
+                onChange={(e) => handleFormChange("displayName", e.target.value)}
+                placeholder="我的 MCP 服务器"
+                type="text"
+                value={form.displayName}
+              />
             </label>
-            <input
-              type="text"
-              value={form.displayName}
-              onChange={(e) => handleFormChange("displayName", e.target.value)}
-              placeholder="我的 MCP 服务器"
-              aria-label="显示名称"
-              style={{ width: "100%", boxSizing: "border-box" }}
-              data-testid="tool-source-add-name"
-            />
-          </div>
-
-          <div style={{ marginBottom: "8px" }}>
-            <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-              端点 URL <span style={{ color: "#f44336" }}>*</span>
+            <label className="agent-tool-source-field">
+              <span>
+                端点 URL{" "}
+                <span aria-hidden="true" className="agent-tool-source-required">
+                  *
+                </span>
+              </span>
+              <input
+                aria-label="端点 URL"
+                className="ns-search-input"
+                data-testid="tool-source-add-endpoint"
+                onChange={(e) => handleFormChange("endpointUrl", e.target.value)}
+                placeholder="https://mcp.example.com/api"
+                type="url"
+                value={form.endpointUrl}
+              />
             </label>
-            <input
-              type="url"
-              value={form.endpointUrl}
-              onChange={(e) => handleFormChange("endpointUrl", e.target.value)}
-              placeholder="https://mcp.example.com/api"
-              aria-label="端点 URL"
-              style={{ width: "100%", boxSizing: "border-box" }}
-              data-testid="tool-source-add-endpoint"
-            />
-          </div>
-          <div style={{ marginBottom: "8px" }}>
-            <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-              TLS 证书指纹（可选）
+            <label className="agent-tool-source-field">
+              <span>TLS 证书指纹（可选）</span>
+              <input
+                aria-label="TLS 证书指纹"
+                className="ns-search-input"
+                data-testid="tool-source-add-tls"
+                onChange={(e) => handleFormChange("tlsFingerprint", e.target.value)}
+                placeholder="sha256:..."
+                type="text"
+                value={form.tlsFingerprint}
+              />
             </label>
-            <input
-              type="text"
-              value={form.tlsFingerprint}
-              onChange={(e) => handleFormChange("tlsFingerprint", e.target.value)}
-              placeholder="sha256:..."
-              aria-label="TLS 证书指纹"
-              style={{ width: "100%", boxSizing: "border-box" }}
-              data-testid="tool-source-add-tls"
-            />
-          </div>
-          <div style={{ marginBottom: "8px" }}>
-            <label style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>
-              API Key（可选）
+            <label className="agent-tool-source-field">
+              <span>API Key（可选）</span>
+              <input
+                aria-label="MCP API Key"
+                autoComplete="off"
+                className="ns-search-input"
+                data-testid="tool-source-add-apikey"
+                onChange={(e) => handleFormChange("apiKey", e.target.value)}
+                placeholder="留空表示无鉴权"
+                type="password"
+                value={form.apiKey}
+              />
+              <small>保存后写入桌面安全存储，MCP 配置文件只保留 secret:// 引用。</small>
             </label>
-            <input
-              type="password"
-              value={form.apiKey}
-              onChange={(e) => handleFormChange("apiKey", e.target.value)}
-              placeholder="留空表示无鉴权"
-              aria-label="MCP API Key"
-              autoComplete="off"
-              style={{ width: "100%", boxSizing: "border-box" }}
-              data-testid="tool-source-add-apikey"
-            />
-            <p style={{ fontSize: "11px", color: "#888", margin: "4px 0 0" }}>
-              保存后写入桌面安全存储，MCP 配置文件只保留 secret:// 引用。
-            </p>
           </div>
 
           {addError && (
-            <p
-              data-testid="tool-source-add-error"
-              style={{ color: "#f44336", fontSize: "12px", margin: "8px 0" }}
-            >
+            <p className="agent-tool-source-error" data-testid="tool-source-add-error" role="alert">
               {addError}
             </p>
           )}
 
-          <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+          <div className="agent-tool-source-form-actions">
             <button
+              className="ns-icon-text-button"
               onClick={handleAddServer}
               disabled={loading}
               aria-label="确认添加服务器"
               data-testid="tool-source-add-confirm"
+              type="button"
             >
               添加
             </button>
             <button
+              className="ns-icon-text-button"
               onClick={() => {
                 setShowAddForm(false);
                 setForm(emptyForm);
@@ -368,6 +366,7 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
               }}
               aria-label="取消添加"
               data-testid="tool-source-add-cancel"
+              type="button"
             >
               取消
             </button>
@@ -375,29 +374,9 @@ export function AgentToolSourcePanel(props: AgentToolSourcePanelProps): React.Re
         </div>
       )}
 
-      {!showAddForm && (
-        <button
-          onClick={() => setShowAddForm(true)}
-          disabled={loading}
-          aria-label="添加 MCP 服务器"
-          data-testid="tool-source-add-button"
-          style={{ marginTop: "8px" }}
-        >
-          + 添加工具来源
-        </button>
-      )}
-
-      <div
-        style={{
-          marginTop: "24px",
-          borderTop: "1px solid #333",
-          paddingTop: "12px",
-          fontSize: "11px",
-          color: "#666"
-        }}
-      >
+      <footer className="agent-tool-source-note">
         <p>工具来源只在运行开始前冻结。运行中修改设置将在下次运行时生效，当前运行不受影响。</p>
-      </div>
-    </div>
+      </footer>
+    </section>
   );
 }

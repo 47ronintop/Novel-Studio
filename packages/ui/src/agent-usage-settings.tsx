@@ -29,10 +29,14 @@ const rangeOptions = [
 export function AgentUsageSettings(props: AgentUsageSettingsProps) {
   const days = props.report?.days ?? [];
   return (
-    <section className="agent-usage-settings" aria-labelledby="agent-usage-heading">
+    <section
+      className="model-settings-section agent-usage-settings"
+      aria-labelledby="agent-usage-heading"
+    >
       <header className="model-settings-section-header">
         <div>
           <h2 id="agent-usage-heading">Agent 用量</h2>
+          <p>查看总量、输入、输出与缓存用量；详细记录仅保留写作决策需要的信息。</p>
         </div>
         <button
           className="ns-icon-text-button"
@@ -44,34 +48,36 @@ export function AgentUsageSettings(props: AgentUsageSettingsProps) {
           清除所选范围用量
         </button>
       </header>
-      <div aria-label="用量日期范围" className="agent-usage-range" role="group">
-        {rangeOptions.map((option) => (
-          <button
-            aria-pressed={props.rangePreset === option.id}
-            key={option.id}
-            onClick={() => props.onRangePresetChange?.(option.id)}
-            type="button"
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-      <div className="agent-usage-filters">
-        <UsageFilter
-          label="Provider"
-          onChange={(provider) => props.onFiltersChange?.({ provider })}
-          value={props.filters.provider}
-        />
-        <UsageFilter
-          label="Model"
-          onChange={(model) => props.onFiltersChange?.({ model })}
-          value={props.filters.model}
-        />
-        <UsageFilter
-          label="Project"
-          onChange={(projectId) => props.onFiltersChange?.({ projectId })}
-          value={props.filters.projectId}
-        />
+      <div aria-label="用量筛选" className="agent-usage-controls" role="group">
+        <div aria-label="用量日期范围" className="agent-usage-range" role="group">
+          {rangeOptions.map((option) => (
+            <button
+              aria-pressed={props.rangePreset === option.id}
+              key={option.id}
+              onClick={() => props.onRangePresetChange?.(option.id)}
+              type="button"
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <div className="agent-usage-filters">
+          <UsageFilter
+            label="Provider"
+            onChange={(provider) => props.onFiltersChange?.({ provider })}
+            value={props.filters.provider}
+          />
+          <UsageFilter
+            label="Model"
+            onChange={(model) => props.onFiltersChange?.({ model })}
+            value={props.filters.model}
+          />
+          <UsageFilter
+            label="Project"
+            onChange={(projectId) => props.onFiltersChange?.({ projectId })}
+            value={props.filters.projectId}
+          />
+        </div>
       </div>
       {props.feedback === undefined ? null : (
         <p
@@ -107,14 +113,7 @@ function UsageSummary({ days }: { readonly days: readonly AgentUsageDailyBucket[
         <UsageSummaryCard label="总 Token" value={summary.totalTokens.toLocaleString()} />
         <UsageSummaryCard label="输入" value={summary.inputTokens.toLocaleString()} />
         <UsageSummaryCard label="输出" value={summary.outputTokens.toLocaleString()} />
-        <UsageSummaryCard label="缓存读取" value={formatTokenCount(summary.cacheReadTokens)} />
-        <UsageSummaryCard label="缓存写入" value={formatTokenCount(summary.cacheWriteTokens)} />
-        <UsageSummaryCard
-          label="可缓存输入"
-          value={formatTokenCount(summary.cacheEligibleInputTokens)}
-        />
-        <UsageSummaryCard label="缓存命中率" value={formatCacheHitRate(summary.cacheHitRate)} />
-        <UsageSummaryCard label="缓存节省" value={formatSavings(summary.cacheSavings)} />
+        <UsageSummaryCard label="缓存" value={formatTokenCount(summary.cacheReadTokens)} />
       </div>
     </section>
   );
@@ -134,10 +133,6 @@ interface UsageSummaryValues {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number | undefined;
-  readonly cacheEligibleInputTokens: number | undefined;
-  readonly cacheHitRate: number | undefined;
-  readonly cacheSavings: ReadonlyMap<string, number>;
 }
 
 function summarizeUsage(days: readonly AgentUsageDailyBucket[]): UsageSummaryValues {
@@ -145,67 +140,20 @@ function summarizeUsage(days: readonly AgentUsageDailyBucket[]): UsageSummaryVal
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadTokens = 0;
-  let cacheWriteTokens = 0;
-  let cacheEligibleInputTokens = 0;
-  let hasCacheWriteTokens = false;
-  let hasCacheEligibleInputTokens = false;
-  let hitNumerator = 0;
-  let hitDenominator = 0;
-  const cacheSavings = new Map<string, number>();
 
   for (const day of days) {
     totalTokens += day.totalTokens;
     inputTokens += day.inputTokens;
     outputTokens += day.outputTokens;
     cacheReadTokens += day.cacheReadTokens ?? day.cachedTokens;
-
-    if (day.cacheWriteTokens !== undefined) {
-      hasCacheWriteTokens = true;
-      cacheWriteTokens += day.cacheWriteTokens;
-    }
-    if (day.cacheEligibleInputTokens !== undefined) {
-      hasCacheEligibleInputTokens = true;
-      cacheEligibleInputTokens += day.cacheEligibleInputTokens;
-    }
-
-    const explicitEligible = day.cacheEligibleInputTokens ?? 0;
-    if (explicitEligible > 0) {
-      const dayHitRate =
-        day.cacheHitRate ?? (day.cacheReadTokens ?? day.cachedTokens) / explicitEligible;
-      hitNumerator += dayHitRate * explicitEligible;
-      hitDenominator += explicitEligible;
-    } else if (day.cacheHitRate !== undefined && day.inputTokens > 0) {
-      hitNumerator += day.cacheHitRate * day.inputTokens;
-      hitDenominator += day.inputTokens;
-    }
-
-    for (const cost of day.costs) {
-      if (cost.estimatedCacheSavings === undefined) continue;
-      cacheSavings.set(
-        cost.currency,
-        (cacheSavings.get(cost.currency) ?? 0) + cost.estimatedCacheSavings
-      );
-    }
   }
 
   return {
     totalTokens,
     inputTokens,
     outputTokens,
-    cacheReadTokens,
-    cacheWriteTokens: hasCacheWriteTokens ? cacheWriteTokens : undefined,
-    cacheEligibleInputTokens: hasCacheEligibleInputTokens ? cacheEligibleInputTokens : undefined,
-    cacheHitRate: hitDenominator > 0 ? hitNumerator / hitDenominator : undefined,
-    cacheSavings
+    cacheReadTokens
   };
-}
-
-function formatSavings(savings: ReadonlyMap<string, number>): string {
-  const values = [...savings.entries()]
-    .filter(([, amount]) => amount !== 0)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([currency, amount]) => `${currency} ${formatAmount(amount)}`);
-  return values.length === 0 ? "不可用" : values.join(" · ");
 }
 
 function UsageFilter({
@@ -408,58 +356,63 @@ function DailyUsageTable({
   readonly onSelectDay: AgentUsageSettingsProps["onSelectDay"];
 }) {
   return (
-    <div className="agent-usage-table-wrap">
-      <table aria-label="每日 Agent 用量明细" className="agent-usage-table">
-        <thead>
-          <tr>
-            <th>日期</th>
-            <th>Input</th>
-            <th>Output</th>
-            <th>缓存读取</th>
-            <th>缓存写入</th>
-            <th>可缓存输入</th>
-            <th>命中率</th>
-            <th>费用</th>
-          </tr>
-        </thead>
-        <tbody>
-          {report.days.map((day) => (
-            <tr key={day.localDate}>
-              <th data-label="日期" scope="row">
-                <button onClick={() => onSelectDay?.(day.localDate)} type="button">
-                  {day.localDate}
-                </button>
-              </th>
-              <td data-label="Input">{day.inputTokens.toLocaleString()}</td>
-              <td data-label="Output">{day.outputTokens.toLocaleString()}</td>
-              <td data-label="缓存读取">
-                {formatTokenCount(day.cacheReadTokens ?? day.cachedTokens)}
-              </td>
-              <td data-label="缓存写入">{formatTokenCount(day.cacheWriteTokens)}</td>
-              <td data-label="可缓存输入">{formatTokenCount(day.cacheEligibleInputTokens)}</td>
-              <td data-label="命中率">{formatCacheHitRate(day.cacheHitRate)}</td>
-              <td data-label="费用">
-                {day.costs.map((cost) => (
-                  <span className="agent-usage-cost" key={cost.currency}>
-                    {cost.currency} 实际费用 {formatAmount(cost.actualAmount)} · 估算费用{" "}
-                    {formatAmount(cost.estimatedAmount)}
-                    {cost.estimatedCacheSavings === undefined
-                      ? null
-                      : ` · 缓存节省 ${formatAmount(cost.estimatedCacheSavings)}`}
-                  </span>
-                ))}
-                {day.hasUnknownCost ? <span className="agent-usage-unknown">未知费用</span> : null}
-              </td>
+    <section className="agent-usage-detail-section" aria-labelledby="agent-usage-daily-heading">
+      <header className="agent-usage-subsection-header">
+        <div>
+          <h3 id="agent-usage-daily-heading">每日明细</h3>
+          <p>点击日期查看当天的精简运行记录。</p>
+        </div>
+      </header>
+      <div className="agent-usage-table-wrap">
+        <table aria-label="每日 Agent 用量明细" className="agent-usage-table">
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>总 Token</th>
+              <th>输入</th>
+              <th>输出</th>
+              <th>缓存</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {report.days.map((day) => (
+              <tr key={day.localDate}>
+                <th data-label="日期" scope="row">
+                  <button onClick={() => onSelectDay?.(day.localDate)} type="button">
+                    {day.localDate}
+                  </button>
+                </th>
+                <td data-label="总 Token">
+                  <strong className="agent-usage-table-primary">
+                    {day.totalTokens.toLocaleString()}
+                  </strong>
+                </td>
+                <td data-label="输入">
+                  <span className="agent-usage-table-secondary">
+                    {day.inputTokens.toLocaleString()}
+                  </span>
+                </td>
+                <td data-label="输出">
+                  <span className="agent-usage-table-secondary">
+                    {day.outputTokens.toLocaleString()}
+                  </span>
+                </td>
+                <td data-label="缓存">
+                  <span className="agent-usage-table-secondary">
+                    {formatTokenCount(day.cacheReadTokens ?? day.cachedTokens)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
 function RunDetails({ report }: { readonly report: AgentUsageReport }) {
-  const pageSize = 20;
+  const pageSize = 10;
   const totalPages = Math.max(1, Math.ceil(report.runs.length / pageSize));
   const [page, setPage] = useState(1);
 
@@ -476,69 +429,42 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
   const visibleRuns = report.runs.slice((page - 1) * pageSize, page * pageSize);
   return (
     <section className="agent-usage-runs" aria-labelledby="agent-usage-runs-heading">
-      <h3 id="agent-usage-runs-heading">{report.query.detailLocalDate} 运行记录</h3>
+      <header className="agent-usage-subsection-header">
+        <div>
+          <h3 id="agent-usage-runs-heading">{report.query.detailLocalDate} 运行记录</h3>
+          <p>每条仅显示模型、总 Token 和缓存结果。</p>
+        </div>
+        <span>{report.runs.length.toLocaleString()} 条</span>
+      </header>
       {report.runs.length === 0 ? (
         <p>该日没有匹配的运行记录。</p>
       ) : (
-        <div className="agent-usage-table-wrap">
-          <table aria-label="所选日期 Agent 运行记录" className="agent-usage-table">
-            <thead>
-              <tr>
-                <th>Run</th>
-                <th>Provider / Model</th>
-                <th>Project</th>
-                <th>Tokens</th>
-                <th>缓存</th>
-                <th>用量状态</th>
-                <th>费用</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRuns.map((run) => (
-                <tr key={run.usageId}>
-                  <th data-label="Run" scope="row">
-                    {run.runId}
-                  </th>
-                  <td data-label="Provider / Model">
-                    {run.provider} / {run.model}
-                  </td>
-                  <td data-label="Project">
-                    {run.scope.kind === "standalone" ? "Standalone" : run.projectId}
-                  </td>
-                  <td data-label="Tokens">{run.totalTokens.toLocaleString()}</td>
-                  <td data-label="缓存">
-                    <div>模式：{cacheModeLabel(run.cacheMode)}</div>
-                    <div>
-                      结果：{cacheOutcomeLabel(run.cacheOutcome)}
-                      {run.cacheBypassReason === undefined
-                        ? null
-                        : `（${cacheBypassReasonLabel(run.cacheBypassReason)}）`}
-                    </div>
-                    <div>
-                      读取 {formatTokenCount(run.cacheReadTokens)} · 写入{" "}
-                      {formatTokenCount(run.cacheWriteTokens)} · 可缓存输入{" "}
-                      {formatTokenCount(run.cacheEligibleInputTokens)}
-                    </div>
-                    <div>命中率：{formatCacheHitRate(run.cacheHitRate)}</div>
-                    <div>缓存用量：{cacheUsageStatusLabel(run.cacheUsageStatus)}</div>
-                    <div>
-                      输入口径：{cacheInputTokenSemanticsLabel(run.cacheInputTokenSemantics)}
-                    </div>
-                    <div>Prefix：{shortPrefixChecksum(run.cachePrefixChecksum)}</div>
-                  </td>
-                  <td data-label="用量状态">{statusLabel(run.usageStatus)}</td>
-                  <td data-label="费用">
-                    {run.cost.status === "unknown"
-                      ? "未知费用"
-                      : `${run.cost.currency} ${formatAmount(run.cost.amount)} (${run.cost.status === "actual" ? "实际费用" : "估算费用"})`}
-                    {run.estimatedCacheSavings === undefined
-                      ? null
-                      : ` · 缓存节省 ${run.estimatedCacheSavings.currency} ${formatAmount(run.estimatedCacheSavings.amount)}`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <>
+          <ol aria-label="所选日期 Agent 运行记录" className="agent-usage-run-list">
+            {visibleRuns.map((run) => (
+              <li className="agent-usage-run-card" key={run.usageId}>
+                <div className="agent-usage-run-identity">
+                  <div>
+                    <strong>{run.model}</strong>
+                    <span>{run.provider}</span>
+                  </div>
+                  <time dateTime={run.timestamp}>{formatRunTime(run.timestamp)}</time>
+                </div>
+                <dl className="agent-usage-run-metrics">
+                  <div>
+                    <dt>Token</dt>
+                    <dd>
+                      <strong>{run.totalTokens.toLocaleString()}</strong>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>缓存</dt>
+                    <dd>{formatRunCache(run)}</dd>
+                  </div>
+                </dl>
+              </li>
+            ))}
+          </ol>
           <nav aria-label="运行记录分页" className="agent-usage-pagination">
             <span>
               第 {page} / {totalPages} 页 · 共 {report.runs.length.toLocaleString()} 条
@@ -562,44 +488,14 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
               <ChevronRight aria-hidden="true" size={14} />
             </button>
           </nav>
-        </div>
+        </>
       )}
     </section>
   );
 }
 
-function formatAmount(amount: number): string {
-  return amount.toFixed(4);
-}
-
 function formatTokenCount(value: number | undefined): string {
   return value === undefined ? "不可用" : value.toLocaleString();
-}
-
-function formatCacheHitRate(value: number | undefined): string {
-  return value === undefined
-    ? "不可用"
-    : new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 1 }).format(value);
-}
-
-function cacheModeLabel(
-  mode:
-    "none" | "automatic_prefix" | "explicit_breakpoints" | "explicit_resource" | null | undefined
-): string {
-  switch (mode) {
-    case "none":
-      return "无";
-    case "automatic_prefix":
-      return "自动前缀";
-    case "explicit_breakpoints":
-      return "显式断点";
-    case "explicit_resource":
-      return "显式资源";
-    case null:
-      return "不可用";
-    default:
-      return "不可用";
-  }
 }
 
 function cacheOutcomeLabel(outcome: "hit" | "miss" | "bypass" | "unknown" | undefined): string {
@@ -638,26 +534,25 @@ function cacheBypassReasonLabel(
   return labels[reason];
 }
 
-function cacheUsageStatusLabel(status: "actual" | "derived" | "unavailable" | undefined): string {
-  return status === "actual" ? "实际" : status === "derived" ? "推导" : "不可用";
+function formatRunTime(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  if (!Number.isFinite(parsed.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(parsed);
 }
 
-function cacheInputTokenSemanticsLabel(
-  semantics: "included_in_input" | "excluded_from_input" | "unavailable" | undefined
-): string {
-  return semantics === "included_in_input"
-    ? "计入输入"
-    : semantics === "excluded_from_input"
-      ? "不计入输入"
-      : "不可用";
-}
-
-function shortPrefixChecksum(checksum: string | null | undefined): string {
-  if (checksum === null) return "不可用";
-  if (typeof checksum !== "string" || checksum.length < 14) return "不可用";
-  return `${checksum.slice(0, 8)}...${checksum.slice(-6)}`;
-}
-
-function statusLabel(status: "actual" | "estimated" | "missing"): string {
-  return status === "actual" ? "已报告" : status === "estimated" ? "估算" : "未知";
+function formatRunCache(run: AgentUsageReport["runs"][number]): string {
+  if (run.cacheOutcome === "unknown" || run.cacheOutcome === undefined) return "无缓存数据";
+  if (run.cacheOutcome === "bypass") {
+    return run.cacheBypassReason === undefined
+      ? "跳过"
+      : `跳过 · ${cacheBypassReasonLabel(run.cacheBypassReason)}`;
+  }
+  if (run.cacheOutcome === "hit" && run.cacheReadTokens !== undefined) {
+    return `${cacheOutcomeLabel(run.cacheOutcome)} · 读取 ${formatTokenCount(run.cacheReadTokens)}`;
+  }
+  return cacheOutcomeLabel(run.cacheOutcome);
 }

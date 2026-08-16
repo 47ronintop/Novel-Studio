@@ -75,10 +75,11 @@ test("shows private daily usage analytics and clears only usage data", async () 
     const recoveryRepository = new RecoveryRepository({ projectRoot });
     await seedProjectHistory(runRepository, recoveryRepository);
     await page.getByLabel("活动栏").getByRole("button", { name: "设置" }).click();
-    await page
-      .locator(".model-settings-category-list")
-      .getByText("Agent 用量", { exact: true })
-      .click();
+    const settingsCategories = page.locator(".model-settings-category-list");
+    await settingsCategories.getByText("外观", { exact: true }).click();
+    await page.getByRole("button", { name: "浅色主题" }).click();
+    await expect(page.locator(".ns-shell")).toHaveAttribute("data-theme", "light");
+    await settingsCategories.getByText("Agent 用量", { exact: true }).click();
     await expect(page.getByRole("heading", { name: "Agent 用量" })).toBeVisible();
     const dailyChart = page.locator('.agent-usage-chart[data-chart-kind="daily"]');
     await expect(dailyChart).toBeVisible();
@@ -86,6 +87,8 @@ test("shows private daily usage analytics and clears only usage data", async () 
     await expect(dailyChart.locator(".agent-usage-bar-column")).toHaveCount(1);
     await expect(dailyChart.locator(".agent-usage-legend li")).toHaveCount(2);
     await expectNoHorizontalOverflow(page.locator(".agent-usage-settings"));
+    await expect(page.locator(".agent-usage-summary-card")).toHaveCount(4);
+    await expectUsesThemeInk(page.locator(".agent-usage-summary-card strong").first());
     const dailySegmentColors = await dailyChart
       .locator(".agent-usage-bar-segment")
       .evaluateAll((segments) =>
@@ -95,15 +98,17 @@ test("shows private daily usage analytics and clears only usage data", async () 
       );
     expect(new Set(dailySegmentColors).size).toBe(2);
     const daily = page.getByRole("table", { name: "每日 Agent 用量明细" });
-    await expect(daily).toContainText("Input");
-    await expect(daily).toContainText("Output");
-    await expect(daily).toContainText("缓存读取");
-    await expect(daily).toContainText("缓存写入");
-    await expect(daily).toContainText("命中率");
-    await expect(daily).toContainText("USD 实际费用");
-    await expect(daily).toContainText("EUR");
-    await expect(daily).toContainText("估算费用");
-    await expect(daily).toContainText("未知费用");
+    await expect(daily.locator("thead th")).toHaveCount(5);
+    await expect(daily.locator("thead th")).toHaveText([
+      "日期",
+      "总 Token",
+      "输入",
+      "输出",
+      "缓存"
+    ]);
+    await expect(page.locator(".agent-usage-settings")).not.toContainText(
+      /费用|缓存节省|缓存命中率|USD|EUR/
+    );
 
     await page.getByRole("button", { name: "今日", exact: true }).press("Enter");
     const hourlyChart = page.locator('.agent-usage-chart[data-chart-kind="hourly"]');
@@ -112,13 +117,14 @@ test("shows private daily usage analytics and clears only usage data", async () 
     await expect(hourlyChart.locator(".agent-usage-bar-column")).toHaveCount(24);
     await expect(hourlyChart.locator(".agent-usage-legend li")).toHaveCount(2);
     await expectNoHorizontalOverflow(hourlyChart.locator(".agent-usage-chart-body"));
-    const runs = page.getByRole("table", { name: "所选日期 Agent 运行记录" });
-    await expect(runs).toContainText("run_reported");
-    await expect(runs).toContainText("已报告");
-    await expect(runs).toContainText("自动前缀");
-    await expect(runs).toContainText("命中");
-    await expect(runs).toContainText("aaaaaaaa...aaaaaa");
-    await expect(runs).toContainText("命中率：不可用");
+    const runs = page.getByRole("list", { name: "所选日期 Agent 运行记录" });
+    await expect(runs.getByRole("listitem")).toHaveCount(3);
+    await expectNoHorizontalOverflow(runs);
+    await expect(runs).toContainText("命中 · 读取 100");
+    await expect(runs).toContainText("无缓存数据");
+    await expect(runs).not.toContainText(/模式：|缓存用量：|输入口径：|Prefix：|可缓存输入/);
+    await expect(runs).not.toContainText(/费用|USD|EUR/);
+    await expect(runs).not.toContainText("run_reported");
     await expect(runs).not.toContainText("a".repeat(64));
     await expect(runs).not.toContainText(/prompt|request|正文内容|secret/i);
 
@@ -145,6 +151,17 @@ async function expectNoHorizontalOverflow(
     scrollWidth: element.scrollWidth
   }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
+}
+
+async function expectUsesThemeInk(locator: import("@playwright/test").Locator): Promise<void> {
+  const colors = await locator.evaluate((element) => {
+    const shell = element.closest(".ns-shell");
+    return {
+      actual: getComputedStyle(element).color,
+      expected: shell === null ? "" : getComputedStyle(shell).color
+    };
+  });
+  expect(colors.actual).toBe(colors.expected);
 }
 
 async function seedProjectHistory(

@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
-import { ModelSettingsPanel } from "../src/index.js";
+import { AgentToolSourcePanel, ModelSettingsPanel } from "../src/index.js";
 
 (
   globalThis as typeof globalThis & {
@@ -89,6 +89,37 @@ describe("M8 Settings UI", () => {
     expect(css).toMatch(
       /\.model-settings-main\s*\{[^}]*overflow-x:\s*hidden[^}]*overflow-y:\s*auto/s
     );
+  });
+
+  test("uses the shared themed settings structure for tool sources", () => {
+    const html = renderToStaticMarkup(
+      <AgentToolSourcePanel
+        servers={[
+          {
+            config: {
+              serverId: "mcp_example",
+              displayName: "Example MCP",
+              transport: "remote_http",
+              endpointUrl: "https://mcp.example.com/api",
+              apiKeyRef: "secret://remote-mcp/mcp_example/api_key",
+              apiKeyRequired: true,
+              enabled: true
+            }
+          }
+        ]}
+        onAddServer={async () => undefined}
+        onRemoveServer={async () => undefined}
+        onRevokeServer={async () => undefined}
+        onSetEnabled={async () => undefined}
+        onTestConnection={async () => ({ latencyMs: 12 })}
+      />
+    );
+
+    expect(html).toContain('class="model-settings-section agent-tool-source-settings"');
+    expect(html).toContain('class="agent-tool-source-card"');
+    expect(html).toContain('class="agent-tool-source-badge"');
+    expect(html).not.toContain("style=");
+    expect(html).not.toMatch(/#(?:111|1a1a1a|333|555|666|888|aaa|4caf50|f44336)/i);
   });
 
   test("filters settings by search query", async () => {
@@ -415,7 +446,7 @@ describe("M8 Settings UI", () => {
     expect(pluginHtml).not.toContain('aria-label="模型配置"');
   });
 
-  test("renders server-authoritative Agent usage trends, costs, filters, and private run summaries", () => {
+  test("renders Agent usage trends, token breakdowns, filters, and private run summaries", () => {
     const prefixChecksum = "a".repeat(64);
     const html = renderToStaticMarkup(
       <ModelSettingsPanel
@@ -514,9 +545,12 @@ describe("M8 Settings UI", () => {
     );
 
     expect(html).toContain("Agent 用量");
+    expect(html).toContain('class="model-settings-section agent-usage-settings"');
     expect(html).toContain("用量摘要");
     expect(html).toContain("总 Token");
-    expect(html).toContain("缓存节省");
+    expect(html).toContain("输入");
+    expect(html).toContain("输出");
+    expect(html).toContain("缓存");
     expect(html).toContain('aria-label="用量日期范围"');
     expect(html).toContain("今日");
     expect(html).toContain("近 7 天");
@@ -526,33 +560,33 @@ describe("M8 Settings UI", () => {
     expect(html).toContain('aria-label="每日 Agent Token 柱状图"');
     expect(html).toContain('aria-label="模型颜色图例"');
     expect(html).toContain('data-model-key="openai/gpt-5"');
-    expect(html).toContain("Input");
-    expect(html).toContain("Output");
-    expect(html).toContain("缓存读取");
-    expect(html).toContain("缓存写入");
-    expect(html).toContain("可缓存输入");
-    expect(html).toContain("读取 400");
+    expect(html).toContain("每日明细");
+    expect(html).not.toContain("输入 / 输出");
+    expect(html).toContain("总 Token");
+    expect(html).not.toContain("缓存写入");
+    expect(html).not.toContain("可缓存输入");
+    expect(html).toContain("命中 · 读取 400");
     expect(html).toContain('aria-label="运行记录分页"');
     expect(html).toContain("第 1 / 1 页 · 共 2 条");
-    expect(html).toContain("命中率");
-    expect(html).toContain("80%");
-    expect(html).toContain("缓存节省 0.0120");
-    expect(html).toContain("缓存节省 USD 0.0120");
-    expect(html).toContain("自动前缀");
     expect(html).toContain("命中");
     expect(html).toContain("跳过");
     expect(html).toContain("低于最小 token 数");
-    expect(html).toContain("命中率：不可用");
-    expect(html).toContain("aaaaaaaa...aaaaaa");
+    expect(html).toContain('class="agent-usage-run-card"');
+    expect(html).toContain('aria-label="所选日期 Agent 运行记录"');
+    expect(html).not.toContain("模式：");
+    expect(html).not.toContain("缓存用量：");
+    expect(html).not.toContain("输入口径：");
+    expect(html).not.toContain("Prefix：");
+    expect(html).not.toContain("aaaaaaaa...aaaaaa");
     expect(html).not.toContain(prefixChecksum);
-    expect(html).toContain("实际费用");
-    expect(html).toContain("估算费用");
-    expect(html).toContain("未知费用");
-    expect(html).toContain("USD");
-    expect(html).toContain("EUR");
+    expect(html).not.toContain("费用");
+    expect(html).not.toContain("缓存命中率");
+    expect(html).not.toContain("缓存节省");
+    expect(html).not.toContain("USD");
+    expect(html).not.toContain("EUR");
     expect(html).toContain('aria-label="每日 Agent 用量明细"');
-    expect(html).toContain("run_01");
-    expect(html).toContain("已报告");
+    expect(html).not.toContain("run_01");
+    expect(html).not.toContain("已报告");
     expect(html).not.toMatch(/prompt|request|正文内容|filesystem|node:|fs\./i);
 
     const emptyHtml = renderToStaticMarkup(
@@ -638,20 +672,24 @@ describe("M8 Settings UI", () => {
       );
     });
 
-    const runTable = host.querySelector<HTMLTableElement>(
-      'table[aria-label="所选日期 Agent 运行记录"]'
+    const runList = host.querySelector<HTMLOListElement>(
+      'ol[aria-label="所选日期 Agent 运行记录"]'
     );
-    expect(runTable?.querySelectorAll("tbody tr")).toHaveLength(20);
+    expect(runList?.querySelectorAll("li")).toHaveLength(10);
     expect(host.querySelector('[aria-label="运行记录分页"]')?.textContent).toContain(
-      "第 1 / 2 页 · 共 21 条"
+      "第 1 / 3 页 · 共 21 条"
     );
-    expect(runTable?.textContent).toContain("读取 0");
+    expect(runList?.textContent).toContain("命中 · 读取 0");
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>('button[aria-label="下一页运行记录"]')?.click();
     });
-    expect(runTable?.querySelectorAll("tbody tr")).toHaveLength(1);
-    expect(runTable?.textContent).toContain("run_20");
+    expect(runList?.querySelectorAll("li")).toHaveLength(10);
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="下一页运行记录"]')?.click();
+    });
+    expect(runList?.querySelectorAll("li")).toHaveLength(1);
 
     await act(async () => {
       root.unmount();
