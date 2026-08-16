@@ -170,7 +170,10 @@ describe("DesktopAgentRuntimeManager", () => {
       manager.prepareWorkspace(engineeringBinding("ws_start_lease_b", rootB))
     ).resolves.toMatchObject({
       ok: false,
-      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+      error: {
+        code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED",
+        message: "Agent 正在处理任务，或另一个工作区切换尚未结束，暂时无法切换工作区。"
+      }
     });
     expect(runtimes.get("ws_start_lease_a")).toMatchObject({ disposeCalls: 0 });
     expect(runtimes.has("ws_start_lease_b")).toBe(false);

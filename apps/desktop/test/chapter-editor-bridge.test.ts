@@ -152,7 +152,7 @@ describe("chapter editor bridge", () => {
     const diff = await bridge.previewSuggestionDiff("AI revised opening.\n");
 
     expect(loaded.chapter.body).toBe("原始章节正文。\n");
-    expect(loaded.versionHistory[0]?.label).toBe("Manual save");
+    expect(loaded.versionHistory[0]?.label).toBe("手动保存");
     expect(edited.saveStatus).toBe("Unsaved");
     expect(saved.saveStatus).toBe("Saved");
     expect(versions[0]?.versionId).toBe("ver_manual_save");

@@ -2958,7 +2958,20 @@ textarea:focus-visible,
 }
 
 .ns-editor-panel-header {
+  gap: 12px;
   justify-content: space-between;
+}
+
+.ns-editor-panel-header > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-editor-panel-header-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
 }
 
 .ns-editor-runtime {
@@ -3387,6 +3400,12 @@ textarea:focus-visible,
 .ns-version-main {
   display: grid;
   gap: 3px;
+  min-width: 0;
+}
+
+.ns-version-main > span,
+.ns-version-main > time {
+  overflow-wrap: anywhere;
 }
 
 .ns-version-actions {

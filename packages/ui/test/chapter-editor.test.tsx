@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { ChapterEditor } from "../src/chapter-editor.js";
 import {
@@ -10,9 +10,11 @@ import {
   type CodeMirrorDocumentSelection
 } from "../src/codemirror-document-editor.js";
 
-(globalThis as typeof globalThis & {
-  IS_REACT_ACT_ENVIRONMENT?: boolean;
-}).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const chapter = {
   frontmatter: {
@@ -76,7 +78,7 @@ describe("ChapterEditor", () => {
           versionHistory={[
             {
               versionId: "ver_01",
-              label: "Manual save",
+              label: "手动保存",
               createdAt: "2026-07-04T00:00:00.000Z"
             }
           ]}
@@ -85,6 +87,15 @@ describe("ChapterEditor", () => {
     });
 
     const history = host.querySelector<HTMLDetailsElement>('[aria-label="版本历史"]');
+    const expectedTime = new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).format(new Date("2026-07-04T00:00:00.000Z"));
+    expect(history?.querySelector("time")?.textContent).toBe(expectedTime);
     expect(history?.open).toBe(false);
     act(() => history?.querySelector("summary")?.click());
     expect(history?.open).toBe(true);
@@ -102,7 +113,7 @@ describe("ChapterEditor", () => {
         versionHistory={[
           {
             versionId: "ver_manual_save",
-            label: "Manual save",
+            label: "手动保存",
             createdAt: "2026-07-04T00:00:00.000Z"
           }
         ]}
@@ -117,16 +128,49 @@ describe("ChapterEditor", () => {
         }}
         onBodyChange={() => undefined}
         onSave={() => undefined}
+        onDiffPreviewClose={() => undefined}
         onVersionPreview={() => undefined}
         onVersionRestore={() => undefined}
       />
     );
 
     expect(html).not.toContain('aria-label="保存章节"');
-    expect(html).toContain('aria-label="预览版本 Manual save"');
-    expect(html).toContain('aria-label="恢复版本 Manual save"');
+    expect(html).toContain('aria-label="预览版本 手动保存"');
+    expect(html).toContain('aria-label="恢复版本 手动保存"');
+    expect(html).toContain('aria-label="关闭正文变更预览"');
     expect(html).toContain("仅预览");
     expect(html).not.toContain("Apply suggestion");
+  });
+
+  test("invokes the close action from the body change preview", () => {
+    const onDiffPreviewClose = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    act(() => {
+      root.render(
+        <ChapterEditor
+          chapter={chapter}
+          saveStatus="Saved"
+          dirty={false}
+          versionHistory={[]}
+          diffPreview={{
+            title: "历史版本预览：手动保存",
+            changes: [{ kind: "replace", value: "历史正文。\n" }]
+          }}
+          onDiffPreviewClose={onDiffPreviewClose}
+        />
+      );
+    });
+
+    act(() => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="关闭正文变更预览"]')?.click();
+    });
+    expect(onDiffPreviewClose).toHaveBeenCalledOnce();
+
+    act(() => root.unmount());
+    host.remove();
   });
 
   test("renders large-document metrics, capped line gutter, and diff summary", () => {
@@ -160,7 +204,7 @@ describe("ChapterEditor", () => {
       />
     );
 
-    expect(html).toContain("Diff summary: 1 insert / 1 delete / 1 replace");
+    expect(html).toContain("变更摘要：新增 1 / 删除 1 / 替换 1");
     expect(html).toContain('data-large-document="true"');
     expect(html).toContain('data-runtime-id="textarea"');
     expect(html.match(/ns-editor-line-number/g)?.length).toBe(120);

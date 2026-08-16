@@ -978,16 +978,16 @@ function mapVersionSummaries(
 function versionReasonLabel(reason: SnapshotReason): string {
   switch (reason) {
     case "manual-save":
-      return "Manual save";
+      return "手动保存";
     case "autosave-snapshot":
-      return "Autosave";
+      return "自动保存";
     case "interval-snapshot":
-      return "Interval snapshot";
+      return "定时快照";
     case "before-ai-apply":
-      return "Before AI apply";
+      return "AI 修改前";
     case "before-rollback":
-      return "Before rollback";
+      return "恢复版本前";
     case "migration":
-      return "Migration";
+      return "项目迁移";
   }
 }

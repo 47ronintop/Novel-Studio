@@ -729,16 +729,21 @@ function isSafeId(value: string): boolean {
 
 function runtimeError(code: string): UnifiedError {
   const standalone = code.startsWith("AGENT_STANDALONE_");
+  const switchBlocked = code === "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED";
   return createUnifiedError({
     code,
     category: "AgentError",
     message: standalone
-      ? "The standalone Agent runtime could not be initialized."
-      : "The Agent runtime could not switch workspaces.",
+      ? "无法初始化独立 Agent 运行环境。"
+      : switchBlocked
+        ? "Agent 正在处理任务，或另一个工作区切换尚未结束，暂时无法切换工作区。"
+        : "无法为所选目录初始化 Agent 工作区。",
     recoverability: "user-action",
     suggestedAction: standalone
-      ? "Check application storage and model settings, then retry."
-      : "Stop the active run or reopen the workspace and retry.",
+      ? "请检查应用存储和模型设置后重试。"
+      : switchBlocked
+        ? "请等待当前操作结束；若 Agent 正在运行，请先停止任务后重试。"
+        : "请重新选择目录；若问题仍然存在，请重启应用后重试。",
     traceId: "desktop-agent-runtime-manager"
   });
 }

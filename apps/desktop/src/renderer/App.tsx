@@ -360,26 +360,37 @@ export function App() {
       }
 
       void chapterBridge.previewVersion(versionId).then((preview) => {
-        setChapterEditor((current) =>
-          current === undefined
-            ? current
-            : {
-                ...current,
-                diffPreview: {
-                  title: `Version ${versionId}`,
-                  changes: [
-                    {
-                      kind: "replace",
-                      value: preview.body
-                    }
-                  ]
+        setChapterEditor((current) => {
+          if (current === undefined) return current;
+          const versionLabel =
+            current.versionHistory.find((entry) => entry.versionId === versionId)?.label ??
+            "历史版本";
+          return {
+            ...current,
+            diffPreview: {
+              title: `历史版本预览：${versionLabel}`,
+              changes: [
+                {
+                  kind: "replace",
+                  value: preview.body
                 }
-              }
-        );
+              ]
+            }
+          };
+        });
       });
     },
     [chapterBridge]
   );
+
+  const handleDiffPreviewClose = useCallback(() => {
+    setChapterEditor((current) => {
+      if (current?.diffPreview === undefined) return current;
+      const { diffPreview, ...withoutDiffPreview } = current;
+      void diffPreview;
+      return withoutDiffPreview;
+    });
+  }, []);
 
   const handleVersionRestore = useCallback(
     (versionId: string) => {
@@ -851,6 +862,7 @@ export function App() {
           onSelectionAiPreview: handleSelectionAiPreview,
           onSave: handleSave,
           onStatusChange: storyAnalysisWorkspace.onChapterStatusChange,
+          onDiffPreviewClose: handleDiffPreviewClose,
           onVersionPreview: handleVersionPreview,
           onVersionRestore: handleVersionRestore
         };

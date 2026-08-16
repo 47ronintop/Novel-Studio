@@ -164,7 +164,16 @@ test("completes the core writing journey across save, close, reopen, and continu
     await expect
       .poll(async () => (await readCodeMirrorText(body)).trimEnd())
       .toBe(appliedBody.trimEnd());
-    await expect(page.getByLabel("版本历史", { exact: true })).toContainText("Before AI apply");
+    const versionHistory = page.getByLabel("版本历史", { exact: true });
+    await expect(versionHistory).toContainText("AI 修改前");
+    await versionHistory.locator("summary").click();
+    const versionTime = versionHistory.locator(".ns-version-main time").first();
+    await expect(versionTime).not.toHaveText(/T|Z/);
+    await versionHistory.getByRole("button", { name: "预览版本 AI 修改前" }).first().click();
+    const versionPreview = page.getByRole("region", { name: "正文变更预览" });
+    await expect(versionPreview).toContainText("历史版本预览：AI 修改前");
+    await versionPreview.getByRole("button", { name: "关闭正文变更预览" }).click();
+    await expect(versionPreview).toHaveCount(0);
 
     const continuedBody = `${appliedBody}${appliedBody.endsWith("\n") ? "" : "\n"}Continued after reopen.`;
     await replaceCodeMirrorText(page, body, continuedBody);

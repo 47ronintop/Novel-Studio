@@ -27,6 +27,41 @@ describe("engineering workspace bridge", () => {
     expect(calls).toEqual([["choose"], ["open", "selection_engineering"]]);
   });
 
+  test("coalesces concurrent open requests before they reach the workspace switch gate", async () => {
+    const calls: unknown[] = [];
+    const baseApi = createApi(calls);
+    let chooseCalls = 0;
+    let releaseSelection: (() => void) | undefined;
+    const selectionGate = new Promise<void>((resolve) => {
+      releaseSelection = resolve;
+    });
+    const api = {
+      ...baseApi,
+      workspace: {
+        ...baseApi.workspace,
+        async chooseEngineeringDirectory() {
+          chooseCalls += 1;
+          await selectionGate;
+          return ok({
+            canceled: false,
+            selectionId: "selection_engineering",
+            displayName: "Source"
+          });
+        }
+      }
+    } as NovelStudioApi;
+    const bridge = createEngineeringWorkspaceBridge(api);
+
+    const first = bridge.openEngineeringWorkspace();
+    const second = bridge.openEngineeringWorkspace();
+
+    expect(second).toBe(first);
+    expect(chooseCalls).toBe(1);
+    releaseSelection?.();
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(calls).toEqual([["open", "selection_engineering"]]);
+  });
+
   test("refreshes the active tree through the workspace API", async () => {
     const calls: unknown[] = [];
     const bridge = createEngineeringWorkspaceBridge(createApi(calls));
@@ -83,7 +118,12 @@ function createApi(calls: unknown[]): NovelStudioApi {
             displayName: "Source",
             tree: {
               nodes: [
-                { id: "file:README.md", name: "README.md", kind: "file" as const, path: "README.md" }
+                {
+                  id: "file:README.md",
+                  name: "README.md",
+                  kind: "file" as const,
+                  path: "README.md"
+                }
               ],
               truncated: false
             }

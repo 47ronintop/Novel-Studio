@@ -1,5 +1,5 @@
 import type { ChapterDocument, ChapterStatus } from "@novel-studio/shared";
-import { ChevronRight, Eye, History, RotateCcw } from "lucide-react";
+import { ChevronRight, Eye, History, RotateCcw, X } from "lucide-react";
 import { useCallback, useMemo, useRef, type CSSProperties } from "react";
 import {
   CodeMirrorDocumentEditor,
@@ -14,6 +14,14 @@ import {
 
 const LARGE_DOCUMENT_LINE_THRESHOLD = 200;
 const MAX_RENDERED_GUTTER_LINES = 120;
+const VERSION_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23"
+});
 export interface ChapterEditorVersionEntry {
   readonly versionId: string;
   readonly label: string;
@@ -74,6 +82,7 @@ export interface ChapterEditorProps {
   readonly onSelectionAiPreview?: (commandId: string) => void;
   readonly onVersionPreview?: (versionId: string) => void;
   readonly onVersionRestore?: (versionId: string) => void;
+  readonly onDiffPreviewClose?: () => void;
 }
 
 export interface ChapterCompletionFeedbackProps {
@@ -115,7 +124,8 @@ export function ChapterEditor({
   onSelectionReviewReject,
   onSelectionReviewUndo,
   onVersionPreview,
-  onVersionRestore
+  onVersionRestore,
+  onDiffPreviewClose
 }: ChapterEditorProps) {
   const editorFocusRef = useRef<() => void>(() => undefined);
   const editorSelectionRef = useRef<(selection: CodeMirrorDocumentSelection) => void>(
@@ -268,7 +278,9 @@ export function ChapterEditor({
                   <li className="ns-version-item" key={entry.versionId}>
                     <div className="ns-version-main">
                       <span>{entry.label}</span>
-                      <span>{entry.createdAt}</span>
+                      <time dateTime={entry.createdAt}>
+                        {formatVersionTimestamp(entry.createdAt)}
+                      </time>
                     </div>
                     <div className="ns-version-actions">
                       <button
@@ -302,15 +314,28 @@ export function ChapterEditor({
         </details>
 
         {diffPreview ? (
-          <section className="ns-editor-panel" aria-label="AI 建议差异">
+          <section className="ns-editor-panel" aria-label="正文变更预览">
             <div className="ns-editor-panel-header">
               <span>{diffPreview.title}</span>
-              <span className="ns-preview-only">仅预览</span>
+              <div className="ns-editor-panel-header-actions">
+                <span className="ns-preview-only">仅预览</span>
+                {onDiffPreviewClose === undefined ? null : (
+                  <button
+                    aria-label="关闭正文变更预览"
+                    className="ns-icon-button"
+                    onClick={onDiffPreviewClose}
+                    title="关闭预览"
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={13} />
+                  </button>
+                )}
+              </div>
             </div>
             {diffSummary === undefined ? null : (
               <p className="ns-diff-summary">
-                Diff summary: {diffSummary.insertCount} insert / {diffSummary.deleteCount} delete /{" "}
-                {diffSummary.replaceCount} replace
+                变更摘要：新增 {diffSummary.insertCount} / 删除 {diffSummary.deleteCount} / 替换{" "}
+                {diffSummary.replaceCount}
               </p>
             )}
             <ul className="ns-diff-list">
@@ -443,6 +468,13 @@ function summarizeDiff(diffPreview: ChapterEditorDiffPreview): {
     deleteCount: diffPreview.changes.filter((change) => change.kind === "delete").length,
     replaceCount: diffPreview.changes.filter((change) => change.kind === "replace").length
   };
+}
+
+function formatVersionTimestamp(value: string): string {
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.getTime())
+    ? VERSION_TIMESTAMP_FORMATTER.format(timestamp)
+    : "时间未知";
 }
 
 function diffKindLabel(kind: ChapterEditorDiffChange["kind"]): string {
