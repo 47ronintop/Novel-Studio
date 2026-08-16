@@ -1776,7 +1776,11 @@ export function createApplicationIpcHandlers(
       } satisfies EngineeringEditorStateReportResult);
     },
     "application:settings:list-model-profiles": () => application.listModelProfiles(),
-    "application:settings:discover-models": (profileId: unknown, options: unknown) => {
+    "application:settings:discover-models": (
+      profileId: unknown,
+      options: unknown,
+      profileOverride: unknown
+    ) => {
       const discoveryOptions =
         isRecord(options) &&
         hasOnlyKeys(options, ["forceRefresh"]) &&
@@ -1784,10 +1788,18 @@ export function createApplicationIpcHandlers(
           ? options
           : {};
       if (typeof profileId !== "string") {
-        return application.discoverModelOptions("", discoveryOptions);
+        return application.discoverModelOptions(
+          "",
+          discoveryOptions,
+          optionalModelProfileFromIpc(profileOverride)
+        );
       }
 
-      return application.discoverModelOptions(profileId, discoveryOptions);
+      return application.discoverModelOptions(
+        profileId,
+        discoveryOptions,
+        optionalModelProfileFromIpc(profileOverride)
+      );
     },
     "application:settings:save-model-profile": (profile: unknown, options: unknown) => {
       const modelProfile = toModelProfile(profile);
@@ -1824,12 +1836,21 @@ export function createApplicationIpcHandlers(
         ? notifyAgentSettingsChanged(saved)
         : saved;
     },
-    "application:settings:test-model-profile": (profileId: unknown) => {
+    "application:settings:test-model-profile": (
+      profileId: unknown,
+      profileOverride: unknown
+    ) => {
       if (typeof profileId !== "string") {
-        return application.testModelProfileConnection("");
+        return application.testModelProfileConnection(
+          "",
+          optionalModelProfileFromIpc(profileOverride)
+        );
       }
 
-      return application.testModelProfileConnection(profileId);
+      return application.testModelProfileConnection(
+        profileId,
+        optionalModelProfileFromIpc(profileOverride)
+      );
     },
     "application:settings:read-story-analysis": () => application.readStoryAnalysisSettings(),
     "application:settings:save-story-analysis": (value: unknown) => {
@@ -5614,6 +5635,11 @@ function toModelProfile(value: unknown): ModelProfile | undefined {
       ? {}
       : { reasoningEffortEnabled: value.reasoningEffortEnabled })
   };
+}
+
+function optionalModelProfileFromIpc(value: unknown): ModelProfile | undefined {
+  if (value === undefined) return undefined;
+  return toModelProfile(value) ?? emptyModelProfile();
 }
 
 function isSaveModelProfileOptions(value: unknown): value is { readonly makeDefault?: boolean } {

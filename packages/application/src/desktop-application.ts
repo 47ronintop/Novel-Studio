@@ -444,14 +444,16 @@ export interface DesktopApplication {
   listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
   discoverModelOptions(
     profileId: string,
-    options?: ModelDiscoveryRequestOptions
+    options?: ModelDiscoveryRequestOptions,
+    profileOverride?: ModelProfile
   ): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
   saveModelProfile(
     profile: ModelProfile,
     options?: { readonly makeDefault?: boolean }
   ): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
   testModelProfileConnection(
-    profileId: string
+    profileId: string,
+    profileOverride?: ModelProfile
   ): Promise<Result<ModelConnectionResult, UnifiedError>>;
   readStoryAnalysisSettings(): Promise<Result<StoryAnalysisSettings, UnifiedError>>;
   saveStoryAnalysisSettings(
@@ -1495,12 +1497,16 @@ export function createDesktopApplication(
 
       return modelSettingsSession.listModelProfiles();
     },
-    async discoverModelOptions(profileId, discoveryOptions) {
+    async discoverModelOptions(profileId, discoveryOptions, profileOverride) {
       if (modelSettingsSession === undefined) {
         return modelSettingsUnavailable();
       }
 
-      return modelSettingsSession.discoverModelOptions(profileId, discoveryOptions);
+      return modelSettingsSession.discoverModelOptions(
+        profileId,
+        discoveryOptions,
+        profileOverride
+      );
     },
     async saveModelProfile(profile, saveOptions) {
       if (modelSettingsSession === undefined) {
@@ -1509,12 +1515,12 @@ export function createDesktopApplication(
 
       return modelSettingsSession.saveModelProfile(profile, saveOptions);
     },
-    async testModelProfileConnection(profileId) {
+    async testModelProfileConnection(profileId, profileOverride) {
       if (modelSettingsSession === undefined) {
         return modelSettingsUnavailable();
       }
 
-      return modelSettingsSession.testModelProfileConnection(profileId);
+      return modelSettingsSession.testModelProfileConnection(profileId, profileOverride);
     },
     async readStoryAnalysisSettings() {
       return modelSettingsSession === undefined

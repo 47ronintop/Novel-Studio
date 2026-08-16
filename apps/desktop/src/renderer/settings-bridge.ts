@@ -98,6 +98,7 @@ export function createSettingsBridge(
   let saveStatus: ModelSettingsPanelProps["saveStatus"] = "idle";
   let connectionStatus: ModelSettingsPanelProps["connectionStatus"] | undefined;
   let modelDiscovery: ModelDiscoverySnapshot | undefined;
+  let modelDiscoveryProfile: ModelProfile | undefined;
   let modelDiscoveryRequestGeneration = 0;
   let activeSection: SettingsPanelSection = "models";
   let plugins: PluginSettingsPanelProps = {
@@ -148,6 +149,7 @@ export function createSettingsBridge(
       selectedProfileId = selected?.id;
       draft = selected === undefined ? newDraft(createProfileId()) : draftFromProfile(selected);
       modelDiscovery = undefined;
+      modelDiscoveryProfile = undefined;
       if (selected !== undefined) {
         await discoverModels(selected.id);
       }
@@ -222,6 +224,7 @@ export function createSettingsBridge(
       selectedProfileId = profile.id;
       draft = draftFromProfile(profile);
       modelDiscovery = undefined;
+      modelDiscoveryProfile = undefined;
       saveStatus = "idle";
       feedback = undefined;
       return toProps();
@@ -233,18 +236,18 @@ export function createSettingsBridge(
     updateDraft(nextDraft) {
       modelDiscoveryRequestGeneration += 1;
       const next = { ...draft, ...nextDraft };
-      const discoveryProfile =
-        modelDiscovery === undefined
-          ? undefined
-          : profiles.find((profile) => profile.id === modelDiscovery?.profileId);
+      const apiKeyChanged =
+        nextDraft.apiKeyRefInput !== undefined &&
+        nextDraft.apiKeyRefInput.trim() !== draft.apiKeyRefInput.trim();
       const discoveryInvalidated =
         modelDiscovery !== undefined &&
-        (discoveryProfile === undefined ||
-          selectedProfileId !== modelDiscovery.profileId ||
-          !isSavedModelDiscoveryDraft(next, discoveryProfile));
+        (modelDiscoveryProfile === undefined ||
+          apiKeyChanged ||
+          !isModelDiscoveryDraft(next, modelDiscoveryProfile));
       draft = next;
       if (discoveryInvalidated) {
         modelDiscovery = undefined;
+        modelDiscoveryProfile = undefined;
       }
       saveStatus = "idle";
       feedback = undefined;
@@ -255,6 +258,7 @@ export function createSettingsBridge(
       selectedProfileId = undefined;
       draft = newDraft(createProfileId());
       modelDiscovery = undefined;
+      modelDiscoveryProfile = undefined;
       saveStatus = "idle";
       feedback = { kind: "info", message: "正在创建新的模型配置。" };
       return toProps();
@@ -287,7 +291,27 @@ export function createSettingsBridge(
       return toProps();
     },
     async testConnection(profileId) {
-      const result = await api.settings.testModelProfileConnection(profileId);
+      const actionProfile = profileForAction(profileId);
+      if (actionProfile === undefined) {
+        const message = "模型配置字段格式不正确，请检查模型 ID、数字和 API Key。";
+        connectionStatus = { profileId, status: "failed", detail: message };
+        feedback = { kind: "error", message };
+        return toProps();
+      }
+      if (actionProfile.usesDraft) {
+        const secretSaved = await saveDraftSecret(actionProfile.profile, draft);
+        if (!secretSaved.ok) {
+          const message = redactSettingsDetail(secretSaved.error.message);
+          connectionStatus = { profileId, status: "failed", detail: message };
+          feedback = { kind: "error", message };
+          return toProps();
+        }
+      }
+
+      const result = await api.settings.testModelProfileConnection(
+        profileId,
+        actionProfile.profile
+      );
       if (!result.ok) {
         const message = redactSettingsDetail(result.error.message);
         connectionStatus = {
@@ -571,7 +595,7 @@ export function createSettingsBridge(
       return undefined;
     }
 
-    const existingProfile = profiles.find((entry) => entry.id === selectedProfileId);
+    const existingProfile = profiles.find((entry) => entry.id === nextDraft.id.trim());
     const apiKeyRef = apiKeyRefFromDraft(nextDraft, existingProfile?.apiKeyRef);
     if (apiKeyRef === undefined || !apiKeyRef.startsWith("secret://")) {
       return undefined;
@@ -689,34 +713,45 @@ export function createSettingsBridge(
 
   async function discoverModels(profileId: string, forceRefresh = false): Promise<void> {
     const requestGeneration = ++modelDiscoveryRequestGeneration;
-    const profile = profiles.find((entry) => entry.id === profileId);
-    if (profile === undefined) {
+    const actionProfile = profileForAction(profileId);
+    if (actionProfile === undefined) {
       modelDiscovery = undefined;
-      feedback = { kind: "info", message: "请先保存模型配置，再获取模型列表。" };
-      return;
-    }
-    if (selectedProfileId !== profileId || !isSavedModelDiscoveryDraft(draft, profile)) {
-      modelDiscovery = undefined;
+      modelDiscoveryProfile = undefined;
       feedback = {
-        kind: "info",
-        message: "模型地址、Provider 或密钥有未保存修改，请先保存模型配置后再获取模型列表。"
+        kind: "error",
+        message: "模型配置字段格式不正确，请检查模型 ID、数字和 API Key。"
       };
       return;
+    }
+    const { profile } = actionProfile;
+    const requestApiKeyInput = actionProfile.usesDraft ? draft.apiKeyRefInput.trim() : undefined;
+    modelDiscovery = undefined;
+    modelDiscoveryProfile = undefined;
+    feedback = { kind: "info", message: "正在获取模型列表..." };
+    if (actionProfile.usesDraft) {
+      const secretSaved = await saveDraftSecret(profile, draft);
+      if (!secretSaved.ok) {
+        modelDiscovery = undefined;
+        modelDiscoveryProfile = undefined;
+        feedback = { kind: "error", message: redactSettingsDetail(secretSaved.error.message) };
+        return;
+      }
     }
 
     const result = await api.settings.discoverModelOptions(
       profileId,
-      forceRefresh ? { forceRefresh: true } : undefined
+      forceRefresh ? { forceRefresh: true } : undefined,
+      profile
     );
     if (
       requestGeneration !== modelDiscoveryRequestGeneration ||
-      selectedProfileId !== profileId ||
-      !isSavedModelDiscoveryDraft(draft, profile)
+      !isModelDiscoveryActionCurrent(profile, actionProfile.usesDraft, requestApiKeyInput)
     ) {
       return;
     }
     if (!result.ok) {
       modelDiscovery = undefined;
+      modelDiscoveryProfile = undefined;
       feedback = { kind: "error", message: result.error.message };
       return;
     }
@@ -725,9 +760,42 @@ export function createSettingsBridge(
       result.value.profileId === profileId && result.value.provider === profile.provider
         ? result.value
         : undefined;
+    modelDiscoveryProfile = modelDiscovery === undefined ? undefined : profile;
     if (modelDiscovery === undefined) {
       feedback = { kind: "error", message: "模型列表与当前配置不匹配，请重新获取。" };
+    } else if (modelDiscovery.status === "loaded") {
+      feedback = {
+        kind: "info",
+        message: `已获取 ${modelDiscovery.models.length} 个模型。`
+      };
+    } else {
+      feedback = { kind: "info", message: "无法自动获取模型列表，可继续手动填写模型名称。" };
     }
+  }
+
+  function profileForAction(
+    profileId: string
+  ): { readonly profile: ModelProfile; readonly usesDraft: boolean } | undefined {
+    if (draft.id.trim() === profileId) {
+      const profile = profileFromDraft(draft);
+      return profile === undefined ? undefined : { profile, usesDraft: true };
+    }
+    const profile = profiles.find((entry) => entry.id === profileId);
+    return profile === undefined ? undefined : { profile, usesDraft: false };
+  }
+
+  function isModelDiscoveryActionCurrent(
+    profile: ModelProfile,
+    usesDraft: boolean,
+    requestApiKeyInput: string | undefined
+  ): boolean {
+    if (!usesDraft) {
+      return profiles.some((entry) => sameModelDiscoveryProfile(entry, profile));
+    }
+    return (
+      draft.apiKeyRefInput.trim() === requestApiKeyInput &&
+      isModelDiscoveryDraft(draft, profile)
+    );
   }
 
   async function loadUsage(detailLocalDate?: string): Promise<ModelSettingsPanelProps> {
@@ -885,13 +953,22 @@ function draftFromProfile(profile: ModelProfile): ModelSettingsDraft {
   };
 }
 
-function isSavedModelDiscoveryDraft(draft: ModelSettingsDraft, profile: ModelProfile): boolean {
+function isModelDiscoveryDraft(draft: ModelSettingsDraft, profile: ModelProfile): boolean {
   const apiKeyInput = draft.apiKeyRefInput.trim();
   return (
     draft.id.trim() === profile.id &&
     draft.provider.trim() === profile.provider &&
     draft.baseUrl.trim() === (profile.baseUrl ?? "").trim() &&
-    (apiKeyInput.length === 0 || apiKeyInput === profile.apiKeyRef)
+    (!apiKeyInput.startsWith("secret://") || apiKeyInput === profile.apiKeyRef)
+  );
+}
+
+function sameModelDiscoveryProfile(left: ModelProfile, right: ModelProfile): boolean {
+  return (
+    left.id === right.id &&
+    left.provider === right.provider &&
+    (left.baseUrl ?? "").trim() === (right.baseUrl ?? "").trim() &&
+    left.apiKeyRef === right.apiKeyRef
   );
 }
 
@@ -926,7 +1003,7 @@ function apiKeyRefFromDraft(
     return input;
   }
   if (input.length > 0) {
-    return `secret://${nextDraft.id.trim()}/api_key`;
+    return existingApiKeyRef ?? `secret://${nextDraft.id.trim()}/api_key`;
   }
   return existingApiKeyRef;
 }

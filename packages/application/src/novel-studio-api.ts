@@ -532,7 +532,8 @@ export interface NovelStudioApi {
     listModelProfiles(): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
     discoverModelOptions(
       profileId: string,
-      options?: ModelDiscoveryRequestOptions
+      options?: ModelDiscoveryRequestOptions,
+      profileOverride?: ModelProfile
     ): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
     saveModelProfile(
       profile: ModelProfile,
@@ -540,7 +541,8 @@ export interface NovelStudioApi {
     ): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
     saveModelSecret(secretRef: string, secret: string): Promise<Result<void, UnifiedError>>;
     testModelProfileConnection(
-      profileId: string
+      profileId: string,
+      profileOverride?: ModelProfile
     ): Promise<Result<ModelConnectionResult, UnifiedError>>;
     readStoryAnalysisSettings(): Promise<Result<StoryAnalysisSettings, UnifiedError>>;
     saveStoryAnalysisSettings(

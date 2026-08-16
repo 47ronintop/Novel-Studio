@@ -22,11 +22,14 @@ function readRendererFiles(): string[] {
 }
 
 describe("Electron security baseline", () => {
-  test("production preload forwards model discovery request options", () => {
+  test("production preload forwards model discovery options and safe draft overrides", () => {
     const preloadSource = readFileSync(preloadEntryPath, "utf8");
 
     expect(preloadSource).toMatch(
-      /discoverModelOptions:\s*\(profileId:\s*string,\s*options\?:\s*ModelDiscoveryRequestOptions\)\s*=>[\s\S]*?"application:settings:discover-models",\s*profileId,\s*options/
+      /discoverModelOptions:\s*\(\s*profileId:\s*string,\s*options\?:\s*ModelDiscoveryRequestOptions,\s*profileOverride\?:\s*ModelProfile\s*\)\s*=>[\s\S]*?"application:settings:discover-models",\s*profileId,\s*options,\s*profileOverride/
+    );
+    expect(preloadSource).toMatch(
+      /testModelProfileConnection:\s*\(profileId:\s*string,\s*profileOverride\?:\s*ModelProfile\)\s*=>[\s\S]*?"application:settings:test-model-profile",\s*profileId,\s*profileOverride/
     );
   });
 

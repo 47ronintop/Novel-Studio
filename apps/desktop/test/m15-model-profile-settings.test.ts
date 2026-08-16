@@ -6,6 +6,8 @@ import { afterEach, describe, expect, test } from "vitest";
 import type {
   ModelConnectionResult,
   ModelConnectionTester,
+  ModelDiscoveryPort,
+  ModelDiscoverySnapshot,
   ModelProfile,
   ModelSettingsSnapshot
 } from "@novel-studio/application";
@@ -29,6 +31,7 @@ describe("M15 desktop model profile settings", () => {
   test("lists, saves, defaults, and tests project model profiles through IPC", async () => {
     const projectRoot = await copyFixtureProject();
     const testedProfiles: ModelProfile[] = [];
+    const discoveredProfiles: ModelProfile[] = [];
     const savedSecrets = new Map<string, string>();
     const modelSecretStore: ModelSecretStore = {
       async saveSecret(secretRef, secret) {
@@ -59,12 +62,37 @@ describe("M15 desktop model profile settings", () => {
         };
       }
     };
+    const discoveryPort: ModelDiscoveryPort = {
+      async discoverModels(profile) {
+        discoveredProfiles.push(profile);
+        return {
+          ok: true,
+          value: {
+            profileId: profile.id,
+            provider: profile.provider,
+            status: "loaded",
+            models: [
+              {
+                id: "draft-model",
+                displayName: "draft-model",
+                provider: profile.provider
+              }
+            ],
+            reasoningStrength: {
+              status: "hidden",
+              reason: "The test model does not expose reasoning controls."
+            }
+          }
+        };
+      }
+    };
     const handlers = createApplicationIpcHandlers(
       createProjectDesktopApplication({
         projectRoot,
         chapterId,
         projectTitle: "Minimal Chapter Project",
-        modelConnectionTester: tester
+        modelConnectionTester: tester,
+        modelDiscoveryPort: discoveryPort
       }),
       { modelSecretStore }
     );
@@ -123,11 +151,43 @@ describe("M15 desktop model profile settings", () => {
       })
     ]);
 
+    const draftProfile: ModelProfile = {
+      id: "model_draft",
+      provider: "openai-compatible",
+      displayName: "Unsaved Draft",
+      baseUrl: "https://draft.example.com/v1",
+      apiKeyRef: "secret://model_draft/api_key",
+      modelName: "draft-model",
+      temperature: 0.7,
+      maxTokens: 4096,
+      timeoutMs: 60000
+    };
+    const draftConnection = await handlers["application:settings:test-model-profile"](
+      draftProfile.id,
+      draftProfile
+    );
+    assertOk<ModelConnectionResult>(draftConnection);
+    const draftDiscovery = await handlers["application:settings:discover-models"](
+      draftProfile.id,
+      { forceRefresh: true },
+      draftProfile
+    );
+    assertOk<ModelDiscoverySnapshot>(draftDiscovery);
+    expect(testedProfiles.at(-1)).toEqual(draftProfile);
+    expect(discoveredProfiles).toEqual([draftProfile]);
+
+    const afterDraftActions = await handlers["application:settings:list-model-profiles"]();
+    assertOk<ModelSettingsSnapshot>(afterDraftActions);
+    expect(afterDraftActions.value.profiles).not.toContainEqual(
+      expect.objectContaining({ id: "model_draft" })
+    );
+
     const settingsJson = await readFile(join(projectRoot, "settings.json"), "utf8");
     expect(settingsJson).toContain('"provider": "ollama"');
     expect(settingsJson).toContain('"apiKeyRef": "secret://model_ollama/api_key"');
     expect(settingsJson).toContain('"contextWindow": 128000');
     expect(settingsJson).toContain('"reasoningEffortEnabled": true');
+    expect(settingsJson).not.toContain('"id": "model_draft"');
     expect(settingsJson).not.toMatch(/\bsk-[A-Za-z0-9_-]+/);
 
     const secretSaved = await handlers["application:settings:save-model-secret"](

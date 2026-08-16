@@ -32,7 +32,9 @@ export function useModelSettingsActions(
     (profileId: string) => {
       if (settingsBridge === undefined) return;
       setSettings(settingsBridge.selectProfile(profileId));
-      void settingsBridge.discoverModelOptions(profileId).then(setSettings);
+      const pending = settingsBridge.discoverModelOptions(profileId);
+      setSettings(settingsBridge.getProps());
+      void pending.then(setSettings);
     },
     [settingsBridge, setSettings]
   );
@@ -40,7 +42,9 @@ export function useModelSettingsActions(
   const handleDiscoverSettingsModelOptions = useCallback(
     (profileId: string) => {
       if (settingsBridge === undefined) return;
-      void settingsBridge.discoverModelOptions(profileId).then(setSettings);
+      const pending = settingsBridge.discoverModelOptions(profileId);
+      setSettings(settingsBridge.getProps());
+      void pending.then(setSettings);
     },
     [settingsBridge, setSettings]
   );

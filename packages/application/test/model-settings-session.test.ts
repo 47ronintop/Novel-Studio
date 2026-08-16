@@ -480,6 +480,112 @@ describe("model settings session", () => {
     expect(JSON.stringify(result.value)).not.toContain("secret://");
   });
 
+  test("tests and discovers an unsaved model profile override without writing settings", async () => {
+    const writes: ProjectSettings[] = [];
+    const testedProfiles: ModelProfile[] = [];
+    const discoveredProfiles: ModelProfile[] = [];
+    const draftProfile: ModelProfile = {
+      ...secondaryProfile,
+      id: "model_draft",
+      apiKeyRef: "secret://model_draft/api_key",
+      baseUrl: "https://draft.example.com/v1",
+      modelName: "draft-model"
+    };
+    const session = createModelSettingsSession({
+      settingsPort: {
+        async readSettings() {
+          return ok(settings);
+        },
+        async writeSettings(nextSettings) {
+          writes.push(nextSettings);
+          return ok(nextSettings);
+        }
+      },
+      connectionTester: {
+        async testConnection(profile) {
+          testedProfiles.push(profile);
+          return ok({
+            ok: true,
+            provider: profile.provider,
+            modelName: profile.modelName,
+            detail: "Connection succeeded"
+          });
+        }
+      },
+      discoveryPort: {
+        async discoverModels(profile) {
+          discoveredProfiles.push(profile);
+          return ok(
+            createModelDiscoverySnapshot({
+              profile,
+              models: [{ id: "draft-model", displayName: "draft-model" }]
+            })
+          );
+        }
+      }
+    });
+
+    const tested = await session.testModelProfileConnection(draftProfile.id, draftProfile);
+    const discovered = await session.discoverModelOptions(
+      draftProfile.id,
+      { forceRefresh: true },
+      draftProfile
+    );
+
+    expect(tested).toMatchObject({ ok: true });
+    expect(discovered).toMatchObject({
+      ok: true,
+      value: { profileId: "model_draft", status: "loaded" }
+    });
+    expect(testedProfiles).toEqual([draftProfile]);
+    expect(discoveredProfiles).toEqual([draftProfile]);
+    expect(writes).toEqual([]);
+  });
+
+  test("rejects model profile overrides that borrow another profile's secret reference", async () => {
+    const testedProfiles: ModelProfile[] = [];
+    const session = createModelSettingsSession({
+      settingsPort: staticSettingsPort(settings),
+      connectionTester: {
+        async testConnection(profile) {
+          testedProfiles.push(profile);
+          return ok({
+            ok: true,
+            provider: profile.provider,
+            modelName: profile.modelName,
+            detail: "Connection succeeded"
+          });
+        }
+      }
+    });
+
+    const [defaultProfile] = settings.models.profiles;
+    expect(defaultProfile).toBeDefined();
+    if (defaultProfile === undefined) return;
+    const storedOverride = await session.testModelProfileConnection("model_default", {
+      ...defaultProfile,
+      apiKeyRef: "secret://model_secondary/api_key"
+    });
+    const newOverride = await session.testModelProfileConnection("model_draft", {
+      ...secondaryProfile,
+      id: "model_draft",
+      apiKeyRef: "secret://model_default/api_key"
+    });
+    const mismatchedId = await session.testModelProfileConnection("model_draft", {
+      ...secondaryProfile,
+      id: "model_other",
+      apiKeyRef: "secret://model_other/api_key"
+    });
+
+    for (const result of [storedOverride, newOverride, mismatchedId]) {
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "MODEL_PROFILE_OVERRIDE_INVALID" }
+      });
+    }
+    expect(testedProfiles).toEqual([]);
+  });
+
   test("redacts failed model connection details", async () => {
     const tester: ModelConnectionTester = {
       async testConnection(): Promise<Result<never, UnifiedError>> {

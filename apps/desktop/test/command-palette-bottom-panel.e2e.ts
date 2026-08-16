@@ -25,8 +25,13 @@ test("opens the task panel from the command palette", async () => {
 
   try {
     const page = await electronApp.firstWindow();
+    const browserWindow = await electronApp.browserWindow(page);
+    await browserWindow.evaluate((window) => window.setContentSize(1024, 820));
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024);
+
     const taskPanel = page.locator('[data-region="bottom-panel"]');
     await expect(taskPanel).toHaveAttribute("data-visible", "false");
+    await expect(taskPanel).toBeHidden();
 
     await page.getByRole("button", { name: "打开命令面板" }).click();
     const palette = page.getByRole("dialog", { name: "命令面板" });
@@ -35,6 +40,11 @@ test("opens the task panel from the command palette", async () => {
     await palette.getByRole("button", { name: "执行命令：打开任务面板" }).click();
 
     await expect(taskPanel).toHaveAttribute("data-visible", "true");
+    await expect(taskPanel).toBeVisible();
+    await expect(page.getByLabel("底部面板内容：工作流运行")).toBeVisible();
+    const taskPanelBox = await taskPanel.boundingBox();
+    expect(taskPanelBox).not.toBeNull();
+    expect(taskPanelBox?.height ?? 0).toBeGreaterThanOrEqual(160);
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });

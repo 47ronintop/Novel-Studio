@@ -686,12 +686,13 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           ipc,
           "application:settings:list-model-profiles"
         ),
-      discoverModelOptions: (profileId, options) =>
+      discoverModelOptions: (profileId, options, profileOverride) =>
         invokeTyped<Result<ModelDiscoverySnapshot, UnifiedError>>(
           ipc,
           "application:settings:discover-models",
           profileId,
-          options
+          options,
+          profileOverride
         ),
       saveModelProfile: (profile: ModelProfile, options?: { readonly makeDefault?: boolean }) =>
         invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
@@ -707,11 +708,12 @@ export function createNovelStudioApi(ipc: IpcInvoker): NovelStudioApi {
           secretRef,
           secret
         ),
-      testModelProfileConnection: (profileId: string) =>
+      testModelProfileConnection: (profileId: string, profileOverride?: ModelProfile) =>
         invokeTyped<Result<ModelConnectionResult, UnifiedError>>(
           ipc,
           "application:settings:test-model-profile",
-          profileId
+          profileId,
+          profileOverride
         ),
       readStoryAnalysisSettings: () =>
         invokeTyped<Result<StoryAnalysisSettings, UnifiedError>>(

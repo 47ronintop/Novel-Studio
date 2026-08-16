@@ -358,7 +358,7 @@ function ModelProfileSettingsSection({
   readonly selectedProfile: ModelSettingsProfile | undefined;
   readonly selectedProfileId: string | undefined;
 }) {
-  const activeProfileId = selectedProfileId ?? draft.id;
+  const activeProfileId = draft.id;
   const canRunProfileAction = activeProfileId.trim().length > 0;
   const activeConnectionStatus =
     connectionStatus?.profileId === activeProfileId ? connectionStatus : undefined;

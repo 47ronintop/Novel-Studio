@@ -575,11 +575,16 @@ const api: NovelStudioApi = {
       invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
         "application:settings:list-model-profiles"
       ),
-    discoverModelOptions: (profileId: string, options?: ModelDiscoveryRequestOptions) =>
+    discoverModelOptions: (
+      profileId: string,
+      options?: ModelDiscoveryRequestOptions,
+      profileOverride?: ModelProfile
+    ) =>
       invokeTyped<Result<ModelDiscoverySnapshot, UnifiedError>>(
         "application:settings:discover-models",
         profileId,
-        options
+        options,
+        profileOverride
       ),
     saveModelProfile: (profile: ModelProfile, options?: { readonly makeDefault?: boolean }) =>
       invokeTyped<Result<ModelSettingsSnapshot, UnifiedError>>(
@@ -593,10 +598,11 @@ const api: NovelStudioApi = {
         secretRef,
         secret
       ),
-    testModelProfileConnection: (profileId: string) =>
+    testModelProfileConnection: (profileId: string, profileOverride?: ModelProfile) =>
       invokeTyped<Result<ModelConnectionResult, UnifiedError>>(
         "application:settings:test-model-profile",
-        profileId
+        profileId,
+        profileOverride
       ),
     readStoryAnalysisSettings: () =>
       invokeTyped<Result<StoryAnalysisSettings, UnifiedError>>(

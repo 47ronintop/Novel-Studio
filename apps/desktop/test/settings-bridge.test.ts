@@ -9,7 +9,7 @@ import type {
   AgentUsageReport,
   AgentUsageQuery
 } from "@novel-studio/application";
-import { ok } from "@novel-studio/shared";
+import { createUnifiedError, err, ok } from "@novel-studio/shared";
 
 import { createSettingsBridge } from "../src/renderer/settings-bridge.js";
 
@@ -94,20 +94,35 @@ describe("M22 settings bridge", () => {
     expect(calls).toEqual(["settings.discoverModelOptions:model_default:force"]);
   });
 
-  test("does not reuse discovered models after unsaved connection changes", async () => {
+  test("discovers models with the current unsaved connection changes", async () => {
     const calls: string[] = [];
-    const bridge = createSettingsBridge(createApi(calls));
+    const actionProfiles: { tested: ModelProfile[]; discovered: ModelProfile[] } = {
+      tested: [],
+      discovered: []
+    };
+    const bridge = createSettingsBridge(createApi(calls, new Map(), { actionProfiles }));
     await bridge.load();
     calls.length = 0;
+    actionProfiles.discovered.length = 0;
 
     bridge.updateDraft({ baseUrl: "https://other.example.com/v1" });
     expect(bridge.getProps().modelDiscovery).toBeUndefined();
 
     const refreshed = await bridge.discoverModelOptions("model_default");
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(["settings.discoverModelOptions:model_default:force"]);
+    expect(actionProfiles.discovered).toEqual([
+      expect.objectContaining({
+        id: "model_default",
+        baseUrl: "https://other.example.com/v1"
+      })
+    ]);
+    expect(refreshed.modelDiscovery).toMatchObject({
+      profileId: "model_default",
+      status: "loaded"
+    });
     expect(refreshed.feedback).toEqual({
       kind: "info",
-      message: "模型地址、Provider 或密钥有未保存修改，请先保存模型配置后再获取模型列表。"
+      message: "已获取 2 个模型。"
     });
   });
 
@@ -207,6 +222,65 @@ describe("M22 settings bridge", () => {
       status: "success",
       detail: "Profile validated by injected tester"
     });
+  });
+
+  test("tests and discovers the current unsaved model draft without persisting the profile", async () => {
+    const calls: string[] = [];
+    const savedSecrets = new Map<string, string>();
+    const actionProfiles: { tested: ModelProfile[]; discovered: ModelProfile[] } = {
+      tested: [],
+      discovered: []
+    };
+    const bridge = createSettingsBridge(
+      createApi(calls, savedSecrets, { actionProfiles }),
+      { createProfileId: () => "model_draft" }
+    );
+    await bridge.load();
+    calls.length = 0;
+    actionProfiles.discovered.length = 0;
+
+    bridge.newProfile();
+    bridge.updateDraft({
+      displayName: "Draft Model",
+      baseUrl: "https://draft.example.com/v1",
+      modelName: "draft-model",
+      apiKeyRefInput: "sk-draft-key"
+    });
+
+    const tested = await bridge.testConnection("model_draft");
+    const discovered = await bridge.discoverModelOptions("model_draft");
+    const withSelectedModel = bridge.updateDraft({ modelName: "draft-model" });
+
+    expect(tested.connectionStatus).toMatchObject({
+      profileId: "model_draft",
+      status: "success"
+    });
+    expect(discovered.modelDiscovery).toMatchObject({
+      profileId: "model_draft",
+      provider: "openai-compatible",
+      status: "loaded"
+    });
+    expect(withSelectedModel.modelDiscovery).toMatchObject({
+      profileId: "model_draft",
+      status: "loaded"
+    });
+    expect(actionProfiles.tested).toEqual([
+      expect.objectContaining({
+        id: "model_draft",
+        baseUrl: "https://draft.example.com/v1",
+        modelName: "draft-model",
+        apiKeyRef: "secret://model_draft/api_key"
+      })
+    ]);
+    expect(actionProfiles.discovered).toEqual([
+      expect.objectContaining({
+        id: "model_draft",
+        baseUrl: "https://draft.example.com/v1",
+        apiKeyRef: "secret://model_draft/api_key"
+      })
+    ]);
+    expect(savedSecrets.get("secret://model_draft/api_key")).toBe("sk-draft-key");
+    expect(calls.some((call) => call.startsWith("settings.saveModelProfile:"))).toBe(false);
   });
 
   test("redacts failed connection details before exposing settings feedback", async () => {
@@ -545,7 +619,13 @@ describe("M22 settings bridge", () => {
 function createApi(
   calls: string[],
   savedSecrets = new Map<string, string>(),
-  options: { readonly connectionFails?: boolean } = {}
+  options: {
+    readonly connectionFails?: boolean;
+    readonly actionProfiles?: {
+      readonly tested: ModelProfile[];
+      readonly discovered: ModelProfile[];
+    };
+  } = {}
 ): NovelStudioApi {
   let snapshot: ModelSettingsSnapshot = {
     defaultProfileId: "model_default",
@@ -670,7 +750,7 @@ function createApi(
         savedSecrets.set(secretRef, secret);
         return ok(undefined);
       },
-      testModelProfileConnection: async (profileId) => {
+      testModelProfileConnection: async (profileId, profileOverride?: ModelProfile) => {
         calls.push(`settings.testModelProfileConnection:${profileId}`);
         if (options.connectionFails === true) {
           return {
@@ -689,7 +769,21 @@ function createApi(
             }
           };
         }
-        const profile = snapshot.profiles.find((entry) => entry.id === profileId) ?? defaultProfile;
+        const profile =
+          profileOverride ?? snapshot.profiles.find((entry) => entry.id === profileId);
+        if (profile === undefined) {
+          return err(
+            createUnifiedError({
+              code: "MODEL_PROFILE_NOT_FOUND",
+              category: "UserError",
+              message: "The requested model profile does not exist.",
+              recoverability: "user-action",
+              suggestedAction: "Choose an existing model profile and retry.",
+              traceId: "settings-bridge-test"
+            })
+          );
+        }
+        options.actionProfiles?.tested.push(profile);
         const result: ModelConnectionResult = {
           ok: true,
           provider: profile.provider,
@@ -698,11 +792,29 @@ function createApi(
         };
         return ok(result);
       },
-      discoverModelOptions: async (profileId, discoveryOptions) => {
+      discoverModelOptions: async (
+        profileId,
+        discoveryOptions,
+        profileOverride?: ModelProfile
+      ) => {
         calls.push(
           `settings.discoverModelOptions:${profileId}${discoveryOptions?.forceRefresh === true ? ":force" : ""}`
         );
-        const profile = snapshot.profiles.find((entry) => entry.id === profileId) ?? defaultProfile;
+        const profile =
+          profileOverride ?? snapshot.profiles.find((entry) => entry.id === profileId);
+        if (profile === undefined) {
+          return err(
+            createUnifiedError({
+              code: "MODEL_PROFILE_NOT_FOUND",
+              category: "UserError",
+              message: "The requested model profile does not exist.",
+              recoverability: "user-action",
+              suggestedAction: "Choose an existing model profile and retry.",
+              traceId: "settings-bridge-test"
+            })
+          );
+        }
+        options.actionProfiles?.discovered.push(profile);
         const result: ModelDiscoverySnapshot = {
           profileId,
           provider: profile.provider,

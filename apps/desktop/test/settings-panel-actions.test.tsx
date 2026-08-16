@@ -67,6 +67,9 @@ describe("useSettingsPanelActions", () => {
     const profileDiscovered = {
       feedback: { kind: "info", message: "models ready" }
     } as ModelSettingsPanelProps;
+    const profileDiscovering = {
+      feedback: { kind: "info", message: "models loading" }
+    } as ModelSettingsPanelProps;
     const usageSelected = { activeSection: "usage" } as ModelSettingsPanelProps;
     const usageLoading = {
       feedback: { kind: "info", message: "usage loading" }
@@ -79,6 +82,8 @@ describe("useSettingsPanelActions", () => {
       getProps: () => current,
       selectProfile: () => profileSelected,
       discoverModelOptions: async () => {
+        current = profileDiscovering;
+        await Promise.resolve();
         current = profileDiscovered;
         return current;
       },
@@ -107,7 +112,7 @@ describe("useSettingsPanelActions", () => {
       actions?.handleSettingsProfileSelect("model_b");
       await Promise.resolve();
     });
-    expect(published).toEqual([profileSelected, profileDiscovered]);
+    expect(published).toEqual([profileSelected, profileDiscovering, profileDiscovered]);
 
     await act(async () => {
       actions?.handleSettingsSectionSelect("usage");
@@ -116,6 +121,7 @@ describe("useSettingsPanelActions", () => {
     });
     expect(published).toEqual([
       profileSelected,
+      profileDiscovering,
       profileDiscovered,
       usageSelected,
       usageLoading,

@@ -10715,11 +10715,7 @@ textarea:focus-visible,
     grid-template-areas:
       "activity navigator nav-resize editor ai-resize ai"
       "bottom bottom bottom bottom bottom bottom";
-    grid-template-rows: minmax(0, 1fr) 0;
-  }
-
-  .ns-bottom-panel {
-    display: none;
+    grid-template-rows: minmax(0, 1fr) var(--ns-bottom-panel-height, 0px);
   }
 
   .ns-workspace-grid[data-agent-conversation="true"][data-focus-mode="false"]:not(

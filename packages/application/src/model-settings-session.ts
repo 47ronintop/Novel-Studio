@@ -135,11 +135,13 @@ export interface ModelSettingsSession {
     options?: { readonly makeDefault?: boolean }
   ): Promise<Result<ModelSettingsSnapshot, UnifiedError>>;
   testModelProfileConnection(
-    profileId: string
+    profileId: string,
+    profileOverride?: ModelProfile
   ): Promise<Result<ModelConnectionResult, UnifiedError>>;
   discoverModelOptions(
     profileId: string,
-    options?: ModelDiscoveryRequestOptions
+    options?: ModelDiscoveryRequestOptions,
+    profileOverride?: ModelProfile
   ): Promise<Result<ModelDiscoverySnapshot, UnifiedError>>;
 }
 
@@ -220,7 +222,7 @@ export function createModelSettingsSession(
       return ok(snapshotFromSettings(saved.value));
     },
 
-    async testModelProfileConnection(profileId) {
+    async testModelProfileConnection(profileId, profileOverride) {
       if (options.connectionTester === undefined) {
         return err(
           createUnifiedError({
@@ -234,24 +236,13 @@ export function createModelSettingsSession(
         );
       }
 
-      const settings = await options.settingsPort.readSettings();
-      if (!settings.ok) {
-        return settings;
-      }
-      const profile = settings.value.models.profiles.find((entry) => entry.id === profileId);
-      if (profile === undefined) {
-        return err(
-          createUnifiedError({
-            code: "MODEL_PROFILE_NOT_FOUND",
-            category: "UserError",
-            message: "The requested model profile does not exist.",
-            recoverability: "user-action",
-            suggestedAction: "Choose an existing model profile and retry.",
-            traceId: "application-model-settings",
-            redactedDetail: { profileId }
-          })
-        );
-      }
+      const profileResult = await resolveActionModelProfile(
+        options.settingsPort,
+        profileId,
+        profileOverride
+      );
+      if (!profileResult.ok) return profileResult;
+      const profile = profileResult.value;
 
       const result = await options.connectionTester.testConnection(profile);
       if (result.ok) {
@@ -274,8 +265,12 @@ export function createModelSettingsSession(
       );
     },
 
-    async discoverModelOptions(profileId, discoveryOptions) {
-      const profileResult = await readModelProfile(options.settingsPort, profileId);
+    async discoverModelOptions(profileId, discoveryOptions, profileOverride) {
+      const profileResult = await resolveActionModelProfile(
+        options.settingsPort,
+        profileId,
+        profileOverride
+      );
       if (!profileResult.ok) {
         return profileResult;
       }
@@ -380,16 +375,18 @@ function upsertProfile(profiles: readonly ModelProfile[], profile: ModelProfile)
   return profiles.map((entry) => (entry.id === profile.id ? profile : entry));
 }
 
-async function readModelProfile(
+async function resolveActionModelProfile(
   settingsPort: ProjectSettingsPort,
-  profileId: string
+  profileId: string,
+  profileOverride?: ModelProfile
 ): Promise<Result<ModelProfile, UnifiedError>> {
   const settings = await settingsPort.readSettings();
   if (!settings.ok) {
     return settings;
   }
-  const profile = settings.value.models.profiles.find((entry) => entry.id === profileId);
-  if (profile === undefined) {
+  const storedProfile = settings.value.models.profiles.find((entry) => entry.id === profileId);
+  if (profileOverride === undefined) {
+    if (storedProfile !== undefined) return ok(storedProfile);
     return err(
       createUnifiedError({
         code: "MODEL_PROFILE_NOT_FOUND",
@@ -403,7 +400,35 @@ async function readModelProfile(
     );
   }
 
-  return ok(profile);
+  if (profileOverride.id !== profileId) {
+    return invalidModelProfileOverride(profileId, "profile-id-mismatch");
+  }
+  const validation = validateModelProfile(profileOverride);
+  if (!validation.ok) return validation;
+
+  const allowedApiKeyRef = storedProfile?.apiKeyRef ?? `secret://${profileId}/api_key`;
+  if (profileOverride.apiKeyRef !== allowedApiKeyRef) {
+    return invalidModelProfileOverride(profileId, "secret-reference-mismatch");
+  }
+
+  return ok(profileOverride);
+}
+
+function invalidModelProfileOverride(
+  profileId: string,
+  reason: "profile-id-mismatch" | "secret-reference-mismatch"
+): Result<never, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "MODEL_PROFILE_OVERRIDE_INVALID",
+      category: "ValidationError",
+      message: "The current model profile draft is invalid.",
+      recoverability: "user-action",
+      suggestedAction: "Check the profile ID and API key, then retry.",
+      traceId: "application-model-settings",
+      redactedDetail: { profileId, reason }
+    })
+  );
 }
 
 function validateModelProfile(profile: ModelProfile): Result<ModelProvider, UnifiedError> {

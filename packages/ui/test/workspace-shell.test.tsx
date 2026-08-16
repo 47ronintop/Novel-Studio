@@ -363,7 +363,10 @@ describe("WorkspaceShell", () => {
     expect(narrowWorkspace).toMatch(
       /\.ns-workspace-grid\[data-focus-mode="true"\]\s*\{[^}]*grid-template-areas:\s*"editor"[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
     );
-    expect(narrowWorkspace).toMatch(/\.ns-bottom-panel\s*\{[^}]*display:\s*none/s);
+    expect(narrowWorkspace).toMatch(
+      /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+var\(--ns-bottom-panel-height,\s*0px\)/s
+    );
+    expect(narrowWorkspace).not.toMatch(/\.ns-bottom-panel\s*\{[^}]*display:\s*none/s);
     expect(narrowWorkspace).toMatch(
       /grid-template-columns:\s*48px\s+minmax\(180px,\s*250px\)\s+4px\s+minmax\(0,\s*1fr\)\s+4px\s+minmax\(280px/s
     );
