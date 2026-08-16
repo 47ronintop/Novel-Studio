@@ -64,6 +64,7 @@ import {
   ProjectCreationFileRepository,
   ProjectFileRepository,
   ProjectLockFileRepository,
+  ProjectWorkspaceViewStateFileRepository,
   ProjectSettingsRepository,
   RecoveryRepository,
   SearchIndexFileRepository,
@@ -242,6 +243,11 @@ export function createProjectDesktopApplication(
           ownerId: lockOwnerId,
           traceId: "trace_desktop_project_lock_repository",
           ...(options.now === undefined ? {} : { now: options.now })
+        }),
+      createWorkspaceViewStateRepository: (projectRoot) =>
+        new ProjectWorkspaceViewStateFileRepository({
+          projectRoot,
+          traceId: "trace_desktop_project_workspace_view_state"
         })
     });
   const projectWorkspaceSession = createWorkspaceSession();

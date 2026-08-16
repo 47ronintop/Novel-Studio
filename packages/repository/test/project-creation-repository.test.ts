@@ -28,6 +28,39 @@ afterEach(async () => {
 });
 
 describe("project creation repository", () => {
+  test("forwards the nested-folder layout to the project metadata initializer", async () => {
+    const parentDirectory = await createTempRoot();
+    let receivedInput: unknown;
+    const repository = new ProjectCreationFileRepository({
+      createProjectRepository() {
+        return {
+          async createProject(input) {
+            receivedInput = input;
+            return new ProjectFileRepository({
+              projectRoot: join(parentDirectory, "nested-project")
+            }).createProject(input);
+          }
+        };
+      }
+    });
+
+    const created = await repository.createProjectInParent({
+      parentDirectory,
+      folderName: "nested-project",
+      projectId: "prj_nested_layout",
+      title: "Nested layout",
+      language: "en",
+      workspaceLayout: "nested-folder"
+    });
+
+    expect(isOk(created)).toBe(true);
+    if (isErr(created)) {
+      throw new Error(created.error.message);
+    }
+    expect(receivedInput).toMatchObject({ workspaceLayout: "nested-folder" });
+    expect(created.value.snapshot.project.workspaceLayout).toBe("nested-folder");
+  });
+
   test("creates exactly one child project and keeps its title independent from the folder", async () => {
     const parentDirectory = await createTempRoot();
     const folderName = "\u957f\u5b89\u65e7\u68a6";

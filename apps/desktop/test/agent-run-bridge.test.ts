@@ -3690,7 +3690,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     });
   });
 
-  test("prepares an exact send preview, then confirms with only its opaque binding", async () => {
+  test("prepares an exact send preview and automatically confirms only its opaque binding", async () => {
     const prepareCalls: Record<string, unknown>[] = [];
     const confirmCalls: Record<string, unknown>[] = [];
     const ledger = [
@@ -3762,14 +3762,8 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       settings
     });
 
-    const prepared = await bridge.send("检查当前章节");
+    const sent = await bridge.send("检查当前章节");
     expect(prepareCalls).toHaveLength(1);
-    expect(confirmCalls).toHaveLength(0);
-    expect(prepared.status).toBe("created");
-    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toEqual(preview);
-    expect(bridge.getComposerProps()?.request).toBe("检查当前章节");
-
-    const confirmed = await bridge.send("检查当前章节");
     expect(confirmCalls).toEqual([
       {
         schemaVersion: "2.0",
@@ -3777,14 +3771,14 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
         canonicalPayloadChecksum: "p".repeat(64)
       }
     ]);
-    expect(confirmed.sendLedger).toMatchObject([
+    expect(sent.sendLedger).toMatchObject([
       { entryId: "ledger-01", sentAtLabel: "20:00", previewId: "preview-01" }
     ]);
     expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeUndefined();
     expect(bridge.getComposerProps()?.request).toBe("");
   });
 
-  test("does not treat a second click during preview preparation as confirmation", async () => {
+  test("ignores a second send during preview preparation and automatically confirms once", async () => {
     const preview = {
       schemaVersion: "2.0" as const,
       previewId: "preview-pending-01",
@@ -3842,9 +3836,8 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
 
     releasePreview?.(ok(preview));
     await firstClick;
-    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toEqual(preview);
-    await bridge.send("检查当前章节");
     expect(confirmationCount).toBe(1);
+    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeUndefined();
   });
 
   test("explains that an incomplete model sharing choice blocks the send preview", async () => {
@@ -3979,7 +3972,7 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     }
   });
 
-  test("invalidates a prepared send preview when the request changes", async () => {
+  test("does not retain an automatically confirmed preview when the request changes", async () => {
     let prepareCount = 0;
     const api = {
       agentRuns: {
@@ -4025,13 +4018,11 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
       settings
     });
     await bridge.send("第一次请求");
-    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeDefined();
+    expect(prepareCount).toBe(1);
+    expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeUndefined();
 
     bridge.getComposerProps()?.onRequestChange("第二次请求");
     expect(bridge.getComposerProps()?.contextStatus?.sendPreview).toBeUndefined();
-    await bridge.send("第二次请求");
-    expect(prepareCount).toBe(2);
-    expect(bridge.getComposerProps()?.contextStatus?.sendPreview?.previewId).toBe("preview-2");
   });
 });
 

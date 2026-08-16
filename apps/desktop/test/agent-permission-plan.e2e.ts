@@ -123,12 +123,6 @@ test("persists a plan review and fails closed when the provider stream is incomp
         .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
         .filter({ hasText: "先规划，再核对开篇" })
     ).toBeVisible();
-    await composer.getByTitle("查看上下文").click();
-    await page.getByRole("tab", { name: "实际发送预览" }).click();
-    // Starting is a two-stage interaction: wait for the exact Main-bound payload before
-    // confirming it. The generic preview panel is rendered while preparation is still pending.
-    await expect(page.locator(".ns-agent-send-preview")).toBeVisible();
-    await composer.getByLabel("启动 Agent 运行").click();
     await expect
       .poll(async () => {
         const listed = await page.evaluate(async (boundProjectId) => {

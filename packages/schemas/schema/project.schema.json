@@ -23,6 +23,7 @@
     "language": { "type": "string", "minLength": 2 },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" },
+    "workspaceLayout": { "type": "string", "enum": ["standalone", "nested-folder"] },
     "defaultWorkflowId": { "type": "string" },
     "defaultModelProfileId": { "type": "string" },
     "stats": {

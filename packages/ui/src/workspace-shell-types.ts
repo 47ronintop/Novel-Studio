@@ -114,6 +114,10 @@ export interface CreativeProjectFilesNavigatorProps {
   readonly nodes: readonly ProjectFileTreeNode[];
   readonly expandedPathIds: readonly string[];
   readonly activeFilePath?: string | undefined;
+  /** The storage shape is UI metadata only; paths remain project-relative. */
+  readonly workspaceLayout?: "standalone" | "nested-folder" | undefined;
+  /** Nested source folders can be browsed but never mutated from this surface. */
+  readonly mutationMode?: "read-write" | "read-only" | undefined;
   readonly loading?: boolean | undefined;
   readonly truncated?: boolean | undefined;
   readonly errorMessage?: string | undefined;

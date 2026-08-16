@@ -276,7 +276,6 @@ export function AgentComposer(props: AgentComposerProps) {
   const draftDisabled = props.disabled === true || props.active;
   const fixedBudgetExceeded = props.contextStatus?.fixedBudgetExceeded === true;
   const canSend = !draftDisabled && !fixedBudgetExceeded && props.request.trim().length > 0;
-  const sendPreviewPending = props.contextStatus?.sendPreview !== undefined;
 
   function sendRequest(): void {
     if (!canSend) return;
@@ -365,13 +364,6 @@ export function AgentComposer(props: AgentComposerProps) {
                 </li>
               ))}
             </ul>
-          </div>
-        ) : null}
-        {sendPreviewPending ? (
-          <div className="ns-agent-composer-send-confirmation" role="status">
-            <Check aria-hidden="true" size={13} />
-            <span>发送预览待确认</span>
-            <small>再次点击发送以确认</small>
           </div>
         ) : null}
         <div className="ns-agent-composer-toolbar">
@@ -578,24 +570,18 @@ export function AgentComposer(props: AgentComposerProps) {
                 </button>
               ) : (
                 <button
-                  aria-label={sendPreviewPending ? "确认并发送 Agent 请求" : "启动 Agent 运行"}
+                  aria-label="启动 Agent 运行"
                   className="ns-ai-send-button"
                   disabled={!canSend}
                   onClick={sendRequest}
                   title={
                     fixedBudgetExceeded
                       ? (props.contextStatus?.fixedBudgetMessage ?? "固定项超过安全输入预算")
-                      : sendPreviewPending
-                        ? "确认并发送"
-                        : "发送"
+                      : "发送"
                   }
                   type="button"
                 >
-                  {sendPreviewPending ? (
-                    <Check aria-hidden="true" size={14} />
-                  ) : (
-                    <Send aria-hidden="true" size={14} />
-                  )}
+                  <Send aria-hidden="true" size={14} />
                 </button>
               )}
             </div>

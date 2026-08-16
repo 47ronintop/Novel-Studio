@@ -111,7 +111,7 @@ test("creates a project, creates a chapter, edits it, and saves through Electron
 test("imports selected text files as naturally ordered chapters without changing the source", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "novel-studio-folder-import-e2e-"));
   const sourceRoot = join(tempRoot, "Imported Novel");
-  const targetRoot = join(tempRoot, "Imported Novel - ShanHai");
+  const targetRoot = join(sourceRoot, ".shanhai");
   const sourceFiles = new Map([
     ["01-opening.txt", "Imported opening.\n"],
     ["02-middle.md", "Excluded middle.\n"],
@@ -138,8 +138,8 @@ test("imports selected text files as naturally ordered chapters without changing
 
     const dialog = page.getByRole("dialog", { name: "接入普通小说文件夹" });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("Imported Novel - ShanHai");
-    await expect(dialog).toContainText("源文件夹不会被修改");
+    await expect(dialog).toContainText("当前文件夹内创建项目数据目录“.shanhai”");
+    await expect(dialog).toContainText("源正文文件不会被修改");
     await dialog.getByRole("checkbox", { name: /02-middle/u }).uncheck();
     await dialog.getByRole("button", { name: "创建项目并导入 2 章" }).click();
 
@@ -149,7 +149,7 @@ test("imports selected text files as naturally ordered chapters without changing
     await expect(page.getByRole("tab", { name: "10-ending.md" })).toBeVisible();
     await expect(chapterBody(page)).toContainText("Imported ending.");
     await expect(
-      page.getByText("项目已创建在 Imported Novel - ShanHai，源文件夹未被修改。")
+      page.getByText("项目数据已创建在 .shanhai，源正文文件未被修改。")
     ).toBeVisible();
 
     const chapterRows = page.getByLabel("章节列表").locator(".ns-creative-row-main");
@@ -159,7 +159,7 @@ test("imports selected text files as naturally ordered chapters without changing
     expect(chapterRowText[1]).toContain("10-ending");
     await expect(chapterRows.nth(1)).toHaveAttribute("aria-current", "page");
 
-    expect((await readdir(sourceRoot)).sort()).toEqual([...sourceFiles.keys()].sort());
+    expect((await readdir(sourceRoot)).sort()).toEqual([".shanhai", ...sourceFiles.keys()].sort());
     for (const [fileName, expectedBody] of sourceFiles) {
       expect(await readFile(join(sourceRoot, fileName), "utf8")).toBe(expectedBody);
     }
@@ -168,10 +168,12 @@ test("imports selected text files as naturally ordered chapters without changing
     ) as {
       title?: string;
       language?: string;
+      workspaceLayout?: string;
     };
     expect(projectMetadata).toMatchObject({
       title: "Imported Novel",
-      language: "zh-CN"
+      language: "zh-CN",
+      workspaceLayout: "nested-folder"
     });
     const chapterFiles = (await readdir(join(targetRoot, "chapters"))).filter((entry) =>
       entry.endsWith(".md")

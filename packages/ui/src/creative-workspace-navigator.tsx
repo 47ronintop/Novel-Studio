@@ -335,9 +335,13 @@ function OtherFilesSection({ props }: { readonly props: CreativeWorkspaceNavigat
   const fileCount =
     props.projectFiles === undefined
       ? undefined
-      : collectProjectFileNodes(filterProjectFileTreeNodes(props.projectFiles.nodes, "")).filter(
-          (node) => node.kind === "file"
-        ).length;
+      : collectProjectFileNodes(
+          filterProjectFileTreeNodes(
+            props.projectFiles.nodes,
+            "",
+            props.projectFiles.workspaceLayout
+          )
+        ).filter((node) => node.kind === "file").length;
   const fileCountLabel =
     props.projectFiles?.loading === true
       ? "加载中"
@@ -421,9 +425,13 @@ function ProjectFilesProjection({
     );
   }
 
-  const visibleNodes = filterProjectFileTreeNodes(files.nodes, "");
+  const visibleNodes = filterProjectFileTreeNodes(files.nodes, "", files.workspaceLayout);
   const normalizedQuery = normalizeQuery(fileSearchQuery);
-  const filteredNodes = filterProjectFileTreeNodes(visibleNodes, normalizedQuery);
+  const filteredNodes = filterProjectFileTreeNodes(
+    visibleNodes,
+    normalizedQuery,
+    files.workspaceLayout
+  );
   const knownNodes = collectProjectFileNodes(visibleNodes);
   const knownNodePaths = new Set(knownNodes.map((node) => node.path));
   const knownFilePaths = new Set(
@@ -439,6 +447,7 @@ function ProjectFilesProjection({
       : Array.from(
           new Set([...files.expandedPathIds, ...collectExpandedDirectoryPathIds(filteredNodes)])
         );
+  const readOnly = files.mutationMode === "read-only";
   return (
     <>
       <NavigatorSearch
@@ -458,46 +467,50 @@ function ProjectFilesProjection({
           >
             <RefreshCw aria-hidden="true" size={14} />
           </button>
-          <button
-            aria-label="新建其他文件"
-            className="ns-icon-button"
-            onClick={() => createProjectTextFile(files)}
-            title="新建其他文件"
-            type="button"
-          >
-            <FilePlus2 aria-hidden="true" size={14} />
-          </button>
-          <button
-            aria-label="新建其他文件目录"
-            className="ns-icon-button"
-            onClick={() => createProjectDirectory(files)}
-            title="新建其他文件目录"
-            type="button"
-          >
-            <FolderPlus aria-hidden="true" size={14} />
-          </button>
-          <details className="ns-navigator-actions" data-project-file-actions="true">
-            <summary aria-label="其他文件更多操作" title="其他文件更多操作">
-              <MoreHorizontal aria-hidden="true" size={14} />
-            </summary>
-            <div className="ns-navigator-action-menu">
+          {readOnly ? null : (
+            <>
               <button
-                disabled={knownNodePaths.size === 0}
-                onClick={() => renameProjectPath(files, activeFilePath, knownNodes)}
+                aria-label="新建其他文件"
+                className="ns-icon-button"
+                onClick={() => createProjectTextFile(files)}
+                title="新建其他文件"
                 type="button"
               >
-                重命名
+                <FilePlus2 aria-hidden="true" size={14} />
               </button>
               <button
-                disabled={knownNodePaths.size === 0}
-                onClick={() => deleteProjectPath(files, activeFilePath, knownNodePaths)}
+                aria-label="新建其他文件目录"
+                className="ns-icon-button"
+                onClick={() => createProjectDirectory(files)}
+                title="新建其他文件目录"
                 type="button"
               >
-                <Trash2 aria-hidden="true" size={13} />
-                删除
+                <FolderPlus aria-hidden="true" size={14} />
               </button>
-            </div>
-          </details>
+              <details className="ns-navigator-actions" data-project-file-actions="true">
+                <summary aria-label="其他文件更多操作" title="其他文件更多操作">
+                  <MoreHorizontal aria-hidden="true" size={14} />
+                </summary>
+                <div className="ns-navigator-action-menu">
+                  <button
+                    disabled={knownNodePaths.size === 0}
+                    onClick={() => renameProjectPath(files, activeFilePath, knownNodes)}
+                    type="button"
+                  >
+                    重命名
+                  </button>
+                  <button
+                    disabled={knownNodePaths.size === 0}
+                    onClick={() => deleteProjectPath(files, activeFilePath, knownNodePaths)}
+                    type="button"
+                  >
+                    <Trash2 aria-hidden="true" size={13} />
+                    删除
+                  </button>
+                </div>
+              </details>
+            </>
+          )}
         </div>
       </div>
       {files.truncated === true ? (
@@ -507,14 +520,16 @@ function ProjectFilesProjection({
         <div className="ns-creative-empty">
           <span>{normalizedQuery.length === 0 ? "还没有其他文件" : "未找到匹配其他文件"}</span>
           {normalizedQuery.length === 0 ? (
-            <button
-              className="ns-icon-text-button"
-              onClick={() => createProjectTextFile(files)}
-              type="button"
-            >
-              <Plus aria-hidden="true" size={14} />
-              新建文件
-            </button>
+            readOnly ? null : (
+              <button
+                className="ns-icon-text-button"
+                onClick={() => createProjectTextFile(files)}
+                type="button"
+              >
+                <Plus aria-hidden="true" size={14} />
+                新建文件
+              </button>
+            )
           ) : (
             <button
               aria-label="清除其他文件筛选"
@@ -774,15 +789,16 @@ function promptForCreativeProjectPath(
 
 function filterProjectFileTreeNodes(
   nodes: readonly ProjectFileTreeNode[],
-  query: string
+  query: string,
+  workspaceLayout: CreativeProjectFilesNavigatorProps["workspaceLayout"] = "standalone"
 ): readonly ProjectFileTreeNode[] {
   const normalizedQuery = normalizeQuery(query);
   const visibleNodes: ProjectFileTreeNode[] = [];
   for (const node of nodes) {
-    if (!isVisibleCreativeProjectNode(node)) continue;
+    if (!isVisibleCreativeProjectNode(node, workspaceLayout)) continue;
     const children =
       node.kind === "directory"
-        ? filterProjectFileTreeNodes(node.children ?? [], normalizedQuery)
+        ? filterProjectFileTreeNodes(node.children ?? [], normalizedQuery, workspaceLayout)
         : undefined;
     const matchesQuery =
       normalizedQuery.length === 0 ||
@@ -795,6 +811,7 @@ function filterProjectFileTreeNodes(
         name: node.name,
         path: node.path,
         kind: "directory",
+        ...(node.readOnlyReason === undefined ? {} : { readOnlyReason: node.readOnlyReason }),
         children: children ?? []
       });
       continue;
@@ -804,22 +821,38 @@ function filterProjectFileTreeNodes(
       id: node.id,
       name: node.name,
       path: node.path,
-      kind: "file"
+      kind: "file",
+      ...(node.readOnlyReason === undefined ? {} : { readOnlyReason: node.readOnlyReason })
     });
   }
   return visibleNodes;
 }
 
-function isVisibleCreativeProjectNode(node: ProjectFileTreeNode): boolean {
+function isVisibleCreativeProjectNode(
+  node: ProjectFileTreeNode,
+  workspaceLayout: CreativeProjectFilesNavigatorProps["workspaceLayout"]
+): boolean {
   const path = normalizeCreativeProjectPath(node.path);
-  if (path === undefined || path !== node.path || node.readOnlyReason !== undefined) return false;
+  if (path === undefined || path !== node.path) return false;
   const segments = path.split("/");
-  return node.name === segments.at(-1) && isAllowedCreativeProjectPath(path, node.kind);
+  return (
+    node.name === segments.at(-1) && isAllowedCreativeProjectPath(path, node.kind, workspaceLayout)
+  );
 }
 
-function isAllowedCreativeProjectPath(path: string, kind: ProjectFileTreeNode["kind"]): boolean {
+function isAllowedCreativeProjectPath(
+  path: string,
+  kind: ProjectFileTreeNode["kind"],
+  workspaceLayout: CreativeProjectFilesNavigatorProps["workspaceLayout"] = "standalone"
+): boolean {
   const segments = path.split("/");
-  if (segments.some((segment) => isBlockedCreativeProjectSegment(segment))) return false;
+  if (
+    workspaceLayout === "nested-folder"
+      ? segments.some((segment) => segment.toLocaleLowerCase() === ".shanhai")
+      : segments.some((segment) => isBlockedCreativeProjectSegment(segment))
+  ) {
+    return false;
+  }
   if (kind === "directory") return true;
   const fileName = segments.at(-1);
   return fileName !== undefined && CREATIVE_PROJECT_FILE_EXTENSIONS.has(fileExtension(fileName));

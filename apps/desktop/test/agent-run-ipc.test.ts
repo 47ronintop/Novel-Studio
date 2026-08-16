@@ -157,7 +157,7 @@ describe("Agent Run IPC", () => {
 
   test("requires a Main-attested Files surface and exact active resource for creative general drafts", async () => {
     const identity = { projectId: "project-record-01", workspaceId: "workspace-creative-01" };
-    const path = "notes/outline.md";
+    const path = "chapters/source.md";
     const initialChecksum = "a".repeat(64);
     const savedChecksum = "b".repeat(64);
     let diskChecksum = initialChecksum;
@@ -276,7 +276,7 @@ describe("Agent Run IPC", () => {
       kind: "project_file" as const,
       refId: `file:${path}`,
       relativePath: path,
-      label: "outline.md",
+      label: "source.md",
       expectedChecksum: checksum
     });
 

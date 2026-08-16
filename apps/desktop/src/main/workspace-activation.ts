@@ -17,7 +17,10 @@ import type {
 } from "./agent-runtime-manager.js";
 
 export interface WorkspaceActivationCoordinator {
-  openCreativeProject(projectRoot: string): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
+  openCreativeProject(
+    projectRoot: string,
+    displayRoot?: string
+  ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
   createCreativeProject(
     input: CreateCreativeProjectInput
   ): Promise<Result<WorkspaceActivationDto, UnifiedError>>;
@@ -48,8 +51,8 @@ export function createWorkspaceActivationCoordinator(
   options: CreateWorkspaceActivationCoordinatorOptions
 ): WorkspaceActivationCoordinator {
   return {
-    openCreativeProject: (projectRoot) =>
-      activate(() => options.application.prepareOpenCreativeProject(projectRoot)),
+    openCreativeProject: (projectRoot, displayRoot) =>
+      activate(() => options.application.prepareOpenCreativeProject(projectRoot, displayRoot)),
     createCreativeProject: (input) =>
       activate(() => options.application.prepareCreateCreativeProject(input)),
     importCreativeProject: async (input) => {
@@ -109,6 +112,8 @@ export function createWorkspaceActivationCoordinator(
         projectId: candidate.creativeProject.project.projectId,
         workspaceId: candidate.context.workspaceId,
         projectRoot: candidate.context.contentRoot,
+        displayRoot: candidate.context.displayRoot,
+        workspaceLayout: candidate.creativeProject.project.workspaceLayout ?? "standalone",
         stateRoot: candidate.context.stateRoot
       });
       if (!preparedFiles.ok) {

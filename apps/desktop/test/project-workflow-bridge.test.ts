@@ -66,7 +66,7 @@ describe("project workflow bridge", () => {
         projectId: "prj_imported",
         importedChapterIds: ["chapter_1"],
         lastImportedChapterId: "chapter_1",
-        targetLocationLabel: "Books / Draft - ShanHai",
+        targetLocationLabel: ".shanhai",
         activation: creativeActivation("prj_imported", "Draft")
       })
     );
@@ -78,9 +78,11 @@ describe("project workflow bridge", () => {
             preview: {
               schemaVersion: "1.0" as const,
               sourceDisplayName: "Draft",
-              targetDisplayName: "Draft - ShanHai",
+              targetDisplayName: ".shanhai",
               defaultProjectTitle: "Draft",
               language: "zh-CN" as const,
+              layout: "nested-folder" as const,
+              targetRelativePath: ".shanhai" as const,
               candidates: [
                 {
                   relativePath: "01.md",
@@ -124,7 +126,7 @@ describe("project workflow bridge", () => {
       status: "ready",
       feedback: {
         kind: "info",
-        message: "项目已创建在 Books / Draft - ShanHai，源文件夹未被修改。"
+        message: "项目数据已创建在 .shanhai，源正文文件未被修改。"
       }
     });
     expect(imported.folderImportPreview).toBeUndefined();

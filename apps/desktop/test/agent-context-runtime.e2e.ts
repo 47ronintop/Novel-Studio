@@ -318,7 +318,11 @@ test("sends profile-specific conventions and outlines in real workspace provider
     await sourcePanel.press("Escape");
     const engineeringRequest = "ENGINEERING_CONTEXT_E2E_REQUEST";
     await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
-    const engineeringRequestSent = await sendProviderRequest(page, engineeringRequest);
+    const engineeringRequestSent = await sendProviderRequest(
+      page,
+      engineeringRequest,
+      modelRequests
+    );
     if (engineeringRequestSent) {
       await expect
         .poll(() => matchingProviderRequests(modelRequests, engineeringRequest).length)
@@ -387,7 +391,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
 
     const writingRequest = "WRITING_CONTEXT_E2E_REQUEST";
     await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
-    await sendProviderRequest(page, writingRequest);
+    await sendProviderRequest(page, writingRequest, modelRequests);
     await expect.poll(() => matchingProviderRequests(modelRequests, writingRequest).length).toBe(3);
     await expect(page.getByText(`Completed ${writingRequest}`, { exact: true })).toBeVisible();
 
@@ -429,7 +433,7 @@ test("sends profile-specific conventions and outlines in real workspace provider
 
     const creativeRequest = "CREATIVE_GENERAL_CONTEXT_E2E_REQUEST";
     await selectOperationMode(page, page.getByLabel("会话输入区"), "execution");
-    await sendProviderRequest(page, creativeRequest);
+    await sendProviderRequest(page, creativeRequest, modelRequests);
     await expect
       .poll(() => matchingProviderRequests(modelRequests, creativeRequest).length)
       .toBe(3);
@@ -645,35 +649,29 @@ async function selectOperationMode(
   await page.getByLabel("计划或执行模式").getByRole("button", { name: expected }).click();
 }
 
-async function sendProviderRequest(page: Page, request: string): Promise<boolean> {
+async function sendProviderRequest(
+  page: Page,
+  request: string,
+  modelRequests: readonly Record<string, unknown>[]
+): Promise<boolean> {
   const composer = page.getByLabel("会话输入区");
   await composer.getByLabel("Agent 请求").fill(request);
   const start = composer.getByRole("button", { name: "启动 Agent 运行" });
   await start.click();
-  await composer.getByTitle("查看上下文").click();
-  await page.getByRole("tab", { name: "实际发送预览" }).click();
-  const preview = page.getByLabel("实际发送预览");
-  await expect(preview).toBeVisible();
-  const previewClass = (await preview.getAttribute("class")) ?? "";
-  if (!previewClass.split(/\s+/u).includes("ns-agent-send-preview")) {
-    const engineeringSourceUnavailable = page.getByText(
-      /WORKSPACE_OUTLINE_ENGINEERING_SOURCE_UNAVAILABLE/
-    );
-    if (await engineeringSourceUnavailable.isVisible().catch(() => false)) {
-      await page.getByRole("dialog", { name: "上下文用量" }).press("Escape");
-      return false;
-    }
-    throw new Error(`Expected a Main-bound send preview, received classes: ${previewClass}`);
-  }
-  await page.getByRole("dialog", { name: "上下文用量" }).press("Escape");
-  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
-  await expect(
-    page
-      .getByLabel("Agent 会话主视图")
-      .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
-      .filter({ hasText: request })
-  ).toBeVisible();
-  return true;
+  let outcome = "pending";
+  await expect
+    .poll(async () => {
+      if (matchingProviderRequests(modelRequests, request).length > 0) {
+        outcome = "sent";
+        return outcome;
+      }
+      if (await page.getByText(/WORKSPACE_OUTLINE_ENGINEERING_SOURCE_UNAVAILABLE/).count()) {
+        outcome = "outline-unavailable";
+      }
+      return outcome;
+    })
+    .not.toBe("pending");
+  return outcome === "sent";
 }
 
 async function chooseWorkspaceModelSharing(page: Page): Promise<void> {

@@ -27,7 +27,7 @@ import {
 } from "./no-follow-file-operations.js";
 
 export const CREATIVE_PROJECT_FILE_POLICY_VERSION = "1.0" as const;
-export const CREATIVE_PROJECT_FILE_TREE_SNAPSHOT_VERSION = "1.0" as const;
+export const CREATIVE_PROJECT_FILE_TREE_SNAPSHOT_VERSION = "1.1" as const;
 export const CREATIVE_PROJECT_FILE_LIFECYCLE_VERSION = "1.0" as const;
 
 const DEFAULT_MAX_DEPTH = 4;
@@ -111,6 +111,8 @@ export interface CreativeProjectFileTreeNode {
   readonly path: string;
   /** Opaque Main-generated identity used to reject stale move/delete requests. */
   readonly nodeRevision: string;
+  /** Present when this node originates outside the managed project workspace. */
+  readonly readOnlyReason?: string;
   readonly children?: readonly CreativeProjectFileTreeNode[];
 }
 
@@ -121,6 +123,8 @@ export interface CreativeProjectFileTreeSnapshot {
   readonly projectId: string;
   readonly workspaceId: string;
   readonly policyVersion: typeof CREATIVE_PROJECT_FILE_POLICY_VERSION;
+  readonly workspaceLayout: "standalone" | "nested-folder";
+  readonly mutationMode: "read-write" | "read-only";
   /** Structure-only revision. Saving file contents must not change this value. */
   readonly treeRevision: string;
   readonly nodes: readonly CreativeProjectFileTreeNode[];
@@ -139,6 +143,7 @@ export interface CreativeProjectFileDocument {
   readonly checksum: string;
   readonly byteLength: number;
   readonly nodeRevision: string;
+  readonly readOnlyReason?: string;
 }
 
 export type CreativeProjectFileSaveResult =
@@ -222,6 +227,10 @@ export interface CreativeProjectFileReceiptStore {
 export interface CreativeProjectFileRepositoryOptions {
   /** Main-derived canonical candidate root. It is never returned by this repository. */
   readonly projectRoot: string;
+  /** Main-derived display root for nested projects. Never returned to renderer callers. */
+  readonly displayRoot?: string;
+  /** Defaults to the legacy standalone project layout. */
+  readonly workspaceLayout?: "standalone" | "nested-folder";
   readonly projectId: string;
   readonly workspaceId: string;
   readonly policy?: CreativeProjectFilePolicy;
@@ -280,6 +289,8 @@ export class CreativeProjectFileRepository {
   private readonly policy: CreativeProjectFilePolicy;
   private readonly traceId: string;
   private readonly atomicWriter: typeof writeTextAtomically;
+  private readonly workspaceLayout: "standalone" | "nested-folder";
+  private readonly rootPath: string;
   private readonly rootBinding: Promise<Result<RootBinding, UnifiedError>>;
   private readonly receiptCache = new Map<string, CreativeProjectFileLifecycleReceipt>();
   private operationTail: Promise<void> = Promise.resolve();
@@ -292,6 +303,9 @@ export class CreativeProjectFileRepository {
       throw new Error("CreativeProjectFileRepository requires a supported file policy.");
     }
     this.policy = policy.value;
+    this.workspaceLayout = options.workspaceLayout ?? "standalone";
+    this.rootPath =
+      this.workspaceLayout === "nested-folder" ? (options.displayRoot ?? "") : options.projectRoot;
     this.traceId = options.traceId ?? "creative-project-file-repository";
     this.atomicWriter = options.atomicWriter ?? writeTextAtomically;
     this.rootBinding = this.bindRoot();
@@ -307,7 +321,7 @@ export class CreativeProjectFileRepository {
 
   public readTextFile(path: string): Promise<Result<CreativeProjectFileDocument, UnifiedError>> {
     return this.serialize(async () => {
-      const normalized = normalizeCreativeProjectFilePath(path, "file", this.policy);
+      const normalized = this.normalizePath(path, "file");
       if (!normalized.ok) return normalized;
       const node = await this.resolveExistingNode(normalized.value, "file");
       if (!node.ok) return node;
@@ -343,9 +357,10 @@ export class CreativeProjectFileRepository {
     readonly expectedNodeRevision: string;
     readonly expectedChecksum: string;
   }): Promise<Result<CreativeProjectFileSaveResult, UnifiedError>> {
+    if (this.workspaceLayout === "nested-folder") return this.readOnlyFailure(input.path);
     const identity = this.assertIdentity(input.projectId, input.workspaceId);
     if (!identity.ok) return identity;
-    const normalized = normalizeCreativeProjectFilePath(input.path, "file", this.policy);
+    const normalized = this.normalizePath(input.path, "file");
     if (!normalized.ok) return normalized;
     if (
       !isOpaqueRevision(input.expectedTreeRevision) ||
@@ -466,6 +481,7 @@ export class CreativeProjectFileRepository {
     command: CreativeProjectFileLifecycleCommand,
     origin: CreativeProjectFileMutationOrigin
   ): Promise<Result<CreativeProjectFileLifecycleReceipt, UnifiedError>> {
+    if (this.workspaceLayout === "nested-folder") return this.readOnlyFailure(command.commandId);
     const commandValidation = validateLifecycleCommand(command);
     if (!commandValidation.ok) return commandValidation;
     const fingerprint = fingerprintCommand(command);
@@ -534,7 +550,7 @@ export class CreativeProjectFileRepository {
   private async createTextFile(
     command: Extract<CreativeProjectFileLifecycleCommand, { readonly kind: "createTextFile" }>
   ): Promise<Result<readonly string[], UnifiedError>> {
-    const path = normalizeCreativeProjectFilePath(command.path, "file", this.policy);
+    const path = this.normalizePath(command.path, "file");
     if (!path.ok) return path;
     const content = validateTextContent(
       command.content,
@@ -599,7 +615,7 @@ export class CreativeProjectFileRepository {
   private async createDirectory(
     command: Extract<CreativeProjectFileLifecycleCommand, { readonly kind: "createDirectory" }>
   ): Promise<Result<readonly string[], UnifiedError>> {
-    const path = normalizeCreativeProjectFilePath(command.path, "directory", this.policy);
+    const path = this.normalizePath(command.path, "directory");
     if (!path.ok) return path;
     const target = await this.resolveMissingTarget(path.value);
     if (!target.ok) return target;
@@ -636,15 +652,11 @@ export class CreativeProjectFileRepository {
   private async renamePath(
     command: Extract<CreativeProjectFileLifecycleCommand, { readonly kind: "renamePath" }>
   ): Promise<Result<readonly string[], UnifiedError>> {
-    const sourcePath = normalizeCreativeProjectFilePath(command.sourcePath, "any", this.policy);
+    const sourcePath = this.normalizePath(command.sourcePath, "any");
     if (!sourcePath.ok) return sourcePath;
     const source = await this.resolveExistingNode(sourcePath.value);
     if (!source.ok) return source;
-    const allowedSourcePath = normalizeCreativeProjectFilePath(
-      sourcePath.value,
-      source.value.kind,
-      this.policy
-    );
+    const allowedSourcePath = this.normalizePath(sourcePath.value, source.value.kind);
     if (!allowedSourcePath.ok) return allowedSourcePath;
     if (source.value.nodeRevision !== command.expectedSourceRevision) {
       return this.validationFailure(
@@ -652,11 +664,7 @@ export class CreativeProjectFileRepository {
         allowedSourcePath.value
       );
     }
-    const targetPath = normalizeCreativeProjectFilePath(
-      command.targetPath,
-      source.value.kind,
-      this.policy
-    );
+    const targetPath = this.normalizePath(command.targetPath, source.value.kind);
     if (!targetPath.ok) return targetPath;
     if (allowedSourcePath.value === targetPath.value) {
       return this.validationFailure(
@@ -735,7 +743,7 @@ export class CreativeProjectFileRepository {
         command.path
       );
     }
-    const path = normalizeCreativeProjectFilePath(command.path, "file", this.policy);
+    const path = this.normalizePath(command.path, "file");
     if (!path.ok) return path;
     const source = await this.resolveExistingNode(path.value, "file");
     if (!source.ok) return source;
@@ -786,7 +794,7 @@ export class CreativeProjectFileRepository {
         command.path
       );
     }
-    const path = normalizeCreativeProjectFilePath(command.path, "directory", this.policy);
+    const path = this.normalizePath(command.path, "directory");
     if (!path.ok) return path;
     const source = await this.resolveExistingNode(path.value, "directory");
     if (!source.ok) return source;
@@ -882,6 +890,8 @@ export class CreativeProjectFileRepository {
       const dependencyManifestChecksum = checksum(
         JSON.stringify({
           policyVersion: this.policy.schemaVersion,
+          workspaceLayout: this.workspaceLayout,
+          mutationMode: this.workspaceLayout === "nested-folder" ? "read-only" : "read-write",
           truncated: truncationReasons.length > 0,
           truncationReasons,
           nodes: manifest
@@ -893,6 +903,8 @@ export class CreativeProjectFileRepository {
           projectId: this.options.projectId,
           workspaceId: this.options.workspaceId,
           policyVersion: this.policy.schemaVersion,
+          workspaceLayout: this.workspaceLayout,
+          mutationMode: this.workspaceLayout === "nested-folder" ? "read-only" : "read-write",
           treeRevision: `tree:${dependencyManifestChecksum}`,
           nodes: Object.freeze(nodes),
           truncated: truncationReasons.length > 0,
@@ -921,7 +933,7 @@ export class CreativeProjectFileRepository {
     for (const entry of entries) {
       const path =
         relativeDirectory.length === 0 ? entry.name : `${relativeDirectory}/${entry.name}`;
-      const genericPath = normalizeCreativeProjectFilePath(path, "any", this.policy);
+      const genericPath = this.normalizePath(path, "any");
       if (!genericPath.ok || budget.remaining <= 0) {
         if (genericPath.ok) budget.reasons.add("max_items");
         continue;
@@ -938,7 +950,7 @@ export class CreativeProjectFileRepository {
         continue;
       }
       if (stats.isDirectory()) {
-        const allowedDirectory = normalizeCreativeProjectFilePath(path, "directory", this.policy);
+        const allowedDirectory = this.normalizePath(path, "directory");
         if (!allowedDirectory.ok) continue;
         budget.remaining -= 1;
         const atDepthBoundary = depth + 1 >= this.policy.maxDepth;
@@ -948,6 +960,7 @@ export class CreativeProjectFileRepository {
           kind: "directory",
           path: allowedDirectory.value,
           nodeRevision: nodeRevision(allowedDirectory.value, "directory", stats),
+          ...(this.workspaceLayout === "nested-folder" ? { readOnlyReason: "来源文件，只读" } : {}),
           ...(!atDepthBoundary
             ? {
                 children: await this.readDirectory(
@@ -969,7 +982,7 @@ export class CreativeProjectFileRepository {
         nodes.push(Object.freeze(node));
         continue;
       }
-      const allowedFile = normalizeCreativeProjectFilePath(path, "file", this.policy);
+      const allowedFile = this.normalizePath(path, "file");
       if (!allowedFile.ok) continue;
       budget.remaining -= 1;
       nodes.push(
@@ -978,7 +991,8 @@ export class CreativeProjectFileRepository {
           name: entry.name,
           kind: "file",
           path: allowedFile.value,
-          nodeRevision: nodeRevision(allowedFile.value, "file", stats)
+          nodeRevision: nodeRevision(allowedFile.value, "file", stats),
+          ...(this.workspaceLayout === "nested-folder" ? { readOnlyReason: "来源文件，只读" } : {})
         })
       );
     }
@@ -994,7 +1008,7 @@ export class CreativeProjectFileRepository {
       const entries = await readdir(absoluteDirectory, { withFileTypes: true });
       for (const entry of entries) {
         const path = `${relativeDirectory}/${entry.name}`;
-        const generic = normalizeCreativeProjectFilePath(path, "any", this.policy);
+        const generic = this.normalizePath(path, "any");
         if (!generic.ok) continue;
         const absolutePath = join(absoluteDirectory, entry.name);
         const stats = await lstat(absolutePath);
@@ -1002,7 +1016,7 @@ export class CreativeProjectFileRepository {
         const canonical = await realpath(absolutePath);
         if (!isContained(relative(binding.canonicalRoot, canonical))) continue;
         const expectedKind = stats.isDirectory() ? "directory" : "file";
-        if (normalizeCreativeProjectFilePath(path, expectedKind, this.policy).ok) return true;
+        if (this.normalizePath(path, expectedKind).ok) return true;
       }
     } catch {
       return false;
@@ -1041,7 +1055,7 @@ export class CreativeProjectFileRepository {
       if (kind === undefined || (expectedKind !== undefined && kind !== expectedKind)) {
         throw new Error("unexpected target kind");
       }
-      const normalized = normalizeCreativeProjectFilePath(path, kind, this.policy);
+      const normalized = this.normalizePath(path, kind);
       if (!normalized.ok) return normalized;
       return ok({
         path: normalized.value,
@@ -1137,7 +1151,8 @@ export class CreativeProjectFileRepository {
           content,
           checksum: checksum(bytes),
           byteLength: bytes.byteLength,
-          nodeRevision: nodeRevision(node.path, "file", after)
+          nodeRevision: nodeRevision(node.path, "file", after),
+          ...(this.workspaceLayout === "nested-folder" ? { readOnlyReason: "来源文件，只读" } : {})
         })
       );
     } catch {
@@ -1198,7 +1213,7 @@ export class CreativeProjectFileRepository {
           return this.validationFailure("CREATIVE_PROJECT_FILE_DIRECTORY_RENAME_REJECTED", path);
         }
         const kind = stats.isDirectory() ? "directory" : "file";
-        const allowed = normalizeCreativeProjectFilePath(path, kind, this.policy);
+        const allowed = this.normalizePath(path, kind);
         if (!allowed.ok) {
           return this.validationFailure("CREATIVE_PROJECT_FILE_DIRECTORY_RENAME_REJECTED", path);
         }
@@ -1264,16 +1279,47 @@ export class CreativeProjectFileRepository {
     });
   }
 
+  private normalizePath(
+    path: string,
+    expectedKind: "file" | "directory" | "any"
+  ): Result<string, UnifiedError> {
+    const normalized = normalizeCreativeProjectFilePath(path, expectedKind, this.policy, {
+      allowManagedPaths: this.workspaceLayout === "nested-folder"
+    });
+    if (!normalized.ok) return normalized;
+    if (
+      this.workspaceLayout === "nested-folder" &&
+      segmentForPolicy(normalized.value.split("/")[0] ?? "") === ".shanhai"
+    ) {
+      return this.validationFailure("CREATIVE_PROJECT_FILE_PATH_REJECTED", path);
+    }
+    return normalized;
+  }
+
+  private readOnlyFailure<T>(path: string): Result<T, UnifiedError> {
+    return err(
+      validationError({
+        code: "CREATIVE_PROJECT_FILE_READ_ONLY",
+        message: "Source files are read-only in a nested project workspace.",
+        suggestedAction: "Edit project chapters or copy this source file into the project first.",
+        traceId: this.traceId,
+        redactedDetail: { path: redact(path) }
+      })
+    );
+  }
+
   private async bindRoot(): Promise<Result<RootBinding, UnifiedError>> {
     if (
       !isSafeId(this.options.projectId) ||
       !isSafeId(this.options.workspaceId) ||
-      !isAbsolute(this.options.projectRoot)
+      !isAbsolute(this.options.projectRoot) ||
+      !isAbsolute(this.rootPath) ||
+      (this.workspaceLayout !== "standalone" && this.workspaceLayout !== "nested-folder")
     ) {
       return this.validationFailure("CREATIVE_PROJECT_FILE_ROOT_REJECTED", "root");
     }
     try {
-      const rootPath = resolve(this.options.projectRoot);
+      const rootPath = resolve(this.rootPath);
       const stats = await lstat(rootPath, { bigint: true });
       const canonicalRoot = await realpath(rootPath);
       if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error("unsafe root");
@@ -1414,7 +1460,8 @@ export class CreativeProjectFileRepository {
 export function normalizeCreativeProjectFilePath(
   input: string,
   expectedKind: "file" | "directory" | "any",
-  policyInput: CreativeProjectFilePolicy = DEFAULT_CREATIVE_PROJECT_FILE_POLICY
+  policyInput: CreativeProjectFilePolicy = DEFAULT_CREATIVE_PROJECT_FILE_POLICY,
+  options: { readonly allowManagedPaths?: boolean } = {}
 ): Result<string, UnifiedError> {
   const policy = normalizeCreativeProjectFilePolicy(policyInput);
   if (!policy.ok) return policy;
@@ -1444,8 +1491,10 @@ export function normalizeCreativeProjectFilePath(
     }
     const comparison = segmentForPolicy(segment);
     if (
-      policy.value.managedFileNames.some((name) => comparison === segmentForPolicy(name)) ||
-      policy.value.managedPathSegments.some((name) => comparison === segmentForPolicy(name)) ||
+      (!options.allowManagedPaths &&
+        policy.value.managedFileNames.some((name) => comparison === segmentForPolicy(name))) ||
+      (!options.allowManagedPaths &&
+        policy.value.managedPathSegments.some((name) => comparison === segmentForPolicy(name))) ||
       policy.value.ignoredPathSegments.some((name) => comparison === segmentForPolicy(name))
     ) {
       return pathValidationFailure(value);

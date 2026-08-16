@@ -188,7 +188,7 @@ interface BridgeState {
   readonly budgetPreview: ContextBudgetSnapshot | undefined;
   /** The immutable packed preview used by the next start and rendered in the context inspector. */
   readonly packedPreview: PackedAgentContextPreview | undefined;
-  /** Main-owned exact first-round preview awaiting the author's confirmation click. */
+  /** Main-owned exact first-round preview while its frozen payload is being confirmed. */
   readonly sendPreview: NonNullable<AgentComposerContextStatusControl["sendPreview"]> | undefined;
   /** Persisted per-round send ledger for the active run. */
   readonly sendLedger: AgentRunPanelProps["sendLedger"];
@@ -380,6 +380,36 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     };
   }
 
+  async function confirmPreparedSendPreview(
+    pendingSendPreview: NonNullable<BridgeState["sendPreview"]>
+  ): Promise<AgentRunPanelProps> {
+    const confirmSendPreview = api.agentRuns.confirmSendPreview;
+    if (confirmSendPreview === undefined) {
+      state = {
+        ...state,
+        sendPreview: undefined,
+        errorMessage: "当前桌面端不支持确认实际发送预览。请更新后重试。"
+      };
+      notify();
+      return toProps();
+    }
+    state = { ...state, startPending: true, errorMessage: undefined };
+    notify();
+    try {
+      const result = await confirmSendPreview({
+        schemaVersion: "2.0",
+        previewId: pendingSendPreview.previewId,
+        canonicalPayloadChecksum: pendingSendPreview.canonicalPayloadChecksum
+      });
+      await applyCommandResult(result);
+      if (result.ok) state = { ...state, draftRequest: "" };
+      return toProps();
+    } finally {
+      state = { ...state, startPending: false, sendPreview: undefined };
+      notify();
+    }
+  }
+
   async function sendRun(request: string): Promise<AgentRunPanelProps> {
     if (state.startPending) return toProps();
     const pendingSendPreview = state.sendPreview;
@@ -391,31 +421,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         notify();
         return sendRun(request);
       }
-      const confirmSendPreview = api.agentRuns.confirmSendPreview;
-      if (confirmSendPreview === undefined) {
-        state = {
-          ...state,
-          sendPreview: undefined,
-          errorMessage: "当前桌面端不支持确认实际发送预览。请更新后重试。"
-        };
-        notify();
-        return toProps();
-      }
-      state = { ...state, startPending: true, errorMessage: undefined };
-      notify();
-      try {
-        const result = await confirmSendPreview({
-          schemaVersion: "2.0",
-          previewId: pendingSendPreview.previewId,
-          canonicalPayloadChecksum: pendingSendPreview.canonicalPayloadChecksum
-        });
-        await applyCommandResult(result);
-        if (result.ok) state = { ...state, draftRequest: "" };
-        return toProps();
-      } finally {
-        state = { ...state, startPending: false, sendPreview: undefined };
-        notify();
-      }
+      return confirmPreparedSendPreview(pendingSendPreview);
     }
     if (context?.beforeStart !== undefined) {
       try {
@@ -573,7 +579,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       }
       state = { ...state, sendPreview: sendPreview.value, errorMessage: undefined };
       notify();
-      return toProps();
+      // A successful Main-owned preparation means the current sharing grant and all blocking
+      // validation passed. Confirm immediately with only the opaque frozen-preview binding.
+      return confirmPreparedSendPreview(sendPreview.value);
     } finally {
       state = { ...state, startPending: false };
       notify();

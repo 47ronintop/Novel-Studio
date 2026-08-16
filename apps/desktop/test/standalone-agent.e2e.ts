@@ -220,11 +220,6 @@ async function sendConversationRequest(page: Page, request: string): Promise<voi
   await composer.getByLabel("Agent 请求").fill(request);
   const start = composer.getByRole("button", { name: "启动 Agent 运行" });
   await start.click();
-  // The first click performs Main-owned preview preparation. Require the pending transition so a
-  // second click cannot be accepted by the renderer before that work has produced its binding.
-  await expect(start).toBeDisabled();
-  await expect(start).toBeEnabled();
-  await start.click();
   await expect(
     page
       .getByLabel("Agent 会话主视图")

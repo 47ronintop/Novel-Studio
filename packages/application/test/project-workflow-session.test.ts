@@ -1388,6 +1388,62 @@ describe("M12 project workflow session", () => {
     }
     await expect(pathExists(join(projectRoot, ".novel-studio"))).resolves.toBe(false);
   });
+
+  test("restores the last valid active chapter and ignores view-state write failures", async () => {
+    const projectRoot = await createTempRoot();
+    const projectRepository = new ProjectFileRepository({ projectRoot });
+    const chapterRepository = new ChapterFileRepository({ projectRoot });
+    const created = await projectRepository.createProject({
+      projectId: "prj_restore_view",
+      title: "Restore View",
+      language: "zh-CN"
+    });
+    expect(created.ok).toBe(true);
+    await chapterRepository.createChapter({ chapterId: "ch_first", title: "First", body: "1\n" });
+    await chapterRepository.createChapter({ chapterId: "ch_second", title: "Second", body: "2\n" });
+
+    const writes: Array<string | undefined> = [];
+    let storedActiveChapterId = "ch_second";
+    const writeFailure = createUnifiedError({
+      code: "TEST_VIEW_STATE_WRITE_FAILED",
+      category: "StorageError",
+      message: "View state write failed.",
+      recoverability: "retryable",
+      suggestedAction: "Retry.",
+      traceId: "test-workspace-view"
+    });
+    const session = createProjectWorkspaceSession({
+      projectCreationRepository: new ProjectCreationFileRepository(),
+      createProjectRepository: (root) => new ProjectFileRepository({ projectRoot: root }),
+      createChapterRepository: (root) => new ChapterFileRepository({ projectRoot: root }),
+      createHistoryRepository: (root) => new HistoryRepository({ projectRoot: root }),
+      createRecoveryRepository: () => emptyRecoveryRepository(),
+      createWorkspaceViewStateRepository: () => ({
+        async readWorkspaceViewState() {
+          return ok({
+            schemaVersion: "1.0" as const,
+            activeChapterId: storedActiveChapterId,
+            updatedAt: "2026-08-16T00:00:00.000Z"
+          });
+        },
+        async writeWorkspaceViewState(viewState) {
+          writes.push(viewState.activeChapterId);
+          return err(writeFailure);
+        }
+      })
+    });
+
+    const opened = await session.openProject(projectRoot);
+    expect(opened).toMatchObject({ ok: true, value: { activeChapterId: "ch_second" } });
+
+    const selected = await session.selectChapter("ch_first");
+    expect(selected).toMatchObject({ ok: true, value: { activeChapterId: "ch_first" } });
+    expect(writes).toEqual(["ch_second", "ch_first"]);
+
+    storedActiveChapterId = "ch_missing";
+    const reopened = await session.openProject(projectRoot);
+    expect(reopened).toMatchObject({ ok: true, value: { activeChapterId: "ch_first" } });
+  });
 });
 
 function emptyRecoveryRepository(): RecoveryRepositoryPort {

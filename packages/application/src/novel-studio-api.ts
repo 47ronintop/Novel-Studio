@@ -790,6 +790,9 @@ export interface CreativeFolderPreview {
   readonly targetDisplayName: string;
   readonly defaultProjectTitle: string;
   readonly language: "zh-CN";
+  /** Project data is created beneath the selected source folder. */
+  readonly layout: "nested-folder";
+  readonly targetRelativePath: ".shanhai";
   readonly candidates: readonly CreativeFolderCandidate[];
 }
 

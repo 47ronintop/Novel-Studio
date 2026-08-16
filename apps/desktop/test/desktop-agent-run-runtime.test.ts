@@ -2407,9 +2407,8 @@ describe("desktop Agent Run runtime", () => {
   test("requires a Packed Context preview and reuses its exact blocks through Provider and persistence", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-desktop-packed-context-"));
     roots.push(projectRoot);
-    await mkdir(join(projectRoot, "notes"), { recursive: true });
     const sourceContent = "AUTHOR_VISIBLE_PACKED_CONTEXT_BODY\n";
-    await writeFile(join(projectRoot, "notes", "context.md"), sourceContent, "utf8");
+    const sourceReads: string[] = [];
     let providerMessages: readonly { readonly role: string; readonly content: string }[] = [];
     let modelRounds = 0;
     const runId = "run-packed-context-binding";
@@ -2420,6 +2419,20 @@ describe("desktop Agent Run runtime", () => {
       stateRoot: projectRoot,
       createRunId: () => runId,
       verifyCreativeGeneralActiveResource: async () => ok(undefined),
+      readCreativeProjectFile: async (relativePath: string) => {
+        sourceReads.push(relativePath);
+        return ok({
+          schemaVersion: "1.0" as const,
+          projectId: "project-01",
+          workspaceId: "project-01",
+          path: relativePath,
+          content: sourceContent,
+          checksum: sha256(sourceContent),
+          byteLength: Buffer.byteLength(sourceContent, "utf8"),
+          nodeRevision: "packed-context-source-node-1",
+          readOnlyReason: "来源文件，只读"
+        });
+      },
       resolveModelStartFacts: async () => ({
         profileId: "profile-packed-context",
         provider: "demo",
@@ -2461,7 +2474,7 @@ describe("desktop Agent Run runtime", () => {
       contextRefs: [
         {
           kind: "project_file",
-          refId: "file:notes/context.md",
+          refId: "pf:notes/context.md",
           relativePath: "notes/context.md",
           label: "Context"
         }
@@ -2502,6 +2515,8 @@ describe("desktop Agent Run runtime", () => {
       });
     });
     expect(modelRounds).toBe(1);
+    expect(sourceReads.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(sourceReads)).toEqual(new Set(["notes/context.md"]));
 
     const contextSnapshotId = "context_" + runId + "_1";
     const promptArtifact = JSON.parse(
@@ -6750,7 +6765,7 @@ describe("desktop Agent Run runtime", () => {
         value: { snapshot: { status: "completed" } }
       });
     });
-    expect(readerCalls).toBe(1);
+    expect(readerCalls).toBe(2);
     expect(modelRounds).toBe(2);
 
     const ledgerRepository = new AgentSendLedgerFileRepository({ projectRoot });
@@ -7139,7 +7154,7 @@ describe("desktop Agent Run runtime", () => {
       }
       expect(read).toMatchObject({ ok: true, value: { snapshot: { status: "completed" } } });
     });
-    expect(readerCalls).toBe(1);
+    expect(readerCalls).toBe(2);
   });
 
   test("forwards Main's search-query auto-approval policy into the run session", async () => {

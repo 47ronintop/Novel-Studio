@@ -204,8 +204,10 @@ async function captureStoryViews(page: Page, prefix: string): Promise<void> {
   await expect(page.getByLabel("伏笔原文证据")).toBeVisible();
   await captureAndAudit(page, `${prefix}-foreshadow-detail.png`);
 
-  await page.getByLabel("活动栏").getByRole("button", { name: "时间线", exact: true }).click();
-  await expect(page.getByLabel("时间线主视图")).toBeVisible();
+  await selectStoryKind(page, "timeline");
+  await expect(
+    page.getByLabel("故事圣经").getByRole("heading", { name: "时间线", exact: true })
+  ).toBeVisible();
   await captureAndAudit(page, `${prefix}-timeline.png`);
 }
 
@@ -216,7 +218,7 @@ async function openStoryActivity(page: Page): Promise<void> {
 
 async function selectStoryKind(
   page: Page,
-  kind: "character" | "world" | "outline" | "foreshadow"
+  kind: "character" | "world" | "outline" | "foreshadow" | "timeline"
 ): Promise<void> {
   const responsiveSwitch = page.getByLabel("切换故事资料分类");
   if (await responsiveSwitch.isVisible()) {

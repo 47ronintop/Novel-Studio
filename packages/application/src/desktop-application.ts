@@ -279,7 +279,8 @@ export interface DesktopApplication {
   listCommands(): readonly ApplicationCommand[];
   executeCommand(commandId: string): Result<DesktopShellState, UnifiedError>;
   prepareOpenCreativeProject(
-    projectRoot: string
+    projectRoot: string,
+    displayRoot?: string
   ): Promise<Result<PreparedWorkspaceActivation, UnifiedError>>;
   prepareCreateCreativeProject(
     input: CreateCreativeProjectInput
@@ -767,12 +768,12 @@ export function createDesktopApplication(
         })
       );
     },
-    async prepareOpenCreativeProject(projectRoot) {
+    async prepareOpenCreativeProject(projectRoot, displayRoot = projectRoot) {
       const session = createProjectCandidateSession();
       if (session === undefined) return projectWorkspaceUnavailable();
       const opened = await session.openProject(projectRoot);
       if (!opened.ok) return opened;
-      return storeCreativeActivation(session, opened.value);
+      return storeCreativeActivation(session, opened.value, undefined, displayRoot);
     },
     async prepareCreateCreativeProject(input) {
       const session = createProjectCandidateSession();
@@ -789,7 +790,8 @@ export function createDesktopApplication(
       const stored = storeCreativeActivation(
         session,
         imported.value.workspace,
-        imported.value.projectRoot
+        imported.value.projectRoot,
+        input.workspaceLayout === "nested-folder" ? input.parentDirectory : undefined
       );
       if (!stored.ok) return stored;
       return ok({
@@ -1669,7 +1671,8 @@ export function createDesktopApplication(
   function storeCreativeActivation(
     session: ProjectWorkspaceSession,
     snapshot: ProjectWorkspaceSnapshot,
-    createdProjectRoot?: string
+    createdProjectRoot?: string,
+    displayRoot = snapshot.projectRoot
   ): Result<
     Extract<PreparedWorkspaceActivation, { readonly creativeProject: unknown }>,
     UnifiedError
@@ -1682,6 +1685,7 @@ export function createDesktopApplication(
       displayName: snapshot.project.title,
       contentRoot: snapshot.projectRoot,
       stateRoot: snapshot.projectRoot,
+      displayRoot,
       capabilities: ["creativeWorkbench", "writingContext", "creativeSearch", "creativeStudio"],
       ...(snapshot.activeChapterId === undefined
         ? {}
@@ -2051,6 +2055,7 @@ function withProjectWorkspaceState(
       displayName: workspaceSnapshot.project.title,
       contentRoot: workspaceSnapshot.projectRoot,
       stateRoot: workspaceSnapshot.projectRoot,
+      displayRoot: workspaceSnapshot.projectRoot,
       capabilities: ["creativeWorkbench", "writingContext", "creativeSearch", "creativeStudio"],
       ...(workspaceSnapshot.activeChapterId === undefined
         ? {}

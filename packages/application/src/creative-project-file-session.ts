@@ -10,6 +10,9 @@ export interface CreativeProjectFileSessionIdentity {
 /** Main-only activation input. Renderer commands never receive or submit projectRoot. */
 export interface CreativeProjectFileSessionActivation extends CreativeProjectFileSessionIdentity {
   readonly projectRoot: string;
+  /** Main-only visible source root for nested-folder projects. */
+  readonly displayRoot?: string;
+  readonly workspaceLayout?: "standalone" | "nested-folder";
   /** Main-owned workspace state root for durable lifecycle receipts. */
   readonly stateRoot?: string;
 }
@@ -20,14 +23,17 @@ export interface CreativeProjectFileTreeNode {
   readonly kind: "directory" | "file";
   readonly path: string;
   readonly nodeRevision: string;
+  readonly readOnlyReason?: string;
   readonly children?: readonly CreativeProjectFileTreeNode[];
 }
 
 export interface CreativeProjectFileTreeSnapshot {
-  readonly schemaVersion: "1.0";
+  readonly schemaVersion: "1.1";
   readonly projectId: string;
   readonly workspaceId: string;
   readonly policyVersion: "1.0";
+  readonly workspaceLayout: "standalone" | "nested-folder";
+  readonly mutationMode: "read-write" | "read-only";
   readonly treeRevision: string;
   readonly nodes: readonly CreativeProjectFileTreeNode[];
   readonly truncated: boolean;
@@ -44,6 +50,7 @@ export interface CreativeProjectFileDocument {
   readonly checksum: string;
   readonly byteLength: number;
   readonly nodeRevision: string;
+  readonly readOnlyReason?: string;
 }
 
 export type CreativeProjectFileSaveResult =
@@ -167,6 +174,7 @@ interface ActiveCreativeProjectFileSession {
   readonly identity: CreativeProjectFileSessionIdentity;
   readonly repository: CreativeProjectFileRepositoryPort;
   readonly generation: number;
+  readonly mutationMode: "read-write" | "read-only";
   snapshot: CreativeProjectFileTreeSnapshot;
 }
 
@@ -191,7 +199,12 @@ export function createCreativeProjectFileSession(
         if (
           !isIdentity(activation) ||
           typeof activation.projectRoot !== "string" ||
-          activation.projectRoot.length === 0
+          activation.projectRoot.length === 0 ||
+          (activation.workspaceLayout !== undefined &&
+            activation.workspaceLayout !== "standalone" &&
+            activation.workspaceLayout !== "nested-folder") ||
+          (activation.workspaceLayout === "nested-folder" &&
+            (typeof activation.displayRoot !== "string" || activation.displayRoot.length === 0))
         ) {
           return activationFailure("CREATIVE_PROJECT_FILE_SESSION_ACTIVATION_INVALID");
         }
@@ -203,7 +216,10 @@ export function createCreativeProjectFileSession(
         }
         const snapshot = await safelyReadTree(repository);
         if (!snapshot.ok) return snapshot;
-        if (!matchesIdentity(snapshot.value, activation)) {
+        if (
+          !matchesIdentity(snapshot.value, activation) ||
+          snapshot.value.workspaceLayout !== (activation.workspaceLayout ?? "standalone")
+        ) {
           return activationFailure("CREATIVE_PROJECT_FILE_SESSION_IDENTITY_REJECTED");
         }
         generation += 1;
@@ -211,6 +227,7 @@ export function createCreativeProjectFileSession(
           identity: { projectId: activation.projectId, workspaceId: activation.workspaceId },
           repository,
           generation,
+          mutationMode: snapshot.value.mutationMode,
           snapshot: snapshot.value
         };
         return ok(snapshot.value);
@@ -256,6 +273,7 @@ export function createCreativeProjectFileSession(
       return withMutationLease(async () => {
         const candidate = requireActive(input);
         if (!candidate.ok) return candidate;
+        if (candidate.value.mutationMode === "read-only") return readOnlyFailure();
         const saved = await safelySave(candidate.value.repository, input);
         if (!saved.ok) return saved;
         if (
@@ -283,6 +301,7 @@ export function createCreativeProjectFileSession(
       return withMutationLease(async () => {
         const candidate = requireActive(command);
         if (!candidate.ok) return candidate;
+        if (candidate.value.mutationMode === "read-only") return readOnlyFailure();
         const receipt = await safelyExecute(candidate.value.repository, command, origin);
         if (!receipt.ok) return receipt;
         if (
@@ -438,9 +457,11 @@ function matchesSaveIdentity(
 function isTreeSnapshot(value: unknown): value is CreativeProjectFileTreeSnapshot {
   if (!isRecord(value)) return false;
   return (
-    value["schemaVersion"] === "1.0" &&
+    value["schemaVersion"] === "1.1" &&
     value["policyVersion"] === "1.0" &&
     isIdentity(value) &&
+    (value["workspaceLayout"] === "standalone" || value["workspaceLayout"] === "nested-folder") &&
+    (value["mutationMode"] === "read-write" || value["mutationMode"] === "read-only") &&
     typeof value["treeRevision"] === "string" &&
     Array.isArray(value["nodes"]) &&
     value["nodes"].every(isTreeNode) &&
@@ -461,6 +482,7 @@ function isTreeNode(value: unknown): value is CreativeProjectFileTreeNode {
     typeof value["path"] === "string" &&
     (value["kind"] === "directory" || value["kind"] === "file") &&
     typeof value["nodeRevision"] === "string" &&
+    (value["readOnlyReason"] === undefined || typeof value["readOnlyReason"] === "string") &&
     (value["children"] === undefined ||
       (Array.isArray(value["children"]) && value["children"].every(isTreeNode)))
   );
@@ -475,7 +497,8 @@ function isDocument(value: unknown): value is CreativeProjectFileDocument {
     typeof value["content"] === "string" &&
     typeof value["checksum"] === "string" &&
     typeof value["byteLength"] === "number" &&
-    typeof value["nodeRevision"] === "string"
+    typeof value["nodeRevision"] === "string" &&
+    (value["readOnlyReason"] === undefined || typeof value["readOnlyReason"] === "string")
   );
 }
 
@@ -517,10 +540,12 @@ function projectTreeSnapshot(
   value: CreativeProjectFileTreeSnapshot
 ): CreativeProjectFileTreeSnapshot {
   return Object.freeze({
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     projectId: value.projectId,
     workspaceId: value.workspaceId,
     policyVersion: "1.0",
+    workspaceLayout: value.workspaceLayout,
+    mutationMode: value.mutationMode,
     treeRevision: value.treeRevision,
     nodes: Object.freeze(value.nodes.map(projectTreeNode)),
     truncated: value.truncated,
@@ -536,6 +561,7 @@ function projectTreeNode(value: CreativeProjectFileTreeNode): CreativeProjectFil
     kind: value.kind,
     path: value.path,
     nodeRevision: value.nodeRevision,
+    ...(value.readOnlyReason === undefined ? {} : { readOnlyReason: value.readOnlyReason }),
     ...(value.children === undefined
       ? {}
       : { children: Object.freeze(value.children.map(projectTreeNode)) })
@@ -551,7 +577,8 @@ function projectDocument(value: CreativeProjectFileDocument): CreativeProjectFil
     content: value.content,
     checksum: value.checksum,
     byteLength: value.byteLength,
-    nodeRevision: value.nodeRevision
+    nodeRevision: value.nodeRevision,
+    ...(value.readOnlyReason === undefined ? {} : { readOnlyReason: value.readOnlyReason })
   });
 }
 
@@ -598,6 +625,19 @@ function activationFailure<T>(code: string): Result<T, UnifiedError> {
       message: "The creative project file session is not available for this project.",
       recoverability: "user-action",
       suggestedAction: "Open or refresh the current creative project before retrying.",
+      traceId: "creative-project-file-session"
+    })
+  );
+}
+
+function readOnlyFailure<T>(): Result<T, UnifiedError> {
+  return err(
+    createUnifiedError({
+      code: "CREATIVE_PROJECT_FILE_READ_ONLY",
+      category: "UserError",
+      message: "Source files are read-only in this project workspace.",
+      recoverability: "user-action",
+      suggestedAction: "Edit a project chapter or copy the source file into the project first.",
       traceId: "creative-project-file-session"
     })
   );

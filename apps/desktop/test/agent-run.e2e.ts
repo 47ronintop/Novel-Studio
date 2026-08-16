@@ -36,7 +36,6 @@ test("uses the local scripted Agent when the configured profile has no stored ke
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("检查当前章节");
     await composer.getByLabel("启动 Agent 运行").click();
-    await confirmFirstSendPreview(page, composer);
     await expect(page.locator(".ns-agent-assistant-text")).toContainText(
       "我会先读取项目结构和当前章节。"
     );
@@ -119,7 +118,6 @@ test("stops a live Agent run through the real Electron IPC path", async () => {
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("读取当前章节");
     await composer.getByLabel("启动 Agent 运行").click();
-    await confirmFirstSendPreview(page, composer);
     await resolveContextRefreshIfVisible(page);
     await expect(page.locator(".ns-agent-assistant-text")).toContainText("等待停止");
     await expect(page.locator(".ns-agent-status")).toHaveText("规划中");
@@ -306,7 +304,6 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
     const composer = page.getByLabel("会话输入区");
     await composer.getByLabel("Agent 请求").fill("核对当前章节并给出计划");
     await composer.getByLabel("启动 Agent 运行").click();
-    await confirmFirstSendPreview(page, composer);
     await expect(page.getByText("editor_buffer / dirty", { exact: false })).toBeVisible();
 
     const activitySummary = page.getByLabel("Agent 活动摘要");
@@ -481,20 +478,6 @@ async function resolveContextRefreshIfVisible(page: Page): Promise<void> {
     .then(() => true)
     .catch(() => false);
   if (visible) await refresh.getByRole("button", { name: "从目标排除" }).click();
-}
-
-async function confirmFirstSendPreview(
-  page: Page,
-  composer: ReturnType<Page["getByLabel"]>
-): Promise<void> {
-  await composer.getByTitle("查看上下文").click();
-  const inspector = page.getByRole("dialog", { name: "上下文用量" });
-  await inspector.getByRole("tab", { name: "实际发送预览", exact: true }).click();
-  // The generic context panel appears while the request is still being prepared. Only this exact
-  // Main-bound preview proves that the next click confirms an actual frozen payload.
-  await expect(inspector.locator(".ns-agent-send-preview")).toBeVisible();
-  await inspector.press("Escape");
-  await composer.getByRole("button", { name: "启动 Agent 运行" }).click();
 }
 
 async function waitForLatestRunStatus(

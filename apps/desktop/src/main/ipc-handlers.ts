@@ -286,12 +286,17 @@ interface CreativeFolderInspectionState {
   readonly candidates: readonly CreativeFolderCandidateInternal[];
 }
 
+interface CreativeProjectRootSelection {
+  readonly projectRoot: string;
+  readonly displayRoot: string;
+}
+
 const CREATIVE_FOLDER_TEXT_EXTENSIONS = new Set([".txt", ".md"]);
+const NESTED_CREATIVE_PROJECT_DIRECTORY = ".shanhai";
 const CREATIVE_FOLDER_MANAGED_MARKERS = new Set(
-  [
-    ...DEFAULT_CREATIVE_PROJECT_FILE_POLICY.managedFileNames,
-    ...DEFAULT_CREATIVE_PROJECT_FILE_POLICY.managedPathSegments
-  ].map((value) => value.toLocaleLowerCase())
+  [...DEFAULT_CREATIVE_PROJECT_FILE_POLICY.managedFileNames, NESTED_CREATIVE_PROJECT_DIRECTORY].map(
+    (value) => value.toLocaleLowerCase()
+  )
 );
 
 export function createAgentWriteSaveCoordinator(): AgentWriteSaveCoordinator {
@@ -440,6 +445,7 @@ export function createApplicationIpcHandlers(
   const activeAiSuggestionPushStreams = new Map<string, ActiveAiSuggestionPushStream>();
   const directorySelections = new Map<string, DirectorySelection>();
   const creativeFolderInspections = new Map<string, CreativeFolderInspectionState>();
+  const creativeProjectRootSelections = new Map<string, CreativeProjectRootSelection>();
   let nextAiSuggestionStreamId = 0;
   const publishAgentRunEvent = (event: AgentRunEvent): void => {
     try {
@@ -568,6 +574,7 @@ export function createApplicationIpcHandlers(
       if (selection.expiresAt > now) continue;
       directorySelections.delete(selectionId);
       creativeFolderInspections.delete(selectionId);
+      creativeProjectRootSelections.delete(selectionId);
     }
     const selected = await choose?.();
     if (selected === undefined) return ok({ canceled: true });
@@ -643,6 +650,7 @@ export function createApplicationIpcHandlers(
     ) {
       directorySelections.delete(selectionId);
       creativeFolderInspections.delete(selectionId);
+      creativeProjectRootSelections.delete(selectionId);
       return err(directorySelectionInvalid());
     }
     return ok(selection);
@@ -653,6 +661,7 @@ export function createApplicationIpcHandlers(
   ): Promise<Result<OpenCreativeDirectoryInspection, UnifiedError>> {
     const selection = resolveDirectorySelection(selectionId, "creative-open");
     if (!selection.ok) return selection;
+    creativeProjectRootSelections.delete(selectionId as string);
     const rootPath = selection.value.path;
     try {
       const [rootStats, entries] = await Promise.all([
@@ -692,9 +701,68 @@ export function createApplicationIpcHandlers(
           if (!projectValidation.valid || !settingsValidation.valid) {
             return err(creativeFolderInvalid("项目元数据格式无效，请先修复后再打开。"));
           }
+          if (
+            isNestedCreativeProjectMetadata(project) ||
+            basename(rootPath).toLocaleLowerCase() === NESTED_CREATIVE_PROJECT_DIRECTORY
+          ) {
+            return err(
+              creativeFolderInvalid("这是容器项目数据目录，请选择包含 .shanhai 的上一级文件夹。")
+            );
+          }
+          creativeProjectRootSelections.set(selectionId as string, {
+            projectRoot: rootPath,
+            displayRoot: rootPath
+          });
           return ok({ kind: "existing-project" });
         } catch {
           return err(creativeFolderInvalid("项目元数据损坏，请先修复后再打开。"));
+        }
+      }
+      const nestedProjectRoot = join(rootPath, NESTED_CREATIVE_PROJECT_DIRECTORY);
+      const nestedRootStat = await lstatIfPresent(nestedProjectRoot);
+      if (nestedRootStat !== undefined) {
+        if (!nestedRootStat.isDirectory() || nestedRootStat.isSymbolicLink()) {
+          return err(creativeFolderInvalid(".shanhai 必须是普通项目目录，请先修复后再打开。"));
+        }
+        const nestedProjectPath = join(nestedProjectRoot, "project.json");
+        const nestedSettingsPath = join(nestedProjectRoot, "settings.json");
+        const [nestedProjectStat, nestedSettingsStat] = await Promise.all([
+          lstatIfPresent(nestedProjectPath),
+          lstatIfPresent(nestedSettingsPath)
+        ]);
+        if (
+          !nestedProjectStat?.isFile() ||
+          nestedProjectStat.isSymbolicLink() ||
+          !nestedSettingsStat?.isFile() ||
+          nestedSettingsStat.isSymbolicLink()
+        ) {
+          return err(creativeFolderInvalid(".shanhai 项目元数据不完整，请先修复后再打开。"));
+        }
+        try {
+          const [projectText, settingsText] = await Promise.all([
+            readFile(nestedProjectPath, "utf8"),
+            readFile(nestedSettingsPath, "utf8")
+          ]);
+          const project = JSON.parse(projectText) as unknown;
+          const settings = JSON.parse(settingsText) as unknown;
+          const [projectValidation, settingsValidation] = await Promise.all([
+            validateWithSchema("project", project),
+            validateWithSchema("settings", settings)
+          ]);
+          if (
+            !projectValidation.valid ||
+            !settingsValidation.valid ||
+            !isNestedCreativeProjectMetadata(project)
+          ) {
+            return err(creativeFolderInvalid(".shanhai 项目元数据无效，请先修复后再打开。"));
+          }
+          creativeProjectRootSelections.set(selectionId as string, {
+            projectRoot: nestedProjectRoot,
+            displayRoot: rootPath
+          });
+          return ok({ kind: "existing-project" });
+        } catch {
+          return err(creativeFolderInvalid(".shanhai 项目元数据损坏，请先修复后再打开。"));
         }
       }
       if (hasManagedMarker) {
@@ -714,8 +782,8 @@ export function createApplicationIpcHandlers(
         return err(creativeFolderInvalid("正文文件数量超过支持上限。"));
 
       const parentPath = dirname(rootPath);
-      const targetDisplayName = `${basename(rootPath)} - ShanHai`;
-      const targetPath = join(parentPath, targetDisplayName);
+      const targetDisplayName = NESTED_CREATIVE_PROJECT_DIRECTORY;
+      const targetPath = join(rootPath, targetDisplayName);
       if ((await lstatIfPresent(targetPath)) !== undefined) {
         return err(creativeFolderTargetConflict());
       }
@@ -777,6 +845,8 @@ export function createApplicationIpcHandlers(
         targetDisplayName,
         defaultProjectTitle: basename(rootPath),
         language: "zh-CN",
+        layout: "nested-folder",
+        targetRelativePath: NESTED_CREATIVE_PROJECT_DIRECTORY,
         candidates: candidates.map((candidate) => ({
           relativePath: candidate.relativePath,
           sizeBytes: candidate.sizeBytes,
@@ -862,7 +932,7 @@ export function createApplicationIpcHandlers(
         }
         chapters.push({ title: candidate.defaultTitle, body });
       }
-      const targetPath = join(inspection.parentPath, inspection.targetDisplayName);
+      const targetPath = join(inspection.rootPath, inspection.targetDisplayName);
       if ((await lstatIfPresent(targetPath)) !== undefined)
         return err(creativeFolderTargetConflict());
       if (options.workspaceActivationCoordinator?.importCreativeProject === undefined) {
@@ -875,11 +945,12 @@ export function createApplicationIpcHandlers(
         return err(creativeFolderInvalid("无法生成有效的山海项目标识。"));
       }
       const imported = await options.workspaceActivationCoordinator.importCreativeProject({
-        parentDirectory: inspection.parentPath,
+        parentDirectory: inspection.rootPath,
         folderName: inspection.targetDisplayName,
         projectId,
         title: basename(inspection.rootPath),
         language: "zh-CN",
+        workspaceLayout: "nested-folder",
         chapters
       });
       if (!imported.ok) return imported;
@@ -933,12 +1004,22 @@ export function createApplicationIpcHandlers(
       if (!selection.ok) return selection;
       directorySelections.delete(selectionId as string);
       creativeFolderInspections.delete(selectionId as string);
+      const projectRoots = creativeProjectRootSelections.get(selectionId as string);
+      creativeProjectRootSelections.delete(selectionId as string);
       const recovery = await assertEngineeringRecovery(options, { allowWorkspaceExit: true });
       if (!recovery.ok) return recovery;
       if (options.workspaceActivationCoordinator === undefined) {
         return workspaceActivationUnavailable<WorkspaceActivationDto>();
       }
-      return options.workspaceActivationCoordinator.openCreativeProject(selection.value.path);
+      if (projectRoots !== undefined && projectRoots.projectRoot !== projectRoots.displayRoot) {
+        return options.workspaceActivationCoordinator.openCreativeProject(
+          projectRoots.projectRoot,
+          projectRoots.displayRoot
+        );
+      }
+      return options.workspaceActivationCoordinator.openCreativeProject(
+        projectRoots?.projectRoot ?? selection.value.path
+      );
     },
     "application:project:preview-creative-project": async (input: unknown) => {
       const request = toCreativePreviewRequest(input);
@@ -2615,7 +2696,7 @@ function isProjectFileContextRef(value: unknown): boolean {
     value["kind"] === "project_file" &&
     isNonEmptyString(value["refId"]) &&
     typeof value["relativePath"] === "string" &&
-    normalizeCreativeProjectFilePath(value["relativePath"], "file").ok &&
+    normalizeCreativeSourceFilePath(value["relativePath"], "file").ok &&
     isNonEmptyString(value["label"]) &&
     (value["expectedChecksum"] === undefined ||
       (typeof value["expectedChecksum"] === "string" &&
@@ -5208,11 +5289,17 @@ function toCreativeProjectFileReadRequest(
   if (
     identity === undefined ||
     typeof value["path"] !== "string" ||
-    !normalizeCreativeProjectFilePath(value["path"], "file").ok
+    !normalizeCreativeSourceFilePath(value["path"], "file").ok
   ) {
     return undefined;
   }
   return { ...identity, path: value["path"] };
+}
+
+function normalizeCreativeSourceFilePath(path: string, kind: "file" | "directory" | "any") {
+  return normalizeCreativeProjectFilePath(path, kind, DEFAULT_CREATIVE_PROJECT_FILE_POLICY, {
+    allowManagedPaths: true
+  });
 }
 
 function toCreativeProjectFileSaveRequest(value: unknown):
@@ -5591,6 +5678,10 @@ function projectTextFileSelectionInvalid(): UnifiedError {
     suggestedAction: "Choose a file inside the active workspace and try again.",
     traceId: "project-file-selection"
   });
+}
+
+function isNestedCreativeProjectMetadata(value: unknown): boolean {
+  return isRecord(value) && value.workspaceLayout === "nested-folder";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

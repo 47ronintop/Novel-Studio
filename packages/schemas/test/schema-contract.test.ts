@@ -157,6 +157,22 @@ describe("schema contract coverage", () => {
     expect(fixture.experimentalUserField).toBe("must stay");
   });
 
+  test("accepts an omitted workspace layout for legacy standalone projects and validates layouts", () => {
+    const legacyFixture = readFixture("valid", "project") as Record<string, unknown>;
+    const validate = createSchemaValidator(readSchema("project"));
+
+    expect(validate(legacyFixture)).toEqual({ valid: true, issues: [] });
+    expect(validate({ ...legacyFixture, workspaceLayout: "standalone" })).toEqual({
+      valid: true,
+      issues: []
+    });
+    expect(validate({ ...legacyFixture, workspaceLayout: "nested-folder" })).toEqual({
+      valid: true,
+      issues: []
+    });
+    expect(validate({ ...legacyFixture, workspaceLayout: "unsupported" }).valid).toBe(false);
+  });
+
   test.each(STORY_BIBLE_V11_ASSET_TYPES)(
     "keeps generated strict %s schema in sync with the runtime contract",
     (assetType) => {
@@ -192,9 +208,9 @@ describe("schema contract coverage", () => {
     expect(validateStoryBibleV11Asset({ ...fixture, passthrough }, "writeStrict").valid).toBe(
       false
     );
-    expect(
-      validateStoryBibleV11Asset({ ...fixture, passthrough }, "persistedStrict").valid
-    ).toBe(true);
+    expect(validateStoryBibleV11Asset({ ...fixture, passthrough }, "persistedStrict").valid).toBe(
+      true
+    );
   });
 
   test.each(STORY_BIBLE_V11_ASSET_TYPES)(
@@ -207,12 +223,7 @@ describe("schema contract coverage", () => {
         type: assetType,
         createValueSchema: createStoryBibleCreateValueSchema(assetType),
         writeCandidateSchema: createStoryBibleWriteCandidateSchema(assetType),
-        systemManagedFields: expect.arrayContaining([
-          "id",
-          "type",
-          "revision",
-          "passthrough"
-        ]),
+        systemManagedFields: expect.arrayContaining(["id", "type", "revision", "passthrough"]),
         referenceConstraints: {
           relationSourceMustEqualOwner: true,
           relationTargetMustExist: true,

@@ -64,6 +64,9 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
       language: input.language,
       createdAt: now,
       updatedAt: now,
+      ...(input.workspaceLayout === "nested-folder"
+        ? { workspaceLayout: "nested-folder" as const }
+        : {}),
       defaultWorkflowId: "wf_review_chapter",
       defaultModelProfileId: "model_default",
       stats: {

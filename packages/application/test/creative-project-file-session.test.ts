@@ -270,6 +270,43 @@ describe("CreativeProjectFileSession", () => {
     });
     expect(session.getSnapshot()).toBeUndefined();
   });
+
+  test("rejects saves and lifecycle commands from a nested read-only session", async () => {
+    const repository = createRepository(first, "tree:first", {
+      getTreeSnapshot: async () => ok(tree(first, "tree:first", "nested-folder"))
+    });
+    const session = createCreativeProjectFileSession({ createRepository: () => repository });
+    const activation = await session.activate({
+      ...first,
+      projectRoot: "D:/novels/source/.shanhai",
+      displayRoot: "D:/novels/source",
+      workspaceLayout: "nested-folder"
+    });
+    if (!activation.ok) throw new Error(activation.error.message);
+
+    expect(
+      await session.saveTextFile({
+        ...first,
+        path: "source.md",
+        content: "changed\n",
+        expectedTreeRevision: "tree:first",
+        expectedNodeRevision: "node:current",
+        expectedChecksum: "a".repeat(64)
+      })
+    ).toMatchObject({ ok: false, error: { code: "CREATIVE_PROJECT_FILE_READ_ONLY" } });
+    expect(
+      await session.executeLifecycleCommand({
+        schemaVersion: "1.0",
+        ...first,
+        kind: "createTextFile",
+        commandId: "read-only-create",
+        expectedTreeRevision: "tree:first",
+        path: "new.md",
+        content: "new\n"
+      })
+    ).toMatchObject({ ok: false, error: { code: "CREATIVE_PROJECT_FILE_READ_ONLY" } });
+    expect(repository.commands).toEqual([]);
+  });
 });
 
 function createRepository(
@@ -314,12 +351,15 @@ function createRepository(
 
 function tree(
   identity: CreativeProjectFileSessionIdentity,
-  treeRevision: string
+  treeRevision: string,
+  workspaceLayout: "standalone" | "nested-folder" = "standalone"
 ): CreativeProjectFileTreeSnapshot {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     ...identity,
     policyVersion: "1.0",
+    workspaceLayout,
+    mutationMode: workspaceLayout === "nested-folder" ? "read-only" : "read-write",
     treeRevision,
     nodes: [],
     truncated: false,

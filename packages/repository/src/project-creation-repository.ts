@@ -6,7 +6,7 @@ import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import { storageError, validationError } from "./errors.js";
 import { createProjectPathGuard } from "./atomic-write.js";
-import type { ProjectSnapshot, ProjectType } from "./ports.js";
+import type { ProjectSnapshot, ProjectType, ProjectWorkspaceLayout } from "./ports.js";
 import { ProjectFileRepository, type ProjectFileRepositoryOptions } from "./project-repository.js";
 
 export interface ProjectCreationFileSystem {
@@ -33,6 +33,7 @@ export interface CreateCreativeProjectInput {
   readonly language: string;
   readonly projectType?: string;
   readonly targetWordCount?: number;
+  readonly workspaceLayout?: ProjectWorkspaceLayout;
 }
 
 export interface ProjectCreationResult {
@@ -165,7 +166,8 @@ export class ProjectCreationFileRepository {
         ...(input.projectType === undefined
           ? {}
           : { projectType: input.projectType as ProjectType }),
-        ...(input.targetWordCount === undefined ? {} : { targetWordCount: input.targetWordCount })
+        ...(input.targetWordCount === undefined ? {} : { targetWordCount: input.targetWordCount }),
+        ...(input.workspaceLayout === undefined ? {} : { workspaceLayout: input.workspaceLayout })
       });
     } catch (error) {
       return this.cleanupAfterInitializationFailure(

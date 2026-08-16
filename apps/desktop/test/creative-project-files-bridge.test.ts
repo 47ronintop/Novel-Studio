@@ -82,6 +82,34 @@ describe("CreativeProjectFilesBridge", () => {
     );
     expect(onActiveFilePathChange).toHaveBeenNthCalledWith(3, undefined, "delete_active_path");
   });
+
+  test("does not send lifecycle mutations for a read-only source tree", async () => {
+    const executeLifecycle = vi.fn(async () => ok({}));
+    const api = {
+      creativeProjectFiles: {
+        refresh: async () =>
+          ok({
+            ...treeSnapshot("tree-read-only", "node-read-only", "source/notes.md"),
+            workspaceLayout: "nested-folder" as const,
+            mutationMode: "read-only" as const
+          }),
+        executeLifecycle
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createCreativeProjectFilesBridge(api);
+
+    await bridge.activate({ projectId: "project-01", workspaceId: "workspace-01" });
+    await bridge.createTextFile("source/new.md");
+    await bridge.createDirectory("source/new");
+    await bridge.renamePath("source/notes.md", "source/renamed.md");
+    await bridge.deletePath("source/notes.md");
+
+    expect(bridge.getNavigatorProps()).toMatchObject({
+      workspaceLayout: "nested-folder",
+      mutationMode: "read-only"
+    });
+    expect(executeLifecycle).not.toHaveBeenCalled();
+  });
 });
 
 function treeSnapshot(
@@ -90,10 +118,12 @@ function treeSnapshot(
   path: string
 ): CreativeProjectFileTreeSnapshot {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     projectId: "project-01",
     workspaceId: "workspace-01",
     policyVersion: "1.0",
+    workspaceLayout: "standalone",
+    mutationMode: "read-write",
     treeRevision,
     visibleNodeChecksum: "a".repeat(64),
     truncated: false,
@@ -111,10 +141,12 @@ function treeSnapshot(
 
 function emptyTreeSnapshot(treeRevision: string): CreativeProjectFileTreeSnapshot {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     projectId: "project-01",
     workspaceId: "workspace-01",
     policyVersion: "1.0",
+    workspaceLayout: "standalone",
+    mutationMode: "read-write",
     treeRevision,
     visibleNodeChecksum: "b".repeat(64),
     truncated: false,

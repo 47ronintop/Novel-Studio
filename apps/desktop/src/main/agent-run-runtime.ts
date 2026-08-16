@@ -2324,7 +2324,12 @@ function createDesktopAgentRuntimeServices(
                 continue;
               }
             }
-            const read = await projectReads.readText(source.relativePath);
+            const read =
+              options.workspaceKind === "creativeProject" &&
+              !source.refId.startsWith("chapter:") &&
+              readCreativeProjectFile !== undefined
+                ? await readCreativeProjectFile(source.relativePath)
+                : await projectReads.readText(source.relativePath);
             if (!read.ok) return read;
             current.push({ refId: source.refId, content: read.value.content });
             continue;

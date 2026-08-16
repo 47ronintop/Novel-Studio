@@ -48,7 +48,7 @@ export function ProjectFolderImportDialog(props: ProjectFolderImportDialogProps)
         <header className="ns-project-create-dialog-header">
           <strong>接入普通小说文件夹</strong>
           <p className="ns-project-create-dialog-description">
-            将在同级创建新项目“{props.targetDisplayName}”，源文件夹不会被修改。
+            将在当前文件夹内创建项目数据目录“{props.targetDisplayName}”，源正文文件不会被修改。
           </p>
         </header>
 

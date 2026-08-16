@@ -105,7 +105,7 @@ test("shows private daily usage analytics and clears only usage data", async () 
     await expect(daily).toContainText("估算费用");
     await expect(daily).toContainText("未知费用");
 
-    await page.getByRole("button", { name: "今日", exact: true }).click();
+    await page.getByRole("button", { name: "今日", exact: true }).press("Enter");
     const hourlyChart = page.locator('.agent-usage-chart[data-chart-kind="hourly"]');
     await expect(hourlyChart).toBeVisible();
     await expect(page.getByRole("img", { name: "每小时 Agent Token 柱状图" })).toBeVisible();

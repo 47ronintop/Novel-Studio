@@ -25,6 +25,7 @@ export type {
 } from "@novel-studio/shared";
 
 export type ProjectType = "novel" | "screenplay" | "comic-script" | "game-narrative";
+export type ProjectWorkspaceLayout = "standalone" | "nested-folder";
 export type SnapshotReason =
   | "manual-save"
   | "autosave-snapshot"
@@ -55,6 +56,7 @@ export interface ProjectMetadata extends JsonObject {
   language: string;
   createdAt: string;
   updatedAt: string;
+  workspaceLayout?: ProjectWorkspaceLayout;
   defaultWorkflowId?: string;
   defaultModelProfileId?: string;
   stats?: ProjectStats;
@@ -605,4 +607,5 @@ export interface CreateProjectInput {
   language: string;
   projectType?: ProjectType;
   targetWordCount?: number;
+  workspaceLayout?: ProjectWorkspaceLayout;
 }

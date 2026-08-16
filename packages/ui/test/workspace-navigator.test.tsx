@@ -414,6 +414,65 @@ describe("CreativeWorkspaceNavigator", () => {
     ]);
   });
 
+  test("shows nested source files as read-only and removes file mutations", () => {
+    const opened: string[] = [];
+    render(
+      <CreativeWorkspaceNavigator
+        {...createCreativeProps({
+          projectFiles: {
+            workspaceLayout: "nested-folder",
+            mutationMode: "read-only",
+            nodes: [
+              {
+                id: "folder:chapters",
+                name: "chapters",
+                kind: "directory",
+                path: "chapters",
+                readOnlyReason: "来源文件，只读",
+                children: [
+                  {
+                    id: "file:chapters/source.md",
+                    name: "source.md",
+                    kind: "file",
+                    path: "chapters/source.md",
+                    readOnlyReason: "来源文件，只读"
+                  }
+                ]
+              },
+              {
+                id: "folder:.shanhai",
+                name: ".shanhai",
+                kind: "directory",
+                path: ".shanhai"
+              }
+            ],
+            expandedPathIds: ["folder:chapters"],
+            onExpandedPathIdsChange: () => undefined,
+            onFileOpen: (path) => opened.push(path),
+            onRefresh: () => undefined,
+            onCreateTextFile: () => undefined,
+            onCreateDirectory: () => undefined,
+            onRenamePath: () => undefined,
+            onDeletePath: () => undefined
+          }
+        })}
+      />
+    );
+
+    click(requiredElement(host, 'button[aria-label="其他文件"]'));
+    expect(host.textContent).toContain("source.md");
+    expect(host.textContent).toContain("chapters");
+    expect(host.textContent).not.toContain(".shanhai");
+    expect(host.querySelector('button[aria-label="新建其他文件"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="新建其他文件目录"]')).toBeNull();
+    expect(host.querySelector('[data-project-file-actions="true"]')).toBeNull();
+
+    click(
+      requiredElement(host, 'button[aria-label="打开文件：source.md（只读：来源文件，只读）"]')
+    );
+    expect(opened).toEqual(["chapters/source.md"]);
+  });
+
   function render(node: ReactNode): void {
     act(() => root.render(node));
   }

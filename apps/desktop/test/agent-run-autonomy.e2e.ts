@@ -29,9 +29,14 @@ test("keeps source-built execution read-only until a signed package is qualified
 
   try {
     await startAutonomousExecution(scenario.page);
+    await expect
+      .poll(() => readLatestPermissionSummary(scenario.page), { timeout: 30_000 })
+      .toMatchObject({
+        ok: true,
+        value: { forbiddenCapabilities: expect.arrayContaining(["operation:chapter_replace"]) }
+      });
     const capabilitySummary = scenario.page.getByLabel("运行能力摘要");
     await expect(capabilitySummary).toContainText("只读执行");
-    await expect(capabilitySummary).toContainText("章节正文替换不可用");
     await expect(scenario.page.getByRole("button", { name: "撤销本次运行" })).toHaveCount(0);
     scenario.releaseProviderResponse();
     await expect
@@ -185,10 +190,6 @@ async function startAutonomousExecution(page: Page): Promise<void> {
   await expect(composer.getByRole("checkbox")).toHaveCount(0);
   await composer.getByLabel("Agent 请求").fill("连续修改两章并完成运行");
   await composer.getByLabel("启动 Agent 运行").click();
-  await composer.getByTitle("查看上下文").click();
-  await page.getByRole("tab", { name: "实际发送预览" }).click();
-  await expect(page.locator(".ns-agent-send-preview")).toBeVisible();
-  await composer.getByLabel("启动 Agent 运行").click();
   await resolveContextRefreshIfVisible(page);
 }
 
@@ -294,6 +295,24 @@ async function readLatestAgentRun(page: Page): Promise<unknown> {
     const listed = await window.novelStudio?.agentRuns.list("prj_minimal_chapter");
     const latest = listed?.ok ? listed.value[0] : undefined;
     return latest === undefined ? listed : await window.novelStudio?.agentRuns.read(latest.runId);
+  });
+}
+
+async function readLatestPermissionSummary(page: Page): Promise<unknown> {
+  return page.evaluate(async () => {
+    const listed = await window.novelStudio?.agentRuns.list("prj_minimal_chapter");
+    const latest = listed?.ok ? listed.value[0] : undefined;
+    if (latest === undefined) return listed;
+    const run = await window.novelStudio?.agentRuns.read(latest.runId);
+    if (run?.ok !== true || typeof run.value.snapshot.permissionSummaryId !== "string") {
+      return run;
+    }
+    return window.novelStudio?.agentRuns.readPermissionSummary({
+      kind: "run",
+      projectId: "prj_minimal_chapter",
+      runId: run.value.snapshot.runId,
+      permissionSummaryId: run.value.snapshot.permissionSummaryId
+    });
   });
 }
 

@@ -135,6 +135,7 @@ export function createCreativeProjectFilesBridge(
       let snapshot = current?.snapshot;
       let source = snapshot === undefined ? undefined : findNode(snapshot.nodes, sourcePath);
       if (current === undefined || snapshot === undefined || source === undefined) return;
+      if (snapshot.mutationMode === "read-only") return;
       const changesActivePath = pathContains(sourcePath, current.activeFilePath);
       if (changesActivePath) {
         const allowed = await options.beforeActiveFileChange?.("rename_active_path");
@@ -168,6 +169,7 @@ export function createCreativeProjectFilesBridge(
       let snapshot = current?.snapshot;
       let source = snapshot === undefined ? undefined : findNode(snapshot.nodes, path);
       if (current === undefined || snapshot === undefined || source === undefined) return;
+      if (snapshot.mutationMode === "read-only") return;
       const changesActivePath = pathContains(path, current.activeFilePath);
       if (changesActivePath) {
         const allowed = await options.beforeActiveFileChange?.("delete_active_path");
@@ -226,6 +228,7 @@ export function createCreativeProjectFilesBridge(
     const current = state;
     const snapshot = current?.snapshot;
     if (current === undefined || snapshot === undefined) return;
+    if (snapshot.mutationMode === "read-only") return;
     const command: CreativeProjectFileLifecycleCommand =
       kind === "createTextFile"
         ? {
@@ -295,6 +298,12 @@ export function createCreativeProjectFilesBridge(
       nodes: current.snapshot?.nodes ?? [],
       expandedPathIds: current.expandedPathIds,
       ...(current.activeFilePath === undefined ? {} : { activeFilePath: current.activeFilePath }),
+      ...(current.snapshot?.workspaceLayout === undefined
+        ? {}
+        : { workspaceLayout: current.snapshot.workspaceLayout }),
+      ...(current.snapshot?.mutationMode === undefined
+        ? {}
+        : { mutationMode: current.snapshot.mutationMode }),
       loading: current.loading,
       truncated: current.snapshot?.truncated ?? false,
       ...(current.errorMessage === undefined ? {} : { errorMessage: current.errorMessage }),

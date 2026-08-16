@@ -34,6 +34,8 @@ export interface ProjectMetadata extends JsonObject {
   language: string;
   createdAt: string;
   updatedAt: string;
+  /** Missing is the legacy standalone layout. */
+  workspaceLayout?: "standalone" | "nested-folder";
 }
 
 export interface WorkspaceProjectSettings extends JsonObject {
@@ -55,6 +57,7 @@ export interface ProjectInitializationInput {
   language: string;
   projectType?: string;
   targetWordCount?: number;
+  workspaceLayout?: "standalone" | "nested-folder";
 }
 
 export interface CreateCreativeProjectInput {
@@ -65,6 +68,8 @@ export interface CreateCreativeProjectInput {
   readonly language: string;
   readonly projectType?: string;
   readonly targetWordCount?: number;
+  /** Nested projects keep all managed data in this child directory. */
+  readonly workspaceLayout?: "standalone" | "nested-folder";
 }
 
 export interface ProjectCreationResult {
@@ -187,6 +192,19 @@ export interface ProjectWorkspaceLockPort {
   releaseProjectLock(): Promise<Result<void, UnifiedError>>;
 }
 
+export interface ProjectWorkspaceViewState extends JsonObject {
+  schemaVersion: "1.0";
+  activeChapterId?: string;
+  updatedAt: string;
+}
+
+export interface ProjectWorkspaceViewStatePort {
+  readWorkspaceViewState(): Promise<Result<ProjectWorkspaceViewState | undefined, UnifiedError>>;
+  writeWorkspaceViewState(
+    viewState: ProjectWorkspaceViewState
+  ): Promise<Result<ProjectWorkspaceViewState, UnifiedError>>;
+}
+
 export type ProjectChapterRepositoryPort = ChapterDraftRepositoryPort &
   ChapterCatalogRepositoryPort &
   Partial<ChapterMaintenanceRepositoryPort>;
@@ -198,6 +216,7 @@ export interface ProjectWorkspaceSessionOptions {
   createHistoryRepository(projectRoot: string): ChapterHistoryRepositoryPort;
   createRecoveryRepository(projectRoot: string): RecoveryRepositoryPort;
   createProjectLockRepository?: (projectRoot: string) => ProjectWorkspaceLockPort;
+  createWorkspaceViewStateRepository?: (projectRoot: string) => ProjectWorkspaceViewStatePort;
   now?: () => string;
 }
 
@@ -243,6 +262,7 @@ export function createProjectWorkspaceSession(
   let historyRepository: ChapterHistoryRepositoryPort | undefined;
   let recoveryRepository: RecoveryRepositoryPort | undefined;
   let projectLockRepository: ProjectWorkspaceLockPort | undefined;
+  let workspaceViewStateRepository: ProjectWorkspaceViewStatePort | undefined;
   let activeChapterEditorSession: ChapterEditorSession | undefined;
 
   return {
@@ -286,7 +306,8 @@ export function createProjectWorkspaceSession(
         title: input.title,
         language: input.language,
         ...(input.projectType === undefined ? {} : { projectType: input.projectType }),
-        ...(input.targetWordCount === undefined ? {} : { targetWordCount: input.targetWordCount })
+        ...(input.targetWordCount === undefined ? {} : { targetWordCount: input.targetWordCount }),
+        ...(input.workspaceLayout === undefined ? {} : { workspaceLayout: input.workspaceLayout })
       });
       if (!created.ok) {
         await acquiredLock.value.repository?.releaseProjectLock();
@@ -573,6 +594,7 @@ export function createProjectWorkspaceSession(
 
       state = nextState;
       activeChapterEditorSession = candidateEditor;
+      await persistWorkspaceViewStateBestEffort(selected.id);
       return ok({ workspace: nextState, chapterEditor });
     },
     async previewRecoveryDraft(sessionId) {
@@ -707,6 +729,8 @@ export function createProjectWorkspaceSession(
     const candidateChapterRepository = options.createChapterRepository(projectRoot);
     const candidateHistoryRepository = options.createHistoryRepository(projectRoot);
     const candidateRecoveryRepository = options.createRecoveryRepository(projectRoot);
+    const candidateWorkspaceViewStateRepository =
+      options.createWorkspaceViewStateRepository?.(projectRoot);
     const chapters = await candidateChapterRepository.listChapters();
     if (!chapters.ok) {
       return chapters;
@@ -719,7 +743,12 @@ export function createProjectWorkspaceSession(
       return recovery;
     }
 
-    const activeChapterId = chapters.value[0]?.id;
+    const storedViewState = await candidateWorkspaceViewStateRepository?.readWorkspaceViewState();
+    const storedActiveChapterId =
+      storedViewState?.ok === true ? storedViewState.value?.activeChapterId : undefined;
+    const activeChapterId = chapters.value.some((chapter) => chapter.id === storedActiveChapterId)
+      ? storedActiveChapterId
+      : chapters.value[0]?.id;
     const recoverySummary = recovery.value;
     const nextState: ProjectWorkspaceSnapshot = {
       projectRoot,
@@ -751,8 +780,11 @@ export function createProjectWorkspaceSession(
     historyRepository = candidateHistoryRepository;
     recoveryRepository = candidateRecoveryRepository;
     projectLockRepository = acquiredLock.repository;
+    workspaceViewStateRepository = candidateWorkspaceViewStateRepository;
     state = nextState;
     activeChapterEditorSession = nextEditorSession;
+
+    await persistWorkspaceViewStateBestEffort(activeChapterId);
 
     if (
       previousLockRepository !== undefined &&
@@ -800,6 +832,8 @@ export function createProjectWorkspaceSession(
       activeChapterId: selected.id
     };
     activeChapterEditorSession = createActiveChapterEditorSession(selected.id);
+
+    await persistWorkspaceViewStateBestEffort(selected.id);
 
     return ok(state);
   }
@@ -981,7 +1015,25 @@ export function createProjectWorkspaceSession(
           : createActiveChapterEditorSession(activeChapterId);
     }
 
+    await persistWorkspaceViewStateBestEffort(activeChapterId);
+
     return ok(state);
+  }
+
+  async function persistWorkspaceViewStateBestEffort(
+    activeChapterId: string | undefined
+  ): Promise<void> {
+    if (workspaceViewStateRepository === undefined) return;
+
+    try {
+      await workspaceViewStateRepository.writeWorkspaceViewState({
+        schemaVersion: "1.0",
+        ...(activeChapterId === undefined ? {} : { activeChapterId }),
+        updatedAt: currentTimestamp()
+      });
+    } catch {
+      // View state is non-critical and must never block chapter activation.
+    }
   }
 
   function currentTimestamp(): string {

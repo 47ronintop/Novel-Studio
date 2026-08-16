@@ -513,27 +513,12 @@ async function sendConversationRequest(page: Page, request: string): Promise<voi
   await composer.getByLabel("Agent 请求").fill(request);
   const start = composer.getByRole("button", { name: "启动 Agent 运行" });
   await start.click();
-  await waitForExactSendPreview(page, composer);
-  await composer.getByRole("button", { name: "确认并发送 Agent 请求" }).click();
   await expect(
     page
       .getByLabel("Agent 会话主视图")
       .locator('.ns-agent-conversation-user-message[data-speaker="user"]')
       .filter({ hasText: request })
   ).toBeVisible();
-}
-
-async function waitForExactSendPreview(page: Page, composer: Locator): Promise<void> {
-  // Starting is intentionally two-phase: Main prepares the exact payload first, then a later
-  // click confirms it. Do not race the confirmation against the renderer's pending state.
-  await composer.locator(".ns-agent-context-trigger").click();
-  const inspector = page.getByLabel("上下文用量");
-  await inspector.getByRole("tab", { name: "实际发送预览", exact: true }).click();
-  await expect(inspector.getByRole("tabpanel", { name: "实际发送预览" })).toHaveClass(
-    /ns-agent-send-preview/
-  );
-  await inspector.press("Escape");
-  await expect(inspector).toHaveCount(0);
 }
 
 async function waitForRunCount(page: Page, count: number): Promise<void> {

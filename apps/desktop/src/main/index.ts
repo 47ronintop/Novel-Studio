@@ -401,6 +401,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     createRepository: (activation) =>
       new CreativeProjectFileRepository({
         projectRoot: activation.projectRoot,
+        ...(activation.displayRoot === undefined ? {} : { displayRoot: activation.displayRoot }),
+        workspaceLayout: activation.workspaceLayout ?? "standalone",
         projectId: activation.projectId,
         workspaceId: activation.workspaceId,
         receiptStore: createDesktopCreativeProjectFileReceiptStore({

@@ -86,7 +86,7 @@ describe("CreativeProjectFileRepository", () => {
     if (!tree.ok) throw new Error(tree.error.message);
     const paths = flatten(tree.value.nodes).map((node) => node.path);
     expect(tree.value).toMatchObject({
-      schemaVersion: "1.0",
+      schemaVersion: "1.1",
       ...identity,
       policyVersion: "1.0",
       truncated: false
@@ -111,6 +111,67 @@ describe("CreativeProjectFileRepository", () => {
     expect(JSON.stringify(tree.value)).not.toContain("brief body");
     expect(flatten(tree.value.nodes).every((node) => node.nodeRevision.startsWith("node:"))).toBe(
       true
+    );
+  });
+
+  test("uses the nested display root as a read-only source tree and hides .shanhai", async () => {
+    const sourceRoot = await createRoot("novel-studio-creative-source-");
+    const projectRoot = join(sourceRoot, ".shanhai");
+    await mkdir(projectRoot, { recursive: true });
+    await mkdir(join(sourceRoot, "chapters"), { recursive: true });
+    await mkdir(join(sourceRoot, "world"), { recursive: true });
+    await writeFile(join(sourceRoot, "chapters", "original.md"), "source chapter\n", "utf8");
+    await writeFile(join(sourceRoot, "world", "notes.md"), "source world\n", "utf8");
+    await writeFile(join(projectRoot, "project.json"), "{}\n", "utf8");
+
+    const repository = new CreativeProjectFileRepository({
+      projectRoot,
+      displayRoot: sourceRoot,
+      workspaceLayout: "nested-folder",
+      ...identity
+    });
+    const tree = await repository.getTreeSnapshot();
+    if (!tree.ok) throw new Error(tree.error.message);
+    const paths = flatten(tree.value.nodes).map((entry) => entry.path);
+    expect(tree.value).toMatchObject({
+      schemaVersion: "1.1",
+      workspaceLayout: "nested-folder",
+      mutationMode: "read-only"
+    });
+    expect(paths).toEqual(
+      expect.arrayContaining(["chapters", "chapters/original.md", "world/notes.md"])
+    );
+    expect(paths).not.toContain(".shanhai");
+    expect(
+      flatten(tree.value.nodes).every((entry) => entry.readOnlyReason === "来源文件，只读")
+    ).toBe(true);
+
+    const document = await repository.readTextFile("chapters/original.md");
+    expect(document).toMatchObject({ ok: true, value: { readOnlyReason: "来源文件，只读" } });
+    expect(await repository.readTextFile(".shanhai/project.json")).toMatchObject({ ok: false });
+    expect(
+      await repository.saveTextFile({
+        ...identity,
+        path: "chapters/original.md",
+        content: "changed\n",
+        expectedTreeRevision: tree.value.treeRevision,
+        expectedNodeRevision: "node:ignored",
+        expectedChecksum: "a".repeat(64)
+      })
+    ).toMatchObject({ ok: false, error: { code: "CREATIVE_PROJECT_FILE_READ_ONLY" } });
+    expect(
+      await repository.executeLifecycleCommand(
+        lifecycle({
+          kind: "createTextFile",
+          commandId: "nested-create",
+          expectedTreeRevision: tree.value.treeRevision,
+          path: "new.md",
+          content: "new\n"
+        })
+      )
+    ).toMatchObject({ ok: false, error: { code: "CREATIVE_PROJECT_FILE_READ_ONLY" } });
+    expect(await readFile(join(sourceRoot, "chapters", "original.md"), "utf8")).toBe(
+      "source chapter\n"
     );
   });
 

@@ -199,6 +199,8 @@ export type {
   ProjectSnapshot,
   ProjectWorkspaceLock,
   ProjectWorkspaceLockPort,
+  ProjectWorkspaceViewState,
+  ProjectWorkspaceViewStatePort,
   ProjectRecoveryApplyResult,
   ProjectRecoveryDraftPreview,
   ProjectWorkspaceRecoveryItem,

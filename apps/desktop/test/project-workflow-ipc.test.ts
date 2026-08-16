@@ -201,10 +201,64 @@ describe("Task 5 explicit workspace IPC", () => {
     }
   });
 
+  test("opens a nested project from its container and keeps the display root in Main", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-nested-project-"));
+    const projectRoot = join(root, ".shanhai");
+    await mkdir(projectRoot);
+    try {
+      await Promise.all([
+        writeFile(
+          join(projectRoot, "project.json"),
+          JSON.stringify({
+            schemaVersion: "1.0",
+            projectId: "prj_nested",
+            title: "Nested",
+            projectType: "novel",
+            language: "zh-CN",
+            createdAt: "2026-08-12T00:00:00.000Z",
+            updatedAt: "2026-08-12T00:00:00.000Z",
+            workspaceLayout: "nested-folder"
+          }),
+          "utf8"
+        ),
+        writeFile(
+          join(projectRoot, "settings.json"),
+          JSON.stringify({
+            schemaVersion: "1.0",
+            autosave: { enabled: true, intervalMs: 30_000 },
+            history: { snapshotPolicy: "manual-and-interval" },
+            models: { defaultProfileId: "model_default", profiles: [] }
+          }),
+          "utf8"
+        )
+      ]);
+      const coordinator = { openCreativeProject: vi.fn(async () => ok({})) };
+      const handlers = createApplicationIpcHandlers(undefined, {
+        chooseOpenProjectDirectory: async () => root,
+        workspaceActivationCoordinator: coordinator as never
+      });
+      const selected = (await handlers["application:project:choose-open-creative-directory"]()) as {
+        value: { selectionId: string };
+      };
+
+      await expect(
+        handlers["application:project:inspect-open-creative-directory"](selected.value.selectionId)
+      ).resolves.toEqual({ ok: true, value: { kind: "existing-project" } });
+      await handlers["application:project:open-creative-project"](selected.value.selectionId);
+      expect(coordinator.openCreativeProject).toHaveBeenCalledWith(
+        await realpath(projectRoot),
+        await realpath(root)
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("classifies and confirms an ordinary creative folder using main-owned candidates", async () => {
     const parent = await mkdtemp(join(tmpdir(), "novel-studio-creative-folder-"));
     const root = join(parent, "Book");
     await mkdir(root);
+    await mkdir(join(root, "chapters"));
     await Promise.all([
       writeFile(join(root, "2-second.md"), "second", "utf8"),
       writeFile(join(root, "1-first.txt"), "first", "utf8")
@@ -239,7 +293,9 @@ describe("Task 5 explicit workspace IPC", () => {
           kind: "creative-folder",
           preview: {
             sourceDisplayName: "Book",
-            targetDisplayName: "Book - ShanHai",
+            targetDisplayName: ".shanhai",
+            layout: "nested-folder",
+            targetRelativePath: ".shanhai",
             candidates: [
               { relativePath: "1-first.txt", defaultTitle: "1-first", naturalOrder: 0 },
               { relativePath: "2-second.md", defaultTitle: "2-second", naturalOrder: 1 }
@@ -253,15 +309,16 @@ describe("Task 5 explicit workspace IPC", () => {
       });
       expect(confirmed).toMatchObject({
         ok: true,
-        value: { targetLocationLabel: "Book - ShanHai", lastImportedChapterId: "chapter_2" }
+        value: { targetLocationLabel: ".shanhai", lastImportedChapterId: "chapter_2" }
       });
       expect(coordinator.importCreativeProject).toHaveBeenCalledWith(
         expect.objectContaining({
-          parentDirectory: await realpath(parent),
-          folderName: "Book - ShanHai",
+          parentDirectory: await realpath(root),
+          folderName: ".shanhai",
           projectId: "prj_import_test",
           title: "Book",
           language: "zh-CN",
+          workspaceLayout: "nested-folder",
           chapters: [
             { title: "1-first", body: "first" },
             { title: "2-second", body: "second" }
@@ -348,7 +405,7 @@ describe("Task 5 explicit workspace IPC", () => {
       await handlers["application:project:inspect-open-creative-directory"](
         selected.value.selectionId
       );
-      await mkdir(join(root, "memories"));
+      await mkdir(join(root, ".shanhai"));
 
       await expect(
         handlers["application:project:confirm-creative-folder"]({

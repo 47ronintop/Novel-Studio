@@ -414,6 +414,9 @@ async function readBoundTextFile(
         content: read.value.content,
         checksum: read.value.checksum,
         nodeRevision: read.value.nodeRevision,
+        ...(read.value.readOnlyReason === undefined
+          ? {}
+          : { readOnlyReason: read.value.readOnlyReason }),
         ...(treeRevision === undefined ? {} : { treeRevision })
       }
     };

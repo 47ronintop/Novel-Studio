@@ -19,7 +19,7 @@ describe("ProjectFolderImportDialog", () => {
     const onCandidateToggle = vi.fn();
     ({ root, container } = renderDialog({ onCandidateToggle }));
 
-    expect(container.textContent).toContain("源文件夹不会被修改");
+    expect(container.textContent).toContain("源正文文件不会被修改");
     expect(container.textContent).toContain("创建项目并导入 2 章");
 
     const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
@@ -55,7 +55,7 @@ function renderDialog(overrides: Partial<Parameters<typeof ProjectFolderImportDi
       <ProjectFolderImportDialog
         open
         sourceDisplayName="Draft"
-        targetDisplayName="Draft - ShanHai"
+        targetDisplayName=".shanhai"
         candidates={[
           { relativePath: "01.md", sizeBytes: 12, defaultTitle: "01", selected: true },
           { relativePath: "02.txt", sizeBytes: 24, defaultTitle: "02", selected: true }

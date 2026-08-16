@@ -247,7 +247,7 @@ export function createProjectWorkflowBridge(
         status = "ready";
         feedback = {
           kind: "info",
-          message: `项目已创建在 ${copied.value.targetLocationLabel}，源文件夹未被修改。`
+          message: `项目数据已创建在 ${copied.value.targetLocationLabel}，源正文文件未被修改。`
         };
         return toProps();
       } catch (error) {

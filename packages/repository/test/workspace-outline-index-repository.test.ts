@@ -583,10 +583,12 @@ function entry(
 
 function creativeSnapshot(nodeRevision: string): CreativeProjectFileTreeSnapshot {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     projectId: "project-01",
     workspaceId: "workspace-01",
     policyVersion: "1.0",
+    workspaceLayout: "standalone",
+    mutationMode: "read-write",
     treeRevision: "tree:stable",
     nodes: [
       {

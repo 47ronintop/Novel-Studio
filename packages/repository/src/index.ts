@@ -262,6 +262,11 @@ export type {
   ProjectLockFileRepositoryOptions,
   ProjectLockRecord
 } from "./project-lock-repository.js";
+export { ProjectWorkspaceViewStateFileRepository } from "./project-workspace-view-state-repository.js";
+export type {
+  ProjectWorkspaceViewState,
+  ProjectWorkspaceViewStateFileRepositoryOptions
+} from "./project-workspace-view-state-repository.js";
 export { PluginRegistryFileRepository } from "./plugin-registry-repository.js";
 export type {
   PluginRegistryEntry,

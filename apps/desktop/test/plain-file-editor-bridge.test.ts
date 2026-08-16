@@ -160,6 +160,43 @@ describe("plain file editor bridge", () => {
     ]);
   });
 
+  test("keeps nested source documents read-only without invoking creative save", async () => {
+    const saves: unknown[] = [];
+    const api = {
+      creativeProjectFiles: {
+        async readTextFile(request: { readonly path: string }) {
+          return ok({
+            path: request.path,
+            content: "Source\n",
+            checksum: "sha256:source",
+            nodeRevision: "node-source",
+            readOnlyReason: "来源文件，只读"
+          });
+        },
+        async saveTextFile(request: unknown) {
+          saves.push(request);
+          return ok({});
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createPlainFileEditorBridge(api, {
+      scope: "creativeProjectFile",
+      identity: { projectId: "project-01", workspaceId: "workspace-01" },
+      getTreeRevision: () => "tree-source"
+    });
+
+    const opened = await bridge.openFile("source/notes.md");
+    bridge.updateContent("Changed\n");
+    await bridge.save();
+
+    expect(opened).toMatchObject({
+      content: "Source\n",
+      readOnlyReason: "来源文件，只读"
+    });
+    expect(bridge.getProps()).toMatchObject({ content: "Source\n", dirty: false });
+    expect(saves).toEqual([]);
+  });
+
   test("uses creative conflict revisions when keeping a draft before saving again", async () => {
     const saves: CreativeSaveInput[] = [];
     let treeRevision: string | undefined = "tree-open";

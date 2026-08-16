@@ -131,7 +131,7 @@ describe("AgentComposer", () => {
     );
   });
 
-  test("shows an explicit confirmation state after the send preview is prepared", () => {
+  test("keeps a single-send control while the exact send preview is available", () => {
     const { host } = renderComposer({
       contextStatus: {
         state: "normal",
@@ -159,10 +159,10 @@ describe("AgentComposer", () => {
       }
     });
 
-    expect(host.textContent).toContain("发送预览待确认");
-    expect(host.textContent).toContain("再次点击发送以确认");
-    expect(host.querySelector('[aria-label="确认并发送 Agent 请求"]')).not.toBeNull();
-    expect(host.querySelector('[aria-label="启动 Agent 运行"]')).toBeNull();
+    expect(host.textContent).not.toContain("发送预览待确认");
+    expect(host.textContent).not.toContain("再次点击发送以确认");
+    expect(host.querySelector('[aria-label="确认并发送 Agent 请求"]')).toBeNull();
+    expect(host.querySelector('[aria-label="启动 Agent 运行"]')).not.toBeNull();
   });
 
   test("exposes a persistent model sharing entry in the add menu", () => {
