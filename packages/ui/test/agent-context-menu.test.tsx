@@ -32,8 +32,16 @@ describe("AgentContextMenu", () => {
     expect(
       panel?.querySelector('[data-context-tab="sources"]')?.getAttribute("aria-selected")
     ).toBe("true");
-    expect(panel?.querySelector('[aria-label="上下文来源"]')?.textContent).toContain("世界规则");
-    expect(panel?.textContent).toContain("排除上下文不等于禁止工具读取");
+    const sources = panel?.querySelector('[aria-label="上下文来源"]');
+    expect(sources?.textContent).toContain("世界规则");
+    expect(sources?.textContent).toContain("世界观 · 46 tokens");
+    expect(sources?.textContent).not.toContain("当前章节涉及城门规则");
+    expect(sources?.textContent).not.toContain("自动选择");
+    expect(sources?.textContent).not.toContain("优先级");
+    expect(sources?.textContent).not.toContain("修订");
+    expect(sources?.textContent).not.toContain("顺序");
+    expect(sources?.textContent).not.toContain("校验");
+    expect(panel?.textContent).not.toContain("固定 8100");
     expect(panel?.textContent).toContain("固定项超过安全输入预算");
 
     act(() => panel?.querySelector<HTMLButtonElement>('[data-context-tab="preview"]')?.click());
@@ -48,7 +56,7 @@ describe("AgentContextMenu", () => {
     expect(preview?.textContent).not.toContain("hidden-system-instruction");
   });
 
-  test("exposes scope, source actions, and priority changes through optional callbacks", () => {
+  test("keeps scope and essential source actions without the priority editor", () => {
     const onScopeChange = vi.fn<(scope: "run" | "project") => void>();
     const onPin = vi.fn<() => void>();
     const onExclude = vi.fn<() => void>();
@@ -78,17 +86,8 @@ describe("AgentContextMenu", () => {
     expect(onExclude).toHaveBeenCalledTimes(1);
     expect(onRestore).toHaveBeenCalledTimes(1);
 
-    const priority = document.querySelector<HTMLInputElement>(
-      '[aria-label="调整 世界规则 优先级"]'
-    );
-    expect(priority?.type).toBe("number");
-    act(() => {
-      if (priority === null) throw new Error("priority input missing");
-      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-      setValue?.call(priority, "81");
-      priority.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    expect(onPriorityChange).toHaveBeenCalledWith(81);
+    expect(document.querySelector('[aria-label="调整 世界规则 优先级"]')).toBeNull();
+    expect(onPriorityChange).not.toHaveBeenCalled();
   });
 
   test("shows an unavailable preview without fabricating hidden prompt data", () => {
@@ -126,13 +125,14 @@ describe("AgentContextMenu", () => {
     expect(preview?.textContent).not.toContain("城门在日落后关闭");
   });
 
-  test("labels an automatically resolved source instead of hiding its preference scope", () => {
+  test("hides automatic-selection internals from the compact source row", () => {
     const { host } = render(createControl({ sourcePreferenceScope: "automatic" }));
     act(() => host.querySelector<HTMLButtonElement>('[aria-label^="上下文"]')?.click());
 
     const sources = document.querySelector('[aria-label="上下文来源"]');
-    expect(sources?.textContent).toContain("自动选择");
-    expect(sources?.textContent).toContain("自动");
+    expect(sources?.textContent).toContain("世界规则");
+    expect(sources?.textContent).not.toContain("自动选择");
+    expect(sources?.textContent).not.toContain("自动");
   });
 
   test("keeps context refresh and compaction as separate actions", () => {

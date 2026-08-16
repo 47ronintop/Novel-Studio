@@ -6343,7 +6343,7 @@ textarea:focus-visible,
   max-height: min(520px, calc(100vh - 96px));
   min-width: 0;
   overflow: auto;
-  width: min(440px, calc(100vw - 16px));
+  width: min(400px, calc(100vw - 16px));
 }
 
 .ns-agent-permission-trigger {
@@ -6566,12 +6566,6 @@ textarea:focus-visible,
   margin: 0;
 }
 
-.ns-agent-context-precision,
-.ns-agent-context-budget-facts {
-  color: var(--ns-muted);
-  font-size: 11px;
-}
-
 .ns-agent-context-warning {
   color: var(--ns-warning, #d08b1a);
   font-size: 11px;
@@ -6591,8 +6585,7 @@ textarea:focus-visible,
   padding: 4px 7px;
 }
 
-.ns-agent-context-budget-block > svg,
-.ns-agent-context-tool-note > svg {
+.ns-agent-context-budget-block > svg {
   flex: 0 0 auto;
   margin-top: 1px;
 }
@@ -6600,7 +6593,7 @@ textarea:focus-visible,
 .ns-agent-context-tabs {
   border-bottom: 1px solid var(--ns-border);
   display: grid;
-  grid-template-columns: minmax(76px, 0.75fr) minmax(138px, 1.25fr);
+  grid-template-columns: repeat(2, minmax(76px, 1fr));
 }
 
 .ns-agent-context-tabs > button {
@@ -6706,7 +6699,7 @@ textarea:focus-visible,
 }
 
 .ns-agent-context-source-heading,
-.ns-agent-context-source-controls,
+.ns-agent-context-source-heading-tail,
 .ns-agent-context-source-policy,
 .ns-agent-context-source-facts,
 .ns-agent-context-source-actions {
@@ -6715,16 +6708,14 @@ textarea:focus-visible,
   min-width: 0;
 }
 
-.ns-agent-context-source-heading,
-.ns-agent-context-source-controls {
+.ns-agent-context-source-heading {
   gap: 8px;
   justify-content: space-between;
 }
 
-.ns-agent-context-source-main {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
+.ns-agent-context-source-heading-tail {
+  flex: 0 0 auto;
+  gap: 3px;
 }
 
 .ns-agent-context-source-policy,
@@ -6763,55 +6754,20 @@ textarea:focus-visible,
   overflow-wrap: anywhere;
 }
 
-.ns-agent-context-source-layer,
 .ns-agent-context-empty {
   color: var(--ns-muted);
   font-size: 11px;
 }
 
-.ns-agent-context-source-reason {
-  color: var(--ns-ink);
-  font-size: 11px;
-  line-height: 1.4;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.ns-agent-context-source-facts > span,
-.ns-agent-context-source-facts > code {
+.ns-agent-context-source-facts > span {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.ns-agent-context-source-facts code,
 .ns-agent-context-preview code {
   color: var(--ns-muted);
   font-family: var(--ns-font-mono);
   font-size: 10px;
-}
-
-.ns-agent-context-source-controls {
-  min-height: 27px;
-}
-
-.ns-agent-context-priority {
-  align-items: center;
-  color: var(--ns-muted);
-  display: inline-flex;
-  font-size: 10px;
-  gap: 5px;
-}
-
-.ns-agent-context-priority input {
-  background: var(--ns-surface);
-  border: 1px solid var(--ns-border);
-  border-radius: 4px;
-  color: var(--ns-ink);
-  font: inherit;
-  font-size: 11px;
-  height: 24px;
-  padding: 0 3px 0 5px;
-  width: 52px;
 }
 
 .ns-agent-context-source-actions {
@@ -6840,51 +6796,40 @@ textarea:focus-visible,
   color: var(--ns-ink);
 }
 
-.ns-agent-context-source-actions > button:disabled,
-.ns-agent-context-priority input:disabled {
+.ns-agent-context-source-actions > button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
 
 .ns-agent-context-conventions {
+  align-items: center;
   border-top: 1px solid var(--ns-border);
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 5px;
   padding-top: 6px;
 }
 
-.ns-agent-context-conventions > p {
-  align-items: baseline;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-}
-
-.ns-agent-context-conventions code,
-.ns-agent-context-conventions > p > span:last-child {
+.ns-agent-context-conventions-label {
   color: var(--ns-muted);
   font-size: 11px;
+  margin-right: auto;
+}
+
+.ns-agent-context-conventions-status {
+  color: var(--ns-muted);
+  font-size: 10px;
+}
+
+.ns-agent-context-conventions > .ns-agent-context-warning {
+  flex-basis: 100%;
 }
 
 .ns-agent-context-conventions > button {
   align-items: center;
   display: inline-flex;
   gap: 4px;
-  justify-self: start;
   min-height: 26px;
-}
-
-.ns-agent-context-tool-note {
-  align-items: flex-start;
-  border-top: 1px solid var(--ns-border);
-  color: var(--ns-muted);
-  display: flex;
-  font-size: 10px;
-  gap: 5px;
-  line-height: 1.4;
-  margin: 0;
-  padding-top: 6px;
 }
 
 .ns-agent-context-preview-heading,

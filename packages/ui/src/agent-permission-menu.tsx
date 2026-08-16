@@ -1,8 +1,7 @@
 import { Check, ShieldAlert, ShieldCheck } from "lucide-react";
-import type { AgentWritePolicy } from "@novel-studio/application";
+import type { AgentContextMode, AgentWritePolicy } from "@novel-studio/application";
 
 import type { AgentComposerPermissionControl } from "./workspace-shell-types.js";
-import { AgentCapabilitySummary, operationLabel } from "./agent-capability-summary.js";
 
 export interface AgentPermissionMenuProps {
   readonly writePolicy: AgentWritePolicy;
@@ -84,77 +83,34 @@ function PermissionSummaryDetails({
           {control.errorMessage}
         </p>
       )}
-      {control?.capability === undefined ? null : (
-        <AgentCapabilitySummary
-          ariaLabel="能力目录与审批规则"
-          facts={control.capability}
-        />
-      )}
       {summary === undefined ? (
         <p>{control?.loading ? "正在读取权限摘要…" : "发送前打开此菜单即可生成摘要。"}</p>
       ) : (
         <dl>
           <div>
-            <dt>项目范围</dt>
-            <dd>当前项目根目录 · 仅项目内相对路径</dd>
+            <dt>作用范围</dt>
+            <dd>仅当前项目，不访问项目外路径</dd>
           </div>
-          <div>
-            <dt>上下文</dt>
-            <dd>{summary.contextMode === "writing" ? "写作上下文" : "文件上下文"}</dd>
-          </div>
-          <div>
-            <dt>可读取</dt>
-            <dd>{capabilityList(summary.readCapabilities)}</dd>
-          </div>
-          <div>
-            <dt>可提案</dt>
-            <dd>{capabilityList(summary.proposalCapabilities)}</dd>
-          </div>
-          <div>
-            <dt>Change Set</dt>
-            <dd>
-              {summary.proposalCapabilities.length > 0 ? "允许生成，仍需走审批管线" : "不适用"}
-            </dd>
-          </div>
-          {summary.schemaVersion === "1.1" || summary.schemaVersion === "2.0" ? (
-            <div>
-              <dt>写入后端</dt>
-              <dd>{writeMutationTrustLabel(summary.writeMutationTrust)}</dd>
-            </div>
-          ) : null}
-          {summary.schemaVersion === "2.0" ? (
-            <>
-              <div>
-                <dt>写作操作</dt>
-                <dd>{summary.writingOperations.map(operationLabel).join("、") || "无"}</dd>
-              </div>
-              <div>
-                <dt>文件操作</dt>
-                <dd>{summary.workspaceFileOperations.map(operationLabel).join("、") || "无"}</dd>
-              </div>
-              <div>
-                <dt>规则集</dt>
-                <dd>
-                  {summary.approvalRuleSetVersion === "not_applicable"
-                    ? "不适用"
-                    : `${summary.approvalRuleSetVersion} · ${summary.approvalRules.length} 项`}
-                </dd>
-              </div>
-            </>
-          ) : null}
           <div>
             <dt>审批状态</dt>
             <dd>{approvalLabel(control?.approvalSource ?? "not_approved")}</dd>
           </div>
           <div>
-            <dt>明确不可用</dt>
-            <dd>{summary.forbiddenCapabilities.map(forbiddenLabel).join("、") || "无"}</dd>
+            <dt>可读取</dt>
+            <dd>{readScopeLabel(summary.contextMode, summary.readCapabilities.length > 0)}</dd>
           </div>
           <div>
-            <dt>事实绑定</dt>
+            <dt>修改能力</dt>
             <dd>
-              {summary.checksum.slice(0, 12)} · registry {summary.toolRegistryRevision.slice(0, 8)}
+              {writeScopeLabel(
+                summary.proposalCapabilities.length > 0,
+                control?.approvalSource ?? "not_approved"
+              )}
             </dd>
+          </div>
+          <div>
+            <dt>安全边界</dt>
+            <dd>{forbiddenSummary(summary.forbiddenCapabilities)}</dd>
           </div>
         </dl>
       )}
@@ -162,37 +118,12 @@ function PermissionSummaryDetails({
   );
 }
 
-function capabilityList(capabilities: readonly string[]): string {
-  return capabilities.length === 0 ? "无" : capabilities.join("、");
-}
-
-function forbiddenLabel(capability: string): string {
-  switch (capability) {
-    case "shell":
-      return "Shell";
-    case "git":
-      return "Git";
-    case "network":
-      return "网络";
-    case "delete":
-      return "删除";
-    case "move":
-      return "移动";
-    case "rename":
-      return "重命名";
-    case "create_directory":
-      return "创建目录";
-    default:
-      return capability;
-  }
-}
-
 function approvalLabel(source: AgentComposerPermissionControl["approvalSource"]): string {
   switch (source) {
     case "not_applicable":
-      return "不适用";
+      return "无需写入审批";
     case "human_confirmation":
-      return "人工确认";
+      return "已人工确认";
     case "user_preapproved_run":
       return "本次运行有限预授权";
     default:
@@ -200,17 +131,61 @@ function approvalLabel(source: AgentComposerPermissionControl["approvalSource"])
   }
 }
 
-function writeMutationTrustLabel(
-  trust: "unavailable" | "standard_trusted_creative" | "hardened_native" | undefined
+function readScopeLabel(contextMode: AgentContextMode, canRead: boolean): string {
+  if (!canRead) return "无";
+  return contextMode === "writing"
+    ? "项目内的章节、故事资料与支持的文本文件"
+    : "项目内支持的文本文件";
+}
+
+function writeScopeLabel(
+  canPropose: boolean,
+  approvalSource: AgentComposerPermissionControl["approvalSource"]
 ): string {
-  switch (trust) {
-    case "standard_trusted_creative":
-      return "标准可信创作（standard trusted creative）· 不抵御同权限本地进程的路径竞争";
-    case "hardened_native":
-      return "强化原生（hardened native）";
-    case "unavailable":
-      return "不可用";
+  if (!canPropose) return "只读，不会修改文件";
+  switch (approvalSource) {
+    case "human_confirmation":
+      return "可生成修改建议；本次写入已由你确认";
+    case "user_preapproved_run":
+      return "可生成修改建议；本次运行按有限预授权执行";
     default:
-      return "旧记录未声明";
+      return "可生成修改建议；写入前仍需审批";
   }
+}
+
+function forbiddenSummary(capabilities: readonly string[]): string {
+  const values = new Set(capabilities);
+  const tools = [
+    values.has("shell") ? "Shell" : undefined,
+    values.has("git") ? "Git" : undefined,
+    values.has("network") ? "网络" : undefined,
+    values.has("remote_mcp") ? "远程 MCP" : undefined
+  ].filter((value): value is string => value !== undefined);
+  const fileActions = [
+    values.has("delete") ? "删除文件" : undefined,
+    values.has("move") ? "移动文件" : undefined,
+    values.has("rename") ? "重命名文件" : undefined,
+    values.has("create_directory") ? "创建目录" : undefined
+  ].filter((value): value is string => value !== undefined);
+  const known = new Set([
+    "shell",
+    "git",
+    "network",
+    "remote_mcp",
+    "delete",
+    "move",
+    "rename",
+    "create_directory"
+  ]);
+  const parts = [
+    tools.length === 0 ? undefined : `不可直接使用：${joinChinese(tools)}`,
+    fileActions.length === 0 ? undefined : `不能直接${joinChinese(fileActions)}`,
+    capabilities.some((capability) => !known.has(capability)) ? "另有未授权能力不可用" : undefined
+  ].filter((value): value is string => value !== undefined);
+  return parts.join("；") || "未列出额外限制";
+}
+
+function joinChinese(values: readonly string[]): string {
+  if (values.length <= 1) return values[0] ?? "";
+  return `${values.slice(0, -1).join("、")}或${values.at(-1)}`;
 }

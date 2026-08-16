@@ -364,7 +364,7 @@ describe("AgentComposer", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  test("keeps permission details closed by default and reveals server-owned forbidden capabilities on demand", () => {
+  test("keeps permission details closed by default and reveals a concise safety summary on demand", () => {
     const onOpen = vi.fn();
     const { host } = renderComposer({ permission: permissionControl({ onOpen }) });
     const trigger = host.querySelector<HTMLButtonElement>('[aria-label="添加引用与执行审批"]');
@@ -383,17 +383,24 @@ describe("AgentComposer", () => {
 
     act(() => summary?.querySelector("summary")?.click());
     expect(summary?.open).toBe(true);
+    expect(summary?.textContent).toContain("仅当前项目，不访问项目外路径");
+    expect(summary?.textContent).toContain("尚未批准");
+    expect(summary?.textContent).toContain("项目内的章节、故事资料与支持的文本文件");
+    expect(summary?.textContent).toContain("可生成修改建议；写入前仍需审批");
     expect(summary?.textContent).toContain("Shell");
     expect(summary?.textContent).toContain("Git");
     expect(summary?.textContent).toContain("网络");
-    expect(summary?.textContent).toContain("propose_chapter_write");
-    expect(summary?.textContent).toContain("写作上下文");
-    expect(summary?.textContent).toContain("standard trusted creative");
-    expect(summary?.textContent).toContain("不抵御同权限本地进程的路径竞争");
-    expect(summary?.textContent).not.toContain("通用文件");
+    expect(summary?.textContent).toContain("不能直接删除文件、移动文件、重命名文件或创建目录");
+    expect(summary?.textContent).not.toContain("propose_chapter_write");
+    expect(summary?.textContent).not.toContain("read_project_text");
+    expect(summary?.textContent).not.toContain("standard trusted creative");
+    expect(summary?.textContent).not.toContain("registry-01");
+    expect(summary?.textContent).not.toContain("cccccccccccc");
+    expect(summary?.textContent).not.toContain("写入后端");
+    expect(summary?.textContent).not.toContain("事实绑定");
   });
 
-  test("labels a qualified native write backend without the standard-trust warning", () => {
+  test("does not expose write-backend implementation details", () => {
     const control = permissionControl();
     if (control.summary?.schemaVersion !== "1.1") throw new Error("Expected a v1.1 summary.");
     const { host } = renderComposer({
@@ -405,7 +412,8 @@ describe("AgentComposer", () => {
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="添加引用与执行审批"]')?.click());
     const summary = document.querySelector<HTMLDetailsElement>('[aria-label="本次权限摘要"]');
 
-    expect(summary?.textContent).toContain("hardened native");
+    expect(summary?.textContent).toContain("可生成修改建议；写入前仍需审批");
+    expect(summary?.textContent).not.toContain("hardened native");
     expect(summary?.textContent).not.toContain("不抵御同权限本地进程的路径竞争");
   });
 
@@ -689,9 +697,10 @@ describe("AgentComposer", () => {
     expect(contextPopover?.parentElement?.classList).toContain("ns-agent-popover-layer");
     const sourceText = document.querySelector('[aria-label="上下文来源"]')?.textContent;
     expect(sourceText).toContain("AGENTS.md");
-    expect(sourceText).toContain("约定层");
-    expect(sourceText).toContain("受信任工作区");
-    expect(sourceText).toContain("内容仅作为数据");
+    expect(sourceText).toContain("project_conventions · 42 tokens");
+    expect(sourceText).not.toContain("约定层");
+    expect(sourceText).not.toContain("受信任工作区");
+    expect(sourceText).not.toContain("内容仅作为数据");
     act(() =>
       document.querySelector<HTMLButtonElement>(".ns-agent-context-conventions > button")?.click()
     );
@@ -701,7 +710,7 @@ describe("AgentComposer", () => {
       /\.ns-agent-composer-surface \.ns-agent-context-popover-root\s*\{[^}]*grid-column:\s*3/s
     );
     expect(css).toMatch(
-      /\.ns-agent-composer-surface \.ns-agent-context-popover\s*\{[^}]*width:\s*min\(440px,\s*calc\(100vw\s*-\s*16px\)\)/s
+      /\.ns-agent-composer-surface \.ns-agent-context-popover\s*\{[^}]*width:\s*min\(400px,\s*calc\(100vw\s*-\s*16px\)\)/s
     );
   });
 

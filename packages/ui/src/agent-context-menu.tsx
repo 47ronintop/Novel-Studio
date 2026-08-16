@@ -4,7 +4,6 @@ import {
   Eye,
   FileMinus2,
   FilePlus2,
-  Info,
   Layers,
   ListTree,
   Pin,
@@ -132,15 +131,7 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
           <div className="ns-agent-context-heading">
             <p className="ns-agent-context-usage">
               <span>{control.usageLabel}</span>
-              <span className="ns-agent-context-precision">
-                {PRECISION_LABEL[control.precision]}
-              </span>
             </p>
-            {control.tokenStats === undefined ? null : (
-              <span className="ns-agent-context-budget-facts">
-                固定 {control.tokenStats.pinnedTokens} · 剩余 {control.tokenStats.remainingTokens}
-              </span>
-            )}
           </div>
           {control.state === "compaction_failed" ? (
             <p className="ns-agent-context-warning" role="alert">
@@ -184,7 +175,7 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
               type="button"
             >
               <Eye aria-hidden="true" size={13} />
-              实际发送预览
+              发送内容
             </button>
           </div>
 
@@ -198,10 +189,6 @@ export function AgentContextMenu(props: AgentContextMenuProps): ReactNode {
               <ContextScopeControl control={control} />
               <ContextSourceList control={control} />
               <ConventionsControl control={control} />
-              <p className="ns-agent-context-tool-note" role="note">
-                <Info aria-hidden="true" size={13} />
-                <span>排除上下文不等于禁止工具读取；工具读取仍受权限与审计约束。</span>
-              </p>
             </div>
           ) : (
             <ContextPreview control={control} panelId={`${tabId}-preview-panel`} />
@@ -295,121 +282,79 @@ function ContextSourceItem({
 }): ReactNode {
   const disabled = source.busy === true;
   const hasActions =
-    source.onPin !== undefined ||
-    source.onExclude !== undefined ||
-    source.onRestore !== undefined ||
-    source.onPriorityChange !== undefined;
+    source.onPin !== undefined || source.onExclude !== undefined || source.onRestore !== undefined;
+  const detail =
+    source.detail ??
+    (source.tokenCount === undefined
+      ? undefined
+      : source.tokenCount === null
+        ? "token 未知"
+        : `${String(source.tokenCount)} tokens`);
+  const truncation =
+    source.truncationRange === undefined || source.truncationRange === null
+      ? undefined
+      : formatTruncation(source.truncationRange);
   return (
     <li data-state={source.state ?? "active"}>
       <div className="ns-agent-context-source-heading">
-        <div className="ns-agent-context-source-main">
-          <span className="ns-agent-context-source-label">{source.label}</span>
-          {source.layerLabel === undefined ? null : (
-            <span className="ns-agent-context-source-layer">{source.layerLabel}</span>
-          )}
-        </div>
-        <div className="ns-agent-context-source-policy">
-          {source.state === undefined ? null : (
-            <span data-source-state={source.state}>{SOURCE_STATE_LABEL[source.state]}</span>
-          )}
-          {source.selectionPolicy === undefined ? null : (
-            <span>{SELECTION_POLICY_LABEL[source.selectionPolicy]}</span>
-          )}
-          {source.preferenceScope === undefined ? null : (
-            <span>{PREFERENCE_SCOPE_LABEL[source.preferenceScope]}</span>
-          )}
-        </div>
-      </div>
-      {source.selectionReason === undefined ? null : (
-        <p className="ns-agent-context-source-reason">{source.selectionReason}</p>
-      )}
-      <div className="ns-agent-context-source-facts">
-        {source.detail === undefined ? null : <span>{source.detail}</span>}
-        {source.tokenCount === undefined ? null : (
-          <span>
-            {source.tokenCount === null ? "token 未知" : `${String(source.tokenCount)} tokens`}
-            {source.precision === undefined ? "" : ` · ${PRECISION_LABEL[source.precision]}`}
-          </span>
-        )}
-        {source.tokenCount !== undefined || source.precision === undefined ? null : (
-          <span>{PRECISION_LABEL[source.precision]}</span>
-        )}
-        {source.priority === undefined ? null : <span>优先级 {source.priority}</span>}
-        {source.sourceRevision === undefined ? null : <span>修订 {source.sourceRevision}</span>}
-        {source.materializationOrder === undefined ? null : (
-          <span>顺序 {source.materializationOrder}</span>
-        )}
-        {source.truncationRange === undefined ? null : (
-          <span>{formatTruncation(source.truncationRange)}</span>
-        )}
-        {source.sourceChecksum === undefined ? null : (
-          <code aria-label={`来源校验和 ${source.sourceChecksum}`} title={source.sourceChecksum}>
-            校验 {compactChecksum(source.sourceChecksum)}
-          </code>
-        )}
-        {source.metadata === undefined || source.metadata.length === 0 ? null : (
-          <span>{source.metadata.join(" · ")}</span>
-        )}
-      </div>
-      {!hasActions ? null : (
-        <div className="ns-agent-context-source-controls">
-          {source.onPriorityChange === undefined ? null : (
-            <label className="ns-agent-context-priority">
-              <span>优先级</span>
-              <input
-                aria-label={`调整 ${source.label} 优先级`}
-                disabled={disabled}
-                max={100}
-                min={0}
-                onChange={(event) => {
-                  if (!Number.isFinite(event.currentTarget.valueAsNumber)) return;
-                  source.onPriorityChange?.(
-                    Math.min(100, Math.max(0, event.currentTarget.valueAsNumber))
-                  );
-                }}
-                step={1}
-                type="number"
-                value={source.priority ?? 0}
-              />
-            </label>
-          )}
-          <div className="ns-agent-context-source-actions">
-            {source.onPin === undefined ? null : (
-              <button
-                aria-label={`固定来源 ${source.label}`}
-                aria-pressed={source.selectionPolicy === "pinned"}
-                disabled={disabled}
-                onClick={() => source.onPin?.()}
-                title="固定来源"
-                type="button"
-              >
-                <Pin aria-hidden="true" size={13} />
-              </button>
+        <span className="ns-agent-context-source-label" title={source.selectionReason}>
+          {source.label}
+        </span>
+        <div className="ns-agent-context-source-heading-tail">
+          <div className="ns-agent-context-source-policy">
+            {source.state === undefined || source.state === "active" ? null : (
+              <span data-source-state={source.state}>{SOURCE_STATE_LABEL[source.state]}</span>
             )}
-            {source.onExclude === undefined ? null : (
-              <button
-                aria-label={`排除来源 ${source.label}`}
-                aria-pressed={source.state === "excluded"}
-                disabled={disabled}
-                onClick={() => source.onExclude?.()}
-                title="排除来源"
-                type="button"
-              >
-                <Ban aria-hidden="true" size={13} />
-              </button>
-            )}
-            {source.onRestore === undefined ? null : (
-              <button
-                aria-label={`恢复来源 ${source.label}`}
-                disabled={disabled}
-                onClick={() => source.onRestore?.()}
-                title="恢复自动选择"
-                type="button"
-              >
-                <RotateCcw aria-hidden="true" size={13} />
-              </button>
+            {source.selectionPolicy === undefined ||
+            source.selectionPolicy === "automatic" ? null : (
+              <span>{SELECTION_POLICY_LABEL[source.selectionPolicy]}</span>
             )}
           </div>
+          {!hasActions ? null : (
+            <div className="ns-agent-context-source-actions">
+              {source.onPin === undefined ? null : (
+                <button
+                  aria-label={`固定来源 ${source.label}`}
+                  aria-pressed={source.selectionPolicy === "pinned"}
+                  disabled={disabled}
+                  onClick={() => source.onPin?.()}
+                  title="固定来源"
+                  type="button"
+                >
+                  <Pin aria-hidden="true" size={13} />
+                </button>
+              )}
+              {source.onExclude === undefined ? null : (
+                <button
+                  aria-label={`排除来源 ${source.label}`}
+                  aria-pressed={source.state === "excluded"}
+                  disabled={disabled}
+                  onClick={() => source.onExclude?.()}
+                  title="从上下文排除；不限制工具读取"
+                  type="button"
+                >
+                  <Ban aria-hidden="true" size={13} />
+                </button>
+              )}
+              {source.onRestore === undefined ? null : (
+                <button
+                  aria-label={`恢复来源 ${source.label}`}
+                  disabled={disabled}
+                  onClick={() => source.onRestore?.()}
+                  title="恢复自动选择"
+                  type="button"
+                >
+                  <RotateCcw aria-hidden="true" size={13} />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      {detail === undefined && truncation === undefined ? null : (
+        <div className="ns-agent-context-source-facts">
+          {detail === undefined ? null : <span>{detail}</span>}
+          {truncation === undefined ? null : <span>{truncation}</span>}
         </div>
       )}
     </li>
@@ -422,15 +367,25 @@ function ConventionsControl({
   readonly control: AgentComposerContextStatusControl;
 }): ReactNode {
   if (control.conventions === undefined) return null;
+  const hasActions =
+    control.conventions.onCreate !== undefined ||
+    control.conventions.onDisable !== undefined ||
+    control.conventions.onRevokeTrust !== undefined;
+  if (
+    !hasActions &&
+    control.conventions.errorMessage === undefined &&
+    control.conventions.status === "unknown"
+  ) {
+    return null;
+  }
   return (
     <div className="ns-agent-context-conventions">
-      <p>
-        <span>项目约定</span>
-        <code>{control.conventions.relativePath}</code>
-        {control.conventions.status === "unknown" ? null : (
-          <span>{CONVENTIONS_STATUS_LABEL[control.conventions.status]}</span>
-        )}
-      </p>
+      <span className="ns-agent-context-conventions-label">项目约定</span>
+      {control.conventions.status === "unknown" ? null : (
+        <span className="ns-agent-context-conventions-status" role="status">
+          {CONVENTIONS_STATUS_LABEL[control.conventions.status]}
+        </span>
+      )}
       {control.conventions.errorMessage === undefined ? null : (
         <p className="ns-agent-context-warning" role="alert">
           {control.conventions.errorMessage}
