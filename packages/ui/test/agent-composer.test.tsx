@@ -24,6 +24,17 @@ describe("AgentComposer", () => {
     expect(input?.value).toBe("预填构思");
   });
 
+  test("retries a focus request after a transient disabled state", () => {
+    const { host, rerender } = renderComposer({ request: "", disabled: true });
+    const input = host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]');
+
+    rerender({ request: "预填续写", disabled: true, focusRequestId: 1 });
+    expect(document.activeElement).not.toBe(input);
+
+    rerender({ request: "预填续写", disabled: false, focusRequestId: 1 });
+    expect(document.activeElement).toBe(input);
+  });
+
   afterEach(() => document.body.replaceChildren());
 
   test("renders one draft input and the approved single-row controls", () => {
@@ -37,6 +48,60 @@ describe("AgentComposer", () => {
     expect(host.querySelector('[aria-label="添加引用与执行审批"]')).not.toBeNull();
     expect(document.querySelectorAll('[aria-label="计划或执行模式"]')).toHaveLength(0);
     expect(host.querySelectorAll('[aria-label="上下文"]')).toHaveLength(0);
+  });
+
+  test("renders the two writing actions below the draft and forwards clicks", () => {
+    const onBrainstorm = vi.fn();
+    const onContinue = vi.fn();
+    const { host } = renderComposer({
+      request: "",
+      quickActions: [
+        { id: "brainstorm", label: "开始构思", onSelect: onBrainstorm },
+        { id: "continue", label: "继续写作", onSelect: onContinue }
+      ]
+    });
+
+    const toolbar = host.querySelector('[role="toolbar"][aria-label="Agent 快捷动作"]');
+    const input = host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]');
+    expect(toolbar).not.toBeNull();
+    expect(input?.nextElementSibling).toBe(toolbar);
+    act(() => toolbar?.querySelector<HTMLButtonElement>('[aria-label="开始构思"]')?.click());
+    act(() => toolbar?.querySelector<HTMLButtonElement>('[aria-label="继续写作"]')?.click());
+    expect(onBrainstorm).toHaveBeenCalledTimes(1);
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  test("surfaces quick-action disabled reasons without invoking callbacks", () => {
+    const onBrainstorm = vi.fn();
+    const onContinue = vi.fn();
+    const { host } = renderComposer({
+      request: "",
+      quickActions: [
+        {
+          id: "brainstorm",
+          label: "开始构思",
+          disabledReason: "请先发送或清空当前 Agent 草稿。",
+          onSelect: onBrainstorm
+        },
+        {
+          id: "continue",
+          label: "继续写作",
+          disabledReason: "请先创建或打开一个章节。",
+          onSelect: onContinue
+        }
+      ]
+    });
+
+    const brainstorm = host.querySelector<HTMLButtonElement>('[aria-label="开始构思"]');
+    const continuation = host.querySelector<HTMLButtonElement>('[aria-label="继续写作"]');
+    expect(brainstorm?.disabled).toBe(true);
+    expect(brainstorm?.title).toBe("请先发送或清空当前 Agent 草稿。");
+    expect(continuation?.disabled).toBe(true);
+    expect(continuation?.title).toBe("请先创建或打开一个章节。");
+    act(() => brainstorm?.click());
+    act(() => continuation?.click());
+    expect(onBrainstorm).not.toHaveBeenCalled();
+    expect(onContinue).not.toHaveBeenCalled();
   });
 
   test("keeps standalone chat to text, model, and stop controls", () => {
@@ -71,7 +136,8 @@ describe("AgentComposer", () => {
         usageLabel: "120k / 128k",
         precision: "estimated",
         sources: [{ refId: "chapter:ch-01", label: "第一章", detail: "4k · 精确" }]
-      }
+      },
+      quickActions: [{ id: "brainstorm", label: "开始构思", onSelect: vi.fn() }]
     });
 
     expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]')?.disabled).toBe(
@@ -85,6 +151,7 @@ describe("AgentComposer", () => {
     expect(host.querySelector('[aria-label="执行"]')).toBeNull();
     expect(host.querySelector('[aria-label="上下文较多 · 120k / 128k"]')).toBeNull();
     expect(host.querySelector('[aria-label="执行审批"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Agent 快捷动作"]')).toBeNull();
     expect(permission.onOpen).not.toHaveBeenCalled();
 
     const modelTrigger = host.querySelector<HTMLButtonElement>(
@@ -584,7 +651,7 @@ describe("AgentComposer", () => {
     expect(onRemove).toHaveBeenCalledWith("chapter:ch-01");
   });
 
-  test("keeps context mode and legacy quick actions out while exposing context usage", () => {
+  test("keeps context mode out while exposing context usage", () => {
     const onCreateConventions = vi.fn();
     const { host } = renderComposer({
       availableContextModes: ["general_file"],
@@ -608,11 +675,7 @@ describe("AgentComposer", () => {
           status: "unknown",
           onCreate: onCreateConventions
         }
-      },
-      quickActions: [
-        { id: "rewrite_selection", label: "改写当前选区", onSelect: vi.fn() },
-        { id: "review_style", label: "检查文风与一致性", onSelect: vi.fn() }
-      ]
+      }
     });
 
     expect(host.querySelector("[data-context-option]")).toBeNull();
@@ -640,7 +703,6 @@ describe("AgentComposer", () => {
     expect(css).toMatch(
       /\.ns-agent-composer-surface \.ns-agent-context-popover\s*\{[^}]*width:\s*min\(440px,\s*calc\(100vw\s*-\s*16px\)\)/s
     );
-    expect(host.querySelector('[aria-label="Agent 快捷动作"]')).toBeNull();
   });
 
   test("locks grouped controls while a run is active", () => {

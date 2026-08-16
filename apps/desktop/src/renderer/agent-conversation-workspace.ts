@@ -7,7 +7,6 @@ import {
 } from "@novel-studio/agent-engine";
 import type {
   AgentComposerProps,
-  AgentComposerQuickAction,
   AgentConversationMainReview,
   AgentConversationWorkspaceShellProps,
   AgentRunPanelProps,
@@ -193,26 +192,6 @@ export function decorateAgentConversationWorkspace(input: {
       ? (["writing", "general_file"] as const)
       : (["general_file"] as const);
   const selection = standalone ? undefined : input.aiWritingWorkflow?.selectionReview;
-  const hasSelection =
-    input.chapterEditor !== undefined &&
-    input.chapterSelection !== undefined &&
-    input.chapterSelection.anchor !== input.chapterSelection.head;
-  const quickActions: readonly AgentComposerQuickAction[] | undefined = creative
-    ? [
-        {
-          id: "rewrite_selection",
-          label: "改写当前选区",
-          ...(hasSelection ? {} : { disabledReason: "请先在编辑器中选择文本。" }),
-          onSelect: input.onRewriteSelection
-        },
-        {
-          id: "review_style",
-          label: "检查文风与一致性",
-          ...(hasSelection ? {} : { disabledReason: "请先在编辑器中选择文本。" }),
-          onSelect: input.onReviewSelectionStyle
-        }
-      ]
-    : undefined;
   const selectionMainReview: AgentConversationMainReview | undefined =
     selection === undefined
       ? undefined
@@ -254,8 +233,7 @@ export function decorateAgentConversationWorkspace(input: {
             availableContextModes,
             ...(input.onOpenModelSharing === undefined
               ? {}
-              : { onOpenModelSharing: input.onOpenModelSharing }),
-            ...(quickActions === undefined ? {} : { quickActions })
+              : { onOpenModelSharing: input.onOpenModelSharing })
           };
   const workflowNotice =
     selection === undefined ? input.aiWritingWorkflow?.failure?.message : undefined;

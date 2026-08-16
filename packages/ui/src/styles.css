@@ -11306,8 +11306,26 @@ textarea:focus-visible,
 
 .ns-agent-composer-quick-actions {
   align-items: center;
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   gap: 2px;
+  min-width: 0;
+  padding: 1px 3px 4px;
+}
+
+.ns-agent-composer-quick-actions .ns-ai-secondary-button {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 999px;
+  color: var(--ns-muted);
+  font-size: 11px;
+  min-height: 22px;
+  padding-inline: 6px;
+}
+
+.ns-agent-composer-quick-actions .ns-ai-secondary-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ns-surface-raised) 74%, transparent);
+  color: var(--ns-ink);
 }
 
 .ns-ai-selection-review,

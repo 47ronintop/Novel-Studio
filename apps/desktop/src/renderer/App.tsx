@@ -68,7 +68,7 @@ import {
   useWorkspaceFileEditorRuntime
 } from "./workspace-file-editor-runtime.js";
 import { useWritingEditorIntegration } from "./use-writing-editor-integration.js";
-import { useBrainstormingEntry } from "./brainstorming-entry.js";
+import { useWritingEntry } from "./brainstorming-entry.js";
 
 export { useEngineeringEditorStateBinding } from "./engineering-editor-state-binding.js";
 
@@ -805,9 +805,10 @@ export function App() {
     onUndoSelection: handleUndoSelectionReview,
     onOpenModelSharing: () => modelSharingDialog.openDialog(false)
   });
-  const brainstormingEntry = useBrainstormingEntry(
+  const writingEntry = useWritingEntry(
     agentConversationWorkspaceForShell,
-    activeProjectId
+    activeCreativeProjectId,
+    projectWorkflow?.activeChapterId
   );
 
   const handleAppearancePreferencesChange = useCallback(
@@ -912,7 +913,7 @@ export function App() {
         appearancePreferences={appearancePreferences}
         workspaceTransitionFeedback={workspaceTransitionFeedback}
         aiWritingWorkflow={aiWritingWorkflow}
-        agentConversationWorkspace={brainstormingEntry.workspace}
+        agentConversationWorkspace={writingEntry.workspace}
         projectWorkflow={projectWorkflow}
         projectSearch={projectSearch}
         settings={interactiveSettings}
@@ -941,7 +942,7 @@ export function App() {
         onProjectFolderNameChange={handleProjectFolderNameChange}
         onChooseCreateParentDirectory={handleChooseCreateParentDirectory}
         onCreateChapter={handleCreateChapter}
-        onStartBrainstorming={brainstormingEntry.onStart}
+        onStartBrainstorming={writingEntry.onStart}
         onRenameChapter={handleRenameChapter}
         onDuplicateChapter={handleDuplicateChapter}
         onDeleteChapter={handleDeleteChapter}

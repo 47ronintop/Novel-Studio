@@ -353,7 +353,7 @@ export interface AgentComposerProps {
   readonly focusRequestId?: number;
   /** Presentation-only context filtering; the underlying Stage 5 enum remains unchanged. */
   readonly availableContextModes?: readonly AgentContextMode[];
-  /** Optional selection/style actions rendered in the existing Composer toolbar. */
+  /** Optional creative-writing entries rendered below the Composer draft. */
   readonly quickActions?: readonly AgentComposerQuickAction[];
   /** Model profile selector (right toolbar). Populated from the Settings snapshot, written to the draft. */
   readonly model?: AgentComposerModelControl;
@@ -379,7 +379,7 @@ export interface AgentComposerProps {
 }
 
 export interface AgentComposerQuickAction {
-  readonly id: "rewrite_selection" | "review_style";
+  readonly id: "brainstorm" | "continue";
   readonly label: string;
   readonly disabledReason?: string;
   readonly onSelect: () => void;

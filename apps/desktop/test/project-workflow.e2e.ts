@@ -11,7 +11,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expectCreativeWorkspaceReady } from "./helpers/workspace-readiness.js";
-import { BRAINSTORMING_REQUEST } from "../src/renderer/brainstorming-entry.js";
+import {
+  BRAINSTORMING_REQUEST,
+  CONTINUE_WRITING_REQUEST
+} from "../src/renderer/brainstorming-entry.js";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
@@ -148,9 +151,7 @@ test("imports selected text files as naturally ordered chapters without changing
     await expect(page.locator(".ns-project-title")).toHaveText("Imported Novel");
     await expect(page.getByRole("tab", { name: "10-ending.md" })).toBeVisible();
     await expect(chapterBody(page)).toContainText("Imported ending.");
-    await expect(
-      page.getByText("项目数据已创建在 .shanhai，源正文文件未被修改。")
-    ).toBeVisible();
+    await expect(page.getByText("项目数据已创建在 .shanhai，源正文文件未被修改。")).toBeVisible();
 
     const chapterRows = page.getByLabel("章节列表").locator(".ns-creative-row-main");
     await expect(chapterRows).toHaveCount(2);
@@ -221,11 +222,19 @@ test("prefills and focuses brainstorming for an empty project without sending or
     await page.getByRole("button", { name: "创建项目", exact: true }).click();
     await expectCreativeWorkspaceReady(page);
 
-    const startBrainstorming = page.getByRole("button", { name: "开始构思" });
+    const emptyWorkspace = page.getByRole("region", { name: "空章节工作区" });
+    const quickActions = page.getByRole("toolbar", { name: "Agent 快捷动作" });
+    const startBrainstorming = emptyWorkspace.getByRole("button", { name: "开始构思" });
+    const quickBrainstorming = quickActions.getByRole("button", { name: "开始构思" });
+    const continueWriting = quickActions.getByRole("button", { name: "继续写作" });
     const request = page.getByLabel("Agent 请求");
+    await expect(quickActions).toBeVisible();
+    await expect(continueWriting).toBeDisabled();
+    await expect(continueWriting).toHaveAttribute("title", "请先创建或打开一个章节。");
     await expect(startBrainstorming).toBeEnabled();
     await request.fill("保留这份草稿");
     await expect(startBrainstorming).toBeDisabled();
+    await expect(quickBrainstorming).toBeDisabled();
     await expect(startBrainstorming).toHaveAttribute("title", "请先发送或清空当前 Agent 草稿。");
     await expect(request).toHaveValue("保留这份草稿");
 
@@ -237,9 +246,7 @@ test("prefills and focuses brainstorming for an empty project without sending or
     await expect(request).toBeFocused();
     await expect(page.getByRole("button", { name: "停止 Agent 运行" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "启动 Agent 运行" })).toBeVisible();
-    await expect(
-      page.getByRole("region", { name: "空章节工作区" }).getByRole("button", { name: "新建第一章" })
-    ).toBeVisible();
+    await expect(emptyWorkspace.getByRole("button", { name: "新建第一章" })).toBeVisible();
   } finally {
     await electronApp.close();
     await rm(tempRoot, { recursive: true, force: true });
@@ -266,6 +273,27 @@ test("starts public install users in a ready default project without quick start
     await expect(page.locator(".ns-project-title")).toHaveText("未命名长篇项目");
     await expect(page.getByRole("tab", { name: "第一章.md" })).toBeVisible();
     await expect(chapterBody(page)).toContainText(/这是第一章的正文/);
+
+    const quickActions = page.getByRole("toolbar", { name: "Agent 快捷动作" });
+    const request = page.getByLabel("Agent 请求");
+    const startBrainstorming = quickActions.getByRole("button", { name: "开始构思" });
+    const continueWriting = quickActions.getByRole("button", { name: "继续写作" });
+    await expect(quickActions).toBeVisible();
+    await expect(startBrainstorming).toBeEnabled();
+    await expect(continueWriting).toBeEnabled();
+
+    await startBrainstorming.click();
+    await expect(request).toHaveValue(BRAINSTORMING_REQUEST);
+    await expect(request).toBeFocused();
+    await expect(page.getByRole("button", { name: "计划", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "停止 Agent 运行" })).toHaveCount(0);
+
+    await request.fill("");
+    await continueWriting.click();
+    await expect(request).toHaveValue(CONTINUE_WRITING_REQUEST);
+    await expect(request).toBeFocused();
+    await expect(page.getByRole("button", { name: "执行", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "停止 Agent 运行" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "查找当前文档" }).click();
     const findOverlay = page.getByRole("region", { name: "查找替换", exact: true });

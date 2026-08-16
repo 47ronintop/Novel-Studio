@@ -6,9 +6,11 @@ import {
   ChevronRight,
   Cpu,
   FilePlus2,
+  PenLine,
   Plus,
   Send,
   ShieldCheck,
+  Sparkles,
   Square,
   X
 } from "lucide-react";
@@ -305,9 +307,9 @@ export function AgentComposer(props: AgentComposerProps) {
       : `${selectedModelLabel} · ${reasoningLabel(reasoning.current)}`;
 
   useEffect(() => {
-    if (props.focusRequestId === undefined) return;
+    if (props.focusRequestId === undefined || draftDisabled) return;
     requestInputRef.current?.focus();
-  }, [props.focusRequestId]);
+  }, [draftDisabled, props.focusRequestId]);
 
   return (
     <section className="ns-agent-conversation-composer ns-agent-composer" aria-label="会话输入区">
@@ -366,6 +368,33 @@ export function AgentComposer(props: AgentComposerProps) {
             </ul>
           </div>
         ) : null}
+        {isStandaloneConversation || props.quickActions === undefined ? null : (
+          <div
+            aria-label="Agent 快捷动作"
+            className="ns-agent-composer-quick-actions"
+            role="toolbar"
+          >
+            {props.quickActions.map((action) => (
+              <button
+                aria-label={action.label}
+                className="ns-ai-secondary-button"
+                data-agent-quick-action={action.id}
+                disabled={action.disabledReason !== undefined}
+                key={action.id}
+                onClick={action.onSelect}
+                title={action.disabledReason}
+                type="button"
+              >
+                {action.id === "brainstorm" ? (
+                  <Sparkles aria-hidden="true" size={12} />
+                ) : (
+                  <PenLine aria-hidden="true" size={12} />
+                )}
+                <span>{action.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="ns-agent-composer-toolbar">
           <div aria-label="会话工具栏" className="ns-agent-composer-footer" role="toolbar">
             {isStandaloneConversation ? null : (
