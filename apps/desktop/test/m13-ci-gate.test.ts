@@ -23,11 +23,9 @@ describe("M13 real E2E and CI gate", () => {
     const playwrightConfig = await readFile("playwright.config.ts", "utf8");
     const packagedPlaywrightConfig = await readFile("playwright.packaged.config.ts", "utf8");
 
-    expect(packageJson.scripts["test:e2e"]).toBe(
-      "npm run build && playwright test --config=playwright.config.ts"
-    );
+    expect(packageJson.scripts["test:e2e"]).toBe("npm run build && npm run test:e2e:built");
     expect(packageJson.scripts["test:e2e:built"]).toBe(
-      "playwright test --config=playwright.config.ts"
+      "node scripts/check-e2e-build-manifest.mjs && playwright test --config=playwright.config.ts"
     );
     expect(packageJson.scripts["test:e2e:packaged"]).toBe(
       "playwright test --config=playwright.packaged.config.ts"

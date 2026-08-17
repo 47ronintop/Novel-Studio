@@ -388,11 +388,7 @@ async function checkPublicInstallGate() {
     return;
   }
 
-  expectScript(
-    scripts,
-    "test:e2e",
-    "npm run build && playwright test --config=playwright.config.ts"
-  );
+  expectScript(scripts, "test:e2e", "npm run build && npm run test:e2e:built");
   expectScript(scripts, "package:artifact-check", "node scripts/artifact-secret-scan.mjs");
 
   const publicGatePath = "docs/packaging/m97-public-install-release-gate.md";

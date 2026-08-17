@@ -44,6 +44,10 @@ export interface AgentUsageDailyBucket {
   readonly cacheWriteTokens?: number;
   readonly cacheEligibleInputTokens?: number;
   readonly cacheHitRate?: number;
+  /** Internal counters used to derive report-level cache telemetry metrics. */
+  readonly cacheShareReadTokens?: number;
+  readonly cacheTelemetryComparableInputTokens?: number;
+  readonly cacheComparableInputTokens?: number;
   readonly reasoningTokens: number;
   readonly totalTokens: number;
   readonly costs: readonly AgentUsageCostTotal[];
@@ -83,6 +87,8 @@ export interface AgentUsageReport {
   readonly query: AgentUsageQuery;
   readonly days: readonly AgentUsageDailyBucket[];
   readonly runs: readonly AgentUsageRunSummary[];
+  readonly cacheTokenShare?: number;
+  readonly cacheTelemetryCoverage?: number;
   readonly generatedAt: string;
 }
 

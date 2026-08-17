@@ -94,7 +94,7 @@ export function AgentUsageSettings(props: AgentUsageSettingsProps) {
       ) : null}
       {days.length > 0 && props.report !== undefined ? (
         <>
-          <UsageSummary days={days} />
+          <UsageSummary days={days} report={props.report} />
           <UsageChart report={props.report} />
           <DailyUsageTable report={props.report} onSelectDay={props.onSelectDay} />
           <RunDetails report={props.report} />
@@ -104,8 +104,19 @@ export function AgentUsageSettings(props: AgentUsageSettingsProps) {
   );
 }
 
-function UsageSummary({ days }: { readonly days: readonly AgentUsageDailyBucket[] }) {
+function UsageSummary({
+  days,
+  report
+}: {
+  readonly days: readonly AgentUsageDailyBucket[];
+  readonly report: AgentUsageReport;
+}) {
   const summary = summarizeUsage(days);
+  const cacheTelemetry = summarizeCacheTelemetry(
+    // The application report gains these optional aggregate fields alongside the
+    // existing daily/run data. Keep this UI tolerant while older reports load.
+    report
+  );
   return (
     <section aria-label="用量摘要" className="agent-usage-summary">
       <h3>用量摘要</h3>
@@ -113,17 +124,37 @@ function UsageSummary({ days }: { readonly days: readonly AgentUsageDailyBucket[
         <UsageSummaryCard label="总 Token" value={summary.totalTokens.toLocaleString()} />
         <UsageSummaryCard label="输入" value={summary.inputTokens.toLocaleString()} />
         <UsageSummaryCard label="输出" value={summary.outputTokens.toLocaleString()} />
-        <UsageSummaryCard label="缓存" value={formatTokenCount(summary.cacheReadTokens)} />
+        <UsageSummaryCard
+          label="缓存读取"
+          secondary={cacheTelemetry.label}
+          secondaryStatus={cacheTelemetry.status}
+          value={formatTokenCount(summary.cacheReadTokens)}
+        />
       </div>
     </section>
   );
 }
 
-function UsageSummaryCard({ label, value }: { readonly label: string; readonly value: string }) {
+function UsageSummaryCard({
+  label,
+  value,
+  secondary,
+  secondaryStatus
+}: {
+  readonly label: string;
+  readonly value: string;
+  readonly secondary?: string;
+  readonly secondaryStatus?: CacheTelemetryStatus;
+}) {
   return (
     <article className="agent-usage-summary-card">
       <span>{label}</span>
       <strong>{value}</strong>
+      {secondary === undefined ? null : (
+        <small className="agent-usage-summary-secondary" data-telemetry-status={secondaryStatus}>
+          {secondary}
+        </small>
+      )}
     </article>
   );
 }
@@ -154,6 +185,28 @@ function summarizeUsage(days: readonly AgentUsageDailyBucket[]): UsageSummaryVal
     outputTokens,
     cacheReadTokens
   };
+}
+
+type CacheTelemetryStatus = "complete" | "partial" | "unavailable";
+
+function summarizeCacheTelemetry(report: AgentUsageReport): {
+  readonly status: CacheTelemetryStatus;
+  readonly label: string;
+} {
+  const coverage = report.cacheTelemetryCoverage;
+  const share = report.cacheTokenShare;
+
+  if (coverage === 1 && share !== undefined) {
+    return { status: "complete", label: `占比 ${formatPercent(share)}` };
+  }
+  if (coverage !== undefined && coverage > 0 && coverage < 1) {
+    return { status: "partial", label: "数据不完整" };
+  }
+  return { status: "unavailable", label: "未上报" };
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 function UsageFilter({

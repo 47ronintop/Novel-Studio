@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
 import { AgentToolSourcePanel, ModelSettingsPanel } from "../src/index.js";
+import { AgentUsageSettings } from "../src/agent-usage-settings.js";
 
 (
   globalThis as typeof globalThis & {
@@ -683,6 +684,47 @@ describe("M8 Settings UI", () => {
       />
     );
     expect(emptyHtml).toContain("所选范围暂无 Agent 用量记录");
+  });
+
+  test("shows complete, partial, and unavailable cache telemetry states", () => {
+    const baseReport = {
+      query: { range: { fromLocalDate: "2026-07-17", toLocalDate: "2026-07-17" } },
+      days: [
+        {
+          localDate: "2026-07-17",
+          inputTokens: 100,
+          outputTokens: 20,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          totalTokens: 120,
+          costs: [],
+          hasUnknownCost: false
+        }
+      ],
+      runs: [],
+      generatedAt: "2026-07-17T12:00:00.000Z"
+    };
+    const render = (report: Record<string, unknown>) =>
+      renderToStaticMarkup(
+        <AgentUsageSettings
+          filters={{ provider: "", model: "", projectId: "" }}
+          rangePreset="today"
+          report={report as never}
+          status="loaded"
+        />
+      );
+
+    const complete = render({ ...baseReport, cacheTelemetryCoverage: 1, cacheTokenShare: 0 });
+    expect(complete).toContain("占比 0%");
+    expect(complete).toContain('data-telemetry-status="complete"');
+
+    const partial = render({ ...baseReport, cacheTelemetryCoverage: 0.5, cacheTokenShare: 0.3 });
+    expect(partial).toContain("数据不完整");
+    expect(partial).toContain('data-telemetry-status="partial"');
+
+    const unavailable = render(baseReport);
+    expect(unavailable).toContain("未上报");
+    expect(unavailable).toContain('data-telemetry-status="unavailable"');
   });
 
   test("paginates per-request usage and cache details", async () => {

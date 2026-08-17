@@ -7,6 +7,7 @@ interface BuildManifest {
   readonly schemaVersion: "1.0";
   readonly sourceRevision: string;
   readonly sourceDirty: boolean;
+  readonly sourceStateChecksum: string;
   readonly artifacts: Record<
     | "main"
     | "preload"
@@ -31,6 +32,7 @@ describe("Electron stream build consistency", () => {
     ) as BuildManifest;
     expect(manifest.schemaVersion).toBe("1.0");
     expect(manifest.sourceRevision).toMatch(/^[0-9a-f]{40}$/);
+    expect(manifest.sourceStateChecksum).toMatch(/^[0-9a-f]{64}$/);
 
     for (const artifact of Object.values(manifest.artifacts)) {
       const bytes = await readFile(join(process.cwd(), artifact.path));

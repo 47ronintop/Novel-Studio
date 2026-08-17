@@ -606,6 +606,200 @@ describe("AgentUsageFileRepository", () => {
     });
   });
 
+  test("tracks cache share telemetry with included and excluded input semantics", async () => {
+    const repository = await createRepository();
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "share_included_actual",
+        finalSequence: 1,
+        cacheReadTokens: 400,
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "included_in_input"
+      })
+    );
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "share_excluded_actual",
+        finalSequence: 2,
+        cacheReadTokens: 200,
+        cacheWriteTokens: 100,
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "excluded_from_input"
+      })
+    );
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "share_excluded_derived",
+        finalSequence: 3,
+        cacheReadTokens: 100,
+        cacheWriteTokens: 50,
+        cacheUsageStatus: "derived",
+        cacheInputTokenSemantics: "excluded_from_input"
+      })
+    );
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "share_included_derived_missing_read",
+        finalSequence: 4,
+        cacheUsageStatus: "derived",
+        cacheInputTokenSemantics: "included_in_input"
+      })
+    );
+    await repository.writeFinal(
+      baseRecord({
+        roundId: "share_included_actual_missing_read",
+        finalSequence: 5,
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "included_in_input"
+      })
+    );
+
+    const result = await repository.queryDailyAggregates({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" }
+    });
+
+    expect(result.value?.[0]).toMatchObject({
+      cacheShareReadTokens: 600,
+      cacheTelemetryComparableInputTokens: 2300,
+      cacheComparableInputTokens: 5450
+    });
+  });
+
+  test("rebuilds old or damaged aggregates deterministically without changing details", async () => {
+    const repository = await createRepository();
+    const userDataRoot = latestRoot();
+    const first = baseRecord({ roundId: "rebuild_first", finalSequence: 1 });
+    const second = baseRecord({
+      roundId: "rebuild_second",
+      finalSequence: 2,
+      outputTokens: 400,
+      totalTokens: 1400
+    });
+    expect((await repository.writeFinal(first)).ok).toBe(true);
+    const secondWrite = await repository.writeFinal(second);
+    expect(secondWrite).toMatchObject({ ok: true });
+    const detailPath = join(
+      userDataRoot,
+      "agent-usage",
+      "details",
+      "run_01%3Arebuild_first%3A1.json"
+    );
+    const detailBefore = await readFile(detailPath, "utf8");
+    const aggregatePath = join(userDataRoot, "agent-usage", "aggregates", "2026-07-16.json");
+    await writeFile(aggregatePath, JSON.stringify({ schemaVersion: "1.0", dimensions: [] }));
+
+    const rebuilt = await repository.queryDailyAggregates({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" }
+    });
+    expect(rebuilt.value?.[0]).toMatchObject({ recordCount: 2, totalTokens: 2600 });
+    expect(JSON.parse(await readFile(aggregatePath, "utf8"))).toMatchObject({
+      schemaVersion: "2.0",
+      recordCount: 2
+    });
+    expect(await readFile(detailPath, "utf8")).toBe(detailBefore);
+
+    const aggregateAfter = await readFile(aggregatePath, "utf8");
+    const repeated = await repository.queryDailyAggregates({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" }
+    });
+    expect(repeated.value).toEqual(rebuilt.value);
+    expect(await readFile(aggregatePath, "utf8")).toBe(aggregateAfter);
+  });
+
+  test("does not return zero buckets when a retained aggregate lacks filter dimensions", async () => {
+    const repository = await createRepository();
+    const userDataRoot = latestRoot();
+    const localDate = "2026-06-16";
+    await repository.writeFinal(
+      baseRecord({ roundId: "legacy_without_dimensions", localDate, provider: "provider_a" })
+    );
+    await repository.enforceRetention("2026-07-17");
+    const aggregatePath = join(userDataRoot, "agent-usage", "aggregates", `${localDate}.json`);
+    const aggregate = JSON.parse(await readFile(aggregatePath, "utf8")) as Record<string, unknown>;
+    await writeFile(
+      aggregatePath,
+      `${JSON.stringify({ ...aggregate, schemaVersion: "1.0", dimensions: [] }, null, 2)}\n`
+    );
+
+    const unfiltered = await repository.queryDailyAggregates({
+      range: { fromLocalDate: localDate, toLocalDate: localDate }
+    });
+    expect(unfiltered.value?.[0]).toMatchObject({ recordCount: 1, totalTokens: 1200 });
+    const filtered = await repository.queryDailyAggregates({
+      range: { fromLocalDate: localDate, toLocalDate: localDate },
+      provider: "provider_a"
+    });
+    expect(filtered.value).toEqual([]);
+  });
+
+  test("discards a damaged retained aggregate without blocking unrelated dates", async () => {
+    const repository = await createRepository();
+    const userDataRoot = latestRoot();
+    const damagedDate = "2026-06-16";
+    await repository.writeFinal(
+      baseRecord({ roundId: "damaged_retained", localDate: damagedDate })
+    );
+    await repository.writeFinal(baseRecord({ roundId: "current_survivor" }));
+    await repository.enforceRetention("2026-07-17");
+    const damagedPath = join(userDataRoot, "agent-usage", "aggregates", `${damagedDate}.json`);
+    await writeFile(damagedPath, "{not-json", "utf8");
+
+    const result = await repository.queryDailyAggregates({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" }
+    });
+    expect(result.value?.[0]).toMatchObject({ recordCount: 1, totalTokens: 1200 });
+    await expect(readFile(damagedPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("discards a structurally incomplete retained aggregate instead of reporting zero usage", async () => {
+    const repository = await createRepository();
+    const userDataRoot = latestRoot();
+    const incompleteDate = "2026-06-15";
+    const invalidDimensionDate = "2026-06-16";
+    await repository.writeFinal(
+      baseRecord({ roundId: "incomplete_retained", localDate: incompleteDate })
+    );
+    await repository.writeFinal(
+      baseRecord({ roundId: "invalid_dimension_retained", localDate: invalidDimensionDate })
+    );
+    await repository.enforceRetention("2026-07-17");
+    const incompletePath = join(
+      userDataRoot,
+      "agent-usage",
+      "aggregates",
+      `${incompleteDate}.json`
+    );
+    const invalidDimensionPath = join(
+      userDataRoot,
+      "agent-usage",
+      "aggregates",
+      `${invalidDimensionDate}.json`
+    );
+    await writeFile(
+      incompletePath,
+      `${JSON.stringify({ schemaVersion: "2.0", localDate: incompleteDate }, null, 2)}\n`
+    );
+    const invalidDimensionAggregate = JSON.parse(
+      await readFile(invalidDimensionPath, "utf8")
+    ) as Record<string, unknown>;
+    const dimensions = invalidDimensionAggregate["dimensions"] as Record<string, unknown>[];
+    const invalidDimension = { ...dimensions[0] };
+    delete invalidDimension["scope"];
+    delete invalidDimension["projectId"];
+    await writeFile(
+      invalidDimensionPath,
+      `${JSON.stringify({ ...invalidDimensionAggregate, dimensions: [invalidDimension] }, null, 2)}\n`
+    );
+
+    const result = await repository.queryDailyAggregates({
+      range: { fromLocalDate: incompleteDate, toLocalDate: invalidDimensionDate }
+    });
+
+    expect(result.value).toEqual([]);
+    await expect(readFile(incompletePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(invalidDimensionPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   test("queries bounded immutable details using stored local dates and stable filters", async () => {
     const repository = await createRepository();
     await repository.writeFinal(baseRecord({ roundId: "r_old", localDate: "2026-07-15" }));

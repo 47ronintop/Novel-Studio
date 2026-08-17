@@ -4652,6 +4652,20 @@ textarea:focus-visible,
   font-weight: 650;
   overflow-wrap: anywhere;
 }
+.agent-usage-summary-secondary {
+  color: var(--ns-info);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.agent-usage-summary-secondary[data-telemetry-status="complete"] {
+  color: var(--ns-success);
+}
+.agent-usage-summary-secondary[data-telemetry-status="partial"] {
+  color: var(--ns-warning);
+}
+.agent-usage-summary-secondary[data-telemetry-status="unavailable"] {
+  color: var(--ns-muted);
+}
 .agent-usage-chart {
   margin: 0;
 }

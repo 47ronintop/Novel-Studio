@@ -44,6 +44,8 @@ test("shows private daily usage analytics and clears only usage data", async () 
       roundId: "estimated",
       finalSequence: 2,
       model: "gpt-5.6-luna",
+      cacheInputTokenSemantics: "included_in_input",
+      cacheMode: "automatic_prefix",
       pricingVersion: "pricing-v1",
       unitPrices: { inputPerMillion: 100, outputPerMillion: 2000, currency: "EUR" },
       cost: { amount: 0.5, currency: "EUR", status: "estimated" }
@@ -89,6 +91,9 @@ test("shows private daily usage analytics and clears only usage data", async () 
     await expectNoHorizontalOverflow(page.locator(".agent-usage-settings"));
     await expect(page.locator(".agent-usage-summary-card")).toHaveCount(4);
     await expectUsesThemeInk(page.locator(".agent-usage-summary-card strong").first());
+    await expect(
+      page.locator('.agent-usage-summary-secondary[data-telemetry-status="partial"]')
+    ).toHaveText("数据不完整");
     const dailySegmentColors = await dailyChart
       .locator(".agent-usage-bar-segment")
       .evaluateAll((segments) =>

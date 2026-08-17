@@ -2280,9 +2280,11 @@ describe("desktop Agent Run runtime", () => {
       ok: false,
       error: { code: "AGENT_RUN_SNAPSHOT_V20_LEGACY_RECORD" }
     });
-    await expect(repository.readSnapshot(runId)).resolves.toMatchObject({
-      ok: true,
-      value: { schemaVersion: "1.3", status: "plan_ready" }
+    await waitForDesktopRuntime(async () => {
+      await expect(repository.readSnapshot(runId)).resolves.toMatchObject({
+        ok: true,
+        value: { schemaVersion: "1.3", status: "plan_ready" }
+      });
     });
 
     let restoredProviderCalls = 0;

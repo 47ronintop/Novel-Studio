@@ -65,6 +65,9 @@ export interface AgentUsageRepositoryDailyBucket {
   readonly cacheWriteTokens: number;
   readonly cacheEligibleInputTokens: number;
   readonly cacheHitRate?: number;
+  readonly cacheShareReadTokens?: number;
+  readonly cacheTelemetryComparableInputTokens?: number;
+  readonly cacheComparableInputTokens?: number;
   readonly reasoningTokens: number;
   readonly totalTokens: number;
   readonly costs: readonly AgentUsageRepositoryCostTotal[];
@@ -310,7 +313,8 @@ export class AgentUsageFileRepository {
       for (const aggregate of aggregates.value) {
         const localDate = stringField(aggregate, "localDate");
         if (localDate < query.range.fromLocalDate || localDate > query.range.toLocalDate) continue;
-        buckets.push(projectAggregate(aggregate, query));
+        const bucket = projectAggregate(aggregate, query);
+        if (bucket !== undefined) buckets.push(bucket);
       }
       return ok(buckets.sort((left, right) => left.localDate.localeCompare(right.localDate)));
     });
@@ -328,6 +332,8 @@ export class AgentUsageFileRepository {
   private async clearUsageLocked(
     command: ClearAgentUsageRepositoryCommand
   ): Promise<Result<void, UnifiedError>> {
+    const repaired = await this.repairDetailsLocked();
+    if (!repaired.ok) return repaired;
     const markerPath = this.clearCommandPath(command.commandId);
     const marker = await this.readJson(markerPath);
     if (!marker.ok) return marker as Result<void, UnifiedError>;
@@ -404,62 +410,152 @@ export class AgentUsageFileRepository {
       const cleared = await this.readJson(this.clearedKeyPath(idempotencyKey(detail)));
       if (!cleared.ok) return cleared as Result<void, UnifiedError>;
       if (cleared.value !== undefined) continue;
-      const repaired = await this.repairFinal(detail);
-      if (!repaired.ok) return repaired as Result<void, UnifiedError>;
+      const keyWritten = await this.writeJson(this.keyPath(idempotencyKey(detail)), {
+        usageId: stringField(detail, "usageId"),
+        localDate,
+        contentChecksum: usageContentChecksum(detail)
+      });
+      if (!keyWritten.ok) return keyWritten as Result<void, UnifiedError>;
     }
-    return ok(undefined);
+    const rebuilt = await this.rebuildAggregatesLocked();
+    if (!rebuilt.ok) return rebuilt;
+    return this.discardInvalidAggregateFilesLocked();
+  }
+
+  /** Invalid aggregate files contain no source data and must not block unrelated usage queries. */
+  private async discardInvalidAggregateFilesLocked(): Promise<Result<void, UnifiedError>> {
+    const aggregateRoot = this.usagePath("aggregates");
+    try {
+      const entries = await readdir(aggregateRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        const path = join(aggregateRoot, entry.name);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
+        } catch (error) {
+          if (isMissingFileError(error)) continue;
+          if (!(error instanceof SyntaxError)) {
+            return err(this.storageFailure("AGENT_USAGE_READ_FAILED", error));
+          }
+        }
+        const expectedDate = basename(entry.name, ".json");
+        if (isValidRetainedAggregate(parsed, expectedDate)) {
+          continue;
+        }
+        const removed = await this.removeFile(path);
+        if (!removed.ok) return removed;
+      }
+      return ok(undefined);
+    } catch (error) {
+      return isMissingFileError(error)
+        ? ok(undefined)
+        : err(this.storageFailure("AGENT_USAGE_READ_FAILED", error));
+    }
   }
 
   private async updateDailyAggregate(
     record: JsonObject
   ): Promise<Result<JsonObject, UnifiedError>> {
     const localDate = String(record["localDate"]);
-    const path = this.aggregatePath(localDate);
-    const existing = await this.readJson(path);
-    if (!existing.ok) return existing as Result<JsonObject, UnifiedError>;
-    const prior: JsonObject = existing.value ?? {
-      schemaVersion: "1.0",
-      localDate,
-      timezone: typeof record["timezone"] === "string" ? record["timezone"] : "",
-      utcOffsetMinutes: numberField(record, "utcOffsetMinutes"),
-      recordCount: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      cacheEligibleInputTokens: 0,
-      reasoningTokens: 0,
-      totalTokens: 0,
-      costs: [],
-      hasUnknownCost: false,
-      dimensions: []
-    };
-    const dimensions = jsonObjectArray(prior["dimensions"]);
-    if (dimensions.some((dimension) => dimension["usageId"] === record["usageId"])) {
-      return ok(prior);
+    const rebuilt = await this.rebuildAggregateForDateLocked(localDate);
+    if (!rebuilt.ok) return rebuilt as Result<JsonObject, UnifiedError>;
+    return ok(
+      rebuilt.value ?? {
+        schemaVersion: "2.0",
+        localDate,
+        recordCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        cacheEligibleInputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 0,
+        costs: [],
+        hasUnknownCost: false,
+        dimensions: []
+      }
+    );
+  }
+
+  /** Rebuilds aggregates from immutable details, making migration and repair deterministic. */
+  private async rebuildAggregatesLocked(): Promise<Result<void, UnifiedError>> {
+    const details = await this.readAllDetails();
+    if (!details.ok) return details as Result<void, UnifiedError>;
+    const dates = new Set<string>();
+    for (const detail of details.value) {
+      const localDate = stringField(detail, "localDate");
+      const pending = await this.findPendingClear(localDate);
+      if (!pending.ok) return pending as Result<void, UnifiedError>;
+      if (pending.value !== undefined) continue;
+      const cleared = await this.readJson(this.clearedKeyPath(idempotencyKey(detail)));
+      if (!cleared.ok) return cleared as Result<void, UnifiedError>;
+      if (cleared.value !== undefined) continue;
+      dates.add(localDate);
     }
-    const dimension = createAggregateDimension(record);
-    const next: JsonObject = {
-      ...prior,
-      recordCount: numberField(prior, "recordCount") + 1,
-      inputTokens: numberField(prior, "inputTokens") + numberField(record, "inputTokens"),
-      outputTokens: numberField(prior, "outputTokens") + numberField(record, "outputTokens"),
-      cachedTokens: numberField(prior, "cachedTokens") + cacheReadTokens(record),
-      cacheReadTokens:
-        (optionalTokenField(prior, "cacheReadTokens") ?? numberField(prior, "cachedTokens")) +
-        cacheReadTokens(record),
-      cacheWriteTokens: numberField(prior, "cacheWriteTokens") + cacheWriteTokens(record),
-      cacheEligibleInputTokens:
-        numberField(prior, "cacheEligibleInputTokens") + cacheEligibleInputTokens(record),
-      reasoningTokens:
-        numberField(prior, "reasoningTokens") + numberField(record, "reasoningTokens"),
-      totalTokens: numberField(prior, "totalTokens") + numberField(record, "totalTokens"),
-      costs: mergeCosts(jsonObjectArray(prior["costs"]), dimension),
-      hasUnknownCost: prior["hasUnknownCost"] === true || dimension["hasUnknownCost"] === true,
-      dimensions: [...dimensions, dimension]
+    for (const localDate of [...dates].sort()) {
+      const rebuilt = await this.rebuildAggregateForDateLocked(localDate, details.value);
+      if (!rebuilt.ok) return rebuilt as Result<void, UnifiedError>;
+    }
+    return ok(undefined);
+  }
+
+  private async rebuildAggregateForDateLocked(
+    localDate: string,
+    providedDetails?: readonly JsonObject[]
+  ): Promise<Result<JsonObject | undefined, UnifiedError>> {
+    let details: readonly JsonObject[];
+    if (providedDetails !== undefined) {
+      details = providedDetails;
+    } else {
+      const loaded = await this.readAllDetails();
+      if (!loaded.ok) return loaded as Result<JsonObject | undefined, UnifiedError>;
+      details = loaded.value;
+    }
+    const records = details
+      .filter((detail) => stringField(detail, "localDate") === localDate)
+      .sort((left, right) =>
+        stringField(left, "usageId").localeCompare(stringField(right, "usageId"))
+      );
+    const dimensions: JsonObject[] = [];
+    for (const detail of records) {
+      const pending = await this.findPendingClear(localDate);
+      if (!pending.ok) return pending as Result<JsonObject | undefined, UnifiedError>;
+      if (pending.value !== undefined) continue;
+      const cleared = await this.readJson(this.clearedKeyPath(idempotencyKey(detail)));
+      if (!cleared.ok) return cleared as Result<JsonObject | undefined, UnifiedError>;
+      if (cleared.value !== undefined) continue;
+      dimensions.push(createAggregateDimension(detail));
+    }
+    if (dimensions.length === 0) return ok(undefined);
+    const first = records[0] ?? {};
+    const aggregate: JsonObject = {
+      schemaVersion: "2.0",
+      localDate,
+      timezone: stringField(first, "timezone"),
+      utcOffsetMinutes: numberField(first, "utcOffsetMinutes"),
+      recordCount: dimensions.length,
+      inputTokens: sumField(dimensions, "inputTokens"),
+      outputTokens: sumField(dimensions, "outputTokens"),
+      cachedTokens: sumField(dimensions, "cacheReadTokens"),
+      cacheReadTokens: sumField(dimensions, "cacheReadTokens"),
+      cacheWriteTokens: sumField(dimensions, "cacheWriteTokens"),
+      cacheEligibleInputTokens: sumField(dimensions, "cacheEligibleInputTokens"),
+      cacheShareReadTokens: sumField(dimensions, "cacheShareReadTokens"),
+      cacheTelemetryComparableInputTokens: sumField(
+        dimensions,
+        "cacheTelemetryComparableInputTokens"
+      ),
+      cacheComparableInputTokens: sumField(dimensions, "cacheComparableInputTokens"),
+      reasoningTokens: sumField(dimensions, "reasoningTokens"),
+      totalTokens: sumField(dimensions, "totalTokens"),
+      costs: mergeDimensionCosts(dimensions),
+      hasUnknownCost: dimensions.some((dimension) => dimension["hasUnknownCost"] === true),
+      dimensions
     };
-    return this.writeJson(path, next);
+    return this.writeJson(this.aggregatePath(localDate), aggregate);
   }
 
   private async readAllDetails(): Promise<Result<readonly JsonObject[], UnifiedError>> {
@@ -1327,6 +1423,7 @@ function createAggregateDimension(record: JsonObject): JsonObject {
   const cost = isJsonObject(record["cost"]) ? record["cost"] : {};
   const status = costStatus(cost["status"]);
   const cacheHitRate = cacheHitRateForRecord(record);
+  const cacheShare = cacheShareMetrics(record);
   const estimatedCacheSavings = estimateCacheSavings(record);
   return {
     usageId: stringField(record, "usageId"),
@@ -1341,6 +1438,9 @@ function createAggregateDimension(record: JsonObject): JsonObject {
     cacheReadTokens: cacheReadTokens(record),
     cacheWriteTokens: cacheWriteTokens(record),
     cacheEligibleInputTokens: cacheEligibleInputTokens(record),
+    cacheShareReadTokens: cacheShare.shareReadTokens,
+    cacheTelemetryComparableInputTokens: cacheShare.telemetryComparableInputTokens,
+    cacheComparableInputTokens: cacheShare.comparableInputTokens,
     cacheHitRateAvailable: cacheHitRate !== undefined,
     reasoningTokens: numberField(record, "reasoningTokens"),
     totalTokens: numberField(record, "totalTokens"),
@@ -1354,10 +1454,111 @@ function createAggregateDimension(record: JsonObject): JsonObject {
   };
 }
 
+const retainedAggregateBaseTokenFields = [
+  "recordCount",
+  "inputTokens",
+  "outputTokens",
+  "cachedTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "cacheEligibleInputTokens",
+  "reasoningTokens",
+  "totalTokens"
+] as const;
+
+const retainedAggregateV2TokenFields = [
+  "cacheShareReadTokens",
+  "cacheTelemetryComparableInputTokens",
+  "cacheComparableInputTokens"
+] as const;
+
+function isValidRetainedAggregate(value: unknown, expectedDate: string): value is JsonObject {
+  if (!isJsonObject(value) || !isLocalDate(expectedDate) || value["localDate"] !== expectedDate) {
+    return false;
+  }
+  const schemaVersion = value["schemaVersion"];
+  if (schemaVersion !== "1.0" && schemaVersion !== "2.0") return false;
+  if (
+    typeof value["timezone"] !== "string" ||
+    !isFiniteNumber(value["utcOffsetMinutes"]) ||
+    (value["hasUnknownCost"] !== true && value["hasUnknownCost"] !== false) ||
+    !retainedAggregateBaseTokenFields.every((field) => isTokenCount(value[field])) ||
+    (schemaVersion === "2.0" &&
+      !retainedAggregateV2TokenFields.every((field) => isTokenCount(value[field]))) ||
+    !Array.isArray(value["costs"]) ||
+    !value["costs"].every(isValidAggregateCost) ||
+    !Array.isArray(value["dimensions"]) ||
+    !value["dimensions"].every((dimension) => isValidAggregateDimension(dimension, schemaVersion))
+  ) {
+    return false;
+  }
+  const recordCount = value["recordCount"];
+  if (!isTokenCount(recordCount) || recordCount === 0) return false;
+  const dimensions = value["dimensions"];
+  return (
+    (dimensions.length === 0 || dimensions.length === recordCount) &&
+    (schemaVersion === "1.0" || dimensions.length === recordCount)
+  );
+}
+
+function isValidAggregateCost(value: unknown): boolean {
+  return (
+    isJsonObject(value) &&
+    typeof value["currency"] === "string" &&
+    isNonNegativeFiniteNumber(value["actualAmount"]) &&
+    isNonNegativeFiniteNumber(value["estimatedAmount"]) &&
+    (value["estimatedCacheSavings"] === undefined || isFiniteNumber(value["estimatedCacheSavings"]))
+  );
+}
+
+function isValidAggregateDimension(value: unknown, schemaVersion: "1.0" | "2.0"): boolean {
+  if (
+    !isJsonObject(value) ||
+    typeof value["usageId"] !== "string" ||
+    value["usageId"].length === 0 ||
+    typeof value["provider"] !== "string" ||
+    value["provider"].length === 0 ||
+    typeof value["model"] !== "string" ||
+    value["model"].length === 0 ||
+    (!isAgentContextScope(value["scope"]) && !isValidLegacyProjectId(value["projectId"])) ||
+    typeof value["currency"] !== "string" ||
+    (value["cacheHitRateAvailable"] !== true && value["cacheHitRateAvailable"] !== false) ||
+    (value["hasUnknownCost"] !== true && value["hasUnknownCost"] !== false) ||
+    !retainedAggregateBaseTokenFields.every((field) => isTokenCount(value[field])) ||
+    value["recordCount"] !== 1 ||
+    !isNonNegativeFiniteNumber(value["actualAmount"]) ||
+    !isNonNegativeFiniteNumber(value["estimatedAmount"]) ||
+    (value["estimatedCacheSavings"] !== undefined &&
+      !isFiniteNumber(value["estimatedCacheSavings"]))
+  ) {
+    return false;
+  }
+  return (
+    schemaVersion === "1.0" ||
+    retainedAggregateV2TokenFields.every((field) => isTokenCount(value[field]))
+  );
+}
+
+function isValidLegacyProjectId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 256;
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function projectAggregate(
   aggregate: JsonObject,
   query: AgentUsageRepositoryQuery
-): AgentUsageRepositoryDailyBucket {
+): AgentUsageRepositoryDailyBucket | undefined {
   const allDimensions = jsonObjectArray(aggregate["dimensions"]);
   const filtered = allDimensions.filter(
     (dimension) =>
@@ -1367,8 +1568,15 @@ function projectAggregate(
   );
   const hasFilters =
     query.provider !== undefined || query.model !== undefined || query.projectId !== undefined;
+  if (hasFilters && filtered.length === 0) return undefined;
   if (allDimensions.length === 0 && !hasFilters) {
     const cacheRead = optionalTokenField(aggregate, "cacheReadTokens");
+    const cacheShareRead = optionalTokenField(aggregate, "cacheShareReadTokens");
+    const cacheTelemetryComparable = optionalTokenField(
+      aggregate,
+      "cacheTelemetryComparableInputTokens"
+    );
+    const cacheComparable = optionalTokenField(aggregate, "cacheComparableInputTokens");
     return {
       localDate: stringField(aggregate, "localDate"),
       recordCount: numberField(aggregate, "recordCount"),
@@ -1378,6 +1586,11 @@ function projectAggregate(
       cacheReadTokens: cacheRead ?? numberField(aggregate, "cachedTokens"),
       cacheWriteTokens: numberField(aggregate, "cacheWriteTokens"),
       cacheEligibleInputTokens: numberField(aggregate, "cacheEligibleInputTokens"),
+      ...(cacheShareRead === undefined ? {} : { cacheShareReadTokens: cacheShareRead }),
+      ...(cacheTelemetryComparable === undefined
+        ? {}
+        : { cacheTelemetryComparableInputTokens: cacheTelemetryComparable }),
+      ...(cacheComparable === undefined ? {} : { cacheComparableInputTokens: cacheComparable }),
       reasoningTokens: numberField(aggregate, "reasoningTokens"),
       totalTokens: numberField(aggregate, "totalTokens"),
       costs: costTotals(jsonObjectArray(aggregate["costs"])),
@@ -1395,6 +1608,9 @@ function projectAggregate(
     cacheReadTokens: sumCacheReadTokens(filtered),
     cacheWriteTokens: sumField(filtered, "cacheWriteTokens"),
     cacheEligibleInputTokens: sumField(filtered, "cacheEligibleInputTokens"),
+    cacheShareReadTokens: sumField(filtered, "cacheShareReadTokens"),
+    cacheTelemetryComparableInputTokens: sumField(filtered, "cacheTelemetryComparableInputTokens"),
+    cacheComparableInputTokens: sumField(filtered, "cacheComparableInputTokens"),
     ...(cacheHitRate === undefined ? {} : { cacheHitRate }),
     reasoningTokens: sumField(filtered, "reasoningTokens"),
     totalTokens: sumField(filtered, "totalTokens"),
@@ -1436,21 +1652,6 @@ function aggregateModels(
   return [...totals.values()].sort(
     (left, right) => right.totalTokens - left.totalTokens || left.model.localeCompare(right.model)
   );
-}
-
-function mergeCosts(existing: readonly JsonObject[], dimension: JsonObject): JsonObject[] {
-  return mergeDimensionCosts([
-    ...existing.map((cost) => {
-      const estimatedCacheSavings = optionalNumberField(cost, "estimatedCacheSavings");
-      return {
-        currency: stringField(cost, "currency"),
-        actualAmount: numberField(cost, "actualAmount"),
-        estimatedAmount: numberField(cost, "estimatedAmount"),
-        ...(estimatedCacheSavings === undefined ? {} : { estimatedCacheSavings })
-      };
-    }),
-    dimension
-  ]);
 }
 
 function mergeDimensionCosts(dimensions: readonly JsonObject[]): JsonObject[] {
@@ -1532,6 +1733,42 @@ function cacheWriteTokens(record: JsonObject): number {
 
 function cacheEligibleInputTokens(record: JsonObject): number {
   return optionalTokenField(record, "cacheEligibleInputTokens") ?? 0;
+}
+
+interface CacheShareMetrics {
+  readonly shareReadTokens: number;
+  readonly telemetryComparableInputTokens: number;
+  readonly comparableInputTokens: number;
+}
+
+function cacheShareMetrics(record: JsonObject): CacheShareMetrics {
+  const semantics = cacheInputTokenSemantics(record["cacheInputTokenSemantics"]);
+  const inputTokens = optionalTokenField(record, "inputTokens");
+  if (semantics === "unavailable" || inputTokens === undefined) {
+    return { shareReadTokens: 0, telemetryComparableInputTokens: 0, comparableInputTokens: 0 };
+  }
+  const readTokens =
+    optionalTokenField(record, "cacheReadTokens") ?? optionalTokenField(record, "cachedTokens");
+  const writeTokens = optionalTokenField(record, "cacheWriteTokens");
+  // Providers that exclude cache tokens from input require both read and write counts to recover
+  // the complete comparable input denominator. Included semantics only require the regular input.
+  const denominator =
+    semantics === "included_in_input"
+      ? inputTokens
+      : readTokens === undefined || writeTokens === undefined
+        ? undefined
+        : inputTokens + readTokens + writeTokens;
+  if (denominator === undefined) {
+    return { shareReadTokens: 0, telemetryComparableInputTokens: 0, comparableInputTokens: 0 };
+  }
+  const telemetry =
+    cacheUsageStatus(record["cacheUsageStatus"]) === "actual" && readTokens !== undefined
+      ? { shareReadTokens: readTokens, telemetryComparableInputTokens: denominator }
+      : { shareReadTokens: 0, telemetryComparableInputTokens: 0 };
+  return {
+    ...telemetry,
+    comparableInputTokens: denominator
+  };
 }
 
 function cacheHitRateForRecord(record: JsonObject): number | undefined {

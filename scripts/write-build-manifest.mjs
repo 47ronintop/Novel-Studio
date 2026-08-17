@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { sourceStateChecksum } from "./source-state-checksum.mjs";
+
 const root = process.cwd();
 const manifestPath = join(root, "apps", "desktop", "dist", "build-manifest.json");
 const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -11,6 +13,7 @@ const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
 }).trim();
 const sourceDirty =
   execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim().length > 0;
+const sourceState = await sourceStateChecksum(root);
 const artifactPaths = {
   main: "apps/desktop/dist/main/index.js",
   preload: "apps/desktop/dist/preload/index.cjs",
@@ -39,6 +42,7 @@ await writeFile(
       schemaVersion: "1.0",
       sourceRevision,
       sourceDirty,
+      sourceStateChecksum: sourceState,
       builtAt: new Date().toISOString(),
       artifacts
     },

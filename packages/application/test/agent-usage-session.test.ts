@@ -226,6 +226,90 @@ describe("AgentUsageSession", () => {
     expect(repository.calls).toEqual(["retain:2026-07-17", "days:2026-07-01:2026-07-17"]);
   });
 
+  test("derives token share and token-weighted telemetry coverage from daily counters", async () => {
+    const { repository, session } = createSession();
+    repository.queryDailyAggregates = async () => ({
+      ok: true as const,
+      value: [
+        {
+          ...daily("2026-07-16"),
+          cacheShareReadTokens: 400,
+          cacheTelemetryComparableInputTokens: 1000,
+          cacheComparableInputTokens: 1500
+        },
+        {
+          ...daily("2026-07-17"),
+          cacheShareReadTokens: 0,
+          cacheTelemetryComparableInputTokens: 0,
+          cacheComparableInputTokens: 500
+        }
+      ]
+    });
+
+    const result = await session.listAgentUsage({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-17" }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        cacheTokenShare: 0.4,
+        cacheTelemetryCoverage: 0.5
+      }
+    });
+  });
+
+  test("keeps a 95 percent observed share partial when another round has no telemetry", async () => {
+    const { repository, session } = createSession();
+    repository.queryDailyAggregates = async () => ({
+      ok: true as const,
+      value: [
+        {
+          ...daily(),
+          cacheShareReadTokens: 19_000,
+          cacheTelemetryComparableInputTokens: 20_000,
+          cacheComparableInputTokens: 21_000
+        }
+      ]
+    });
+
+    const result = await session.listAgentUsage({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        cacheTokenShare: 0.95,
+        cacheTelemetryCoverage: 20 / 21
+      }
+    });
+  });
+
+  test("reports a complete zero percent when actual telemetry reports no cache reads", async () => {
+    const { repository, session } = createSession();
+    repository.queryDailyAggregates = async () => ({
+      ok: true as const,
+      value: [
+        {
+          ...daily(),
+          cacheShareReadTokens: 0,
+          cacheTelemetryComparableInputTokens: 1_000,
+          cacheComparableInputTokens: 1_000
+        }
+      ]
+    });
+
+    const result = await session.listAgentUsage({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { cacheTokenShare: 0, cacheTelemetryCoverage: 1 }
+    });
+  });
+
   test("rejects undeclared fields so sensitive content and project paths cannot cross the boundary", async () => {
     const { repository, session } = createSession();
     expect(

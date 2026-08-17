@@ -11,6 +11,7 @@ import {
   OpenAiCompatibleHttpError,
   type LlmStreamResult,
   type LlmRequest,
+  type LlmUsage,
   type OpenAiCompatibleTransportRequest
 } from "../src/index.js";
 
@@ -100,6 +101,55 @@ describe("OpenAI-compatible provider", () => {
       })
     });
     expect(result.value.usage).not.toHaveProperty("cacheEligibleInputTokens");
+  });
+
+  test("reports a 95 percent cache-token share across twenty stable-prefix rounds", async () => {
+    let round = 0;
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => {
+        round += 1;
+        return {
+          choices: [{ message: { content: `Round ${round}.` } }],
+          usage: {
+            prompt_tokens: 1_000,
+            completion_tokens: 10,
+            total_tokens: 1_010,
+            prompt_tokens_details: { cached_tokens: round === 1 ? 0 : 1_000 }
+          }
+        };
+      }
+    });
+    const adapter = createLlmAdapter({ provider });
+    const promptCache = {
+      mode: "automatic_prefix",
+      policyVersion: "openai-automatic@1.0",
+      identityChecksum: "a".repeat(64),
+      logicalPrefixChecksum: "b".repeat(64),
+      stablePrefixMessageCount: 1,
+      minimumCacheableTokens: 1,
+      eligibleInputTokens: 1_000
+    } as const;
+    const usages: LlmUsage[] = [];
+
+    for (let index = 0; index < 20; index += 1) {
+      const result = await adapter.complete({ ...request, promptCache });
+      expect(isOk(result)).toBe(true);
+      if (!result.ok) return;
+      usages.push(result.value.usage);
+    }
+
+    expect(usages[0]).toMatchObject({
+      cacheReadTokens: 0,
+      cacheOutcome: "miss",
+      cacheUsageStatus: "actual"
+    });
+    expect(usages.slice(1).every((usage) => usage.cacheOutcome === "hit")).toBe(true);
+    const cacheReadTokens = usages.reduce(
+      (total, usage) => total + (usage.cacheReadTokens ?? 0),
+      0
+    );
+    const inputTokens = usages.reduce((total, usage) => total + (usage.inputTokens ?? 0), 0);
+    expect(cacheReadTokens / inputTokens).toBe(0.95);
   });
 
   test("maps provider-neutral non-streaming requests and fixture responses", async () => {

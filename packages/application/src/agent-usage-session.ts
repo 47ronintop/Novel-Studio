@@ -63,7 +63,19 @@ export function createAgentUsageSession(
       if (!details.ok) return err(details.error);
       runs = details.value;
     }
-    return ok({ query, days: days.value, runs, generatedAt: now() });
+    const telemetry = reportCacheTelemetry(days.value);
+    return ok({
+      query,
+      days: days.value,
+      runs,
+      ...(telemetry.cacheTokenShare === undefined
+        ? {}
+        : { cacheTokenShare: telemetry.cacheTokenShare }),
+      ...(telemetry.cacheTelemetryCoverage === undefined
+        ? {}
+        : { cacheTelemetryCoverage: telemetry.cacheTelemetryCoverage }),
+      generatedAt: now()
+    });
   };
 
   return {
@@ -105,6 +117,30 @@ export function createAgentUsageSession(
       if (!cleared.ok) return err(cleared.error);
       return listAgentUsage({ range: command.range });
     }
+  };
+}
+
+function reportCacheTelemetry(days: readonly AgentUsageDailyBucket[]): {
+  readonly cacheTokenShare?: number;
+  readonly cacheTelemetryCoverage?: number;
+} {
+  let shareReadTokens = 0;
+  let telemetryComparableInputTokens = 0;
+  let comparableInputTokens = 0;
+  for (const day of days) {
+    shareReadTokens += day.cacheShareReadTokens ?? 0;
+    telemetryComparableInputTokens += day.cacheTelemetryComparableInputTokens ?? 0;
+    comparableInputTokens += day.cacheComparableInputTokens ?? 0;
+  }
+  // A report is intentionally silent when no actual telemetry is available. When only part of
+  // the comparable input is backed by actual telemetry, retain both the observed ratio and the
+  // token-weighted coverage so callers can distinguish partial from complete observations.
+  if (telemetryComparableInputTokens <= 0) return {};
+  return {
+    cacheTokenShare: shareReadTokens / telemetryComparableInputTokens,
+    ...(comparableInputTokens > 0
+      ? { cacheTelemetryCoverage: telemetryComparableInputTokens / comparableInputTokens }
+      : {})
   };
 }
 
