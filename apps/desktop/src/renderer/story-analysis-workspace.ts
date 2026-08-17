@@ -7,6 +7,7 @@ import type {
   ChapterCompletionFeedbackProps,
   ChapterEditorProps,
   ProjectWorkflowProps,
+  StoryAnalysisBatchProps,
   StoryAnalysisReviewProps,
   StoryBibleEditorProps,
   StoryBibleSummaryProps
@@ -62,6 +63,26 @@ interface StoryAnalysisScope {
   readonly revision: number;
 }
 
+interface StoryAnalysisBatchState {
+  readonly status: StoryAnalysisBatchProps["status"];
+  readonly selectedChapterIds: readonly string[];
+  readonly completedChapterIds: readonly string[];
+  readonly failedChapterIds: readonly string[];
+  readonly currentChapterId: string | undefined;
+  readonly error: string | undefined;
+}
+
+function emptyBatchState(selectedChapterIds: readonly string[] = []): StoryAnalysisBatchState {
+  return {
+    status: "idle",
+    selectedChapterIds: [...selectedChapterIds],
+    completedChapterIds: [],
+    failedChapterIds: [],
+    currentChapterId: undefined,
+    error: undefined
+  };
+}
+
 export function useStoryAnalysisWorkspace(
   options: StoryAnalysisWorkspaceOptions
 ): StoryAnalysisWorkspace {
@@ -92,6 +113,11 @@ export function useStoryAnalysisWorkspace(
         )
   );
   const [review, setReview] = useState(() => bridge?.getProps());
+  const [batch, setBatch] = useState<StoryAnalysisBatchState>(() => emptyBatchState());
+  const batchRef = useRef(batch);
+  batchRef.current = batch;
+  const batchStopRequested = useRef(false);
+  const batchChapterKeyRef = useRef<string | undefined>(undefined);
   const bypassedTransitions = useRef(new Set<string>());
   const scheduledAnalysisChapters = useRef(new Set<string>());
   const scopeRef = useRef<StoryAnalysisScope>({
@@ -111,7 +137,20 @@ export function useStoryAnalysisWorkspace(
     };
     bypassedTransitions.current.clear();
     scheduledAnalysisChapters.current.clear();
+    batchStopRequested.current = true;
+    batchChapterKeyRef.current = undefined;
   }
+
+  const availableChapterIds = [...(projectWorkflow?.chapters ?? [])]
+    .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id, "en"))
+    .map((chapter) => chapter.id);
+  const batchChapterKey = `${activeCreativeProjectId ?? ""}:${availableChapterIds.join(",")}`;
+  useEffect(() => {
+    if (batchChapterKeyRef.current === batchChapterKey) return;
+    batchChapterKeyRef.current = batchChapterKey;
+    batchStopRequested.current = true;
+    setBatch(emptyBatchState(availableChapterIds));
+  }, [batchChapterKey, availableChapterIds.join(",")]);
 
   useEffect(() => {
     if (bridge === undefined) return;
@@ -236,6 +275,118 @@ export function useStoryAnalysisWorkspace(
     },
     [bridge, setChapterEditor]
   );
+  const toggleBatchChapter = useCallback((chapterId: string) => {
+    setBatch((current) => {
+      if (current.status === "running") return current;
+      const selected = new Set(current.selectedChapterIds);
+      if (selected.has(chapterId)) selected.delete(chapterId);
+      else selected.add(chapterId);
+      const selectedIds = [...selected].sort((left, right) => left.localeCompare(right, "en"));
+      return {
+        ...current,
+        selectedChapterIds: selectedIds,
+        completedChapterIds: current.completedChapterIds.filter((id) => selected.has(id)),
+        failedChapterIds: current.failedChapterIds.filter((id) => selected.has(id)),
+        status: current.status === "completed" ? "idle" : current.status,
+        error: undefined
+      };
+    });
+  }, []);
+  const selectAllBatchChapters = useCallback(() => {
+    setBatch((current) =>
+      current.status === "running"
+        ? current
+        : {
+            ...current,
+            status: "idle",
+            selectedChapterIds: [...availableChapterIds],
+            error: undefined
+          }
+    );
+  }, [availableChapterIds.join(",")]);
+  const runBatchAnalysis = useCallback(() => {
+    if (bridge === undefined) return;
+    const scope = scopeRef.current;
+    const current = batchRef.current;
+    if (current.status === "running" || current.selectedChapterIds.length === 0) return;
+    const selected = availableChapterIds.filter((chapterId) =>
+      current.selectedChapterIds.includes(chapterId)
+    );
+    if (selected.length === 0) return;
+    const completed = new Set(current.completedChapterIds);
+    const failed = new Set(current.failedChapterIds);
+    batchStopRequested.current = false;
+    setBatch((state) => ({
+      ...state,
+      status: "running",
+      currentChapterId: undefined,
+      error: undefined
+    }));
+    void (async () => {
+      let stopped = false;
+      for (const chapterId of selected) {
+        if (batchStopRequested.current || scopeRef.current !== scope) {
+          stopped = true;
+          break;
+        }
+        if (completed.has(chapterId)) continue;
+        setBatch((state) => ({ ...state, status: "running", currentChapterId: chapterId }));
+        try {
+          const next = await bridge.analyze(chapterId);
+          if (scopeRef.current !== scope) return;
+          setReview(next);
+          if (next.status === "error") {
+            throw new Error(next.feedback?.message ?? "章节资料分析失败。");
+          }
+          completed.add(chapterId);
+          failed.delete(chapterId);
+          setBatch((state) => ({
+            ...state,
+            completedChapterIds: [...completed],
+            failedChapterIds: [...failed],
+            currentChapterId: undefined,
+            error: undefined
+          }));
+        } catch (error) {
+          if (scopeRef.current !== scope) return;
+          failed.add(chapterId);
+          setBatch((state) => ({
+            ...state,
+            failedChapterIds: [...failed],
+            currentChapterId: undefined,
+            error: error instanceof Error ? error.message : "章节资料分析失败。"
+          }));
+        }
+      }
+      if (scopeRef.current !== scope) return;
+      const pending = selected.some((chapterId) => !completed.has(chapterId));
+      setBatch((state) => ({
+        ...state,
+        status: stopped || pending || failed.size > 0 ? "paused" : "completed",
+        currentChapterId: undefined,
+        error:
+          failed.size > 0
+            ? `${failed.size} 章分析失败，可重试失败章节。`
+            : stopped
+              ? "批量分析已暂停，可继续。"
+              : undefined
+      }));
+    })();
+  }, [availableChapterIds.join(","), bridge, setReview]);
+  const stopBatchAnalysis = useCallback(() => {
+    batchStopRequested.current = true;
+  }, []);
+  const retryFailedBatch = useCallback(() => {
+    setBatch((current) => ({
+      ...current,
+      status: "paused",
+      selectedChapterIds: [...current.failedChapterIds],
+      completedChapterIds: [],
+      failedChapterIds: [],
+      currentChapterId: undefined,
+      error: undefined
+    }));
+  }, []);
   const onChapterStatusChange = useCallback(
     (status: ChapterStatus) => {
       if (chapterBridge === undefined) return;
@@ -470,6 +621,14 @@ export function useStoryAnalysisWorkspace(
             onClose: () => update((target) => target.close()),
             onRunSelect: (workflowRunId) => runAction((target) => target.selectRun(workflowRunId)),
             onFiltersChange: (filters) => update((target) => target.updateFilters(filters)),
+            batch: {
+              ...batch,
+              onChapterToggle: toggleBatchChapter,
+              onSelectAll: selectAllBatchChapters,
+              onStart: runBatchAnalysis,
+              onStop: stopBatchAnalysis,
+              onRetryFailed: retryFailedBatch
+            },
             onSuggestionToggle: (suggestionId) =>
               update((target) => target.toggleSuggestion(suggestionId)),
             onAcceptSelected: () => runAction((target) => target.acceptSelected()),

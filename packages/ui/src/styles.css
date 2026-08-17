@@ -8139,6 +8139,91 @@ textarea:focus-visible,
   text-align: right;
 }
 
+.ns-story-analysis-batch {
+  border-block: 1px solid color-mix(in srgb, var(--ns-border) 74%, transparent);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 0;
+}
+
+.ns-story-analysis-batch-chapters {
+  display: grid;
+  gap: 6px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  max-height: 220px;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.ns-story-analysis-batch-chapter {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--ns-ink);
+  display: grid;
+  gap: 7px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 32px;
+  min-width: 0;
+  padding: 3px 6px;
+}
+
+.ns-story-analysis-batch-chapter:hover {
+  background: color-mix(in srgb, var(--ns-surface-raised) 70%, transparent);
+  border-color: var(--ns-border);
+}
+
+.ns-story-analysis-batch-chapter input {
+  accent-color: var(--ns-primary);
+  flex: 0 0 auto;
+}
+
+.ns-story-analysis-batch-chapter > span {
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ns-story-analysis-batch-chapter small,
+.ns-story-analysis-batch-chapter em {
+  color: var(--ns-muted);
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.ns-story-analysis-batch-chapter em[data-status="failed"] {
+  color: var(--ns-danger);
+}
+
+.ns-story-analysis-batch-chapter em[data-status="completed"] {
+  color: var(--ns-success);
+}
+
+.ns-story-analysis-batch-progress {
+  align-items: center;
+  background: color-mix(in srgb, var(--ns-primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ns-primary) 24%, var(--ns-border));
+  border-radius: 5px;
+  color: var(--ns-muted);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  justify-content: space-between;
+  line-height: 1.4;
+  min-height: 34px;
+  padding: 5px 8px;
+}
+
+.ns-story-analysis-batch-progress > span {
+  color: var(--ns-ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .ns-segmented-control-option {
   background: transparent;
   border: 0;

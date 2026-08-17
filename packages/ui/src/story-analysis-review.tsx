@@ -66,6 +66,11 @@ export function StoryAnalysisReviewView({
     selectedSuggestions.length > 0 &&
     selectedSuggestions.every((suggestion) => suggestion.status === "accepted");
   const groupedSuggestions = groupSuggestions(visibleSuggestions);
+  const batch = review.batch;
+  const selectedBatchChapters = new Set(batch?.selectedChapterIds ?? []);
+  const completedBatchChapterCount =
+    batch?.completedChapterIds.filter((chapterId) => selectedBatchChapters.has(chapterId)).length ??
+    0;
 
   return (
     <div className="ns-story-analysis-review" id="ns-story-analysis-review">
@@ -160,6 +165,97 @@ export function StoryAnalysisReviewView({
           </button>
         </div>
       </div>
+
+      {batch === undefined ? null : (
+        <section aria-label="从已有章节建立故事资料" className="ns-story-analysis-batch">
+          <div className="ns-story-analysis-section-header">
+            <div>
+              <strong>从已有章节建立故事资料</strong>
+              <span>
+                {batch.selectedChapterIds.length}/{chapterOptions.length} 章已选
+              </span>
+            </div>
+            <div className="ns-story-analysis-batch-actions">
+              <button
+                className="ns-icon-text-button"
+                disabled={batch.status === "running" || chapterOptions.length === 0}
+                onClick={batch.onSelectAll}
+                type="button"
+              >
+                <CheckCheck aria-hidden="true" size={14} />
+                全选章节
+              </button>
+              {batch.status === "running" ? (
+                <button className="ns-icon-text-button" onClick={batch.onStop} type="button">
+                  <X aria-hidden="true" size={14} />
+                  暂停
+                </button>
+              ) : (
+                <button
+                  className="ns-primary-button"
+                  disabled={batch.selectedChapterIds.length === 0}
+                  onClick={batch.onStart}
+                  type="button"
+                >
+                  <Play aria-hidden="true" size={14} />
+                  {batch.status === "paused" ? "继续分析" : "分析所选章节"}
+                </button>
+              )}
+              {batch.failedChapterIds.length === 0 ? null : (
+                <button
+                  className="ns-icon-text-button"
+                  disabled={batch.status === "running"}
+                  onClick={batch.onRetryFailed}
+                  type="button"
+                >
+                  <RefreshCcw aria-hidden="true" size={14} />
+                  重试失败章节
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="ns-story-analysis-batch-chapters">
+            {chapterOptions.length === 0 ? (
+              <span className="ns-story-analysis-empty compact">暂无可分析章节</span>
+            ) : (
+              chapterOptions.map((chapter) => (
+                <label className="ns-story-analysis-batch-chapter" key={chapter.id}>
+                  <input
+                    checked={selectedBatchChapters.has(chapter.id)}
+                    disabled={batch.status === "running"}
+                    onChange={() => batch.onChapterToggle(chapter.id)}
+                    type="checkbox"
+                  />
+                  <span>{chapterLabel(chapter.id, chapterTitles)}</span>
+                  <small>第 {chapter.order} 章</small>
+                  {batch.failedChapterIds.includes(chapter.id) ? (
+                    <em data-status="failed">失败</em>
+                  ) : batch.completedChapterIds.includes(chapter.id) ? (
+                    <em data-status="completed">完成</em>
+                  ) : null}
+                </label>
+              ))
+            )}
+          </div>
+          {batch.status === "running" ||
+          batch.status === "paused" ||
+          batch.status === "completed" ? (
+            <div className="ns-story-analysis-batch-progress" role="status">
+              {batch.currentChapterId === undefined
+                ? batchStatusLabel(batch.status, batch.failedChapterIds.length)
+                : `正在分析：${chapterLabel(batch.currentChapterId, chapterTitles)}`}
+              <span>
+                {completedBatchChapterCount}/{batch.selectedChapterIds.length} 已完成
+              </span>
+            </div>
+          ) : null}
+          {batch.error === undefined ? null : (
+            <div className="ns-story-analysis-feedback" data-kind="error" role="alert">
+              {batch.error}
+            </div>
+          )}
+        </section>
+      )}
 
       <section aria-label="章后资料分析设置" className="ns-story-analysis-settings">
         <div className="ns-story-analysis-setting-row">
@@ -699,6 +795,17 @@ function busyLabel(status: StoryAnalysisReviewProps["status"]): string {
     ready: "",
     error: ""
   }[status];
+}
+
+function batchStatusLabel(
+  status: NonNullable<StoryAnalysisReviewProps["batch"]>["status"],
+  failedCount: number
+): string {
+  if (status === "completed")
+    return failedCount === 0 ? "批量分析已完成" : "批量分析已暂停，请重试失败章节";
+  if (status === "paused")
+    return failedCount === 0 ? "批量分析已暂停，可继续" : "批量分析已暂停，可重试失败章节";
+  return "批量分析进行中";
 }
 
 function applyStatusLabel(status: string): string {

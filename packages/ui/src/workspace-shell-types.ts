@@ -1314,6 +1314,20 @@ export interface StoryAnalysisReviewFilters {
   readonly domain: string;
 }
 
+export interface StoryAnalysisBatchProps {
+  readonly status: "idle" | "running" | "paused" | "completed";
+  readonly selectedChapterIds: readonly string[];
+  readonly completedChapterIds: readonly string[];
+  readonly failedChapterIds: readonly string[];
+  readonly currentChapterId: string | undefined;
+  readonly error: string | undefined;
+  readonly onChapterToggle: (chapterId: string) => void;
+  readonly onSelectAll: () => void;
+  readonly onStart: () => void;
+  readonly onStop: () => void;
+  readonly onRetryFailed: () => void;
+}
+
 export interface StoryAnalysisReviewProps {
   readonly open: boolean;
   readonly status:
@@ -1335,6 +1349,7 @@ export interface StoryAnalysisReviewProps {
   readonly activeChapterId?: string;
   readonly selectedSuggestionIds: readonly string[];
   readonly filters: StoryAnalysisReviewFilters;
+  readonly batch?: StoryAnalysisBatchProps;
   readonly suggestions: readonly StoryAnalysisSuggestionProps[];
   readonly issues: readonly StoryAnalysisIssueProps[];
   readonly preview?: StoryAnalysisApplicationPreviewProps;

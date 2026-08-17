@@ -52,6 +52,41 @@ describe("Story Analysis review view", () => {
 
     expect(html).not.toContain("开启安全自动更新");
   });
+
+  test("renders the existing-chapter batch entry with progress and retry state", () => {
+    const props = reviewProps();
+    const html = renderToStaticMarkup(
+      <StoryAnalysisReviewView
+        chapterOptions={[
+          { id: "ch_01", title: "第一章", order: 1, status: "done" },
+          { id: "ch_02", title: "第二章", order: 2, status: "done" }
+        ]}
+        entries={[]}
+        review={{
+          ...props,
+          batch: {
+            status: "paused",
+            selectedChapterIds: ["ch_01", "ch_02"],
+            completedChapterIds: ["ch_01"],
+            failedChapterIds: ["ch_02"],
+            currentChapterId: undefined,
+            error: "1 章分析失败，可重试失败章节。",
+            onChapterToggle: noop,
+            onSelectAll: noop,
+            onStart: noop,
+            onStop: noop,
+            onRetryFailed: noop
+          }
+        }}
+      />
+    );
+
+    expect(html).toContain("从已有章节建立故事资料");
+    expect(html).toContain("继续分析");
+    expect(html).toContain("重试失败章节");
+    expect(html).toContain("1/2 已完成");
+    expect(html).toContain("失败");
+  });
 });
 
 function reviewProps(): StoryAnalysisReviewProps {

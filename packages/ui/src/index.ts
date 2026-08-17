@@ -244,6 +244,7 @@ export type {
   StoryAnalysisEvidenceProps,
   StoryAnalysisIssueProps,
   StoryAnalysisOperationProps,
+  StoryAnalysisBatchProps,
   StoryAnalysisReviewFilters,
   StoryAnalysisReviewProps,
   StoryAnalysisReviewSummaryProps,
