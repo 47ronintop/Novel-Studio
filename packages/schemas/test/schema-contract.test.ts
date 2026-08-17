@@ -362,6 +362,30 @@ describe("schema contract coverage", () => {
     );
   });
 
+  test("allows a model profile to defer its output-token cap to the provider", () => {
+    const fixture = readFixture("valid", "settings") as {
+      readonly models: {
+        readonly profiles: readonly Record<string, unknown>[];
+      };
+    };
+    const [firstProfile, ...remainingProfiles] = fixture.models.profiles;
+    if (firstProfile === undefined) throw new Error("Expected a model profile fixture.");
+    const { maxTokens, ...profileWithoutCap } = firstProfile;
+    void maxTokens;
+    const candidate = {
+      ...fixture,
+      models: {
+        ...fixture.models,
+        profiles: [profileWithoutCap, ...remainingProfiles]
+      }
+    };
+
+    expect(createSchemaValidator(readSchema("settings"))(candidate)).toEqual({
+      valid: true,
+      issues: []
+    });
+  });
+
   test("settings valid fixture covers every constitution-required model provider", () => {
     const fixture = readFixture("valid", "settings") as {
       readonly models?: {

@@ -90,7 +90,8 @@ export interface ModelProfile extends JsonObject {
   apiKeyRef: string;
   modelName: string;
   temperature: number;
-  maxTokens: number;
+  /** Optional output-token cap. Omitted means the provider/model default. */
+  maxTokens?: number;
   topP?: number;
   timeoutMs: number;
   frequencyPenalty?: number;

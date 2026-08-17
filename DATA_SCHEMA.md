@@ -210,7 +210,6 @@ project/
         "apiKeyRef": "secret://model_default/api_key",
         "modelName": "example-model",
         "temperature": 0.7,
-        "maxTokens": 4096,
         "topP": 1,
         "timeoutMs": 60000,
         "frequencyPenalty": 0,
@@ -225,6 +224,7 @@ project/
 
 - `apiKeyRef` 是密钥引用，不是密钥值。
 - 密钥存储机制在 `SECURITY.md` 细化。
+- `maxTokens` 是可选的输出上限；省略时由模型或服务商决定，不写入全局固定默认值。
 - `snapshotPolicy` 可选值：`manual-only`、`interval-only`、`manual-and-interval`、`on-save-and-manual`。
 
 ## 7. Chapter Markdown

@@ -28,8 +28,6 @@ export interface SettingsBridgeOptions {
 
 type UsageProps = NonNullable<ModelSettingsPanelProps["usage"]>;
 
-const DEFAULT_MODEL_MAX_TOKENS = 4096;
-
 export interface SettingsBridge {
   getProps(): ModelSettingsPanelProps;
   load(): Promise<ModelSettingsPanelProps>;
@@ -582,7 +580,7 @@ export function createSettingsBridge(
     const temperature = parseNumber(nextDraft.temperature);
     const maxTokens =
       nextDraft.maxTokens.trim().length === 0
-        ? DEFAULT_MODEL_MAX_TOKENS
+        ? undefined
         : parsePositiveInteger(nextDraft.maxTokens);
     const contextWindow =
       nextDraft.contextWindow.trim().length === 0
@@ -592,7 +590,7 @@ export function createSettingsBridge(
     const timeoutMs = parseInteger(nextDraft.timeoutMs);
     if (
       temperature === undefined ||
-      maxTokens === undefined ||
+      (nextDraft.maxTokens.trim().length > 0 && maxTokens === undefined) ||
       timeoutMs === undefined ||
       (nextDraft.contextWindow.trim().length > 0 && contextWindow === undefined) ||
       (nextDraft.topP.trim().length > 0 && topP === undefined)
@@ -613,8 +611,8 @@ export function createSettingsBridge(
       apiKeyRef,
       modelName: nextDraft.modelName.trim(),
       temperature,
-      maxTokens,
-      timeoutMs
+      timeoutMs,
+      ...(maxTokens === undefined ? {} : { maxTokens })
     };
 
     return {
@@ -950,7 +948,7 @@ function draftFromProfile(profile: ModelProfile): ModelSettingsDraft {
     contextWindow: profile.contextWindow === undefined ? "" : String(profile.contextWindow),
     apiKeyRefInput: "",
     temperature: String(profile.temperature),
-    maxTokens: String(profile.maxTokens),
+    maxTokens: profile.maxTokens === undefined ? "" : String(profile.maxTokens),
     topP: profile.topP === undefined ? "" : String(profile.topP),
     reasoningEffortEnabled: profile.reasoningEffortEnabled === true,
     timeoutMs: String(profile.timeoutMs)

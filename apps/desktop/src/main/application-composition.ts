@@ -981,7 +981,6 @@ function createDefaultApplicationSettings(): ProjectSettings {
           apiKeyRef: "secret://model_default/api_key",
           modelName: "example-model",
           temperature: 0.7,
-          maxTokens: 4096,
           topP: 1,
           timeoutMs: 60_000,
           frequencyPenalty: 0,

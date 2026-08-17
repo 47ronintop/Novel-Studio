@@ -5703,7 +5703,6 @@ function toModelProfile(value: unknown): ModelProfile | undefined {
     typeof value.apiKeyRef !== "string" ||
     typeof value.modelName !== "string" ||
     typeof value.temperature !== "number" ||
-    typeof value.maxTokens !== "number" ||
     typeof value.timeoutMs !== "number"
   ) {
     return undefined;
@@ -5711,6 +5710,7 @@ function toModelProfile(value: unknown): ModelProfile | undefined {
   if (
     !isOptionalString(value.baseUrl) ||
     !isOptionalPositiveSafeInteger(value.contextWindow) ||
+    !isOptionalPositiveSafeInteger(value.maxTokens) ||
     !isOptionalNumber(value.topP) ||
     !isOptionalNumber(value.frequencyPenalty) ||
     !isOptionalNumber(value.presencePenalty) ||
@@ -5728,7 +5728,7 @@ function toModelProfile(value: unknown): ModelProfile | undefined {
     modelName: value.modelName,
     ...(value.contextWindow === undefined ? {} : { contextWindow: value.contextWindow }),
     temperature: value.temperature,
-    maxTokens: value.maxTokens,
+    ...(value.maxTokens === undefined ? {} : { maxTokens: value.maxTokens }),
     ...(value.topP === undefined ? {} : { topP: value.topP }),
     timeoutMs: value.timeoutMs,
     ...(value.frequencyPenalty === undefined ? {} : { frequencyPenalty: value.frequencyPenalty }),

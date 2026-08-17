@@ -44,7 +44,7 @@ describe("M8 Settings UI", () => {
     expect(modelHtml).toContain('aria-label="模型上下文窗口"');
     expect(modelHtml).toContain("这不是单次响应的 Max Tokens");
     expect(modelHtml).toContain("Max Tokens（可选）");
-    expect(modelHtml).toContain("留空时使用默认值 4096");
+    expect(modelHtml).toContain("留空时使用模型或服务商默认值");
   });
 
   test("renders VSCode settings structure with editor preferences in appearance", () => {

@@ -98,7 +98,6 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
             apiKeyRef: "secret://model_default/api_key",
             modelName: "example-model",
             temperature: 0.7,
-            maxTokens: 4096,
             topP: 1,
             timeoutMs: 60000,
             frequencyPenalty: 0,

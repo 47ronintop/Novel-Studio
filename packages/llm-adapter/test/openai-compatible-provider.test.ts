@@ -162,6 +162,26 @@ describe("OpenAI-compatible provider", () => {
     });
   });
 
+  test("omits max_tokens when no output cap is requested", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async (transportRequest) => {
+        calls.push(transportRequest);
+        return { choices: [{ message: { content: "Provider default." } }] };
+      }
+    });
+    const { maxTokens, ...parameters } = request.parameters;
+    void maxTokens;
+
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      parameters
+    });
+
+    expect(isOk(result)).toBe(true);
+    expect(calls[0]?.body).not.toHaveProperty("max_tokens");
+  });
+
   test("normalizes OpenAI-compatible rate limits without leaking secrets", async () => {
     const provider = createOpenAiCompatibleProvider({
       transport: async () => {

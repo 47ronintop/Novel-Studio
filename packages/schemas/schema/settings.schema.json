@@ -45,7 +45,6 @@
               "apiKeyRef",
               "modelName",
               "temperature",
-              "maxTokens",
               "timeoutMs"
             ],
             "properties": {

@@ -1356,7 +1356,7 @@ async function resolveDesktopAgentModelProfile(
     modelProfile,
     parameters: {
       temperature: profile.temperature,
-      maxTokens: profile.maxTokens,
+      ...(profile.maxTokens === undefined ? {} : { maxTokens: profile.maxTokens }),
       ...(profile.topP === undefined ? {} : { topP: profile.topP })
     }
   };

@@ -939,6 +939,26 @@ describe("model settings session", () => {
       }
     });
   });
+
+  test("omits the output-token parameter when the profile defers to the provider", () => {
+    const [profile] = settings.models.profiles;
+    if (profile === undefined) throw new Error("Expected a default model profile.");
+    const { maxTokens, ...profileWithoutCap } = profile;
+    void maxTokens;
+    const autoSettings: ProjectSettings = {
+      ...settings,
+      models: {
+        ...settings.models,
+        profiles: [profileWithoutCap]
+      }
+    };
+
+    const result = resolveDefaultModelRuntimeProfile(autoSettings);
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.parameters).toEqual({ temperature: 0.7, topP: 1 });
+  });
 });
 
 function staticSettingsPort(value: ProjectSettings): ProjectSettingsPort {

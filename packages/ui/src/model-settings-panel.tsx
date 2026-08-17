@@ -26,7 +26,7 @@ export interface ModelSettingsProfile {
   readonly contextWindow?: number;
   readonly apiKeyRef: string;
   readonly temperature: number;
-  readonly maxTokens: number;
+  readonly maxTokens?: number;
   readonly topP?: number;
   readonly reasoningEffortEnabled?: boolean;
   readonly timeoutMs: number;
@@ -628,7 +628,7 @@ function ModelProfileSettingsSection({
                 </ModelField>
                 <ModelField
                   label="Max Tokens（可选）"
-                  note="限制单次响应可生成的最大 token 数；留空时使用默认值 4096。"
+                  note="限制单次响应可生成的最大 token 数；留空时使用模型或服务商默认值。"
                 >
                   <input
                     aria-label="Max Tokens"
@@ -636,7 +636,7 @@ function ModelProfileSettingsSection({
                     inputMode="numeric"
                     min={1}
                     onChange={(event) => onDraftChange?.({ maxTokens: event.currentTarget.value })}
-                    placeholder="默认 4096"
+                    placeholder="使用模型默认值"
                     type="number"
                     value={draft.maxTokens}
                   />

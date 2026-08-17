@@ -30,7 +30,8 @@ export interface ModelProfile extends JsonObject {
   /** Verified input context capacity for the configured model; distinct from output maxTokens. */
   readonly contextWindow?: number;
   readonly temperature: number;
-  readonly maxTokens: number;
+  /** Optional output-token cap. Omitted means the provider/model default. */
+  readonly maxTokens?: number;
   readonly topP?: number;
   readonly timeoutMs: number;
   readonly frequencyPenalty?: number;
@@ -349,7 +350,7 @@ export function resolveDefaultModelRuntimeProfile(
   };
   const parameters: LlmParameters = {
     temperature: profile.temperature,
-    maxTokens: profile.maxTokens,
+    ...(profile.maxTokens === undefined ? {} : { maxTokens: profile.maxTokens }),
     ...(profile.topP === undefined ? {} : { topP: profile.topP })
   };
 
@@ -433,10 +434,18 @@ function invalidModelProfileOverride(
 
 function validateModelProfile(profile: ModelProfile): Result<ModelProvider, UnifiedError> {
   const provider = toSupportedProvider(profile.provider);
+  const maxTokensValid =
+    profile.maxTokens === undefined ||
+    (Number.isSafeInteger(profile.maxTokens) && profile.maxTokens > 0);
   const contextWindowValid =
     profile.contextWindow === undefined ||
     (Number.isSafeInteger(profile.contextWindow) && profile.contextWindow > 0);
-  if (provider === undefined || !profile.apiKeyRef.startsWith("secret://") || !contextWindowValid) {
+  if (
+    provider === undefined ||
+    !profile.apiKeyRef.startsWith("secret://") ||
+    !maxTokensValid ||
+    !contextWindowValid
+  ) {
     return err(
       createUnifiedError({
         code: "MODEL_PROFILE_INVALID",
@@ -449,6 +458,7 @@ function validateModelProfile(profile: ModelProfile): Result<ModelProvider, Unif
         redactedDetail: {
           profileId: profile.id,
           provider: profile.provider,
+          maxTokens: profile.maxTokens ?? null,
           contextWindow: profile.contextWindow ?? null,
           apiKeyRef: redactJsonValue("apiKeyRef", profile.apiKeyRef)
         }

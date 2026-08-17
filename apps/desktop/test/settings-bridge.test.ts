@@ -176,7 +176,7 @@ describe("M22 settings bridge", () => {
     });
   });
 
-  test("accepts an empty Max Tokens field and saves the compatible default", async () => {
+  test("accepts an empty Max Tokens field and leaves the provider default unset", async () => {
     const calls: string[] = [];
     const bridge = createSettingsBridge(createApi(calls));
     await bridge.load();
@@ -185,7 +185,8 @@ describe("M22 settings bridge", () => {
     const saved = await bridge.saveDraft();
 
     expect(saved.saveStatus).toBe("saved");
-    expect(saved.profiles[0]?.maxTokens).toBe(4096);
+    expect(saved.profiles[0]?.maxTokens).toBeUndefined();
+    expect(saved.draft.maxTokens).toBe("");
     expect(calls).toContain("settings.saveModelProfile:model_default:openai-compatible:false");
   });
 
