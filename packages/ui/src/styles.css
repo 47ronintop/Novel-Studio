@@ -3392,6 +3392,17 @@ textarea:focus-visible,
   margin: 0;
 }
 
+.ns-editor-history-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.ns-history-toggle {
+  color: var(--ns-accent);
+  min-height: 24px;
+}
+
 .ns-editor-panel {
   background: var(--ns-surface);
   border: 1px solid var(--ns-border);

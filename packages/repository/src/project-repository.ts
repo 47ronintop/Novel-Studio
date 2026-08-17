@@ -85,7 +85,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
       history: {
         snapshotPolicy: "manual-and-interval",
         intervalMinutes: 10,
-        maxSnapshotsPerChapter: 20
+        maxSnapshotsPerChapter: 10
       },
       models: {
         defaultProfileId: "model_default",

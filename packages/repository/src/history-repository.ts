@@ -42,6 +42,8 @@ export interface HistoryRepositoryOptions {
   traceId?: string;
   now?: () => string;
   createVersionId?: () => string;
+  /** Chapter history retention. Omitted/undefined uses the default of 10; null disables cleanup. */
+  maxSnapshotsPerChapter?: number | null | undefined;
   storyAnalysisLock?: {
     readonly staleAfterMs?: number;
     readonly waitTimeoutMs?: number;
@@ -56,6 +58,7 @@ export class HistoryRepository
   private readonly now: () => string;
   private readonly createVersionId: () => string;
   private readonly pathGuard: ProjectPathGuard;
+  private readonly maxSnapshotsPerChapter: number | null;
 
   public constructor(private readonly options: HistoryRepositoryOptions) {
     this.traceId = options.traceId ?? "trace_repository_history";
@@ -63,6 +66,8 @@ export class HistoryRepository
     this.createVersionId =
       options.createVersionId ?? (() => `ver_${randomUUID().replaceAll("-", "")}`);
     this.pathGuard = createProjectPathGuard(options.projectRoot);
+    this.maxSnapshotsPerChapter =
+      options.maxSnapshotsPerChapter === null ? null : (options.maxSnapshotsPerChapter ?? 10);
   }
 
   public async snapshotTextAsset(
@@ -94,6 +99,10 @@ export class HistoryRepository
           })
         );
       }
+    }
+    const duplicate = await this.findConsecutiveDuplicate(input);
+    if (duplicate !== undefined) {
+      return ok(duplicate);
     }
     const versionId = this.createVersionId();
     const storyBibleStatusTransition = createStoryBibleStatusTransition(
@@ -186,6 +195,15 @@ export class HistoryRepository
         }
       }
       return recordWrite;
+    }
+
+    // Retention is deliberately best effort. The snapshot and its record are already
+    // durable at this point, so a cleanup failure must never turn a successful save into
+    // an error or interrupt a surrounding transaction.
+    try {
+      await this.cleanupChapterSnapshots(input.assetType, input.assetId);
+    } catch {
+      // Preserve the successful snapshot result; stale history can be cleaned later.
     }
 
     return ok(record);
@@ -630,6 +648,92 @@ export class HistoryRepository
     }
   }
 
+  private async findConsecutiveDuplicate(
+    input: SnapshotTextAssetInput
+  ): Promise<VersionRecord | undefined> {
+    if (input.assetType !== "chapter" && input.assetType !== "text") return undefined;
+    // Transition proofs and candidate bodies carry transaction semantics that cannot be
+    // represented by reusing an earlier record, even when the current body is unchanged.
+    if (
+      input.chapterStatusTransitionProof !== undefined ||
+      input.candidateContent !== undefined ||
+      isProtectedSnapshotReason(input.reason)
+    ) {
+      return undefined;
+    }
+    try {
+      const records = await this.listTextAssetSnapshotRecords({
+        assetType: input.assetType,
+        assetId: input.assetId
+      });
+      if (!records.ok) return undefined;
+      const latest = records.value[0];
+      const checksum = `sha256:${createHash("sha256").update(input.content).digest("hex")}`;
+      if (
+        latest === undefined ||
+        isProtectedSnapshotReason(latest.reason) ||
+        latest.checksum !== checksum
+      ) {
+        return undefined;
+      }
+      const versionValidation = validateVersionId(latest.versionId);
+      if (!versionValidation.ok) return undefined;
+      const snapshotPath = join(
+        this.options.projectRoot,
+        this.snapshotRelativePath(input.assetType, input.assetId, latest.versionId)
+      );
+      const pathValidation = await verifyProjectStoragePath(
+        this.pathGuard,
+        snapshotPath,
+        this.traceId
+      );
+      if (!pathValidation.ok) return undefined;
+      await readFile(snapshotPath, "utf8");
+      return latest;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async cleanupChapterSnapshots(assetType: string, assetId: string): Promise<void> {
+    if (assetType !== "chapter" || this.maxSnapshotsPerChapter === null) {
+      return;
+    }
+    const records = await this.listTextAssetSnapshotRecords({ assetType: "chapter", assetId });
+    if (!records.ok) return;
+    const ordinary = records.value.filter((record) => !isProtectedSnapshotReason(record.reason));
+    const keep = new Set(
+      ordinary.slice(0, Math.max(0, this.maxSnapshotsPerChapter)).map((record) => record.versionId)
+    );
+    const candidates = records.value.filter(
+      (record) => !isProtectedSnapshotReason(record.reason) && !keep.has(record.versionId)
+    );
+    await Promise.all(candidates.map((record) => this.deleteChapterSnapshot(assetId, record)));
+  }
+
+  private async deleteChapterSnapshot(assetId: string, record: VersionRecord): Promise<void> {
+    const versionValidation = validateVersionId(record.versionId);
+    if (!versionValidation.ok) return;
+    const recordPath = join(
+      this.options.projectRoot,
+      "history",
+      "chapters-records",
+      this.historyAssetKey("chapter", assetId),
+      `${record.versionId}.json`
+    );
+    const snapshotPath = join(
+      this.options.projectRoot,
+      this.snapshotRelativePath("chapter", assetId, record.versionId)
+    );
+    const [recordGuard, snapshotGuard] = await Promise.all([
+      verifyProjectStoragePath(this.pathGuard, recordPath, this.traceId),
+      verifyProjectStoragePath(this.pathGuard, snapshotPath, this.traceId)
+    ]);
+    if (!recordGuard.ok || !snapshotGuard.ok) return;
+    await rm(snapshotPath, { force: true });
+    await rm(recordPath, { force: true });
+  }
+
   private snapshotRelativePath(assetType: string, assetId: string, versionId: string): string {
     const extension = assetType === "chapter" ? "md" : assetType === "text" ? "txt" : "json";
     return join(
@@ -747,6 +851,16 @@ export class HistoryRepository
       );
     }
   }
+}
+
+function isProtectedSnapshotReason(reason: SnapshotTextAssetInput["reason"]): boolean {
+  return (
+    reason === "before-ai-apply" ||
+    reason === "before-agent-write" ||
+    reason === "before-agent-session-undo" ||
+    reason === "before-rollback" ||
+    reason === "migration"
+  );
 }
 
 function validateHistoryAssetId(assetType: string, assetId: string): Result<void, UnifiedError> {

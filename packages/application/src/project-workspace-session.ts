@@ -213,7 +213,10 @@ export interface ProjectWorkspaceSessionOptions {
   projectCreationRepository: ProjectCreationRepositoryPort;
   createProjectRepository(projectRoot: string): ProjectRepositoryPort;
   createChapterRepository(projectRoot: string): ProjectChapterRepositoryPort;
-  createHistoryRepository(projectRoot: string): ChapterHistoryRepositoryPort;
+  createHistoryRepository(
+    projectRoot: string,
+    maxSnapshotsPerChapter?: number | null
+  ): ChapterHistoryRepositoryPort;
   createRecoveryRepository(projectRoot: string): RecoveryRepositoryPort;
   createProjectLockRepository?: (projectRoot: string) => ProjectWorkspaceLockPort;
   createWorkspaceViewStateRepository?: (projectRoot: string) => ProjectWorkspaceViewStatePort;
@@ -727,7 +730,13 @@ export function createProjectWorkspaceSession(
     const previousLockRepository = projectLockRepository;
     const previousProjectRoot = state?.projectRoot;
     const candidateChapterRepository = options.createChapterRepository(projectRoot);
-    const candidateHistoryRepository = options.createHistoryRepository(projectRoot);
+    const maxSnapshotsPerChapter = readMaxSnapshotsPerChapter(
+      projectSnapshot.settings.history["maxSnapshotsPerChapter"]
+    );
+    const candidateHistoryRepository = options.createHistoryRepository(
+      projectRoot,
+      maxSnapshotsPerChapter
+    );
     const candidateRecoveryRepository = options.createRecoveryRepository(projectRoot);
     const candidateWorkspaceViewStateRepository =
       options.createWorkspaceViewStateRepository?.(projectRoot);
@@ -1146,6 +1155,11 @@ export function createProjectWorkspaceSession(
       repository
     });
   }
+}
+
+function readMaxSnapshotsPerChapter(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : undefined;
 }
 
 function creativeProjectImportEmpty<T>(): Result<T, UnifiedError> {

@@ -156,4 +156,170 @@ describe("HistoryRepository version browsing", () => {
     expect(result.ok).toBe(false);
     expect(await readdir(join(projectRoot, "history", "texts", assetKey))).toEqual([]);
   });
+
+  test("retains the configured number of ordinary chapter versions and keeps protected versions", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-retention-"));
+    tempRoots.push(projectRoot);
+    let tick = 0;
+    let sequence = 0;
+    const history = new HistoryRepository({
+      projectRoot,
+      maxSnapshotsPerChapter: 2,
+      now: () => `2026-07-04T00:00:0${tick++}.000Z`,
+      createVersionId: () => `ver_${String(++sequence).padStart(2, "0")}`
+    });
+
+    await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "one"
+    });
+    await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "before-ai-apply",
+      body: "protected"
+    });
+    await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "two"
+    });
+    await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "three"
+    });
+    await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "four"
+    });
+
+    const listed = await history.listTextAssetSnapshotRecords({
+      assetType: "chapter",
+      assetId: "ch_01"
+    });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) throw new Error(listed.error.message);
+    expect(listed.value.map((record) => record.versionId)).toEqual(["ver_05", "ver_04", "ver_02"]);
+    expect(listed.value.find((record) => record.reason === "before-ai-apply")?.versionId).toBe(
+      "ver_02"
+    );
+
+    const removed = await history.readChapterVersion("ch_01", "ver_01");
+    expect(removed.ok).toBe(false);
+    const retained = await history.readChapterVersion("ch_01", "ver_04");
+    expect(retained).toMatchObject({ ok: true, value: { content: "three" } });
+  });
+
+  test("does not prune when chapter retention is explicitly disabled", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-retention-disabled-"));
+    tempRoots.push(projectRoot);
+    let sequence = 0;
+    const history = new HistoryRepository({
+      projectRoot,
+      maxSnapshotsPerChapter: null,
+      now: (() => {
+        let tick = 0;
+        return () => `2026-07-04T00:00:0${tick++}.000Z`;
+      })(),
+      createVersionId: () => `ver_${String(++sequence).padStart(2, "0")}`
+    });
+    await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "one"
+    });
+    await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "two"
+    });
+    await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "three"
+    });
+    const listed = await history.listChapterVersions("ch_01");
+    expect(listed.ok && listed.value).toHaveLength(3);
+  });
+
+  test("uses the default retention for an explicit undefined value", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-retention-undefined-"));
+    tempRoots.push(projectRoot);
+    let sequence = 0;
+    const history = new HistoryRepository({
+      projectRoot,
+      maxSnapshotsPerChapter: undefined,
+      createVersionId: () => `ver_${String(++sequence).padStart(2, "0")}`
+    });
+    for (let index = 0; index < 11; index += 1) {
+      await history.snapshotChapterVersion({
+        chapterId: "ch_01",
+        reason: "manual-save",
+        body: `body-${index}`
+      });
+    }
+    const listed = await history.listChapterVersions("ch_01");
+    expect(listed.ok && listed.value).toHaveLength(10);
+  });
+
+  test("reuses a consecutive snapshot with the same checksum", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-dedupe-"));
+    tempRoots.push(projectRoot);
+    let sequence = 0;
+    const history = new HistoryRepository({
+      projectRoot,
+      maxSnapshotsPerChapter: null,
+      createVersionId: () => `ver_${String(++sequence).padStart(2, "0")}`
+    });
+    const first = await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "same"
+    });
+    const duplicate = await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "interval-snapshot",
+      body: "same"
+    });
+    const changed = await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "changed"
+    });
+    expect(first).toMatchObject({ ok: true, value: { versionId: "ver_01" } });
+    expect(duplicate).toMatchObject({ ok: true, value: { versionId: "ver_01" } });
+    expect(changed).toMatchObject({ ok: true, value: { versionId: "ver_02" } });
+    const listed = await history.listChapterVersions("ch_01");
+    expect(listed.ok && listed.value.map((entry) => entry.versionId)).toEqual(["ver_02", "ver_01"]);
+  });
+
+  test("never deduplicates a protected snapshot", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-history-protected-dedupe-"));
+    tempRoots.push(projectRoot);
+    let sequence = 0;
+    const history = new HistoryRepository({
+      projectRoot,
+      maxSnapshotsPerChapter: null,
+      createVersionId: () => `ver_${String(++sequence).padStart(2, "0")}`
+    });
+
+    const first = await history.snapshotChapterVersion({
+      chapterId: "ch_01",
+      reason: "manual-save",
+      body: "same"
+    });
+    const protectedSnapshot = await history.snapshotTextAsset({
+      assetType: "chapter",
+      assetId: "ch_01",
+      reason: "before-agent-write",
+      content: "same"
+    });
+
+    expect(first).toMatchObject({ ok: true, value: { versionId: "ver_01" } });
+    expect(protectedSnapshot).toMatchObject({ ok: true, value: { versionId: "ver_02" } });
+    const listed = await history.listChapterVersions("ch_01");
+    expect(listed.ok && listed.value.map((entry) => entry.versionId)).toEqual(["ver_02", "ver_01"]);
+  });
 });

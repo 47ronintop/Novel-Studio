@@ -223,10 +223,11 @@ export function createProjectDesktopApplication(
           traceId: "trace_desktop_project_chapter_repository",
           ...(options.now === undefined ? {} : { now: options.now })
         }),
-      createHistoryRepository: (projectRoot) =>
+      createHistoryRepository: (projectRoot, maxSnapshotsPerChapter) =>
         new HistoryRepository({
           projectRoot,
           traceId: "trace_desktop_project_history_repository",
+          ...(maxSnapshotsPerChapter === undefined ? {} : { maxSnapshotsPerChapter }),
           ...(options.now === undefined ? {} : { now: options.now }),
           ...(options.createVersionId === undefined
             ? {}
@@ -967,7 +968,7 @@ function createDefaultApplicationSettings(): ProjectSettings {
     history: {
       snapshotPolicy: "manual-and-interval",
       intervalMinutes: 10,
-      maxSnapshotsPerChapter: 20
+      maxSnapshotsPerChapter: 10
     },
     models: {
       defaultProfileId: "model_default",

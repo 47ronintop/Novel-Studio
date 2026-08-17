@@ -104,6 +104,60 @@ describe("ChapterEditor", () => {
     host.remove();
   });
 
+  test("shows the recent five versions and expands the full history accessibly", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const onVersionPreview = vi.fn();
+    const onVersionRestore = vi.fn();
+    const versionHistory = Array.from({ length: 10 }, (_, index) => ({
+      versionId: `ver_${index + 1}`,
+      label: `版本 ${index + 1}`,
+      createdAt: `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`
+    }));
+
+    act(() => {
+      root.render(
+        <ChapterEditor
+          chapter={chapter}
+          saveStatus="Saved"
+          dirty={false}
+          versionHistory={versionHistory}
+          onVersionPreview={onVersionPreview}
+          onVersionRestore={onVersionRestore}
+        />
+      );
+    });
+
+    const history = host.querySelector<HTMLDetailsElement>('[aria-label="版本历史"]');
+    expect(history?.querySelector(".ns-editor-history-count")?.textContent).toBe("最近5 / 共10");
+    expect(history?.querySelectorAll(".ns-version-item")).toHaveLength(5);
+
+    act(() => history?.querySelector("summary")?.click());
+    const toggle = history?.querySelector<HTMLButtonElement>('[aria-controls="ns-version-list"]');
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle?.textContent).toBe("查看全部");
+
+    act(() => toggle?.click());
+    expect(history?.querySelectorAll(".ns-version-item")).toHaveLength(10);
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle?.textContent).toBe("收起");
+
+    act(() => {
+      history?.querySelector<HTMLButtonElement>('[aria-label="预览版本 版本 10"]')?.click();
+      history?.querySelector<HTMLButtonElement>('[aria-label="恢复版本 版本 10"]')?.click();
+    });
+    expect(onVersionPreview).toHaveBeenCalledWith("ver_10");
+    expect(onVersionRestore).toHaveBeenCalledWith("ver_10");
+
+    act(() => toggle?.click());
+    expect(history?.querySelectorAll(".ns-version-item")).toHaveLength(5);
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
   test("renders callback-driven save, version preview, restore, and preview-only AI diff controls", () => {
     const html = renderToStaticMarkup(
       <ChapterEditor

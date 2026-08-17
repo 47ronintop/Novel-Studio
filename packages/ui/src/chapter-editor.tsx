@@ -1,6 +1,6 @@
 import type { ChapterDocument, ChapterStatus } from "@novel-studio/shared";
 import { ChevronRight, Eye, History, RotateCcw, X } from "lucide-react";
-import { useCallback, useMemo, useRef, type CSSProperties } from "react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   CodeMirrorDocumentEditor,
   type CodeMirrorDocumentSelection
@@ -14,6 +14,7 @@ import {
 
 const LARGE_DOCUMENT_LINE_THRESHOLD = 200;
 const MAX_RENDERED_GUTTER_LINES = 120;
+const RECENT_VERSION_LIMIT = 5;
 const VERSION_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
   month: "2-digit",
@@ -127,6 +128,7 @@ export function ChapterEditor({
   onVersionRestore,
   onDiffPreviewClose
 }: ChapterEditorProps) {
+  const [showAllVersions, setShowAllVersions] = useState(false);
   const editorFocusRef = useRef<() => void>(() => undefined);
   const editorSelectionRef = useRef<(selection: CodeMirrorDocumentSelection) => void>(
     () => undefined
@@ -138,6 +140,10 @@ export function ChapterEditor({
     ? documentLines.slice(0, MAX_RENDERED_GUTTER_LINES)
     : documentLines;
   const diffSummary = diffPreview === undefined ? undefined : summarizeDiff(diffPreview);
+  const recentVersionCount = Math.min(versionHistory.length, RECENT_VERSION_LIMIT);
+  const visibleVersionHistory = showAllVersions
+    ? versionHistory
+    : versionHistory.slice(0, RECENT_VERSION_LIMIT);
   const registerEditorFocus = useCallback((focus: () => void) => {
     editorFocusRef.current = focus;
   }, []);
@@ -265,7 +271,9 @@ export function ChapterEditor({
             <span className="ns-editor-history-label">
               <History aria-hidden="true" size={14} />
               <span>版本历史</span>
-              <span className="ns-editor-history-count">{versionHistory.length}</span>
+              <span className="ns-editor-history-count">
+                最近{recentVersionCount} / 共{versionHistory.length}
+              </span>
             </span>
             <ChevronRight aria-hidden="true" className="ns-editor-history-chevron" size={14} />
           </summary>
@@ -273,42 +281,57 @@ export function ChapterEditor({
             {versionHistory.length === 0 ? (
               <p className="ns-editor-history-empty">暂无版本记录</p>
             ) : (
-              <ul className="ns-version-list">
-                {versionHistory.map((entry) => (
-                  <li className="ns-version-item" key={entry.versionId}>
-                    <div className="ns-version-main">
-                      <span>{entry.label}</span>
-                      <time dateTime={entry.createdAt}>
-                        {formatVersionTimestamp(entry.createdAt)}
-                      </time>
-                    </div>
-                    <div className="ns-version-actions">
-                      <button
-                        aria-label={`预览版本 ${entry.label}`}
-                        className="ns-icon-button"
-                        onClick={() => {
-                          onVersionPreview?.(entry.versionId);
-                        }}
-                        title={`预览版本 ${entry.label}`}
-                        type="button"
-                      >
-                        <Eye aria-hidden="true" size={13} />
-                      </button>
-                      <button
-                        aria-label={`恢复版本 ${entry.label}`}
-                        className="ns-icon-button"
-                        onClick={() => {
-                          onVersionRestore?.(entry.versionId);
-                        }}
-                        title={`恢复版本 ${entry.label}`}
-                        type="button"
-                      >
-                        <RotateCcw aria-hidden="true" size={13} />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul className="ns-version-list" id="ns-version-list">
+                  {visibleVersionHistory.map((entry) => (
+                    <li className="ns-version-item" key={entry.versionId}>
+                      <div className="ns-version-main">
+                        <span>{entry.label}</span>
+                        <time dateTime={entry.createdAt}>
+                          {formatVersionTimestamp(entry.createdAt)}
+                        </time>
+                      </div>
+                      <div className="ns-version-actions">
+                        <button
+                          aria-label={`预览版本 ${entry.label}`}
+                          className="ns-icon-button"
+                          onClick={() => {
+                            onVersionPreview?.(entry.versionId);
+                          }}
+                          title={`预览版本 ${entry.label}`}
+                          type="button"
+                        >
+                          <Eye aria-hidden="true" size={13} />
+                        </button>
+                        <button
+                          aria-label={`恢复版本 ${entry.label}`}
+                          className="ns-icon-button"
+                          onClick={() => {
+                            onVersionRestore?.(entry.versionId);
+                          }}
+                          title={`恢复版本 ${entry.label}`}
+                          type="button"
+                        >
+                          <RotateCcw aria-hidden="true" size={13} />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {versionHistory.length > RECENT_VERSION_LIMIT ? (
+                  <div className="ns-editor-history-actions">
+                    <button
+                      aria-controls="ns-version-list"
+                      aria-expanded={showAllVersions}
+                      className="ns-icon-text-button ns-history-toggle"
+                      onClick={() => setShowAllVersions((expanded) => !expanded)}
+                      type="button"
+                    >
+                      {showAllVersions ? "收起" : "查看全部"}
+                    </button>
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
         </details>
