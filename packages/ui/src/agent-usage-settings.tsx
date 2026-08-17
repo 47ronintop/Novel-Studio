@@ -498,42 +498,6 @@ function formatTokenCount(value: number | undefined): string {
   return value === undefined ? "不可用" : value.toLocaleString();
 }
 
-function cacheOutcomeLabel(outcome: "hit" | "miss" | "bypass" | "unknown" | undefined): string {
-  return outcome === "hit"
-    ? "命中"
-    : outcome === "miss"
-      ? "未命中"
-      : outcome === "bypass"
-        ? "跳过"
-        : "未知";
-}
-
-function cacheBypassReasonLabel(
-  reason:
-    | "policy_none"
-    | "unsupported_provider"
-    | "below_minimum_tokens"
-    | "identity_unverified"
-    | "resource_unavailable"
-    | "resource_create_failed"
-    | "resource_expired"
-    | "cache_error"
-    | "usage_unavailable"
-): string {
-  const labels = {
-    policy_none: "策略未启用",
-    unsupported_provider: "Provider 不支持",
-    below_minimum_tokens: "低于最小 token 数",
-    identity_unverified: "身份未验证",
-    resource_unavailable: "资源不可用",
-    resource_create_failed: "资源创建失败",
-    resource_expired: "资源已过期",
-    cache_error: "缓存错误",
-    usage_unavailable: "用量不可用"
-  } as const;
-  return labels[reason];
-}
-
 function formatRunTime(timestamp: string): string {
   const parsed = new Date(timestamp);
   if (!Number.isFinite(parsed.getTime())) return "时间未知";
@@ -545,14 +509,19 @@ function formatRunTime(timestamp: string): string {
 }
 
 function formatRunCache(run: AgentUsageReport["runs"][number]): string {
-  if (run.cacheOutcome === "unknown" || run.cacheOutcome === undefined) return "无缓存数据";
-  if (run.cacheOutcome === "bypass") {
-    return run.cacheBypassReason === undefined
-      ? "跳过"
-      : `跳过 · ${cacheBypassReasonLabel(run.cacheBypassReason)}`;
-  }
   if (run.cacheOutcome === "hit" && run.cacheReadTokens !== undefined) {
-    return `${cacheOutcomeLabel(run.cacheOutcome)} · 读取 ${formatTokenCount(run.cacheReadTokens)}`;
+    return `命中 · 读取 ${formatTokenCount(run.cacheReadTokens)}`;
   }
-  return cacheOutcomeLabel(run.cacheOutcome);
+  if (run.cacheOutcome === "hit") return "命中";
+  if (run.cacheOutcome === "miss") return "未命中";
+  if (run.cacheOutcome === "bypass" && run.cacheBypassReason === "policy_none") {
+    return "未启用";
+  }
+  if (run.cacheOutcome === "bypass" && run.cacheBypassReason === "below_minimum_tokens") {
+    return "低于门槛";
+  }
+  return (run.cacheOutcome === "unknown" || run.cacheOutcome === undefined) &&
+    run.cacheMode === null
+    ? "未上报（旧记录）"
+    : "未上报";
 }

@@ -5714,7 +5714,8 @@ function toModelProfile(value: unknown): ModelProfile | undefined {
     !isOptionalNumber(value.topP) ||
     !isOptionalNumber(value.frequencyPenalty) ||
     !isOptionalNumber(value.presencePenalty) ||
-    !isOptionalBoolean(value.reasoningEffortEnabled)
+    !isOptionalBoolean(value.reasoningEffortEnabled) ||
+    !isOptionalPromptCachePreference(value.promptCachePreference)
   ) {
     return undefined;
   }
@@ -5735,8 +5736,17 @@ function toModelProfile(value: unknown): ModelProfile | undefined {
     ...(value.presencePenalty === undefined ? {} : { presencePenalty: value.presencePenalty }),
     ...(value.reasoningEffortEnabled === undefined
       ? {}
-      : { reasoningEffortEnabled: value.reasoningEffortEnabled })
+      : { reasoningEffortEnabled: value.reasoningEffortEnabled }),
+    ...(value.promptCachePreference === undefined
+      ? {}
+      : { promptCachePreference: value.promptCachePreference })
   };
+}
+
+function isOptionalPromptCachePreference(
+  value: unknown
+): value is ModelProfile["promptCachePreference"] {
+  return value === undefined || value === "auto" || value === "enabled" || value === "disabled";
 }
 
 function optionalModelProfileFromIpc(value: unknown): ModelProfile | undefined {

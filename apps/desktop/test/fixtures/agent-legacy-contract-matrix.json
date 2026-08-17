@@ -77,7 +77,7 @@
       "tests": [
         {
           "path": "packages/application/test/agent-prompt-materializer.test.ts",
-          "title": "places prior summary before outline and keeps the current request last in the initial turn"
+          "title": "places stable project context before dynamic conversation data and keeps the request last"
         }
       ],
       "readerDisposition": "replay_only",

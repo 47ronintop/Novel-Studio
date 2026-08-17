@@ -88,6 +88,7 @@ import {
   createMcpSettingsSession,
   mangleToolId,
   reasoningStrengthForModel,
+  resolveAgentPromptCacheCapability,
   resolveCatalogAgentModelCapabilities
 } from "@novel-studio/application";
 import {
@@ -1450,7 +1451,12 @@ async function resolveDesktopAgentModelStartFacts(
       ...(contextWindow === undefined ? {} : { contextWindow }),
       promptCache:
         storedSecret.ok && storedSecret.value !== undefined
-          ? (catalogCapabilities?.promptCache ?? NO_AGENT_PROMPT_CACHE_CAPABILITY)
+          ? resolveAgentPromptCacheCapability({
+              provider: profile.provider,
+              modelName: selectedModelName,
+              ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
+              preference: profile.promptCachePreference ?? "auto"
+            })
           : NO_AGENT_PROMPT_CACHE_CAPABILITY
     },
     requiredContextTokens: 8_000,

@@ -103,34 +103,19 @@ async function* streamChatCompletion(
     let sawRoundCompleted = false;
     const toolCallIdsByIndex = new Map<number, string>();
     const syntheticToolCallPrefix = `tool_call_${safeIdentifier(request.requestId)}`;
-    try {
-      for await (const chunk of streamTransport(transportRequest)) {
-        for (const event of parseStreamChunk(
-          chunk,
-          toolCallIdsByIndex,
-          syntheticToolCallPrefix,
-          request
-        )) {
-          emittedEvent = true;
-          if (event.type === "round_completed") {
-            if (sawRoundCompleted) throw duplicateRoundCompletion();
-            sawRoundCompleted = true;
-          }
-          yield event;
-        }
-      }
-      throwIfStreamIncomplete(request, sawRoundCompleted);
-      return;
-    } catch (error) {
-      if (!emittedEvent && shouldRetryWithoutReasoningEffort(error, transportRequest)) {
-        yield reasoningEffortIgnoredWarning();
-        for await (const chunk of streamTransport(omitReasoningEffort(transportRequest))) {
+    let currentRequest = transportRequest;
+    let streamOptionsRetried = false;
+    let reasoningRetried = false;
+    for (;;) {
+      try {
+        for await (const chunk of streamTransport(currentRequest)) {
           for (const event of parseStreamChunk(
             chunk,
             toolCallIdsByIndex,
             syntheticToolCallPrefix,
             request
           )) {
+            emittedEvent = true;
             if (event.type === "round_completed") {
               if (sawRoundCompleted) throw duplicateRoundCompletion();
               sawRoundCompleted = true;
@@ -140,8 +125,28 @@ async function* streamChatCompletion(
         }
         throwIfStreamIncomplete(request, sawRoundCompleted);
         return;
+      } catch (error) {
+        if (
+          !emittedEvent &&
+          !streamOptionsRetried &&
+          shouldRetryWithoutStreamOptions(error, currentRequest)
+        ) {
+          streamOptionsRetried = true;
+          currentRequest = omitStreamOptions(currentRequest);
+          continue;
+        }
+        if (
+          !emittedEvent &&
+          !reasoningRetried &&
+          shouldRetryWithoutReasoningEffort(error, currentRequest)
+        ) {
+          reasoningRetried = true;
+          yield reasoningEffortIgnoredWarning();
+          currentRequest = omitReasoningEffort(currentRequest);
+          continue;
+        }
+        throw error;
       }
-      throw error;
     }
   } catch (error) {
     throw normalizeOpenAiCompatibleError(error, request.abortSignal);
@@ -184,6 +189,18 @@ function createTransportRequest(
     messages: request.messages.map(toOpenAiCompatibleMessage),
     stream: streaming
   };
+  // OpenAI-compatible endpoints often emit final streaming usage only when asked. Request it for
+  // a valid automatic-prefix policy, including below-threshold prompts so the bypass remains
+  // observable; requests without that policy retain their existing shape.
+  const cacheResolution = resolveOpenAiPromptCache(request).resolution;
+  if (
+    streaming &&
+    (cacheResolution.active ||
+      (cacheResolution.config?.mode === "automatic_prefix" &&
+        cacheResolution.bypassReason === "below_minimum_tokens"))
+  ) {
+    body.stream_options = { include_usage: true } as unknown as JsonObject;
+  }
 
   if (request.parameters.temperature !== undefined) {
     body.temperature = request.parameters.temperature;
@@ -374,6 +391,51 @@ function shouldRetryWithoutReasoningEffort(
   return parameterCode || parameterMessage;
 }
 
+function shouldRetryWithoutStreamOptions(
+  error: unknown,
+  request: OpenAiCompatibleTransportRequest
+): boolean {
+  if (
+    !Object.hasOwn(request.body, "stream_options") ||
+    !(error instanceof OpenAiCompatibleHttpError) ||
+    error.status < 400 ||
+    error.status >= 500
+  ) {
+    return false;
+  }
+  const message = `${error.message}\n${readProviderErrorMessage(error.body) ?? ""}`;
+  const code = readProviderErrorCode(error.body);
+  const parameter = readProviderErrorParameter(error.body);
+  const names = /stream[_ .-]?options?|include[_ .-]?usage/i;
+  const namedParameter =
+    names.test(message) ||
+    (parameter !== undefined &&
+      /^(?:stream_options(?:\.include_usage)?|include_usage)$/i.test(parameter));
+  if (!namedParameter) {
+    return false;
+  }
+  const unsupportedMarker =
+    /(?:unknown|unrecognized|unrecognised|unexpected|unsupported|not supported|not allowed|invalid)/i;
+  if (
+    code !== undefined &&
+    /^(?:(?:unknown|unrecognized|unrecognised|unsupported|not[_ .-]?supported)[_. -]?(?:parameter|param|field|property|option|argument)?|invalid[_. -](?:parameter|param|field|property|option|argument))$/i.test(
+      code
+    )
+  ) {
+    return true;
+  }
+  return (
+    unsupportedMarker.test(message) &&
+    (/(?:unknown|unrecognized|unrecognised|unexpected|unsupported|not supported|not allowed|invalid)\b[^\n]{0,80}(?:stream[_ .-]?options?|include[_ .-]?usage)/i.test(
+      message
+    ) ||
+      /(?:stream[_ .-]?options?|include[_ .-]?usage)[^\n]{0,80}(?:unknown|unrecognized|unrecognised|unexpected|unsupported|not supported|not allowed|invalid)\b/i.test(
+        message
+      ) ||
+      (parameter !== undefined && unsupportedMarker.test(message)))
+  );
+}
+
 function hasReasoningEffort(body: JsonObject): boolean {
   return Object.hasOwn(body, "reasoning_effort") || Object.hasOwn(body, "reasoning");
 }
@@ -388,6 +450,14 @@ function omitReasoningEffort(
     ...request,
     body
   };
+}
+
+function omitStreamOptions(
+  request: OpenAiCompatibleTransportRequest
+): OpenAiCompatibleTransportRequest {
+  const body = { ...request.body };
+  delete body.stream_options;
+  return { ...request, body };
 }
 
 function toOpenAiCompatibleMessage(message: LlmMessage): JsonObject {
@@ -537,6 +607,11 @@ function parseStreamChunk(
   const root = requireRecord(payload);
   const choices = root.choices;
   if (!Array.isArray(choices)) {
+    // OpenAI's optional final usage chunk has no choices on some compatible
+    // endpoints. It is valid only when it actually carries usage.
+    if (root.usage !== undefined) {
+      return [{ type: "usage", usage: parseUsage(root.usage, request) }];
+    }
     throw malformedResponse(root);
   }
 
@@ -660,10 +735,28 @@ function parseUsage(value: unknown, request?: LlmRequest): LlmUsage {
     ? value["prompt_tokens_details"]
     : undefined;
   const cacheReadTokens =
-    promptTokenDetails === undefined ? undefined : readNumber(promptTokenDetails, "cached_tokens");
+    readFirstNumber(
+      promptTokenDetails,
+      "cached_tokens",
+      "cache_read_tokens",
+      "cache_read_input_tokens"
+    ) ?? readFirstNumber(value, "cache_read_tokens", "cache_read_input_tokens", "cached_tokens");
+  const deepSeekCacheHitTokens = readNumber(value, "prompt_cache_hit_tokens");
+  const deepSeekCacheMissTokens = readNumber(value, "prompt_cache_miss_tokens");
+  const hasDeepSeekCacheEvidence =
+    deepSeekCacheHitTokens !== undefined || deepSeekCacheMissTokens !== undefined;
   const cache = resolveOpenAiPromptCache(request);
   return withLlmPromptCacheUsage(usage, cache.resolution, {
-    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(hasDeepSeekCacheEvidence
+      ? { cacheReadTokens: deepSeekCacheHitTokens ?? 0 }
+      : cacheReadTokens === undefined
+        ? {}
+        : { cacheReadTokens }),
+    ...(hasDeepSeekCacheEvidence
+      ? {
+          cacheEligibleInputTokens: (deepSeekCacheHitTokens ?? 0) + (deepSeekCacheMissTokens ?? 0)
+        }
+      : {}),
     cacheInputTokenSemantics: "included_in_input",
     ...(cache.physicalPrefixChecksum === undefined
       ? {}
@@ -863,6 +956,18 @@ function isRecord(value: unknown): value is UnknownRecord {
 function readNumber(record: UnknownRecord, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" ? value : undefined;
+}
+
+function readFirstNumber(
+  record: UnknownRecord | undefined,
+  ...keys: readonly string[]
+): number | undefined {
+  if (record === undefined) return undefined;
+  for (const key of keys) {
+    const value = readNumber(record, key);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 interface UnknownRecord {

@@ -83,6 +83,50 @@ describe("Agent prompt materializer", () => {
     );
   });
 
+  it("keeps the workspace outline in the stable prefix before prior conversation summaries", () => {
+    const providerSemanticVersionSet = createProviderSemanticVersionSetV1({
+      writingTaskIntentSchemaVersion: "not_applicable",
+      writingGenerationGuidanceVersion: "not_applicable",
+      approvalRuleSetVersion: "not_applicable",
+      approvalRuleSetChecksum: "not_applicable"
+    });
+    const round = materializeCanonicalAgentRound({
+      roundId: "round_outline_conversation",
+      runId: "run_outline_conversation",
+      roundNumber: 0,
+      profile,
+      systemPrompt: "trusted authority",
+      toolCatalogRevision: "catalog_1",
+      projectedToolDescriptors: [],
+      sharing: { defaultsRevision: "defaults_1", runGrantRevision: "grant_1" },
+      providerSemanticVersionSet,
+      userRequest: "Continue the thread",
+      conversationSummaryMessages: [{ role: "user", content: "prior summary" }],
+      contextSources: [
+        {
+          refId: "outline",
+          sourceKind: "workspace_outline",
+          content: "outline content",
+          dirty: false
+        },
+        {
+          refId: "current-file",
+          sourceKind: "disk_file",
+          relativePath: "notes.md",
+          content: "current body",
+          dirty: false
+        }
+      ]
+    });
+
+    expect(round.canonicalRoundManifest.messages.map((message) => message.kind)).toEqual([
+      "workspace_outline",
+      "prior_conversation",
+      "explicit_reference",
+      "current_user_request"
+    ]);
+  });
+
   it("binds a compaction source to the envelope summary revision", () => {
     const providerSemanticVersionSet = createProviderSemanticVersionSetV1({
       writingTaskIntentSchemaVersion: "not_applicable",
@@ -196,7 +240,7 @@ describe("Agent prompt materializer", () => {
     expect(materializeAgentRunHistory(events)).toEqual([]);
   });
 
-  it("places prior summary before outline and keeps the current request last in the initial turn", () => {
+  it("places stable project context before dynamic conversation data and keeps the request last", () => {
     const output = materializeAgentPrompt({
       profile,
       systemPrompt: buildAgentSystemPrompt(profile),
@@ -229,12 +273,15 @@ describe("Agent prompt materializer", () => {
 
     expect(output.messages.map((message) => message.content)).toEqual([
       expect.stringContaining("project_conventions"),
-      expect.stringContaining("untrusted_conversation_data"),
       expect.stringContaining("workspace_outline"),
+      expect.stringContaining("untrusted_conversation_data"),
       expect.stringContaining("current body"),
       "Edit the notes"
     ]);
-    expect(output.stablePrefixMessages).toHaveLength(1);
+    expect(output.stablePrefixMessages.map((message) => message.content)).toEqual([
+      expect.stringContaining("project_conventions"),
+      expect.stringContaining("workspace_outline")
+    ]);
     expect(output.dynamicSuffixMessages.at(-1)?.content).toBe("Edit the notes");
   });
 
@@ -325,8 +372,7 @@ describe("Agent prompt materializer", () => {
     expect(packed.sources.find((source) => source.refId === "current-file")?.sourceRevision).toBe(
       7
     );
-    expect(prompt.stablePrefixMessages).toEqual([]);
-    expect(prompt.dynamicSuffixMessages.slice(0, 2).map((message) => message.content)).toEqual(
+    expect(prompt.stablePrefixMessages.map((message) => message.content)).toEqual(
       packed.blocks.slice(0, 2).map((block) => block.content)
     );
     expect(prompt.dynamicSuffixMessages.at(-2)?.content).toBe(packed.blocks[2]?.content);
@@ -391,7 +437,7 @@ describe("Agent prompt materializer", () => {
   });
 
   it("does not invalidate the stable prefix for a request or current-file body change", () => {
-    const create = (userRequest: string, body: string) =>
+    const create = (userRequest: string, body: string, outline = "notes.md") =>
       materializeAgentPrompt({
         profile,
         systemPrompt: "trusted app prompt",
@@ -401,7 +447,7 @@ describe("Agent prompt materializer", () => {
           {
             refId: "outline",
             sourceKind: "workspace_outline",
-            content: "notes.md",
+            content: outline,
             dirty: false
           },
           {
@@ -416,6 +462,9 @@ describe("Agent prompt materializer", () => {
 
     expect(create("first", "body one").stablePrefixChecksum).toBe(
       create("second", "body two").stablePrefixChecksum
+    );
+    expect(create("first", "body one", "notes.md").stablePrefixChecksum).not.toBe(
+      create("first", "body one", "revised outline").stablePrefixChecksum
     );
   });
 
@@ -471,10 +520,10 @@ describe("Agent prompt materializer", () => {
         contextSources: [source(treeRevision)]
       });
 
-    expect(materialize("tree_1").dynamicSuffixMessages[0]?.content).toContain(
+    expect(materialize("tree_1").stablePrefixMessages[0]?.content).toContain(
       "same visible outline"
     );
-    expect(materialize("tree_2").dynamicSuffixMessages[0]?.content).toContain(
+    expect(materialize("tree_2").stablePrefixMessages[0]?.content).toContain(
       "same visible outline"
     );
     expect(materialize("tree_1").stablePrefixChecksum).not.toBe(

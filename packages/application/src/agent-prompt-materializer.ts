@@ -117,6 +117,8 @@ export interface AgentPromptMaterializationArtifactV2 extends Omit<
   "schemaVersion"
 > {
   readonly schemaVersion: "2.0";
+  /** Absent only on artifacts created before workspace outlines joined the stable prefix. */
+  readonly stablePrefixLayoutVersion?: "2.0";
   readonly artifactId: string;
   readonly runId: string;
   readonly contextSnapshotId: string;
@@ -204,10 +206,21 @@ export type CreateHistoricalAgentPromptMaterializationArtifactInput = Omit<
 >;
 
 const stableProjectSourceKinds = new Set<string>(["project_conventions", "workspace_outline"]);
-const stablePrefixSourceKinds = new Set<string>(["project_conventions"]);
+/**
+ * These project-scoped sources are materialized before mutable conversation and document data so
+ * automatic provider prefix caches can safely reuse them across requests in the same workspace.
+ */
+const stablePrefixSourceKinds = new Set<string>(["project_conventions", "workspace_outline"]);
 
 export function materializeAgentPrompt(
   input: MaterializeAgentPromptInput
+): AgentPromptMaterialization {
+  return materializeAgentPromptWithStablePrefixSourceKinds(input, stablePrefixSourceKinds);
+}
+
+function materializeAgentPromptWithStablePrefixSourceKinds(
+  input: MaterializeAgentPromptInput,
+  prefixSourceKinds: ReadonlySet<string>
 ): AgentPromptMaterialization {
   const sources = input.contextSources ?? [];
   if (
@@ -240,7 +253,7 @@ export function materializeAgentPrompt(
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
   const stablePrefixMessages = sourceEntries
-    .filter((entry) => stablePrefixSourceKinds.has(entry.source.sourceKind))
+    .filter((entry) => prefixSourceKinds.has(entry.source.sourceKind))
     .map((entry) => entry.message as MaterializedAgentMessage);
   const conversationMessages =
     input.conversationSummaryMessages === undefined
@@ -249,7 +262,7 @@ export function materializeAgentPrompt(
   const dynamicSuffixMessages: MaterializedAgentMessage[] = [
     ...conversationMessages,
     ...sourceEntries
-      .filter((entry) => !stablePrefixSourceKinds.has(entry.source.sourceKind))
+      .filter((entry) => !prefixSourceKinds.has(entry.source.sourceKind))
       .map((entry) => entry.message as MaterializedAgentMessage),
     { role: "user", content: input.userRequest },
     ...(input.historyMessages ?? [])
@@ -316,7 +329,7 @@ export function materializeCanonicalAgentRound(
     });
   };
   for (const [index, source] of orderedSources.entries()) {
-    if (source.sourceKind !== "project_conventions") continue;
+    if (!stablePrefixSourceKinds.has(source.sourceKind)) continue;
     const message = sourceMessages[index];
     if (message === undefined) throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
     addSource(source, message);
@@ -343,7 +356,7 @@ export function materializeCanonicalAgentRound(
     });
   }
   for (const [index, source] of orderedSources.entries()) {
-    if (source.sourceKind === "project_conventions") continue;
+    if (stablePrefixSourceKinds.has(source.sourceKind)) continue;
     const message = sourceMessages[index];
     if (message === undefined) throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
     addSource(source, message);
@@ -949,6 +962,7 @@ export function createAgentPromptMaterializationArtifact(
   const unsigned = {
     ...materialization,
     schemaVersion: "2.0" as const,
+    stablePrefixLayoutVersion: "2.0" as const,
     artifactId: promptMaterializationArtifactId(input.contextSnapshotId),
     runId: input.runId,
     contextSnapshotId: input.contextSnapshotId,
@@ -981,6 +995,21 @@ export function createAgentPromptMaterializationArtifact(
 export function createHistoricalAgentPromptMaterializationArtifact(
   input: CreateHistoricalAgentPromptMaterializationArtifactInput
 ): LegacyAgentPromptMaterializationArtifactV11 {
+  return createHistoricalAgentPromptMaterializationArtifactWithPrefixSourceKinds(
+    input,
+    stablePrefixSourceKinds
+  );
+}
+
+/**
+ * Keep the legacy writer/parser able to reproduce artifacts written before workspace outlines
+ * joined the stable prefix. The layout is deliberately an internal parameter; newly written
+ * artifacts always use the current source-kind set above.
+ */
+function createHistoricalAgentPromptMaterializationArtifactWithPrefixSourceKinds(
+  input: CreateHistoricalAgentPromptMaterializationArtifactInput,
+  prefixSourceKinds: ReadonlySet<string>
+): LegacyAgentPromptMaterializationArtifactV11 {
   assertPersistableContextSources(input.contextSources ?? []);
   const systemGuidanceRefId =
     input.systemGuidanceRefId ??
@@ -1001,7 +1030,10 @@ export function createHistoricalAgentPromptMaterializationArtifact(
   } catch {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
-  const materialization = materializeAgentPrompt(input);
+  const materialization = materializeAgentPromptWithStablePrefixSourceKinds(
+    input,
+    prefixSourceKinds
+  );
   const packedContextManifestChecksum = resolvePackedContextManifestChecksum(input);
   const unsigned = {
     ...materialization,
@@ -1079,6 +1111,7 @@ function parseAgentPromptMaterializationArtifactV2(
 ): AgentPromptMaterializationArtifactV2 {
   const fields = [
     "schemaVersion",
+    ...(value["stablePrefixLayoutVersion"] === undefined ? [] : ["stablePrefixLayoutVersion"]),
     "profileId",
     "profileVersion",
     "systemPrompt",
@@ -1138,6 +1171,8 @@ function parseAgentPromptMaterializationArtifactV2(
     systemGuidanceRefId === undefined ||
     contextSources === undefined ||
     conversationSummaryMessages === undefined ||
+    (value["stablePrefixLayoutVersion"] !== undefined &&
+      value["stablePrefixLayoutVersion"] !== "2.0") ||
     (value["packedContextManifestChecksum"] !== undefined &&
       packedContextManifestChecksum === undefined) ||
     !isRecord(normalized) ||
@@ -1264,10 +1299,45 @@ function parseAgentPromptMaterializationArtifactV2(
     guidanceMaterialization,
     ...(packedContextManifestChecksum === undefined ? {} : { packedContextManifestChecksum })
   });
-  if (stableSerialize(value) !== stableSerialize(recreated)) {
+  const expected =
+    value["stablePrefixLayoutVersion"] === "2.0"
+      ? recreated
+      : recreatePreWorkspaceOutlineStablePrefixArtifact(recreated, {
+          profile,
+          systemPrompt,
+          toolCatalogRevision,
+          userRequest,
+          contextSources,
+          conversationSummaryMessages
+        });
+  if (stableSerialize(value) !== stableSerialize(expected)) {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
-  return recreated;
+  return expected;
+}
+
+/**
+ * Artifacts written before the layout marker put workspace outlines after the stable prefix.
+ * Preserve their exact persisted prompt when reopening an old run; new artifacts always use 2.0.
+ */
+function recreatePreWorkspaceOutlineStablePrefixArtifact(
+  recreated: AgentPromptMaterializationArtifactV2,
+  input: MaterializeAgentPromptInput
+): AgentPromptMaterializationArtifactV2 {
+  const materialization = materializeAgentPromptWithStablePrefixSourceKinds(
+    input,
+    new Set<string>(["project_conventions"])
+  );
+  const { schemaVersion: materializationSchemaVersion, ...materialized } = materialization;
+  const { checksum: recreatedChecksum, stablePrefixLayoutVersion, ...base } = recreated;
+  void materializationSchemaVersion;
+  void recreatedChecksum;
+  void stablePrefixLayoutVersion;
+  const unsigned = { ...base, ...materialized };
+  return deepFreeze({
+    ...unsigned,
+    checksum: checksum(stableSerialize(unsigned))
+  });
 }
 
 function parseLegacyAgentPromptMaterializationArtifact(
@@ -1308,7 +1378,7 @@ function parseLegacyAgentPromptMaterializationArtifact(
   ) {
     throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
   }
-  const recreated = createHistoricalAgentPromptMaterializationArtifact({
+  const recreationInput = {
     runId,
     contextSnapshotId,
     profile,
@@ -1319,26 +1389,48 @@ function parseLegacyAgentPromptMaterializationArtifact(
     conversationSummaryMessages,
     systemGuidanceRefId,
     ...(packedContextManifestChecksum === undefined ? {} : { packedContextManifestChecksum })
-  });
+  } satisfies CreateHistoricalAgentPromptMaterializationArtifactInput;
+  const recreated = createHistoricalAgentPromptMaterializationArtifact(recreationInput);
+  if (legacyArtifactMatches(value, recreated, persistedSchemaVersion, guidanceTemplateChecksum)) {
+    return recreated;
+  }
+
+  // Schema 1.x artifacts predate the V2 layout marker. Try the previous stable-prefix split once
+  // before rejecting the artifact, so reopening an older run does not silently invalidate it.
+  const legacyLayout = createHistoricalAgentPromptMaterializationArtifactWithPrefixSourceKinds(
+    recreationInput,
+    new Set<string>(["project_conventions"])
+  );
+  if (
+    legacyArtifactMatches(value, legacyLayout, persistedSchemaVersion, guidanceTemplateChecksum)
+  ) {
+    return legacyLayout;
+  }
+  throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
+}
+
+function legacyArtifactMatches(
+  value: JsonObject,
+  recreated: LegacyAgentPromptMaterializationArtifactV11,
+  persistedSchemaVersion: "1.0" | "1.1",
+  guidanceTemplateChecksum: string
+): boolean {
   const persistedChecksumMatches =
     persistedSchemaVersion === "1.1"
       ? value["checksum"] === recreated.checksum
       : value["checksum"] === legacyArtifactChecksum(recreated);
-  if (
-    value["profileId"] !== recreated.profileId ||
-    value["profileVersion"] !== recreated.profileVersion ||
-    guidanceTemplateChecksum !== recreated.guidanceTemplateChecksum ||
-    value["stablePrefixChecksum"] !== recreated.stablePrefixChecksum ||
-    !persistedChecksumMatches ||
-    stableSerialize(value["stablePrefixMessages"]) !==
-      stableSerialize(recreated.stablePrefixMessages) ||
-    stableSerialize(value["dynamicSuffixMessages"]) !==
-      stableSerialize(recreated.dynamicSuffixMessages) ||
-    stableSerialize(value["messages"]) !== stableSerialize(recreated.messages)
-  ) {
-    throw new Error("AGENT_PROMPT_MATERIALIZATION_INVALID");
-  }
-  return recreated;
+  return (
+    value["profileId"] === recreated.profileId &&
+    value["profileVersion"] === recreated.profileVersion &&
+    guidanceTemplateChecksum === recreated.guidanceTemplateChecksum &&
+    value["stablePrefixChecksum"] === recreated.stablePrefixChecksum &&
+    persistedChecksumMatches &&
+    stableSerialize(value["stablePrefixMessages"]) ===
+      stableSerialize(recreated.stablePrefixMessages) &&
+    stableSerialize(value["dynamicSuffixMessages"]) ===
+      stableSerialize(recreated.dynamicSuffixMessages) &&
+    stableSerialize(value["messages"]) === stableSerialize(recreated.messages)
+  );
 }
 
 export function promptMaterializationArtifactId(contextSnapshotId: string): string {

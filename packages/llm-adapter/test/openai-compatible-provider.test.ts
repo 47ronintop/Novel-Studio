@@ -162,6 +162,88 @@ describe("OpenAI-compatible provider", () => {
     });
   });
 
+  test("normalizes compatible cache-read aliases and DeepSeek cache evidence", async () => {
+    const responses = [
+      {
+        choices: [{ message: { content: "GLM response." } }],
+        usage: {
+          prompt_tokens: 40,
+          completion_tokens: 5,
+          total_tokens: 45,
+          prompt_tokens_details: { cache_read_tokens: 12 }
+        }
+      },
+      {
+        choices: [{ message: { content: "DeepSeek response." } }],
+        usage: {
+          prompt_tokens: 40,
+          completion_tokens: 5,
+          total_tokens: 45,
+          prompt_cache_hit_tokens: 20,
+          prompt_cache_miss_tokens: 8
+        }
+      }
+    ];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => responses.shift()
+    });
+    const promptCache = {
+      mode: "automatic_prefix",
+      policyVersion: "compatible-automatic@1.0",
+      identityChecksum: "a".repeat(64),
+      logicalPrefixChecksum: "b".repeat(64),
+      stablePrefixMessageCount: 1,
+      minimumCacheableTokens: 1
+    } as const;
+    const adapter = createLlmAdapter({ provider });
+
+    const glm = await adapter.complete({ ...request, promptCache });
+    const deepSeek = await adapter.complete({ ...request, promptCache });
+
+    expect(isOk(glm)).toBe(true);
+    expect(isOk(deepSeek)).toBe(true);
+    if (!glm.ok || !deepSeek.ok) return;
+    expect(glm.value.usage).toMatchObject({
+      cacheReadTokens: 12,
+      cacheOutcome: "hit",
+      cacheUsageStatus: "actual"
+    });
+    expect(glm.value.usage).not.toHaveProperty("cacheEligibleInputTokens");
+    expect(deepSeek.value.usage).toMatchObject({
+      cacheReadTokens: 20,
+      cacheEligibleInputTokens: 28,
+      cacheOutcome: "hit",
+      cacheUsageStatus: "actual"
+    });
+  });
+
+  test("keeps an active compatible cache as unavailable when the provider reports no cache fields", async () => {
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => ({
+        choices: [{ message: { content: "No cache telemetry." } }],
+        usage: { prompt_tokens: 40, completion_tokens: 5, total_tokens: 45 }
+      })
+    });
+    const result = await createLlmAdapter({ provider }).complete({
+      ...request,
+      promptCache: {
+        mode: "automatic_prefix",
+        policyVersion: "compatible-automatic@1.0",
+        identityChecksum: "a".repeat(64),
+        logicalPrefixChecksum: "b".repeat(64),
+        stablePrefixMessageCount: 1,
+        minimumCacheableTokens: 1
+      }
+    });
+
+    expect(isOk(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.usage).toMatchObject({
+      cacheOutcome: "unknown",
+      cacheUsageStatus: "unavailable"
+    });
+  });
+
   test("omits max_tokens when no output cap is requested", async () => {
     const calls: OpenAiCompatibleTransportRequest[] = [];
     const provider = createOpenAiCompatibleProvider({
@@ -398,6 +480,176 @@ describe("OpenAI-compatible provider", () => {
         }
       }
     ]);
+  });
+
+  test("requests streaming usage for an active cache and accepts a usage-only final chunk", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => ({ choices: [{ message: { content: "unused" } }] }),
+      streamTransport: async function* (transportRequest) {
+        calls.push(transportRequest);
+        yield { choices: [{ delta: { content: "Cached stream." }, finish_reason: "stop" }] };
+        yield {
+          usage: {
+            prompt_tokens: 40,
+            completion_tokens: 5,
+            total_tokens: 45,
+            prompt_tokens_details: { cached_tokens: 0 }
+          }
+        };
+      }
+    });
+    const events = await collectStream(
+      createLlmAdapter({ provider }).stream({
+        ...request,
+        mode: "streaming",
+        promptCache: {
+          mode: "automatic_prefix",
+          policyVersion: "compatible-automatic@1.0",
+          identityChecksum: "a".repeat(64),
+          logicalPrefixChecksum: "b".repeat(64),
+          stablePrefixMessageCount: 1,
+          minimumCacheableTokens: 1
+        }
+      })
+    );
+
+    expect(calls[0]?.body).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true }
+    });
+    expect(JSON.stringify(calls[0]?.body)).not.toContain("promptCache");
+    expect(events).toContainEqual({
+      ok: true,
+      value: {
+        type: "usage",
+        usage: expect.objectContaining({
+          cacheReadTokens: 0,
+          cacheOutcome: "miss",
+          cacheUsageStatus: "actual"
+        })
+      }
+    });
+  });
+
+  test("retries once without stream_options when the endpoint explicitly rejects it", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    let attempt = 0;
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => ({ choices: [{ message: { content: "unused" } }] }),
+      streamTransport: async function* (transportRequest) {
+        calls.push(transportRequest);
+        if (attempt++ === 0) {
+          throw new OpenAiCompatibleHttpError({
+            status: 400,
+            message: "Unknown parameter stream_options",
+            body: {
+              error: { message: "Unknown parameter stream_options", param: "stream_options" }
+            }
+          });
+        }
+        yield { choices: [{ delta: { content: "Retried." }, finish_reason: "stop" }] };
+        yield { choices: [], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } };
+      }
+    });
+    const events = await collectStream(
+      createLlmAdapter({ provider }).stream({
+        ...request,
+        mode: "streaming",
+        promptCache: {
+          mode: "automatic_prefix",
+          policyVersion: "compatible-automatic@1.0",
+          identityChecksum: "a".repeat(64),
+          logicalPrefixChecksum: "b".repeat(64),
+          stablePrefixMessageCount: 1,
+          minimumCacheableTokens: 1
+        }
+      })
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.body).toHaveProperty("stream_options");
+    expect(calls[1]?.body).not.toHaveProperty("stream_options");
+    expect(events).toContainEqual({ ok: true, value: { type: "delta", value: "Retried." } });
+  });
+
+  test("does not retry a stream_options error without explicit incompatibility evidence", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => ({ choices: [{ message: { content: "unused" } }] }),
+      streamTransport: async function* (transportRequest) {
+        calls.push(transportRequest);
+        if (transportRequest.body["stream"] !== true) yield { choices: [] };
+        throw new OpenAiCompatibleHttpError({
+          status: 400,
+          message: "Provider returned HTTP 400.",
+          body: { error: { message: "Request could not be processed", param: "stream_options" } }
+        });
+      }
+    });
+    const events = await collectStream(
+      createLlmAdapter({ provider }).stream({
+        ...request,
+        mode: "streaming",
+        promptCache: {
+          mode: "automatic_prefix",
+          policyVersion: "compatible-automatic@1.0",
+          identityChecksum: "a".repeat(64),
+          logicalPrefixChecksum: "b".repeat(64),
+          stablePrefixMessageCount: 1,
+          minimumCacheableTokens: 1
+        }
+      })
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({ code: "LLM_PROVIDER_ERROR" })
+      })
+    );
+  });
+
+  test("requests usage telemetry below the cache minimum and reads top-level cache aliases", async () => {
+    const calls: OpenAiCompatibleTransportRequest[] = [];
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => ({ choices: [{ message: { content: "unused" } }] }),
+      streamTransport: async function* (transportRequest) {
+        calls.push(transportRequest);
+        yield { choices: [{ delta: { content: "Short." }, finish_reason: "stop" }] };
+        yield { choices: [], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } };
+      }
+    });
+    const promptCache = {
+      mode: "automatic_prefix",
+      policyVersion: "compatible-automatic@1.0",
+      identityChecksum: "a".repeat(64),
+      logicalPrefixChecksum: "b".repeat(64),
+      stablePrefixMessageCount: 1,
+      minimumCacheableTokens: 10,
+      eligibleInputTokens: 2
+    } as const;
+    const events = await collectStream(
+      createLlmAdapter({ provider }).stream({ ...request, mode: "streaming", promptCache })
+    );
+    expect(calls[0]?.body).toHaveProperty("stream_options", { include_usage: true });
+    expect(events).toContainEqual(
+      expect.objectContaining({ ok: true, value: expect.objectContaining({ type: "usage" }) })
+    );
+
+    const nonStreaming = await createOpenAiCompatibleProvider({
+      transport: async () => ({
+        choices: [{ message: { content: "Top-level." } }],
+        usage: {
+          prompt_tokens: 4,
+          completion_tokens: 1,
+          total_tokens: 5,
+          cache_read_input_tokens: 3
+        }
+      })
+    }).complete({ ...request, promptCache: { ...promptCache, eligibleInputTokens: 20 } });
+    expect(nonStreaming.usage).toMatchObject({ cacheReadTokens: 3, cacheOutcome: "hit" });
   });
 
   test("preserves streamed tool-call deltas as tool events instead of text", async () => {
@@ -765,24 +1017,27 @@ describe("OpenAI-compatible provider", () => {
     "ollama",
     "lm-studio",
     "vllm"
-  ] as const)("rejects undeclared generic reasoning for %s before transport", async (providerId) => {
-    const calls: OpenAiCompatibleTransportRequest[] = [];
-    const provider = createOpenAiCompatibleProvider({
-      transport: async (transportRequest) => {
-        calls.push(transportRequest);
-        return readFixture("openai-compatible-chat-success.json");
-      }
-    });
+  ] as const)(
+    "rejects undeclared generic reasoning for %s before transport",
+    async (providerId) => {
+      const calls: OpenAiCompatibleTransportRequest[] = [];
+      const provider = createOpenAiCompatibleProvider({
+        transport: async (transportRequest) => {
+          calls.push(transportRequest);
+          return readFixture("openai-compatible-chat-success.json");
+        }
+      });
 
-    const result = await createLlmAdapter({ provider }).complete({
-      ...request,
-      modelProfile: { ...request.modelProfile, provider: providerId },
-      parameters: { ...request.parameters, reasoningEffort: "high" }
-    });
+      const result = await createLlmAdapter({ provider }).complete({
+        ...request,
+        modelProfile: { ...request.modelProfile, provider: providerId },
+        parameters: { ...request.parameters, reasoningEffort: "high" }
+      });
 
-    expect(isErr(result)).toBe(true);
-    expect(calls).toHaveLength(0);
-  });
+      expect(isErr(result)).toBe(true);
+      expect(calls).toHaveLength(0);
+    }
+  );
 
   test("does not restore static reasoning when Main explicitly hides the capability", async () => {
     const calls: OpenAiCompatibleTransportRequest[] = [];

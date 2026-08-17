@@ -20,12 +20,14 @@ export {
 export {
   preflightAgentModelCapabilities,
   normalizeAgentPromptCacheCapability,
+  resolveAgentPromptCacheCapability,
   resolveCatalogAgentModelCapabilities,
   resolveAgentReasoningEffort,
   type AgentModelCapabilityCatalogEntry,
   type AgentModelCapabilityDeclaration,
   type AgentModelCapabilityPreflightInput,
   type AgentModelCapabilitySnapshot,
+  type ResolveAgentPromptCacheCapabilityInput,
   type AgentReasoningEffortResolution,
   type AgentReasoningEffortResolutionInput
 } from "./agent-model-capabilities.js";
@@ -326,6 +328,7 @@ export type {
   ModelConnectionResult,
   ModelConnectionTester,
   ModelProfile,
+  PromptCachePreference,
   ModelSettings,
   ModelRuntimeProfile,
   ModelSettingsSession,

@@ -239,6 +239,174 @@ describe("AgentRunSession", () => {
     expect(written).toEqual([]);
   });
 
+  test("retains cache hit evidence across rounds without inventing a partial hit-rate denominator", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    const written: Record<string, unknown>[] = [];
+    let round = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_cache_miss_then_hit" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          if (round === 1) {
+            yield {
+              type: "usage",
+              usage: {
+                inputTokens: 100,
+                outputTokens: 10,
+                totalTokens: 110,
+                cacheReadTokens: 0,
+                cacheEligibleInputTokens: 100,
+                cacheOutcome: "miss",
+                cacheUsageStatus: "actual",
+                cacheInputTokenSemantics: "included_in_input",
+                usageStatus: "actual",
+                cost: { amount: 0, currency: "", status: "unknown" }
+              }
+            };
+            yield toolCall("cache_probe_read", "read_project_text", { path: "notes.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield {
+            type: "usage",
+            usage: {
+              inputTokens: 50,
+              outputTokens: 5,
+              totalTokens: 55,
+              cacheReadTokens: 40,
+              cacheOutcome: "hit",
+              cacheUsageStatus: "unavailable",
+              cacheInputTokenSemantics: "included_in_input",
+              usageStatus: "actual",
+              cost: { amount: 0, currency: "", status: "unknown" }
+            }
+          };
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "read", data: {} } };
+        }
+      },
+      usageSink: {
+        async writeFinal(record: Record<string, unknown>) {
+          written.push(record);
+          return { ok: true, value: record };
+        }
+      },
+      usageBudgetResolver: async () => ({
+        ok: true,
+        value: { contextWindow: 128000, safeInputBudget: 100000 }
+      })
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      const observed = await session.readAgentRun("run_cache_miss_then_hit");
+      expect(observed).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: {
+            status: "completed",
+            usageSummary: {
+              cacheReadTokens: 40,
+              cacheOutcome: "hit",
+              cacheUsageStatus: "actual"
+            }
+          }
+        }
+      });
+    });
+    const completed = await session.readAgentRun("run_cache_miss_then_hit");
+    expect(completed).toMatchObject({
+      ok: true,
+      value: { snapshot: { usageSummary: {} } }
+    });
+    if (completed.ok) {
+      const snapshot = (completed.value as Record<string, unknown>)["snapshot"] as {
+        readonly usageSummary: object;
+      };
+      expect(snapshot.usageSummary).not.toHaveProperty("cacheEligibleInputTokens");
+    }
+    expect(written).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ cacheOutcome: "miss", cacheEligibleInputTokens: 100 }),
+        expect.objectContaining({ cacheOutcome: "hit", cacheReadTokens: 40 })
+      ])
+    );
+  });
+
+  test("marks different cache bypass reasons as unreported across rounds", async () => {
+    const createSession = (applicationExports as unknown as Record<string, unknown>)[
+      "createAgentRunSession"
+    ] as (options: Record<string, unknown>) => {
+      startAgentRun(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+      readAgentRun(runId: string): Promise<Record<string, unknown>>;
+    };
+    let round = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_cache_mixed_bypass" },
+      repository: memoryRepository(),
+      modelDriver: {
+        async *streamRound() {
+          round += 1;
+          yield {
+            type: "usage",
+            usage: {
+              inputTokens: 10,
+              outputTokens: 1,
+              totalTokens: 11,
+              cacheOutcome: "bypass",
+              cacheBypassReason: round === 1 ? "policy_none" : "below_minimum_tokens",
+              cacheUsageStatus: "unavailable",
+              cacheInputTokenSemantics: "unavailable",
+              usageStatus: "actual",
+              cost: { amount: 0, currency: "", status: "unknown" }
+            }
+          };
+          if (round === 1) {
+            yield toolCall("cache_bypass_read", "read_project_text", { path: "notes.md" });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: {
+        async execute() {
+          return { ok: true, value: { summary: "read", data: {} } };
+        }
+      },
+      usageBudgetResolver: async () => ({
+        ok: true,
+        value: { contextWindow: 128000, safeInputBudget: 100000 }
+      })
+    });
+
+    await session.startAgentRun(startCommand());
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_cache_mixed_bypass")).toMatchObject({
+        ok: true,
+        value: {
+          snapshot: {
+            status: "completed",
+            usageSummary: { cacheOutcome: "unknown", cacheUsageStatus: "unavailable" }
+          }
+        }
+      });
+    });
+  });
+
   test("persists missing usage for a completed round when the provider reports none", async () => {
     const createSession = (applicationExports as unknown as Record<string, unknown>)[
       "createAgentRunSession"

@@ -121,7 +121,7 @@ test("shows private daily usage analytics and clears only usage data", async () 
     await expect(runs.getByRole("listitem")).toHaveCount(3);
     await expectNoHorizontalOverflow(runs);
     await expect(runs).toContainText("命中 · 读取 100");
-    await expect(runs).toContainText("无缓存数据");
+    await expect(runs).toContainText("未上报（旧记录）");
     await expect(runs).not.toContainText(/模式：|缓存用量：|输入口径：|Prefix：|可缓存输入/);
     await expect(runs).not.toContainText(/费用|USD|EUR/);
     await expect(runs).not.toContainText("run_reported");

@@ -536,6 +536,79 @@ describe("M8 Settings UI", () => {
                 usageStatus: "actual",
                 cost: { status: "unknown", amount: 0, currency: "" },
                 timestamp: "2026-07-16T09:00:00.000Z"
+              },
+              {
+                scope: {
+                  kind: "workspace",
+                  workspaceKind: "creativeProject",
+                  workspaceId: "project_01"
+                },
+                usageId: "run_03:round_01:9",
+                runId: "run_03",
+                conversationId: "conversation_01",
+                provider: "openai",
+                model: "gpt-5",
+                totalTokens: 80,
+                cacheOutcome: "miss",
+                cacheUsageStatus: "actual",
+                usageStatus: "actual",
+                cost: { status: "unknown", amount: 0, currency: "" },
+                timestamp: "2026-07-16T10:00:00.000Z"
+              },
+              {
+                scope: {
+                  kind: "workspace",
+                  workspaceKind: "creativeProject",
+                  workspaceId: "project_01"
+                },
+                usageId: "run_04:round_01:10",
+                runId: "run_04",
+                conversationId: "conversation_01",
+                provider: "openai",
+                model: "gpt-5",
+                totalTokens: 80,
+                cacheOutcome: "unknown",
+                cacheMode: null,
+                usageStatus: "actual",
+                cost: { status: "unknown", amount: 0, currency: "" },
+                timestamp: "2026-07-16T11:00:00.000Z"
+              },
+              {
+                scope: {
+                  kind: "workspace",
+                  workspaceKind: "creativeProject",
+                  workspaceId: "project_01"
+                },
+                usageId: "run_05:round_01:11",
+                runId: "run_05",
+                conversationId: "conversation_01",
+                provider: "openai",
+                model: "gpt-5",
+                totalTokens: 80,
+                cacheOutcome: "unknown",
+                cacheMode: "automatic_prefix",
+                usageStatus: "actual",
+                cost: { status: "unknown", amount: 0, currency: "" },
+                timestamp: "2026-07-16T12:00:00.000Z"
+              },
+              {
+                scope: {
+                  kind: "workspace",
+                  workspaceKind: "creativeProject",
+                  workspaceId: "project_01"
+                },
+                usageId: "run_06:round_01:12",
+                runId: "run_06",
+                conversationId: "conversation_01",
+                provider: "openai",
+                model: "gpt-5",
+                totalTokens: 80,
+                cacheOutcome: "bypass",
+                cacheBypassReason: "policy_none",
+                cacheMode: "none",
+                usageStatus: "actual",
+                cost: { status: "unknown", amount: 0, currency: "" },
+                timestamp: "2026-07-16T13:00:00.000Z"
               }
             ],
             generatedAt: "2026-07-17T12:00:00.000Z"
@@ -567,10 +640,13 @@ describe("M8 Settings UI", () => {
     expect(html).not.toContain("可缓存输入");
     expect(html).toContain("命中 · 读取 400");
     expect(html).toContain('aria-label="运行记录分页"');
-    expect(html).toContain("第 1 / 1 页 · 共 2 条");
+    expect(html).toContain("第 1 / 1 页 · 共 6 条");
     expect(html).toContain("命中");
-    expect(html).toContain("跳过");
-    expect(html).toContain("低于最小 token 数");
+    expect(html).toContain("未命中");
+    expect(html).toContain("未启用");
+    expect(html).toContain("低于门槛");
+    expect(html).toContain("未上报（旧记录）");
+    expect(html).toContain("未上报");
     expect(html).toContain('class="agent-usage-run-card"');
     expect(html).toContain('aria-label="所选日期 Agent 运行记录"');
     expect(html).not.toContain("模式：");
@@ -795,6 +871,8 @@ describe("M8 Settings UI", () => {
     expect(html).toContain("请填写 Anthropic Messages API 根地址");
     expect(html).not.toContain("请填写兼容 OpenAI 格式的服务端点地址");
     expect(html).not.toContain('aria-label="手动启用兼容端点推理强度"');
+    expect(html).toContain('aria-label="上下文缓存"');
+    expect(html).not.toContain("尽力启用");
   });
 
   test("keeps provider visible and moves low-frequency model fields into advanced settings", () => {
@@ -817,6 +895,10 @@ describe("M8 Settings UI", () => {
     expect(baseUrlIndex).toBeGreaterThan(-1);
     expect(advancedIndex).toBeGreaterThan(baseUrlIndex);
     expect(reasoningEffortIndex).toBeGreaterThan(advancedIndex);
+    expect(html).toContain('aria-label="上下文缓存"');
+    expect(html).toContain("自动（推荐）");
+    expect(html).toContain("尽力启用");
+    expect(html).toContain("未知兼容端点，服务商可能不会上报缓存数据");
     expect(profileIdIndex).toBeGreaterThan(advancedIndex);
     expect(temperatureIndex).toBeGreaterThan(advancedIndex);
   });

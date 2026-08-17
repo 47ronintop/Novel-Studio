@@ -13514,10 +13514,22 @@ function addRoundUsage(
   const cacheReadTokens =
     (base.cacheReadTokens ?? base.cachedTokens ?? 0) + (nextCacheReadTokens ?? 0);
   const cacheWriteTokens = (base.cacheWriteTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
+  // A cache hit rate is only meaningful when every recorded round supplied its
+  // own provider-reported eligible-input denominator.  Do not turn a missing
+  // round into a zero denominator or silently retain a partial total.
+  const hasCompleteCacheEligibleInputTokens = !hasPriorUsage
+    ? usage.cacheEligibleInputTokens !== undefined
+    : base.cacheEligibleInputTokens !== undefined && usage.cacheEligibleInputTokens !== undefined;
   const cacheEligibleInputTokens =
     (base.cacheEligibleInputTokens ?? 0) + (usage.cacheEligibleInputTokens ?? 0);
   const reasoningTokens = (base.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0);
-  const cacheOutcome = aggregateCacheOutcome(base.cacheOutcome, usage.cacheOutcome, hasPriorUsage);
+  const cacheOutcome = aggregateCacheOutcome(
+    base.cacheOutcome,
+    base.cacheBypassReason,
+    usage.cacheOutcome,
+    usage.cacheBypassReason,
+    hasPriorUsage
+  );
   const cacheBypassReason =
     cacheOutcome === "bypass" &&
     (!hasPriorUsage || base.cacheBypassReason === usage.cacheBypassReason)
@@ -13534,9 +13546,7 @@ function addRoundUsage(
     ...(base.cacheWriteTokens === undefined && usage.cacheWriteTokens === undefined
       ? {}
       : { cacheWriteTokens }),
-    ...(base.cacheEligibleInputTokens === undefined && usage.cacheEligibleInputTokens === undefined
-      ? {}
-      : { cacheEligibleInputTokens }),
+    ...(hasCompleteCacheEligibleInputTokens ? { cacheEligibleInputTokens } : {}),
     cacheOutcome,
     ...(cacheBypassReason === undefined ? {} : { cacheBypassReason }),
     cacheUsageStatus: aggregateCacheUsageStatus(
@@ -13671,11 +13681,23 @@ function normalizeCacheUsage(snapshot: AgentRunSnapshot, usage: LlmUsage): LlmUs
 
 function aggregateCacheOutcome(
   prior: AgentRunUsageSummary["cacheOutcome"],
+  priorBypassReason: AgentRunUsageSummary["cacheBypassReason"],
   next: LlmUsage["cacheOutcome"],
+  nextBypassReason: LlmUsage["cacheBypassReason"],
   hasPriorUsage: boolean
 ): AgentRunUsageSummary["cacheOutcome"] {
   const current = next ?? "unknown";
-  return !hasPriorUsage ? current : prior === current ? prior : "unknown";
+  if (!hasPriorUsage) return current;
+  // A verified hit is useful evidence even if another round missed or did not
+  // report cache usage. A miss is likewise retained unless a later hit exists.
+  if (prior === "hit" || current === "hit") return "hit";
+  if (prior === "miss" || current === "miss") return "miss";
+  return prior === "bypass" &&
+    current === "bypass" &&
+    priorBypassReason !== undefined &&
+    priorBypassReason === nextBypassReason
+    ? "bypass"
+    : "unknown";
 }
 
 function aggregateCacheUsageStatus(
@@ -13685,8 +13707,10 @@ function aggregateCacheUsageStatus(
 ): AgentRunUsageSummary["cacheUsageStatus"] {
   const current = next ?? "unavailable";
   if (!hasPriorUsage) return current;
-  if (prior === "unavailable" || current === "unavailable") return "unavailable";
-  return prior === "derived" || current === "derived" ? "derived" : "actual";
+  // Keep the strongest evidence seen across rounds: a later unavailable usage
+  // report must not erase a provider-reported cache measurement.
+  const precision = { unavailable: 0, derived: 1, actual: 2 } as const;
+  return precision[prior] >= precision[current] ? prior : current;
 }
 
 function aggregateCacheInputSemantics(

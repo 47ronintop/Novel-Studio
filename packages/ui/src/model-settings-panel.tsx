@@ -29,6 +29,7 @@ export interface ModelSettingsProfile {
   readonly maxTokens?: number;
   readonly topP?: number;
   readonly reasoningEffortEnabled?: boolean;
+  readonly promptCachePreference?: "auto" | "enabled" | "disabled";
   readonly timeoutMs: number;
 }
 
@@ -47,6 +48,7 @@ export interface ModelSettingsDraft {
   readonly maxTokens: string;
   readonly topP: string;
   readonly reasoningEffortEnabled: boolean;
+  readonly promptCachePreference?: "auto" | "enabled" | "disabled";
   readonly timeoutMs: string;
 }
 
@@ -443,6 +445,9 @@ function ModelProfileSettingsSection({
                     ...(provider?.agentAdapter === "openai-compatible"
                       ? {}
                       : { reasoningEffortEnabled: false }),
+                    ...(provider?.agentAdapter === "openai-compatible"
+                      ? {}
+                      : { promptCachePreference: "auto" }),
                     ...(provider?.defaultBaseUrl === undefined
                       ? {}
                       : { baseUrl: provider.defaultBaseUrl }),
@@ -597,6 +602,33 @@ function ModelProfileSettingsSection({
                     </label>
                   </ModelField>
                 ) : null}
+                <ModelField
+                  label="上下文缓存"
+                  note={
+                    selectedProviderOption?.agentAdapter === "openai-compatible"
+                      ? "自动仅为已验证模型启用缓存；尽力启用适用于未知兼容端点，服务商可能不会上报缓存数据。"
+                      : "此 Provider 使用原生缓存策略；可保持自动或关闭。"
+                  }
+                >
+                  <select
+                    aria-label="上下文缓存"
+                    className="model-settings-select"
+                    onChange={(event) =>
+                      onDraftChange?.({
+                        promptCachePreference: event.currentTarget.value as NonNullable<
+                          ModelSettingsDraft["promptCachePreference"]
+                        >
+                      })
+                    }
+                    value={draft.promptCachePreference ?? "auto"}
+                  >
+                    <option value="auto">自动（推荐）</option>
+                    {selectedProviderOption?.agentAdapter === "openai-compatible" ? (
+                      <option value="enabled">尽力启用</option>
+                    ) : null}
+                    <option value="disabled">关闭</option>
+                  </select>
+                </ModelField>
                 <ModelField label="Profile ID" note="当前模型配置在项目中的稳定标识。">
                   <input
                     aria-label="模型 Profile ID"

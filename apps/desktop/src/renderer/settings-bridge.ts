@@ -620,7 +620,8 @@ export function createSettingsBridge(
       ...(nextDraft.baseUrl.trim().length === 0 ? {} : { baseUrl: nextDraft.baseUrl.trim() }),
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(topP === undefined ? {} : { topP }),
-      ...(nextDraft.reasoningEffortEnabled ? { reasoningEffortEnabled: true } : {})
+      ...(nextDraft.reasoningEffortEnabled ? { reasoningEffortEnabled: true } : {}),
+      promptCachePreference: nextDraft.promptCachePreference ?? "auto"
     };
   }
 
@@ -951,6 +952,12 @@ function draftFromProfile(profile: ModelProfile): ModelSettingsDraft {
     maxTokens: profile.maxTokens === undefined ? "" : String(profile.maxTokens),
     topP: profile.topP === undefined ? "" : String(profile.topP),
     reasoningEffortEnabled: profile.reasoningEffortEnabled === true,
+    promptCachePreference:
+      profile.provider === "anthropic" || profile.provider === "google-gemini"
+        ? profile.promptCachePreference === "disabled"
+          ? "disabled"
+          : "auto"
+        : (profile.promptCachePreference ?? "auto"),
     timeoutMs: String(profile.timeoutMs)
   };
 }
@@ -987,6 +994,7 @@ function newDraft(profileId: string): ModelSettingsDraft {
     maxTokens: "",
     topP: "1",
     reasoningEffortEnabled: false,
+    promptCachePreference: "auto",
     timeoutMs: "60000"
   };
 }

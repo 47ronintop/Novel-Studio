@@ -77,7 +77,10 @@
               "timeoutMs": { "type": "integer", "minimum": 1000 },
               "frequencyPenalty": { "type": "number" },
               "presencePenalty": { "type": "number" },
-              "reasoningEffortEnabled": { "type": "boolean" }
+              "reasoningEffortEnabled": { "type": "boolean" },
+              "promptCachePreference": {
+                "enum": ["auto", "enabled", "disabled"]
+              }
             },
             "additionalProperties": true
           }

@@ -96,6 +96,8 @@ export interface ModelProfile extends JsonObject {
   timeoutMs: number;
   frequencyPenalty?: number;
   presencePenalty?: number;
+  /** Missing preferences from older settings use automatic cache capabilities. */
+  promptCachePreference?: "auto" | "enabled" | "disabled";
 }
 
 export interface ModelSettings extends JsonObject {

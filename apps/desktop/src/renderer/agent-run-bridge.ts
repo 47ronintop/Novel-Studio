@@ -581,7 +581,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       notify();
       // A successful Main-owned preparation means the current sharing grant and all blocking
       // validation passed. Confirm immediately with only the opaque frozen-preview binding.
-      return confirmPreparedSendPreview(sendPreview.value);
+      // Await the confirmation before the outer finally clears startPending. Without this await,
+      // the composer becomes enabled while the Main-owned confirmation is still in flight, so a
+      // second request can race the first preview cleanup and be rejected as stale.
+      return await confirmPreparedSendPreview(sendPreview.value);
     } finally {
       state = { ...state, startPending: false };
       notify();

@@ -144,6 +144,85 @@ describe("agent model capability preflight", () => {
     });
   });
 
+  test("enables verified cache families and requires opt-in for unknown compatible endpoints", () => {
+    expect(
+      applicationExports.resolveAgentPromptCacheCapability({
+        provider: "openai",
+        modelName: "gpt-5.6-sol"
+      })
+    ).toMatchObject({
+      mode: "automatic_prefix",
+      policyVersion: "openai-automatic@1.1",
+      minimumCacheableTokens: 1_024
+    });
+    expect(
+      applicationExports.resolveAgentPromptCacheCapability({
+        provider: "openai-compatible",
+        modelName: "gpt-5.6-luna",
+        baseUrl: "https://api.openai.com/v1"
+      })
+    ).toMatchObject({ mode: "automatic_prefix", policyVersion: "openai-automatic@1.1" });
+    expect(
+      applicationExports.resolveAgentPromptCacheCapability({
+        provider: "deepseek",
+        modelName: "deepseek-reasoner"
+      })
+    ).toMatchObject({ mode: "automatic_prefix", policyVersion: "deepseek-automatic@1.0" });
+    expect(
+      applicationExports.resolveAgentPromptCacheCapability({
+        provider: "zhipu",
+        modelName: "glm-4.5-air"
+      })
+    ).toMatchObject({ mode: "automatic_prefix", policyVersion: "zhipu-automatic@1.0" });
+    expect(
+      applicationExports.resolveAgentPromptCacheCapability({
+        provider: "tongyi-qianwen",
+        modelName: "qwen3-235b-a22b"
+      })
+    ).toMatchObject({ mode: "automatic_prefix", policyVersion: "qwen-automatic@1.0" });
+
+    const unknownAuto = applicationExports.resolveAgentPromptCacheCapability({
+      provider: "openai-compatible",
+      modelName: "gpt-5.6-sol",
+      baseUrl: "https://compatible.example/v1"
+    });
+    expect(unknownAuto).toMatchObject({ mode: "none", policyVersion: "none@1.0" });
+    expect(
+      applicationExports.resolveAgentPromptCacheCapability({
+        provider: "openai",
+        modelName: "gpt-4.1",
+        baseUrl: "https://compatible.example/v1"
+      })
+    ).toMatchObject({ mode: "none", policyVersion: "none@1.0" });
+    expect(
+      applicationExports.resolveAgentPromptCacheCapability({
+        provider: "deepseek",
+        modelName: "deepseek-chat",
+        baseUrl: "https://compatible.example/v1"
+      })
+    ).toMatchObject({ mode: "none", policyVersion: "none@1.0" });
+
+    const optedIn = applicationExports.resolveAgentPromptCacheCapability({
+      provider: "openai-compatible",
+      modelName: "custom-model",
+      baseUrl: "https://compatible.example/v1",
+      preference: "enabled"
+    });
+    expect(optedIn).toMatchObject({
+      mode: "automatic_prefix",
+      policyVersion: "openai-compatible-opt-in@1.0",
+      minimumCacheableTokens: 0
+    });
+
+    expect(
+      applicationExports.resolveAgentPromptCacheCapability({
+        provider: "deepseek",
+        modelName: "deepseek-chat",
+        preference: "disabled"
+      })
+    ).toMatchObject({ mode: "none", policyVersion: "none@1.0" });
+  });
+
   test("accepts a text-only model for standalone conversation", () => {
     const result = applicationExports.preflightAgentModelCapabilities({
       profileId: "model_text_only",

@@ -544,8 +544,9 @@ describe("AgentUsageFileRepository", () => {
         localDate: "2026-07-17",
         cacheReadTokens: 10,
         cachedTokens: 10,
+        cacheEligibleInputTokens: 10,
         cacheOutcome: "hit",
-        cacheUsageStatus: "actual",
+        cacheUsageStatus: "derived",
         cacheInputTokenSemantics: "included_in_input",
         cacheMode: "automatic_prefix",
         cachePrefixChecksum: checksum
@@ -574,7 +575,7 @@ describe("AgentUsageFileRepository", () => {
       expect.objectContaining({
         localDate: "2026-07-17",
         cacheReadTokens: 10,
-        cacheEligibleInputTokens: 0
+        cacheEligibleInputTokens: 10
       })
     ]);
     expect(days.value?.[0]?.costs[0]?.estimatedCacheSavings).toBeCloseTo(0.0008, 10);

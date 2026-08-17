@@ -431,11 +431,19 @@ function hasCanonicalMessageAndSourceOrder(
   ) {
     return false;
   }
+  // The 2.0 manifest format was originally emitted as
+  // project_conventions -> prior_conversation -> workspace_outline.  New
+  // materializations put all stable project context before mutable
+  // conversation data so provider prefix caches can be reused. Keep parsing
+  // the old order for persisted ledgers while validating newly emitted rounds
+  // with the stable-prefix order.
+  const initialOrder = resolveInitialMessageOrder(messages, currentRequestOrder);
+  if (initialOrder === undefined) return false;
   let priorRank = -1;
   const pairedToolCalls = new Set<string>();
   for (const message of messages) {
     if (message.order < currentRequestOrder) {
-      const rank = initialMessageRank(message.kind);
+      const rank = initialMessageRank(message.kind, initialOrder);
       if (rank === undefined || rank < priorRank) return false;
       priorRank = rank;
     } else if (message.order === currentRequestOrder) {
@@ -448,7 +456,7 @@ function hasCanonicalMessageAndSourceOrder(
       ) {
         return false;
       }
-    } else if (initialMessageRank(message.kind) !== undefined) {
+    } else if (initialMessageRank(message.kind, initialOrder) !== undefined) {
       return false;
     }
     if (message.kind === "assistant") {
@@ -496,6 +504,26 @@ function hasCanonicalMessageAndSourceOrder(
         envelope.summaryRevision === ref.sourceRevision)
     );
   });
+}
+
+type InitialMessageOrder = "stable-prefix" | "legacy";
+
+function resolveInitialMessageOrder(
+  messages: readonly CanonicalRoundMessageV2[],
+  currentRequestOrder: number
+): InitialMessageOrder | undefined {
+  const workspaceOrder = messages.findIndex(
+    (message) => message.order < currentRequestOrder && message.kind === "workspace_outline"
+  );
+  const conversationOrder = messages.findIndex(
+    (message) =>
+      message.order < currentRequestOrder &&
+      (message.kind === "prior_conversation" || message.kind === "compaction")
+  );
+  if (workspaceOrder >= 0 && conversationOrder >= 0) {
+    return workspaceOrder < conversationOrder ? "stable-prefix" : "legacy";
+  }
+  return "stable-prefix";
 }
 
 function messageEnvelopeAndRoleMatch(
@@ -551,10 +579,18 @@ function messageEnvelopeAndRoleMatch(
   return message.toolCallId === null;
 }
 
-function initialMessageRank(kind: CanonicalRoundMessageKindV2): number | undefined {
+function initialMessageRank(
+  kind: CanonicalRoundMessageKindV2,
+  order: InitialMessageOrder
+): number | undefined {
   if (kind === "project_conventions") return 0;
-  if (kind === "prior_conversation" || kind === "compaction") return 1;
-  if (kind === "workspace_outline") return 2;
+  if (order === "stable-prefix") {
+    if (kind === "workspace_outline") return 1;
+    if (kind === "prior_conversation" || kind === "compaction") return 2;
+  } else {
+    if (kind === "prior_conversation" || kind === "compaction") return 1;
+    if (kind === "workspace_outline") return 2;
+  }
   if (kind === "explicit_reference") return 3;
   if (kind === "active_resource") return 4;
   return undefined;

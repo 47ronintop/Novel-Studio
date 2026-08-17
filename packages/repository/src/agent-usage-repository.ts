@@ -1536,7 +1536,7 @@ function cacheEligibleInputTokens(record: JsonObject): number {
 
 function cacheHitRateForRecord(record: JsonObject): number | undefined {
   if (
-    cacheUsageStatus(record["cacheUsageStatus"]) === "unavailable" ||
+    cacheUsageStatus(record["cacheUsageStatus"]) !== "actual" ||
     cacheInputTokenSemantics(record["cacheInputTokenSemantics"]) === "unavailable"
   ) {
     return undefined;

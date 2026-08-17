@@ -8,6 +8,7 @@ import type {
   ModelReasoningStrengthControl,
   ModelReasoningStrengthValue
 } from "./model-discovery-session.js";
+import type { PromptCachePreference } from "./model-settings-session.js";
 
 export interface AgentModelCapabilityDeclaration {
   readonly streaming?: boolean;
@@ -86,9 +87,180 @@ const AGENT_MODEL_CAPABILITY_CATALOG: readonly AgentModelCapabilityCatalogEntry[
     toolCalling: true,
     structuredArguments: true,
     contextWindow: 64_000,
-    promptCache: NO_AGENT_PROMPT_CACHE_CAPABILITY
+    promptCache: {
+      mode: "automatic_prefix",
+      policyVersion: "deepseek-automatic@1.0",
+      minimumCacheableTokens: 0,
+      ttlSeconds: null,
+      inputTokenSemantics: "included_in_input",
+      reportsCacheReadTokens: true,
+      reportsCacheWriteTokens: false
+    }
   }
 ] as const;
+
+export interface ResolveAgentPromptCacheCapabilityInput {
+  readonly provider: string;
+  readonly modelName: string;
+  readonly baseUrl?: string;
+  readonly preference?: PromptCachePreference;
+}
+
+const OPENAI_AUTOMATIC_PROMPT_CACHE = Object.freeze({
+  mode: "automatic_prefix",
+  policyVersion: "openai-automatic@1.1",
+  minimumCacheableTokens: 1_024,
+  ttlSeconds: 300,
+  inputTokenSemantics: "included_in_input",
+  reportsCacheReadTokens: true,
+  reportsCacheWriteTokens: false
+} satisfies AgentPromptCacheCapabilitySnapshot);
+
+const DEEPSEEK_AUTOMATIC_PROMPT_CACHE = Object.freeze({
+  mode: "automatic_prefix",
+  policyVersion: "deepseek-automatic@1.0",
+  minimumCacheableTokens: 0,
+  ttlSeconds: null,
+  inputTokenSemantics: "included_in_input",
+  reportsCacheReadTokens: true,
+  reportsCacheWriteTokens: false
+} satisfies AgentPromptCacheCapabilitySnapshot);
+
+const ZHIPU_AUTOMATIC_PROMPT_CACHE = Object.freeze({
+  mode: "automatic_prefix",
+  policyVersion: "zhipu-automatic@1.0",
+  minimumCacheableTokens: 0,
+  ttlSeconds: null,
+  inputTokenSemantics: "included_in_input",
+  reportsCacheReadTokens: true,
+  reportsCacheWriteTokens: false
+} satisfies AgentPromptCacheCapabilitySnapshot);
+
+const QWEN_AUTOMATIC_PROMPT_CACHE = Object.freeze({
+  mode: "automatic_prefix",
+  policyVersion: "qwen-automatic@1.0",
+  minimumCacheableTokens: 0,
+  ttlSeconds: null,
+  inputTokenSemantics: "included_in_input",
+  reportsCacheReadTokens: true,
+  reportsCacheWriteTokens: false
+} satisfies AgentPromptCacheCapabilitySnapshot);
+
+const COMPATIBLE_OPT_IN_PROMPT_CACHE = Object.freeze({
+  mode: "automatic_prefix",
+  policyVersion: "openai-compatible-opt-in@1.0",
+  minimumCacheableTokens: 0,
+  ttlSeconds: null,
+  inputTokenSemantics: "included_in_input",
+  reportsCacheReadTokens: true,
+  reportsCacheWriteTokens: false
+} satisfies AgentPromptCacheCapabilitySnapshot);
+
+const OPENAI_COMPATIBLE_PROVIDERS = new Set([
+  "openai-compatible",
+  "openai",
+  "openrouter",
+  "deepseek",
+  "zhipu",
+  "tongyi-qianwen",
+  "ollama",
+  "lm-studio",
+  "vllm"
+]);
+
+/**
+ * Resolve prompt caching independently from the broader model catalog. Automatic mode is limited
+ * to verified provider/model/endpoint triples; compatible endpoints may opt in without claiming
+ * that the upstream will report cache usage.
+ */
+export function resolveAgentPromptCacheCapability(
+  input: ResolveAgentPromptCacheCapabilityInput
+): AgentPromptCacheCapabilitySnapshot {
+  const preference = input.preference ?? "auto";
+  if (preference === "disabled") return NO_AGENT_PROMPT_CACHE_CAPABILITY;
+
+  const verified = resolveVerifiedPromptCacheCapability(input);
+  if (verified !== undefined) return verified;
+
+  return preference === "enabled" &&
+    OPENAI_COMPATIBLE_PROVIDERS.has(input.provider.trim().toLowerCase())
+    ? COMPATIBLE_OPT_IN_PROMPT_CACHE
+    : NO_AGENT_PROMPT_CACHE_CAPABILITY;
+}
+
+function resolveVerifiedPromptCacheCapability(
+  input: ResolveAgentPromptCacheCapabilityInput
+): AgentPromptCacheCapabilitySnapshot | undefined {
+  const provider = input.provider.trim().toLowerCase();
+  const modelName = input.modelName.trim().toLowerCase();
+  const hostname = verifiedEndpointHostname(provider, input.baseUrl);
+
+  if (
+    hostname === "api.openai.com" &&
+    (provider === "openai" || provider === "openai-compatible") &&
+    /^gpt-(?:4\.1|4o|5(?:\.\d+)?)(?:$|[-.])/u.test(modelName)
+  ) {
+    return OPENAI_AUTOMATIC_PROMPT_CACHE;
+  }
+  if (
+    hostname === "api.deepseek.com" &&
+    (provider === "deepseek" || provider === "openai-compatible") &&
+    /^deepseek-(?:chat|reasoner)(?:$|-)/u.test(modelName)
+  ) {
+    return DEEPSEEK_AUTOMATIC_PROMPT_CACHE;
+  }
+  if (
+    hostname === "open.bigmodel.cn" &&
+    (provider === "zhipu" || provider === "openai-compatible") &&
+    /^glm-(?:4(?:\.\d+)?|5(?:\.\d+)?)(?:$|-)/u.test(modelName)
+  ) {
+    return ZHIPU_AUTOMATIC_PROMPT_CACHE;
+  }
+  if (
+    hostname === "dashscope.aliyuncs.com" &&
+    (provider === "tongyi-qianwen" || provider === "openai-compatible") &&
+    (/^qwen-(?:turbo|plus|max|long)(?:$|-)/u.test(modelName) || /^qwen3(?:$|[-.])/u.test(modelName))
+  ) {
+    return QWEN_AUTOMATIC_PROMPT_CACHE;
+  }
+
+  const exact = resolveCatalogAgentModelCapabilities(provider, modelName);
+  if (exact === undefined || exact.promptCache.mode === "none") return undefined;
+  if (hostname !== defaultProviderHostname(provider)) return undefined;
+  return exact.promptCache;
+}
+
+function verifiedEndpointHostname(
+  provider: string,
+  baseUrl: string | undefined
+): string | undefined {
+  const value = baseUrl?.trim() || defaultProviderBaseUrl(provider);
+  if (value === undefined) return undefined;
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function defaultProviderBaseUrl(provider: string): string | undefined {
+  if (provider === "openai") return "https://api.openai.com/v1";
+  if (provider === "anthropic") return "https://api.anthropic.com";
+  if (provider === "google-gemini") {
+    return "https://generativelanguage.googleapis.com/v1beta";
+  }
+  if (provider === "deepseek") return "https://api.deepseek.com/v1";
+  if (provider === "zhipu") return "https://open.bigmodel.cn/api/paas/v4";
+  if (provider === "tongyi-qianwen") {
+    return "https://dashscope.aliyuncs.com/compatible-mode/v1";
+  }
+  return undefined;
+}
+
+function defaultProviderHostname(provider: string): string | undefined {
+  const baseUrl = defaultProviderBaseUrl(provider);
+  return baseUrl === undefined ? undefined : new URL(baseUrl).hostname.toLowerCase();
+}
 
 /** Exact provider/model facts only; custom OpenAI-compatible endpoints never receive a fallback. */
 export function resolveCatalogAgentModelCapabilities(

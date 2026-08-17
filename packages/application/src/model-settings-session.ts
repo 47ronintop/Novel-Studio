@@ -20,6 +20,8 @@ import type {
 } from "./model-discovery-session.js";
 import { isModelProvider, type ModelProvider } from "./model-provider-catalog.js";
 
+export type PromptCachePreference = "auto" | "enabled" | "disabled";
+
 export interface ModelProfile extends JsonObject {
   readonly id: string;
   readonly provider: string;
@@ -37,6 +39,8 @@ export interface ModelProfile extends JsonObject {
   readonly frequencyPenalty?: number;
   readonly presencePenalty?: number;
   readonly reasoningEffortEnabled?: boolean;
+  /** Missing preferences from older settings use the automatic capability policy. */
+  readonly promptCachePreference?: PromptCachePreference;
 }
 
 export interface AutosaveSettings extends JsonObject {
@@ -440,11 +444,17 @@ function validateModelProfile(profile: ModelProfile): Result<ModelProvider, Unif
   const contextWindowValid =
     profile.contextWindow === undefined ||
     (Number.isSafeInteger(profile.contextWindow) && profile.contextWindow > 0);
+  const promptCachePreferenceValid =
+    profile.promptCachePreference === undefined ||
+    profile.promptCachePreference === "auto" ||
+    profile.promptCachePreference === "enabled" ||
+    profile.promptCachePreference === "disabled";
   if (
     provider === undefined ||
     !profile.apiKeyRef.startsWith("secret://") ||
     !maxTokensValid ||
-    !contextWindowValid
+    !contextWindowValid ||
+    !promptCachePreferenceValid
   ) {
     return err(
       createUnifiedError({
