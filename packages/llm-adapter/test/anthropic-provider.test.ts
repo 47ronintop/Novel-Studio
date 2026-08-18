@@ -440,9 +440,7 @@ describe("Anthropic provider", () => {
       rawEvents.push(event);
     }
     const metadataEvents = rawEvents.filter(
-      (
-        event
-      ): event is Extract<LlmProviderStreamEvent, { readonly type: "tool_call_delta" }> =>
+      (event): event is Extract<LlmProviderStreamEvent, { readonly type: "tool_call_delta" }> =>
         event.type === "tool_call_delta" && event.providerMetadata !== undefined
     );
     expect(metadataEvents).toHaveLength(2);

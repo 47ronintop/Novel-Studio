@@ -200,12 +200,14 @@ test("streams read tools, restores a question after reload, refreshes dirty cont
         typeof message["content"] === "string" &&
         !isApplicationContextEnvelope(message["content"])
     );
-    const toolCount = messages.slice(currentRequestIndex + 1).filter(
-      (message) =>
-        typeof message === "object" &&
-        message !== null &&
-        (message as { role?: unknown }).role === "tool"
-    ).length;
+    const toolCount = messages
+      .slice(currentRequestIndex + 1)
+      .filter(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { role?: unknown }).role === "tool"
+      ).length;
     const toolNames = Array.isArray(body.tools)
       ? body.tools
           .map((tool) =>
@@ -491,22 +493,22 @@ async function waitForLatestRunStatus(
         window.novelStudio?.agentRuns.list("prj_minimal_chapter")
       );
       const runs = listed?.ok
-        ? listed.value.filter((run) => operationMode === undefined || run.operationMode === operationMode)
+        ? listed.value.filter(
+            (run) => operationMode === undefined || run.operationMode === operationMode
+          )
         : [];
       return runs.at(-1)?.status;
     })
     .toBe(status);
 }
 
-async function latestRunId(
-  page: Page,
-  operationMode?: "planning" | "execution"
-): Promise<string> {
+async function latestRunId(page: Page, operationMode?: "planning" | "execution"): Promise<string> {
   const runId = await page.evaluate(async (expectedOperationMode) => {
     const listed = await window.novelStudio?.agentRuns.list("prj_minimal_chapter");
     const runs = listed?.ok
       ? listed.value.filter(
-          (run) => expectedOperationMode === undefined || run.operationMode === expectedOperationMode
+          (run) =>
+            expectedOperationMode === undefined || run.operationMode === expectedOperationMode
         )
       : [];
     return runs.at(-1)?.runId;

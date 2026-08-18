@@ -277,9 +277,7 @@ function anthropicAssistantBlockSequence(
     });
   }
 
-  return [...blocks.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([, block]) => block);
+  return [...blocks.entries()].sort(([left], [right]) => left - right).map(([, block]) => block);
 }
 
 function streamToolInput(call: AnthropicStreamToolCall): JsonObject {
@@ -637,8 +635,7 @@ function jsonValuesEqual(left: JsonValue, right: JsonValue): boolean {
     leftKeys.length === rightKeys.length &&
     leftKeys.every(
       (key, index) =>
-        key === rightKeys[index] &&
-        jsonValuesEqual(left[key] as JsonValue, right[key] as JsonValue)
+        key === rightKeys[index] && jsonValuesEqual(left[key] as JsonValue, right[key] as JsonValue)
     )
   );
 }

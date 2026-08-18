@@ -1202,9 +1202,7 @@ function reasoningStrengthFromModelMetadata(
     ...new Set(allowedValueCandidates.map((values) => JSON.stringify(values)))
   ];
   if (uniqueAllowedValueSets.length === 0) {
-    return sawReasoningMetadata
-      ? hiddenProviderReasoningMetadata()
-      : undefined;
+    return sawReasoningMetadata ? hiddenProviderReasoningMetadata() : undefined;
   }
   if (uniqueAllowedValueSets.length > 1) return hiddenProviderReasoningMetadata();
   const allowedValues = allowedValueCandidates[0];
@@ -1276,21 +1274,17 @@ function reasoningProviderParamName(
   entry: JsonObject,
   provider: string
 ): ModelReasoningStrengthAvailable["providerParamName"] | undefined {
-  const explicit =
-    [
-      stringValue(entry["providerParamName"]),
-      stringValue(entry["provider_param_name"]),
-      stringValue(entry["reasoningProviderParamName"]),
-      stringValue(entry["reasoning_provider_param_name"])
-    ].filter((value): value is string => value !== undefined);
+  const explicit = [
+    stringValue(entry["providerParamName"]),
+    stringValue(entry["provider_param_name"]),
+    stringValue(entry["reasoningProviderParamName"]),
+    stringValue(entry["reasoning_provider_param_name"])
+  ].filter((value): value is string => value !== undefined);
   const uniqueExplicitValues = [...new Set(explicit)];
   if (uniqueExplicitValues.length > 1) return undefined;
   const explicitValue = uniqueExplicitValues[0];
   if (explicitValue !== undefined) {
-    if (
-      explicitValue === "reasoning_effort" ||
-      explicitValue === "reasoning"
-    ) {
+    if (explicitValue === "reasoning_effort" || explicitValue === "reasoning") {
       return reasoningProviderParamMatchesAdapter(provider, explicitValue)
         ? explicitValue
         : undefined;
@@ -1355,9 +1349,7 @@ function consistentStringArrayMetadata(
   value: JsonObject,
   keys: readonly string[]
 ): { readonly declared: boolean; readonly conflicting: boolean; readonly values: string[] } {
-  const declarations = keys.flatMap((key) =>
-    Object.hasOwn(value, key) ? [value[key]] : []
-  );
+  const declarations = keys.flatMap((key) => (Object.hasOwn(value, key) ? [value[key]] : []));
   if (declarations.length === 0) {
     return { declared: false, conflicting: false, values: [] };
   }

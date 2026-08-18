@@ -90,11 +90,7 @@ export function resolveLlmReasoningCapability(
 export function resolveLlmReasoningCapabilityForProfile(
   profile: Pick<
     LlmModelProfile,
-    | "provider"
-    | "modelName"
-    | "baseUrl"
-    | "reasoningEffortEnabled"
-    | "reasoningCapability"
+    "provider" | "modelName" | "baseUrl" | "reasoningEffortEnabled" | "reasoningCapability"
   >
 ): LlmReasoningCapability | undefined {
   if (profile.reasoningCapability === null) return undefined;
@@ -112,11 +108,7 @@ export function resolveLlmReasoningCapabilityForProfile(
 export function serializeLlmReasoningEffort(
   profile: Pick<
     LlmModelProfile,
-    | "provider"
-    | "modelName"
-    | "baseUrl"
-    | "reasoningEffortEnabled"
-    | "reasoningCapability"
+    "provider" | "modelName" | "baseUrl" | "reasoningEffortEnabled" | "reasoningCapability"
   >,
   effort: string
 ): LlmReasoningSerialization | undefined {
@@ -193,8 +185,7 @@ function reasoningProviderParamMatchesAdapter(
 ): boolean {
   if (provider === "anthropic") {
     return (
-      providerParamName === "anthropic_effort" ||
-      providerParamName === "anthropic_thinking_budget"
+      providerParamName === "anthropic_effort" || providerParamName === "anthropic_thinking_budget"
     );
   }
   if (provider === "google-gemini") {
