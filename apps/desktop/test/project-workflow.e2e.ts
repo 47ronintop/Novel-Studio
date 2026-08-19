@@ -485,6 +485,7 @@ test("switches visible beta activity views without a duplicate timeline activity
 
   try {
     const page = await electronApp.firstWindow();
+    await expectCreativeWorkspaceReady(page, { requireWritingSurface: false });
     const activityBar = page.getByLabel("活动栏");
 
     await activityBar.getByRole("button", { name: "搜索" }).click();
