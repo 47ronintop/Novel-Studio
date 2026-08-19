@@ -131,6 +131,26 @@ describe("AgentRunPanel", () => {
     expect(html).toContain("保留现有揭示时机？");
   });
 
+  test("disables the answer action while the pending question is being submitted", () => {
+    const host = renderPanelHost({
+      status: "awaiting_user_input",
+      answerPending: true,
+      pendingUserInput: {
+        questionId: "question-01",
+        prompt: "保留现有揭示时机？",
+        reason: "它会改变执行范围。",
+        options: [{ id: "keep", label: "保留" }],
+        allowFreeText: false
+      }
+    });
+
+    const question = host.querySelector<HTMLElement>('[aria-label="Agent 阻塞问题"]');
+    const answerButton = question?.querySelector<HTMLButtonElement>('[aria-label="回答并继续"]');
+    expect(question?.getAttribute("aria-busy")).toBe("true");
+    expect(answerButton?.disabled).toBe(true);
+    disposePanelHost(host);
+  });
+
   test("renders and dispatches a durable pending tool approval", () => {
     const onDecideToolApproval = vi.fn();
     const host = renderPanelHost({
@@ -414,9 +434,14 @@ describe("AgentRunPanel", () => {
   test("renders the run as inline assistant content without another frame or scroller", () => {
     const css = readUiStyles();
     const runRule = css.match(/\.ns-agent-run\s*\{[^}]*\}/s)?.[0] ?? "";
+    const questionRule =
+      css.match(/\.ns-agent-question,\s*\.ns-agent-context-refresh[\s\S]*?\}/s)?.[0] ?? "";
     const wrapperRule = css.match(/\.ns-agent-conversation-run-panel\s*\{[^}]*\}/s)?.[0] ?? "";
 
     expect(runRule).not.toMatch(/overflow\s*:\s*(?:auto|scroll)/);
+    expect(runRule).toMatch(/min-width\s*:\s*0/);
+    expect(questionRule).toMatch(/min-width\s*:\s*0/);
+    expect(css).toMatch(/\.ns-project-feedback[\s\S]*?overflow-wrap\s*:\s*anywhere/);
     expect(wrapperRule).not.toMatch(/border(?:-top)?\s*:/);
   });
 

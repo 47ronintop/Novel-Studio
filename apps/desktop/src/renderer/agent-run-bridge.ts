@@ -266,6 +266,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   let approvalInFlight: Promise<AgentRunPanelProps> | undefined;
   let toolApprovalInFlight: Promise<AgentRunPanelProps> | undefined;
   let contextShareApprovalInFlight: Promise<AgentRunPanelProps> | undefined;
+  let answerInFlight: Promise<AgentRunPanelProps> | undefined;
   let selectionInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlight: Promise<AgentRunPanelProps> | undefined;
   let undoInFlightAction: "request" | "resolve" | "retry" | undefined;
@@ -605,27 +606,40 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     return toProps();
   }
 
-  async function answerRun(answer: string): Promise<AgentRunPanelProps> {
+  function answerRun(answer: string): Promise<AgentRunPanelProps> {
+    if (answerInFlight !== undefined) return answerInFlight;
     const snapshot = requireSnapshot();
     const questionId = state.pendingUserInput?.questionId;
     if (
       snapshot === undefined ||
       questionId === undefined ||
+      snapshot.status !== "awaiting_user_input" ||
+      snapshot.pendingUserInputId !== questionId ||
       isStandaloneScope(scopeForSnapshot(snapshot))
     ) {
-      return toProps();
+      return Promise.resolve(toProps());
     }
-    await applyCommandResult(
-      await api.agentRuns.answerUserInput({
-        runId: snapshot.runId,
-        ...scopeIdentity(scopeForSnapshot(snapshot)),
-        commandId: createCommandId("answer"),
-        expectedRunRevision: snapshot.runRevision,
-        questionId,
-        answer
-      } as never)
-    );
-    return toProps();
+    const request = (async () => {
+      try {
+        await applyCommandResult(
+          await api.agentRuns.answerUserInput({
+            runId: snapshot.runId,
+            ...scopeIdentity(scopeForSnapshot(snapshot)),
+            commandId: createCommandId("answer"),
+            expectedRunRevision: snapshot.runRevision,
+            questionId,
+            answer
+          } as never)
+        );
+      } finally {
+        answerInFlight = undefined;
+        notify();
+      }
+      return toProps();
+    })();
+    answerInFlight = request;
+    notify();
+    return request;
   }
 
   async function resumeRun(): Promise<AgentRunPanelProps> {
@@ -1266,7 +1280,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         ? {}
         : { packedContextHistory: state.packedContextHistory }),
       ...(state.sendLedger === undefined ? {} : { sendLedger: state.sendLedger }),
-      ...(state.pendingUserInput === undefined ? {} : { pendingUserInput: state.pendingUserInput }),
+      ...(state.pendingUserInput === undefined
+        ? {}
+        : {
+            pendingUserInput: state.pendingUserInput,
+            answerPending: answerInFlight !== undefined
+          }),
       ...(standalone || pendingToolApproval === undefined ? {} : { pendingToolApproval }),
       ...(standalone || pendingContextShareApproval === undefined
         ? {}

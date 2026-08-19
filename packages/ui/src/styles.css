@@ -1270,6 +1270,8 @@ textarea:focus-visible,
   font-size: 12px;
   line-height: 1.45;
   margin: 0;
+  max-width: 100%;
+  min-width: 0;
   padding: 7px 8px;
 }
 
@@ -5006,7 +5008,9 @@ textarea:focus-visible,
   flex: 0 0 auto;
   flex-direction: column;
   gap: 12px;
+  max-width: 100%;
   min-height: 0;
+  min-width: 0;
   overflow: visible;
   padding: 10px 12px 12px;
 }
@@ -5163,7 +5167,9 @@ textarea:focus-visible,
 .ns-agent-status {
   color: var(--ns-muted);
   font-size: 12px;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .ns-agent-runtime-label,
@@ -5620,6 +5626,7 @@ textarea:focus-visible,
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   position: relative;
@@ -6008,7 +6015,18 @@ textarea:focus-visible,
   border-radius: 6px;
   display: grid;
   gap: 9px;
+  max-width: 100%;
+  min-width: 0;
   padding: 10px;
+}
+
+.ns-agent-question > *,
+.ns-agent-context-refresh > *,
+.ns-agent-error > *,
+.ns-agent-plan-revision > *,
+.ns-plan-review > * {
+  max-width: 100%;
+  min-width: 0;
 }
 
 .ns-agent-question p,
@@ -6023,6 +6041,23 @@ textarea:focus-visible,
 .ns-plan-review span {
   color: var(--ns-muted);
   font-size: 12px;
+}
+
+.ns-agent-question strong,
+.ns-agent-question p,
+.ns-agent-tool-approval {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ns-agent-question strong,
+.ns-agent-question p,
+.ns-agent-tool-approval,
+.ns-agent-tool-approval p,
+.ns-agent-tool-approval span,
+.ns-project-feedback {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .ns-agent-error {

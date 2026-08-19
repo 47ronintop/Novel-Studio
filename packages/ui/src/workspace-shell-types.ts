@@ -658,6 +658,8 @@ export interface AgentRunPanelProps {
   readonly rollbackReview?: RollbackReviewProps;
   readonly planExecution?: AgentPlanExecutionControl;
   readonly canUndoRun?: boolean;
+  /** True while the current pending question is being submitted to Main. */
+  readonly answerPending?: boolean;
   readonly onUndoRun?: () => void;
   readonly onAnswerUserInput: (answer: string) => void;
   readonly onResume: () => void;

@@ -336,6 +336,83 @@ describe("Agent Run renderer bridge", () => {
     expect(bridge.getProps()?.pendingToolApproval).toBeUndefined();
   });
 
+  test("coalesces duplicate pending-question answers and releases the busy state", async () => {
+    const pendingQuestion = {
+      questionId: "question-bridge-01",
+      prompt: "继续执行吗？",
+      reason: "需要确认后才能继续。",
+      options: [
+        { id: "keep", label: "继续" },
+        { id: "stop", label: "停止" }
+      ],
+      allowFreeText: false
+    };
+    const pendingSnapshot = {
+      ...snapshot,
+      status: "awaiting_user_input" as const,
+      runRevision: 12,
+      lastSequence: 12,
+      pendingUserInputId: pendingQuestion.questionId
+    } as AgentRunSnapshot;
+    const resolvedSnapshot = {
+      ...pendingSnapshot,
+      status: "executing_model" as const,
+      runRevision: 13,
+      lastSequence: 13,
+      pendingUserInputId: null
+    } as AgentRunSnapshot;
+    let current = pendingSnapshot;
+    let currentQuestion: typeof pendingQuestion | undefined = pendingQuestion;
+    const answers: Record<string, unknown>[] = [];
+    let releaseAnswer: (() => void) | undefined;
+    const answerGate = new Promise<void>((resolve) => {
+      releaseAnswer = resolve;
+    });
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        list: async () => ok([current]),
+        read: async () =>
+          ok({
+            snapshot: current,
+            events: [],
+            ...(currentQuestion === undefined ? {} : { pendingUserInput: currentQuestion })
+          }),
+        answerUserInput: async (command: Record<string, unknown>) => {
+          answers.push(structuredClone(command));
+          await answerGate;
+          current = resolvedSnapshot;
+          currentQuestion = undefined;
+          return ok(resolvedSnapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    await bridge.load("project-01");
+    const first = bridge.answerUserInput("keep");
+    const duplicate = bridge.answerUserInput("stop");
+
+    expect(bridge.getProps()?.answerPending).toBe(true);
+    await vi.waitFor(() => expect(answers).toHaveLength(1));
+    releaseAnswer?.();
+    const [answered, duplicateResult] = await Promise.all([first, duplicate]);
+
+    expect(answers).toEqual([
+      expect.objectContaining({
+        runId: "run-bridge",
+        projectId: "project-01",
+        expectedRunRevision: 12,
+        questionId: pendingQuestion.questionId,
+        answer: "keep"
+      })
+    ]);
+    expect(duplicateResult).toEqual(answered);
+    expect(bridge.getProps()?.pendingUserInput).toBeUndefined();
+    expect(bridge.getProps()?.answerPending).toBeUndefined();
+  });
+
   test("projects a durable context-sharing request and sends its bound decision", async () => {
     const approvalBinding = "c".repeat(64);
     const pendingSnapshot = {

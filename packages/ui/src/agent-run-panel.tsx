@@ -62,7 +62,11 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
       )}
 
       {props.pendingUserInput === undefined ? null : (
-        <section className="ns-agent-question" aria-label="Agent 阻塞问题">
+        <section
+          aria-busy={props.answerPending === true}
+          className="ns-agent-question"
+          aria-label="Agent 阻塞问题"
+        >
           <strong>{props.pendingUserInput.prompt}</strong>
           <p>{props.pendingUserInput.reason}</p>
           <fieldset>
@@ -90,7 +94,10 @@ export function AgentRunPanel(props: AgentRunPanelProps) {
             <button
               aria-label="回答并继续"
               className="ns-ai-send-button ns-agent-answer"
-              disabled={selectedOption.length === 0 && answer.trim().length === 0}
+              disabled={
+                props.answerPending === true ||
+                (selectedOption.length === 0 && answer.trim().length === 0)
+              }
               onClick={() => props.onAnswerUserInput(answer.trim() || selectedOption)}
               type="button"
             >
