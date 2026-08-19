@@ -903,8 +903,7 @@ function isStreamingPingProbe(body: Record<string, unknown>): boolean {
     body["stream"] === true &&
     Array.isArray(messages) &&
     messages.some(
-      (message) =>
-        isRecord(message) && message["role"] === "user" && message["content"] === "ping"
+      (message) => isRecord(message) && message["role"] === "user" && message["content"] === "ping"
     )
   );
 }

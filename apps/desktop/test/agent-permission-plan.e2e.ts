@@ -284,13 +284,16 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 
 function isConnectionProbe(body: Record<string, unknown>): boolean {
   const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
-  return body["stream"] === true && messages.some(
-    (message) =>
-      typeof message === "object" &&
-      message !== null &&
-      !Array.isArray(message) &&
-      (message as Record<string, unknown>)["role"] === "user" &&
-      (message as Record<string, unknown>)["content"] === "ping"
+  return (
+    body["stream"] === true &&
+    messages.some(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        !Array.isArray(message) &&
+        (message as Record<string, unknown>)["role"] === "user" &&
+        (message as Record<string, unknown>)["content"] === "ping"
+    )
   );
 }
 

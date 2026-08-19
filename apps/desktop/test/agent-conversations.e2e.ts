@@ -800,8 +800,11 @@ function isApplicationContextEnvelope(content: string): boolean {
 
 function isConnectionProbe(body: Record<string, unknown>): boolean {
   const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
-  return body["stream"] === true && messages.some(
-    (message) => isRecord(message) && message["role"] === "user" && message["content"] === "ping"
+  return (
+    body["stream"] === true &&
+    messages.some(
+      (message) => isRecord(message) && message["role"] === "user" && message["content"] === "ping"
+    )
   );
 }
 

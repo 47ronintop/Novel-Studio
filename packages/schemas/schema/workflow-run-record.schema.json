@@ -34,11 +34,7 @@
       "minLength": 1
     },
     "status": {
-      "enum": [
-        "pending-confirmation",
-        "applied",
-        "failed"
-      ]
+      "enum": ["pending-confirmation", "applied", "failed"]
     },
     "startedAt": {
       "type": "string",
@@ -73,13 +69,7 @@
     "storyAnalysis": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "analysisRun",
-        "observations",
-        "factDeltas",
-        "records"
-      ],
+      "required": ["schemaVersion", "analysisRun", "observations", "factDeltas", "records"],
       "properties": {
         "schemaVersion": {
           "const": "1.1"
@@ -112,10 +102,7 @@
               "pattern": "^run_[a-f0-9]{32}$"
             },
             "trigger": {
-              "enum": [
-                "manual",
-                "chapter_completed"
-              ]
+              "enum": ["manual", "chapter_completed"]
             },
             "createdAt": {
               "type": "string",
@@ -146,10 +133,7 @@
             "chapter": {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "chapterId",
-                "checksum"
-              ],
+              "required": ["chapterId", "checksum"],
               "properties": {
                 "chapterId": {
                   "type": "string",
@@ -164,10 +148,7 @@
             "contextSnapshot": {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "contextSnapshotId",
-                "checksum"
-              ],
+              "required": ["contextSnapshotId", "checksum"],
               "properties": {
                 "contextSnapshotId": {
                   "type": "string",
@@ -186,13 +167,7 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                  "assetId",
-                  "revision",
-                  "checksum",
-                  "reason",
-                  "truncated"
-                ],
+                "required": ["assetId", "revision", "checksum", "reason", "truncated"],
                 "properties": {
                   "assetId": {
                     "type": "string",
@@ -259,12 +234,7 @@
             "validation": {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "observationCount",
-                "acceptedCount",
-                "rejectedCount",
-                "errors"
-              ],
+              "required": ["observationCount", "acceptedCount", "rejectedCount", "errors"],
               "properties": {
                 "observationCount": {
                   "type": "integer",
@@ -284,10 +254,7 @@
                   "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": [
-                      "code",
-                      "message"
-                    ],
+                    "required": ["code", "message"],
                     "properties": {
                       "code": {
                         "type": "string",
@@ -307,12 +274,7 @@
             "usage": {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "usageRecordId",
-                "inputTokens",
-                "outputTokens",
-                "estimatedCost"
-              ],
+              "required": ["usageRecordId", "inputTokens", "outputTokens", "estimatedCost"],
               "properties": {
                 "usageRecordId": {
                   "anyOf": [
@@ -348,25 +310,14 @@
               }
             },
             "status": {
-              "enum": [
-                "queued",
-                "running",
-                "completed",
-                "partial",
-                "failed",
-                "cancelled"
-              ]
+              "enum": ["queued", "running", "completed", "partial", "failed", "cancelled"]
             },
             "failure": {
               "anyOf": [
                 {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": [
-                    "code",
-                    "retryable",
-                    "reason"
-                  ],
+                  "required": ["code", "retryable", "reason"],
                   "properties": {
                     "code": {
                       "type": "string",
@@ -424,10 +375,7 @@
               "chapter": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                  "chapterId",
-                  "checksum"
-                ],
+                "required": ["chapterId", "checksum"],
                 "properties": {
                   "chapterId": {
                     "type": "string",
@@ -455,12 +403,7 @@
               "subject": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                  "mention",
-                  "expectedType",
-                  "candidateAssetIds",
-                  "resolvedAssetId"
-                ],
+                "required": ["mention", "expectedType", "candidateAssetIds", "resolvedAssetId"],
                 "properties": {
                   "mention": {
                     "type": "string",
@@ -517,10 +460,7 @@
               "fact": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                  "kind",
-                  "value"
-                ],
+                "required": ["kind", "value"],
                 "properties": {
                   "kind": {
                     "enum": [
@@ -552,11 +492,7 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": [
-                    "start",
-                    "end",
-                    "excerptHash"
-                  ],
+                  "required": ["start", "end", "excerptHash"],
                   "properties": {
                     "start": {
                       "type": "integer",
@@ -648,10 +584,7 @@
               "chapter": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                  "chapterId",
-                  "checksum"
-                ],
+                "required": ["chapterId", "checksum"],
                 "properties": {
                   "chapterId": {
                     "type": "string",
@@ -677,21 +610,14 @@
                 ]
               },
               "action": {
-                "enum": [
-                  "create",
-                  "patch"
-                ]
+                "enum": ["create", "patch"]
               },
               "target": {
                 "anyOf": [
                   {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": [
-                      "assetId",
-                      "baseRevision",
-                      "entryRef"
-                    ],
+                    "required": ["assetId", "baseRevision", "entryRef"],
                     "properties": {
                       "assetId": {
                         "type": "string",
@@ -772,13 +698,7 @@
                     {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": [
-                        "kind",
-                        "assetId",
-                        "baseRevision",
-                        "selectors",
-                        "valueChecksum"
-                      ],
+                      "required": ["kind", "assetId", "baseRevision", "selectors", "valueChecksum"],
                       "properties": {
                         "kind": {
                           "const": "asset_fields"
@@ -810,12 +730,7 @@
                     {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": [
-                        "kind",
-                        "assetType",
-                        "querySignature",
-                        "indexRevision"
-                      ],
+                      "required": ["kind", "assetType", "querySignature", "indexRevision"],
                       "properties": {
                         "kind": {
                           "const": "type_index"
@@ -847,11 +762,7 @@
                     {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": [
-                        "kind",
-                        "chapterId",
-                        "checksum"
-                      ],
+                      "required": ["kind", "chapterId", "checksum"],
                       "properties": {
                         "kind": {
                           "const": "chapter"
@@ -879,18 +790,10 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": [
-                    "op",
-                    "path",
-                    "beforeValueChecksum"
-                  ],
+                  "required": ["op", "path", "beforeValueChecksum"],
                   "properties": {
                     "op": {
-                      "enum": [
-                        "add",
-                        "replace",
-                        "remove"
-                      ]
+                      "enum": ["add", "replace", "remove"]
                     },
                     "path": {
                       "type": "string",
@@ -919,11 +822,7 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": [
-                    "start",
-                    "end",
-                    "excerptHash"
-                  ],
+                  "required": ["start", "end", "excerptHash"],
                   "properties": {
                     "start": {
                       "type": "integer",
@@ -1027,10 +926,7 @@
                   "chapter": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": [
-                      "chapterId",
-                      "checksum"
-                    ],
+                    "required": ["chapterId", "checksum"],
                     "properties": {
                       "chapterId": {
                         "type": "string",
@@ -1056,21 +952,14 @@
                     ]
                   },
                   "action": {
-                    "enum": [
-                      "create",
-                      "patch"
-                    ]
+                    "enum": ["create", "patch"]
                   },
                   "target": {
                     "anyOf": [
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": [
-                          "assetId",
-                          "baseRevision",
-                          "entryRef"
-                        ],
+                        "required": ["assetId", "baseRevision", "entryRef"],
                         "properties": {
                           "assetId": {
                             "type": "string",
@@ -1189,12 +1078,7 @@
                         {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": [
-                            "kind",
-                            "assetType",
-                            "querySignature",
-                            "indexRevision"
-                          ],
+                          "required": ["kind", "assetType", "querySignature", "indexRevision"],
                           "properties": {
                             "kind": {
                               "const": "type_index"
@@ -1226,11 +1110,7 @@
                         {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": [
-                            "kind",
-                            "chapterId",
-                            "checksum"
-                          ],
+                          "required": ["kind", "chapterId", "checksum"],
                           "properties": {
                             "kind": {
                               "const": "chapter"
@@ -1258,18 +1138,10 @@
                     "items": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": [
-                        "op",
-                        "path",
-                        "beforeValueChecksum"
-                      ],
+                      "required": ["op", "path", "beforeValueChecksum"],
                       "properties": {
                         "op": {
-                          "enum": [
-                            "add",
-                            "replace",
-                            "remove"
-                          ]
+                          "enum": ["add", "replace", "remove"]
                         },
                         "path": {
                           "type": "string",
@@ -1298,11 +1170,7 @@
                     "items": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": [
-                        "start",
-                        "end",
-                        "excerptHash"
-                      ],
+                      "required": ["start", "end", "excerptHash"],
                       "properties": {
                         "start": {
                           "type": "integer",
@@ -1351,14 +1219,7 @@
                     "const": "change"
                   },
                   "status": {
-                    "enum": [
-                      "pending",
-                      "accepted",
-                      "applied",
-                      "rejected",
-                      "stale",
-                      "failed"
-                    ]
+                    "enum": ["pending", "accepted", "applied", "rejected", "stale", "failed"]
                   },
                   "revision": {
                     "type": "integer",
@@ -1426,10 +1287,7 @@
                   "chapter": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": [
-                      "chapterId",
-                      "checksum"
-                    ],
+                    "required": ["chapterId", "checksum"],
                     "properties": {
                       "chapterId": {
                         "type": "string",
@@ -1442,20 +1300,10 @@
                     }
                   },
                   "issueType": {
-                    "enum": [
-                      "conflict",
-                      "ambiguity",
-                      "unresolved_entity",
-                      "overdue_foreshadow"
-                    ]
+                    "enum": ["conflict", "ambiguity", "unresolved_entity", "overdue_foreshadow"]
                   },
                   "status": {
-                    "enum": [
-                      "open",
-                      "resolved",
-                      "dismissed",
-                      "stale"
-                    ]
+                    "enum": ["open", "resolved", "dismissed", "stale"]
                   },
                   "claims": {
                     "type": "array",
@@ -1464,10 +1312,7 @@
                     "items": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": [
-                        "value",
-                        "evidence"
-                      ],
+                      "required": ["value", "evidence"],
                       "properties": {
                         "value": {},
                         "evidence": {
@@ -1477,11 +1322,7 @@
                           "items": {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": [
-                              "start",
-                              "end",
-                              "excerptHash"
-                            ],
+                            "required": ["start", "end", "excerptHash"],
                             "properties": {
                               "start": {
                                 "type": "integer",
@@ -1555,12 +1396,7 @@
                         {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": [
-                            "kind",
-                            "assetType",
-                            "querySignature",
-                            "indexRevision"
-                          ],
+                          "required": ["kind", "assetType", "querySignature", "indexRevision"],
                           "properties": {
                             "kind": {
                               "const": "type_index"
@@ -1592,11 +1428,7 @@
                         {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": [
-                            "kind",
-                            "chapterId",
-                            "checksum"
-                          ],
+                          "required": ["kind", "chapterId", "checksum"],
                           "properties": {
                             "kind": {
                               "const": "chapter"
@@ -1623,12 +1455,7 @@
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": [
-                          "decision",
-                          "changeSetId",
-                          "actor",
-                          "resolvedAt"
-                        ],
+                        "required": ["decision", "changeSetId", "actor", "resolvedAt"],
                         "properties": {
                           "decision": {
                             "type": "string",
@@ -1648,10 +1475,7 @@
                             ]
                           },
                           "actor": {
-                            "enum": [
-                              "author",
-                              "system"
-                            ]
+                            "enum": ["author", "system"]
                           },
                           "resolvedAt": {
                             "type": "string",
@@ -1699,11 +1523,7 @@
     "contextSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "sourceCount",
-        "tokenEstimate",
-        "selectionReason"
-      ],
+      "required": ["sourceCount", "tokenEstimate", "selectionReason"],
       "properties": {
         "sourceCount": {
           "type": "integer",
@@ -1725,12 +1545,7 @@
     "modelSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "profileId",
-        "displayName",
-        "provider",
-        "modelName"
-      ],
+      "required": ["profileId", "displayName", "provider", "modelName"],
       "properties": {
         "profileId": {
           "type": "string",
@@ -1753,13 +1568,7 @@
     "usageSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "inputTokens",
-        "outputTokens",
-        "totalTokens",
-        "usageStatus",
-        "cost"
-      ],
+      "required": ["inputTokens", "outputTokens", "totalTokens", "usageStatus", "cost"],
       "properties": {
         "inputTokens": {
           "type": "integer",
@@ -1774,20 +1583,12 @@
           "minimum": 0
         },
         "usageStatus": {
-          "enum": [
-            "missing",
-            "estimated",
-            "actual"
-          ]
+          "enum": ["missing", "estimated", "actual"]
         },
         "cost": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "amount",
-            "currency",
-            "status"
-          ],
+          "required": ["amount", "currency", "status"],
           "properties": {
             "amount": {
               "type": "number",
@@ -1798,11 +1599,7 @@
               "minLength": 1
             },
             "status": {
-              "enum": [
-                "unknown",
-                "estimated",
-                "actual"
-              ]
+              "enum": ["unknown", "estimated", "actual"]
             }
           }
         }
@@ -1811,12 +1608,7 @@
     "step": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "stepId",
-        "label",
-        "kind",
-        "status"
-      ],
+      "required": ["stepId", "label", "kind", "status"],
       "properties": {
         "stepId": {
           "type": "string",
@@ -1827,30 +1619,17 @@
           "minLength": 1
         },
         "kind": {
-          "enum": [
-            "context",
-            "agent",
-            "confirmation"
-          ]
+          "enum": ["context", "agent", "confirmation"]
         },
         "status": {
-          "enum": [
-            "pending",
-            "running",
-            "completed",
-            "waiting-confirmation",
-            "failed"
-          ]
+          "enum": ["pending", "running", "completed", "waiting-confirmation", "failed"]
         }
       }
     },
     "errorSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "code",
-        "message"
-      ],
+      "required": ["code", "message"],
       "properties": {
         "code": {
           "type": "string",
@@ -1861,12 +1640,7 @@
           "minLength": 1
         },
         "recoverability": {
-          "enum": [
-            "retryable",
-            "user-action",
-            "fatal",
-            "unknown"
-          ]
+          "enum": ["retryable", "user-action", "fatal", "unknown"]
         },
         "suggestedAction": {
           "type": "string",
@@ -1880,17 +1654,10 @@
     "retryPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "mode",
-        "maxAttempts",
-        "backoffLabel",
-        "retryableCodes"
-      ],
+      "required": ["mode", "maxAttempts", "backoffLabel", "retryableCodes"],
       "properties": {
         "mode": {
-          "enum": [
-            "manual"
-          ]
+          "enum": ["manual"]
         },
         "maxAttempts": {
           "type": "integer",
