@@ -9,8 +9,10 @@ import {
 import {
   DEFAULT_AGENT_FEATURE_FLAGS,
   createAgentFeatureFlags,
-  createProductionAgentFeatureFlags
+  createProductionAgentFeatureFlags,
+  createUnsignedBetaAgentFeatureFlags
 } from "../../../apps/desktop/src/main/agent-feature-flags.js";
+import { createCreativeFileOperationQualificationService } from "../../../apps/desktop/src/main/creative-file-operation-qualification.js";
 import { createEngineeringFileAccessQualificationService } from "../../../apps/desktop/src/main/engineering-file-access-qualification.js";
 
 vi.mock(
@@ -167,6 +169,64 @@ describe("AgentFeatureFlags", () => {
 
     expect(flags).toMatchObject({ approvalBindingV2: false, writingDomainCrudV2: false });
     expect(flags.revision).toBe("test-revision:approval-surface:unavailable");
+  });
+
+  test("unsigned beta exposes only fresh creative operations when its V2 port exists", async () => {
+    const qualifications = await createCreativeFileOperationQualificationService({
+      packageKind: "unsigned-beta",
+      now: () => "2026-08-07T00:30:00.000Z",
+      candidateInspector: {
+        async inspect(operation) {
+          return operation === "delete_file"
+            ? {
+                status: "qualified" as const,
+                evidenceChecksum: "e".repeat(64),
+                issuedAt: "2026-08-01T00:00:00.000Z",
+                expiresAt: "2026-08-20T00:00:00.000Z"
+              }
+            : {
+                status: "qualified" as const,
+                evidenceChecksum: "f".repeat(64),
+                issuedAt: "2026-08-01T00:00:00.000Z",
+                expiresAt: "2026-08-20T00:00:00.000Z"
+              };
+        }
+      }
+    }).readAll();
+    const flags = createUnsignedBetaAgentFeatureFlags(
+      qualifications,
+      true,
+      true,
+      "2026-08-07T00:30:00.000Z"
+    );
+    expect(flags).toMatchObject({
+      unsignedBetaCreativeFileOperations: true,
+      agentGuidanceV3: true,
+      approvalBindingV2: true,
+      creativeTrustedReplaceV2: true,
+      creativeFileCreateV2: true,
+      creativeFileMoveV2: true,
+      creativeFileDeleteV2: false,
+      creativeDirectoryCreateV2: true,
+      engineeringHardenedAccessV1: false
+    });
+    expect(
+      createUnsignedBetaAgentFeatureFlags(qualifications, true, false, "2026-08-07T00:30:00.000Z")
+    ).toMatchObject({
+      unsignedBetaCreativeFileOperations: false,
+      agentGuidanceV3: false,
+      approvalBindingV2: false,
+      creativeTrustedReplaceV2: false,
+      creativeFileCreateV2: false,
+      creativeFileMoveV2: false,
+      creativeDirectoryCreateV2: false
+    });
+    expect(
+      createAgentFeatureFlags({
+        unsignedBetaCreativeFileOperations: true,
+        creativeFileDeleteV2: true
+      }).creativeFileDeleteV2
+    ).toBe(false);
   });
 
   test("createAgentFeatureFlags result is frozen", () => {

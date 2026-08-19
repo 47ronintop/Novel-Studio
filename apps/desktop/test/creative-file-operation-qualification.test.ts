@@ -4,6 +4,7 @@ import {
   CREATIVE_FILE_OPERATIONS,
   createCreativeFileOperationQualificationService,
   hasMainOwnedCreativeFileOperationQualification,
+  hasMainOwnedUnsignedBetaCreativeFileOperationQualification,
   isMainOwnedCreativeFileOperationQualification,
   validateCreativeFileOperationQualification,
   type CreativeFileOperation
@@ -67,6 +68,36 @@ describe("Main-owned creative file operation qualification", () => {
     expect(all.create_file.evidenceChecksum).toBe(evidence);
     expect(validateCreativeFileOperationQualification(all.create_file)).toBe(true);
     expect(isMainOwnedCreativeFileOperationQualification({ ...all.create_file })).toBe(false);
+  });
+
+  test("unsigned beta evidence is qualified separately from production", async () => {
+    const service = createCreativeFileOperationQualificationService({
+      packageKind: "unsigned-beta",
+      now: () => checkedAt,
+      candidateInspector: {
+        async inspect() {
+          return {
+            status: "qualified" as const,
+            evidenceChecksum: "d".repeat(64),
+            issuedAt: "2026-08-06T00:00:00.000Z",
+            expiresAt: "2026-08-20T00:00:00.000Z"
+          };
+        }
+      }
+    });
+    const attestation = await service.readAttestation("replace_file");
+    expect(attestation.packageKind).toBe("unsigned-beta");
+    expect(attestation.productionQualified).toBe(false);
+    expect(
+      hasMainOwnedCreativeFileOperationQualification(attestation, "replace_file", checkedAt)
+    ).toBe(false);
+    expect(
+      hasMainOwnedUnsignedBetaCreativeFileOperationQualification(
+        attestation,
+        "replace_file",
+        checkedAt
+      )
+    ).toBe(true);
   });
 
   test("rejects stale evidence and malformed available attestations", async () => {

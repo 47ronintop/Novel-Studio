@@ -50,11 +50,16 @@ import {
 import { err, ok, type UnifiedError } from "@novel-studio/shared";
 import {
   createChapterAgentToolSession,
+  createAgentFileOperationSession,
   type ChapterLifecyclePreparationPort
 } from "@novel-studio/application";
 
 import * as runtimeExports from "../src/main/agent-run-runtime.js";
-import { createAgentFeatureFlags } from "../src/main/agent-feature-flags.js";
+import {
+  createAgentFeatureFlags,
+  createUnsignedBetaAgentFeatureFlags
+} from "../src/main/agent-feature-flags.js";
+import { createCreativeFileOperationQualificationService } from "../src/main/creative-file-operation-qualification.js";
 
 const roots: string[] = [];
 
@@ -370,6 +375,91 @@ describe("desktop Agent Run runtime", () => {
         featureFlags: broadLegacyFlags
       })
     ).toMatchObject({ writingOperations: [], workspaceFileOperations: [] });
+  });
+
+  test("unsigned beta projects only qualified creative replace/create/move operations", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-unsigned-beta-runtime-"));
+    roots.push(projectRoot);
+    const qualifications = await createCreativeFileOperationQualificationService({
+      packageKind: "unsigned-beta",
+      now: () => "2026-08-19T00:30:00.000Z",
+      candidateInspector: {
+        async inspect() {
+          return {
+            status: "qualified" as const,
+            evidenceChecksum: "a".repeat(64),
+            issuedAt: "2026-08-18T00:00:00.000Z",
+            expiresAt: "2026-08-20T00:00:00.000Z"
+          };
+        }
+      }
+    }).readAll();
+    const featureFlags = createUnsignedBetaAgentFeatureFlags(
+      qualifications,
+      true,
+      true,
+      "2026-08-19T00:30:00.000Z"
+    );
+    const requested = runtimeExports.requestedCapabilitySnapshot({
+      workspaceKind: "creativeProject",
+      projectId: "unsigned-beta-project",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      featureFlags
+    });
+    expect(requested.workspaceFileOperations).toEqual([
+      "replace_file",
+      "create_file",
+      "move_file",
+      "create_directory"
+    ]);
+
+    const withoutApprovalPort = runtimeExports.buildRuntimeCapabilitySnapshot({
+      requested,
+      featureFlags,
+      fileOperationSession: createAgentFileOperationSession(),
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      }),
+      hasVersionGroupExecutor: true,
+      hasTrustedApprovalV2: false
+    });
+    expect(withoutApprovalPort.workspaceFileOperations).toEqual([]);
+
+    const effective = runtimeExports.buildRuntimeCapabilitySnapshot({
+      requested,
+      featureFlags,
+      fileOperationSession: createAgentFileOperationSession(),
+      trustedCreativeMutations: createTrustedCreativeFileOperationsPort({
+        workspaceKind: "creativeProject",
+        projectRoot
+      }),
+      hasVersionGroupExecutor: true,
+      hasTrustedApprovalV2: true
+    });
+    expect(effective.workspaceFileOperations).toEqual([
+      "replace_file",
+      "create_file",
+      "move_file",
+      "create_directory"
+    ]);
+
+    const engineeringRequested = runtimeExports.requestedCapabilitySnapshot({
+      workspaceKind: "engineeringWorkspace",
+      projectId: "unsigned-beta-engineering",
+      contentRoot: projectRoot,
+      stateRoot: projectRoot,
+      featureFlags
+    });
+    const engineeringEffective = runtimeExports.buildRuntimeCapabilitySnapshot({
+      requested: engineeringRequested,
+      featureFlags,
+      hasVersionGroupExecutor: true,
+      hasTrustedApprovalV2: false
+    });
+    expect(engineeringRequested.workspaceFileOperations).toEqual([]);
+    expect(engineeringEffective.workspaceFileOperations).toEqual([]);
   });
 
   test("persists Main-resolved Story Bible and chapter dependency revisions before approval", async () => {

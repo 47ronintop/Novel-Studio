@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "id": "wf_ai_rewrite_selection",
+  "type": "workflow.definition",
+  "title": "AI 改写选中文本",
+  "status": "active",
+  "entryStepId": "build_context",
+  "steps": [
+    { "id": "build_context", "kind": "context", "nextStepId": "rewrite_selection" },
+    {
+      "id": "rewrite_selection",
+      "kind": "agent",
+      "agentId": "agent_selection_rewriter",
+      "nextStepId": "confirm_apply"
+    },
+    { "id": "confirm_apply", "kind": "confirmation" }
+  ],
+  "createdAt": "2026-07-04T00:00:00.000Z",
+  "updatedAt": "2026-07-04T00:00:00.000Z"
+}

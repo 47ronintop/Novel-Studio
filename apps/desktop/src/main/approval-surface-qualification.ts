@@ -179,13 +179,13 @@ export function createSystemExecutableCodeSignatureInspector(
           const systemRoot = process.env["SystemRoot"];
           if (systemRoot === undefined) return "invalid";
           const windowsPowerShellRoot = join(systemRoot, "System32", "WindowsPowerShell", "v1.0");
-          await execFileAsync(
+          const result = await execFileAsync(
             join(windowsPowerShellRoot, "powershell.exe"),
             [
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "Import-Module $env:NOVEL_STUDIO_SIGNATURE_MODULE -ErrorAction Stop; $signature = Get-AuthenticodeSignature -LiteralPath $env:NOVEL_STUDIO_SIGNATURE_TARGET; if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { exit 1 }"
+              "Import-Module $env:NOVEL_STUDIO_SIGNATURE_MODULE -ErrorAction Stop; $signature = Get-AuthenticodeSignature -LiteralPath $env:NOVEL_STUDIO_SIGNATURE_TARGET; [Console]::Out.Write($signature.Status.ToString())"
             ],
             {
               env: {
@@ -201,7 +201,7 @@ export function createSystemExecutableCodeSignatureInspector(
               windowsHide: true
             }
           );
-          return "valid";
+          return classifyWindowsAuthenticodeStatus(result.stdout);
         }
         if (platform === "darwin") {
           await execFileAsync("codesign", [
@@ -232,6 +232,17 @@ export function createSystemExecutableCodeSignatureInspector(
       }
     }
   };
+}
+
+/** @internal Exact Authenticode status mapping used by the packaged unsigned-beta gate. */
+export function classifyWindowsAuthenticodeStatus(
+  value: unknown
+): "valid" | "unsigned" | "invalid" {
+  if (typeof value !== "string") return "invalid";
+  const status = value.trim();
+  if (status === "Valid") return "valid";
+  if (status === "NotSigned") return "unsigned";
+  return "invalid";
 }
 
 export interface SignedAsarPackageCoverageOptions {

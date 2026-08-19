@@ -20,6 +20,7 @@ import {
   approvalBundleDigest,
   approvalSurfaceQualificationAttestationCanonicalBytes,
   approvalSurfaceQualificationAttestationChecksum,
+  classifyWindowsAuthenticodeStatus,
   type ApprovalSurfaceOwnerTrustStore,
   type TrustedApprovalSurfaceQualificationAttestationV1
 } from "../src/main/approval-surface-qualification.js";
@@ -34,6 +35,13 @@ afterEach(async () => {
 });
 
 describe("approval surface qualification", () => {
+  test("distinguishes unsigned Windows packages from invalid signatures", () => {
+    expect(classifyWindowsAuthenticodeStatus("NotSigned\r\n")).toBe("unsigned");
+    expect(classifyWindowsAuthenticodeStatus("Valid")).toBe("valid");
+    expect(classifyWindowsAuthenticodeStatus("HashMismatch")).toBe("invalid");
+    expect(classifyWindowsAuthenticodeStatus("UnknownError")).toBe("invalid");
+  });
+
   test("qualifies only an owner-signed clean production bundle and retains Main provenance", async () => {
     const root = await fixture();
     const owner = ownerSigningKey();

@@ -298,6 +298,7 @@ export interface AiWritingWorkflowSessionOptions {
 
 export interface AiWritingConfigAssetIds {
   readonly workflowId: string;
+  readonly selectionWorkflowId: string;
   readonly chapterAgentId: string;
   readonly chapterPromptId: string;
   readonly selectionAgentId: string;

@@ -7,6 +7,7 @@ import {
 import {
   CREATIVE_FILE_OPERATIONS,
   hasMainOwnedCreativeFileOperationQualification,
+  hasMainOwnedUnsignedBetaCreativeFileOperationQualification,
   creativeFileOperationQualificationRevision,
   type CreativeFileOperation,
   type CreativeFileOperationQualificationV1
@@ -20,6 +21,8 @@ import type { TrustedApprovalSurfaceQualificationV1 } from "./agent-approval-con
  */
 
 export interface AgentFeatureFlags {
+  /** Main-owned, explicitly authorized unsigned beta creative channel. */
+  readonly unsignedBetaCreativeFileOperations: boolean;
   /** Guidance Registry/System Guidance 3.0; default off until its protocol dependencies ship. */
   readonly agentGuidanceV3: boolean;
   /** Phase A: search_project_text + find_project_references */
@@ -33,6 +36,7 @@ export interface AgentFeatureFlags {
   readonly creativeFileCreateV2: boolean;
   readonly creativeFileMoveV2: boolean;
   readonly creativeFileDeleteV2: boolean;
+  readonly creativeDirectoryCreateV2: boolean;
   /** Main-owned Change Set 2.0 approval binding and confirmation boundary. */
   readonly approvalBindingV2: boolean;
   /** Phase D: web_search + fetch_url */
@@ -55,6 +59,7 @@ export interface AgentFeatureFlags {
 
 /** Default flags keep every optional capability off. */
 export const DEFAULT_AGENT_FEATURE_FLAGS: AgentFeatureFlags = Object.freeze<AgentFeatureFlags>({
+  unsignedBetaCreativeFileOperations: false,
   agentGuidanceV3: false,
   phaseA_searchEnabled: false,
   phaseB_fileLifecycleEnabled: false,
@@ -63,6 +68,7 @@ export const DEFAULT_AGENT_FEATURE_FLAGS: AgentFeatureFlags = Object.freeze<Agen
   creativeFileCreateV2: false,
   creativeFileMoveV2: false,
   creativeFileDeleteV2: false,
+  creativeDirectoryCreateV2: false,
   approvalBindingV2: false,
   phaseD_networkReadEnabled: false,
   phaseE_remoteMcpEnabled: false,
@@ -83,6 +89,7 @@ export function createAgentFeatureFlags(
   if (overrides === undefined) return DEFAULT_AGENT_FEATURE_FLAGS;
   const merged = { ...DEFAULT_AGENT_FEATURE_FLAGS, ...overrides };
   const approvalBindingV2 = merged.agentGuidanceV3 && merged.approvalBindingV2;
+  const creativeMutationAuthority = approvalBindingV2 || merged.unsignedBetaCreativeFileOperations;
   const engineeringRequested =
     merged.engineeringHardenedAccessV1 ||
     merged.engineeringReplaceV2 ||
@@ -104,10 +111,11 @@ export function createAgentFeatureFlags(
     ...merged,
     approvalBindingV2,
     writingDomainCrudV2: approvalBindingV2 && merged.writingDomainCrudV2,
-    creativeTrustedReplaceV2: approvalBindingV2 && merged.creativeTrustedReplaceV2,
-    creativeFileCreateV2: approvalBindingV2 && merged.creativeFileCreateV2,
-    creativeFileMoveV2: approvalBindingV2 && merged.creativeFileMoveV2,
+    creativeTrustedReplaceV2: creativeMutationAuthority && merged.creativeTrustedReplaceV2,
+    creativeFileCreateV2: creativeMutationAuthority && merged.creativeFileCreateV2,
+    creativeFileMoveV2: creativeMutationAuthority && merged.creativeFileMoveV2,
     creativeFileDeleteV2: approvalBindingV2 && merged.creativeFileDeleteV2,
+    creativeDirectoryCreateV2: creativeMutationAuthority && merged.creativeDirectoryCreateV2,
     phaseE_remoteMcpEnabled: merged.phaseE_remoteMcpEnabled && merged.phaseD_networkReadEnabled,
     engineeringHardenedAccessV1: accessEnabled,
     engineeringReplaceV2: approvalBindingV2 && merged.engineeringReplaceV2 && recoveryEnabled,
@@ -163,7 +171,9 @@ export function createProductionAgentFeatureFlags(
         creativeQualified("create_file") && overrides.creativeFileCreateV2 === true,
       creativeFileMoveV2: creativeQualified("move_file") && overrides.creativeFileMoveV2 === true,
       creativeFileDeleteV2:
-        creativeQualified("delete_file") && overrides.creativeFileDeleteV2 === true
+        creativeQualified("delete_file") && overrides.creativeFileDeleteV2 === true,
+      creativeDirectoryCreateV2:
+        creativeQualified("create_directory") && overrides.creativeDirectoryCreateV2 === true
     },
     engineeringQualification,
     observedAt
@@ -177,6 +187,54 @@ export function createProductionAgentFeatureFlags(
     revision: `${flags.revision}:approval-surface:${
       qualified ? approvalQualification.attestationChecksum : "unavailable"
     }${creativeRevision}`
+  });
+}
+
+/**
+ * Resolves the deliberately narrower unsigned beta channel. Its Main-owned V2 confirmation port
+ * is not production qualification and cannot satisfy the signed stable release gate.
+ */
+export function createUnsignedBetaAgentFeatureFlags(
+  creativeQualifications:
+    | Readonly<Partial<Record<CreativeFileOperation, CreativeFileOperationQualificationV1>>>
+    | undefined,
+  authorized: boolean,
+  approvalPortAvailable: boolean,
+  now: string = new Date().toISOString()
+): AgentFeatureFlags {
+  const mutationAuthority = authorized && approvalPortAvailable;
+  const qualified = (operation: CreativeFileOperation): boolean =>
+    mutationAuthority &&
+    (operation === "replace_file" ||
+      operation === "create_file" ||
+      operation === "move_file" ||
+      operation === "create_directory") &&
+    hasMainOwnedUnsignedBetaCreativeFileOperationQualification(
+      creativeQualifications?.[operation],
+      operation,
+      now
+    );
+  const hasQualifiedMutation =
+    qualified("replace_file") ||
+    qualified("create_file") ||
+    qualified("move_file") ||
+    qualified("create_directory");
+  const flags = createAgentFeatureFlags({
+    agentGuidanceV3: hasQualifiedMutation,
+    unsignedBetaCreativeFileOperations: mutationAuthority,
+    creativeTrustedReplaceV2: qualified("replace_file"),
+    creativeFileCreateV2: qualified("create_file"),
+    creativeFileMoveV2: qualified("move_file"),
+    creativeFileDeleteV2: false,
+    creativeDirectoryCreateV2: qualified("create_directory"),
+    approvalBindingV2: hasQualifiedMutation,
+    revision: `desktop-main:unsigned-beta:${mutationAuthority ? "authorized" : "unavailable"}`
+  });
+  return Object.freeze({
+    ...flags,
+    revision: `${flags.revision}:creative-qualification:${creativeQualificationRevision(
+      creativeQualifications
+    )}`
   });
 }
 

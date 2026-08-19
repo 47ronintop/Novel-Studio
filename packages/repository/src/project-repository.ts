@@ -633,6 +633,37 @@ function createDefaultConfigAssets(now: string): readonly {
         createdAt: now,
         updatedAt: now
       }
+    },
+    {
+      schemaName: "workflow-definition",
+      relativePath: join("workflow", "wf_ai_rewrite_selection.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "wf_ai_rewrite_selection",
+        type: "workflow.definition",
+        title: "AI 改写选中文本",
+        status: "active",
+        entryStepId: "build_context",
+        steps: [
+          {
+            id: "build_context",
+            kind: "context",
+            nextStepId: "rewrite_selection"
+          },
+          {
+            id: "rewrite_selection",
+            kind: "agent",
+            agentId: "agent_selection_rewriter",
+            nextStepId: "confirm_apply"
+          },
+          {
+            id: "confirm_apply",
+            kind: "confirmation"
+          }
+        ],
+        createdAt: now,
+        updatedAt: now
+      }
     }
   ];
 }
@@ -642,5 +673,6 @@ const AI_WRITING_CONFIG_ASSET_RELATIVE_PATHS = new Set([
   "prompts/prompt_rewrite_selection.json",
   "agents/agent_chapter_writer.json",
   "agents/agent_selection_rewriter.json",
-  "workflow/wf_ai_continue_chapter.json"
+  "workflow/wf_ai_continue_chapter.json",
+  "workflow/wf_ai_rewrite_selection.json"
 ]);

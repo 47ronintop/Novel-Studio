@@ -16,7 +16,8 @@ export const CREATIVE_FILE_OPERATIONS = Object.freeze([
   "replace_file",
   "create_file",
   "move_file",
-  "delete_file"
+  "delete_file",
+  "create_directory"
 ] as const);
 
 export type CreativeFileOperation = (typeof CREATIVE_FILE_OPERATIONS)[number];
@@ -33,7 +34,7 @@ export interface CreativeFileOperationQualificationV1 {
   readonly authority: typeof CREATIVE_FILE_OPERATION_QUALIFICATION_AUTHORITY;
   readonly backendId: typeof CREATIVE_FILE_OPERATION_BACKEND_ID;
   readonly operation: CreativeFileOperation;
-  readonly packageKind: "development" | "production";
+  readonly packageKind: "development" | "production" | "unsigned-beta";
   readonly status: "qualified" | "unavailable";
   readonly productionQualified: boolean;
   /** Digest of the Main-owned, package-bound operation evidence. */
@@ -75,7 +76,7 @@ const MAX_QUALIFICATION_VALIDITY_MS = 90 * 24 * 60 * 60 * 1000;
  * creative mutation in production.
  */
 export function createCreativeFileOperationQualificationService(options?: {
-  readonly packageKind?: "development" | "production";
+  readonly packageKind?: "development" | "production" | "unsigned-beta";
   readonly now?: () => string;
   readonly candidateInspector?: CreativeFileOperationCandidateInspector;
 }): CreativeFileOperationQualificationService {
@@ -147,6 +148,25 @@ export function hasMainOwnedCreativeFileOperationQualification(
   );
 }
 
+export function hasMainOwnedUnsignedBetaCreativeFileOperationQualification(
+  value: unknown,
+  operation: CreativeFileOperation,
+  now: string = new Date().toISOString()
+): value is CreativeFileOperationQualificationV1 {
+  if (!isMainOwnedCreativeFileOperationQualification(value) || value.operation !== operation) {
+    return false;
+  }
+  const observedAt = Date.parse(now);
+  return (
+    value.status === "qualified" &&
+    value.packageKind === "unsigned-beta" &&
+    !value.productionQualified &&
+    Number.isFinite(observedAt) &&
+    Date.parse(value.issuedAt) <= observedAt &&
+    observedAt < Date.parse(value.expiresAt)
+  );
+}
+
 export function creativeFileOperationQualificationRevision(value: unknown): string {
   return isMainOwnedCreativeFileOperationQualification(value)
     ? value.attestationChecksum
@@ -164,7 +184,9 @@ export function validateCreativeFileOperationQualification(
     record.authority !== CREATIVE_FILE_OPERATION_QUALIFICATION_AUTHORITY ||
     record.backendId !== CREATIVE_FILE_OPERATION_BACKEND_ID ||
     !isCreativeFileOperation(record.operation) ||
-    (record.packageKind !== "development" && record.packageKind !== "production") ||
+    (record.packageKind !== "development" &&
+      record.packageKind !== "production" &&
+      record.packageKind !== "unsigned-beta") ||
     (record.status !== "qualified" && record.status !== "unavailable") ||
     typeof record.productionQualified !== "boolean" ||
     !isHashOrNull(record.evidenceChecksum) ||
@@ -197,8 +219,8 @@ export function validateCreativeFileOperationQualification(
     );
   }
   return (
-    record.packageKind === "production" &&
-    record.productionQualified === true &&
+    ((record.packageKind === "production" && record.productionQualified === true) ||
+      (record.packageKind === "unsigned-beta" && record.productionQualified === false)) &&
     record.evidenceChecksum !== null &&
     (record.failureReasons as readonly unknown[]).length === 0
   );
@@ -206,7 +228,7 @@ export function validateCreativeFileOperationQualification(
 
 async function observeCandidate(input: {
   readonly operation: CreativeFileOperation;
-  readonly packageKind: "development" | "production";
+  readonly packageKind: "development" | "production" | "unsigned-beta";
   readonly checkedAt: string;
   readonly inspector: CreativeFileOperationCandidateInspector;
 }): Promise<CreativeFileOperationQualificationV1> {
@@ -221,7 +243,7 @@ async function observeCandidate(input: {
   } catch {
     return createUnavailable(input.operation, input.packageKind, input.checkedAt, ["probe_failed"]);
   }
-  if (candidate.status !== "qualified" || input.packageKind !== "production") {
+  if (candidate.status !== "qualified" || input.packageKind === "development") {
     return createUnavailable(
       input.operation,
       input.packageKind,
@@ -264,7 +286,7 @@ async function observeCandidate(input: {
     operation: input.operation,
     packageKind: input.packageKind,
     status: "qualified" as const,
-    productionQualified: true,
+    productionQualified: input.packageKind === "production",
     evidenceChecksum: candidate.evidenceChecksum,
     issuedAt: candidate.issuedAt,
     expiresAt: candidate.expiresAt,
@@ -278,7 +300,7 @@ async function observeCandidate(input: {
 
 function createUnavailable(
   operation: CreativeFileOperation,
-  packageKind: "development" | "production",
+  packageKind: "development" | "production" | "unsigned-beta",
   checkedAt: string,
   failureReasons: readonly CreativeFileOperationQualificationFailureReason[]
 ): CreativeFileOperationQualificationV1 {

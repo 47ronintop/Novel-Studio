@@ -460,6 +460,7 @@ describe("M14 AI writing workflow session", () => {
       }),
       configAssetIds: {
         workflowId: "wf_ai_continue_chapter",
+        selectionWorkflowId: "wf_ai_rewrite_selection",
         chapterAgentId: "agent_chapter_writer",
         chapterPromptId: "prompt_continue_chapter",
         selectionAgentId: "agent_selection_rewriter",
@@ -731,6 +732,7 @@ describe("M14 AI writing workflow session", () => {
   test("generates a selection-aware preview without writing chapter content", async () => {
     const requests: LlmRequest[] = [];
     const writes: ChapterDocument[] = [];
+    const workflowRunRecords: WorkflowRunRecord[] = [];
     const chapterSession = createChapterEditorSession({
       chapterId: "ch_m14",
       repository: createRepository(writes),
@@ -751,7 +753,13 @@ describe("M14 AI writing workflow session", () => {
       createWorkflowRunId: () => "wfrun_selection_m74",
       createSuggestionId: () => "sug_selection_m74",
       createAgentRunId: () => "agentrun_selection_m74",
-      createHandoffId: () => "handoff_selection_m74"
+      createHandoffId: () => "handoff_selection_m74",
+      workflowRunHistory: {
+        async recordWorkflowRun(record) {
+          workflowRunRecords.push(record);
+          return ok(record);
+        }
+      }
     });
 
     const preview = await aiWorkflow.generateSelectionPreview({
@@ -771,6 +779,7 @@ describe("M14 AI writing workflow session", () => {
       previewId: "sug_selection_m74",
       workflowRunId: "wfrun_selection_m74",
       previewOnly: true,
+      observability: { workflowTitle: "Rewrite Selection" },
       proposedText: "The opening line tightened.",
       summary: "Rewrites only the selected sentence.",
       review: {
@@ -800,6 +809,13 @@ describe("M14 AI writing workflow session", () => {
     expect(chapterSession.getState()?.chapter.body).toBe("Opening line.\n");
     expect(chapterSession.getState()?.dirty).toBe(false);
     expect(writes).toEqual([]);
+    expect(workflowRunRecords).toEqual([
+      expect.objectContaining({
+        workflowId: "wf_ai_rewrite_selection",
+        workflowTitle: "Rewrite Selection",
+        status: "pending-confirmation"
+      })
+    ]);
   });
 
   test("injects writing style rules into selection requests and reviews returned text locally", async () => {
@@ -878,6 +894,68 @@ describe("M14 AI writing workflow session", () => {
         })
       ])
     });
+  });
+
+  test("uses configured selection workflow assets and records their identity", async () => {
+    const requests: LlmRequest[] = [];
+    const workflowRunRecords: WorkflowRunRecord[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_selection_assets",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) throw new Error(loaded.error.message);
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createSelectionPreviewProvider(requests),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      configAssetIds: {
+        workflowId: "wf_ai_continue_chapter",
+        selectionWorkflowId: "wf_ai_rewrite_selection",
+        chapterAgentId: "agent_chapter_writer",
+        chapterPromptId: "prompt_continue_chapter",
+        selectionAgentId: "agent_selection_rewriter",
+        selectionPromptId: "prompt_rewrite_selection"
+      },
+      configAssetLoader: createDefaultWritingAssetLoader("CHAPTER PROMPT"),
+      workflowRunHistory: {
+        async recordWorkflowRun(record) {
+          workflowRunRecords.push(record);
+          return ok(record);
+        }
+      },
+      now: () => "2026-07-04T00:00:00.000Z",
+      createWorkflowRunId: () => "wfrun_selection_assets",
+      createSuggestionId: () => "sug_selection_assets",
+      createAgentRunId: () => "agentrun_selection_assets",
+      createHandoffId: () => "handoff_selection_assets"
+    });
+
+    const preview = await aiWorkflow.generateSelectionPreview({
+      instruction: "Rewrite the selected sentence.",
+      selection: {
+        startOffset: 0,
+        endOffset: 13,
+        selectedText: "Opening line."
+      }
+    });
+
+    expect(isOk(preview)).toBe(true);
+    if (isErr(preview)) throw new Error(preview.error.message);
+    expect(preview.value.observability.workflowTitle).toBe("Configured Rewrite Selection");
+    expect(requests[0]?.messages.map((message) => message.content).join("\n")).toContain(
+      "Return JSON with proposedText"
+    );
+    expect(workflowRunRecords).toEqual([
+      expect.objectContaining({
+        workflowId: "wf_ai_rewrite_selection",
+        workflowTitle: "Configured Rewrite Selection"
+      })
+    ]);
   });
 
   test("applies a stored selection preview only after confirmation", async () => {
@@ -1006,6 +1084,7 @@ describe("M14 AI writing workflow session", () => {
       }),
       configAssetIds: {
         workflowId: "wf_custom",
+        selectionWorkflowId: "wf_custom",
         chapterAgentId: "agent_custom",
         chapterPromptId: "prompt_custom",
         selectionAgentId: "agent_custom",
@@ -1118,6 +1197,7 @@ describe("M14 AI writing workflow session", () => {
       llmAdapter: createLlmAdapter({ provider: createCapturingProvider([]) }),
       configAssetIds: {
         workflowId: workflow.id,
+        selectionWorkflowId: workflow.id,
         chapterAgentId: agent.id,
         chapterPromptId: prompt.id,
         selectionAgentId: agent.id,
@@ -1152,6 +1232,7 @@ describe("M14 AI writing workflow session", () => {
       llmAdapter: createLlmAdapter({ provider: createCapturingProvider([]) }),
       configAssetIds: {
         workflowId: "wf_missing",
+        selectionWorkflowId: "wf_missing",
         chapterAgentId: "agent_missing",
         chapterPromptId: "prompt_missing",
         selectionAgentId: "agent_missing",
@@ -1301,19 +1382,24 @@ function createDefaultWritingAssetLoader(chapterPromptTemplate: string) {
   return {
     async loadConfigAsset(type: "prompt" | "agent" | "workflow", assetId: string) {
       if (type === "workflow") {
+        const selection = assetId === "wf_ai_rewrite_selection";
         return ok({
           schemaVersion: "1.0",
-          id: "wf_ai_continue_chapter",
+          id: selection ? "wf_ai_rewrite_selection" : "wf_ai_continue_chapter",
           type: "workflow.definition",
-          title: "Configured Continue Chapter",
+          title: selection ? "Configured Rewrite Selection" : "Configured Continue Chapter",
           status: "active",
           entryStepId: "build_context",
           steps: [
-            { id: "build_context", kind: "context", nextStepId: "write_suggestion" },
             {
-              id: "write_suggestion",
+              id: "build_context",
+              kind: "context",
+              nextStepId: selection ? "rewrite_selection" : "write_suggestion"
+            },
+            {
+              id: selection ? "rewrite_selection" : "write_suggestion",
               kind: "agent",
-              agentId: "agent_chapter_writer",
+              agentId: selection ? "agent_selection_rewriter" : "agent_chapter_writer",
               nextStepId: "confirm_apply"
             },
             { id: "confirm_apply", kind: "confirmation" }

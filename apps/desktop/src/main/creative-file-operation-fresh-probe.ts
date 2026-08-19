@@ -118,6 +118,8 @@ export async function runCreativeFileOperationProbe(
       "delete_file"
     );
 
+    assertProbeResult(await port.mutate(createDirectoryMutation("drafts")), "create_directory");
+
     assertProbeRejection(
       await port.mutate(createFileMutation(".git/config.md", CANDIDATE)),
       "managed_path"
@@ -133,7 +135,8 @@ export async function runCreativeFileOperationProbe(
       replace_file: "passed" as const,
       create_file: "passed" as const,
       move_file: "passed" as const,
-      delete_file: "passed" as const
+      delete_file: "passed" as const,
+      create_directory: "passed" as const
     });
     const unsigned = {
       schemaVersion: PROBE_SCHEMA_VERSION,
@@ -206,6 +209,15 @@ function deleteFileMutation(
     relativePath,
     before: [fileSnapshot(relativePath, content)],
     after: [missingSnapshot(relativePath)]
+  };
+}
+
+function createDirectoryMutation(relativePath: string): AgentWriteTrustedCreativeLifecycleMutation {
+  return {
+    kind: "create_directory",
+    relativePath,
+    before: [missingSnapshot(relativePath)],
+    after: [{ kind: "directory", relativePath }]
   };
 }
 

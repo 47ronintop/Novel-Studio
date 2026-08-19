@@ -77,6 +77,9 @@ describe("M12 project workflow repository support", () => {
     expect(
       await readFile(join(projectRoot, "workflow", "wf_ai_continue_chapter.json"), "utf8")
     ).toContain("agent_chapter_writer");
+    expect(
+      await readFile(join(projectRoot, "workflow", "wf_ai_rewrite_selection.json"), "utf8")
+    ).toContain("agent_selection_rewriter");
   });
 
   test("does not overwrite existing files when initializing a folder as a project", async () => {
@@ -130,6 +133,9 @@ describe("M12 project workflow repository support", () => {
     expect(
       await readFile(join(projectRoot, "workflow", "wf_ai_continue_chapter.json"), "utf8")
     ).toContain("wf_ai_continue_chapter");
+    expect(
+      await readFile(join(projectRoot, "workflow", "wf_ai_rewrite_selection.json"), "utf8")
+    ).toContain("wf_ai_rewrite_selection");
   });
 
   test("creates, lists, and reads chapters in project order", async () => {

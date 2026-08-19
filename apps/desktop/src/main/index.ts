@@ -27,6 +27,7 @@ import {
 } from "./agent-network-runtime.js";
 import {
   createProductionAgentFeatureFlags,
+  createUnsignedBetaAgentFeatureFlags,
   hasCurrentMainOwnedApprovalSurfaceQualification
 } from "./agent-feature-flags.js";
 import { createCreativeFileOperationQualificationService } from "./creative-file-operation-qualification.js";
@@ -59,6 +60,13 @@ import {
   type TrustedApprovalModalWindowOptions
 } from "./trusted-approval-modal-window.js";
 import { createTrustedChangeSetApprovalV2Port } from "./trusted-change-set-approval-v2.js";
+import { createUnsignedBetaChangeSetApprovalV2Port } from "./unsigned-beta-change-set-approval-v2.js";
+import {
+  createUnsignedBetaAuthorizationService,
+  createUnsignedBetaPackageIdentityChecksum,
+  hasCurrentUnsignedBetaAuthorization,
+  type UnsignedBetaAuthorizationV1
+} from "./unsigned-beta-qualification.js";
 import {
   createDesktopAgentNetworkSettingsPort,
   createDesktopMcpSettingsPort
@@ -321,6 +329,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const userDataRoot = process.env["NOVEL_STUDIO_USER_DATA_ROOT"] ?? app.getPath("userData");
   const fixtureProjectRoot = process.env["NOVEL_STUDIO_PROJECT_ROOT"];
   const appRoot = app.getAppPath();
+  const executableCodeSignatureInspector = app.isPackaged
+    ? createSystemExecutableCodeSignatureInspector(process.platform)
+    : undefined;
   let embeddedAsarIntegrityValidationEnabled = false;
   let onlyLoadAppFromAsarEnabled = false;
   if (app.isPackaged) {
@@ -329,18 +340,17 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       fuseState?.embeddedAsarIntegrityValidationEnabled === true;
     onlyLoadAppFromAsarEnabled = fuseState?.onlyLoadAppFromAsarEnabled === true;
   }
-  const packageSignatureInspector = app.isPackaged
-    ? createSignedAsarPackageCoverageInspector({
-        appPath: appRoot,
-        resourcesPath: process.resourcesPath,
-        executablePath: process.execPath,
-        embeddedAsarIntegrityValidationEnabled: () => embeddedAsarIntegrityValidationEnabled,
-        onlyLoadAppFromAsarEnabled: () => onlyLoadAppFromAsarEnabled,
-        executableCodeSignatureInspector: createSystemExecutableCodeSignatureInspector(
-          process.platform
-        )
-      })
-    : undefined;
+  const packageSignatureInspector =
+    app.isPackaged && executableCodeSignatureInspector !== undefined
+      ? createSignedAsarPackageCoverageInspector({
+          appPath: appRoot,
+          resourcesPath: process.resourcesPath,
+          executablePath: process.execPath,
+          embeddedAsarIntegrityValidationEnabled: () => embeddedAsarIntegrityValidationEnabled,
+          onlyLoadAppFromAsarEnabled: () => onlyLoadAppFromAsarEnabled,
+          executableCodeSignatureInspector
+        })
+      : undefined;
   const approvalQualificationResult = await loadApprovalSurfaceQualification({
     rootDirectory: appRoot,
     buildManifestPath: join(appRoot, "apps", "desktop", "dist", "build-manifest.json"),
@@ -350,12 +360,56 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const approvalSurfaceQualification = approvalQualificationResult.ok
     ? approvalQualificationResult.value
     : undefined;
+  const unsignedBetaPackageIdentityChecksum = createUnsignedBetaPackageIdentityChecksum({
+    appVersion: app.getVersion(),
+    appRoot
+  });
+  // Unsigned beta grants are intentionally process-scoped; the persisted record is audit-only.
+  const unsignedBetaAuthorizationService = createUnsignedBetaAuthorizationService({
+    userDataRoot,
+    packageIdentityChecksum: unsignedBetaPackageIdentityChecksum
+  });
+  let unsignedBetaAuthorization: UnsignedBetaAuthorizationV1 | undefined;
+  if (
+    app.isPackaged &&
+    approvalSurfaceQualification === undefined &&
+    executableCodeSignatureInspector !== undefined &&
+    (await executableCodeSignatureInspector.verify(process.execPath)) === "unsigned"
+  ) {
+    unsignedBetaAuthorization = await unsignedBetaAuthorizationService.read();
+    if (unsignedBetaAuthorization === undefined) {
+      unsignedBetaAuthorization = await unsignedBetaAuthorizationService.requestAuthorization(
+        async () =>
+          (
+            await dialog.showMessageBox({
+              type: "warning",
+              title: "Unsigned Beta",
+              message: "启用无签名 Beta 的创作文件操作？",
+              detail:
+                "将允许 Agent 在当前项目内替换、创建和移动文件，以及创建目录。每个变更集仍需单独确认，此授权将在 24 小时后失效。",
+              buttons: ["启用", "暂不启用"],
+              defaultId: 1,
+              cancelId: 1,
+              noLink: true
+            })
+          ).response === 0
+      );
+    }
+  }
   const creativeFileOperationQualification = createCreativeFileOperationQualificationService({
-    packageKind: app.isPackaged ? "production" : "development",
-    ...(app.isPackaged && approvalSurfaceQualification !== undefined
+    packageKind:
+      unsignedBetaAuthorization !== undefined
+        ? "unsigned-beta"
+        : app.isPackaged
+          ? "production"
+          : "development",
+    ...(app.isPackaged &&
+    (approvalSurfaceQualification !== undefined || unsignedBetaAuthorization !== undefined)
       ? {
           candidateInspector: createMainOwnedCreativeFileOperationCandidateInspector({
-            packageIdentityChecksum: approvalSurfaceQualification.attestationChecksum
+            packageIdentityChecksum:
+              approvalSurfaceQualification?.attestationChecksum ??
+              unsignedBetaPackageIdentityChecksum
           })
         }
       : {})
@@ -370,6 +424,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
   const engineeringFileAccessAddonLoader = createEngineeringFileAccessAddonLoader();
   let creativeQualificationExpiresAt: number | undefined;
   let creativeQualificationExpiryTimer: NodeJS.Timeout | undefined;
+  const unsignedBetaAuthorizationExpiresAt = unsignedBetaAuthorization
+    ? Date.parse(unsignedBetaAuthorization.expiresAt)
+    : undefined;
   const modelSecretStore = createEncryptedFileModelSecretStore({
     userDataRoot,
     cipher: safeStorage
@@ -528,6 +585,59 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
           workspaceLabel: basename(binding.contentRoot) || binding.workspaceId
         });
         nextApprovalCoordinator = coordinator;
+      } else if (
+        binding.kind === "creativeProject" &&
+        hasCurrentUnsignedBetaAuthorization(
+          unsignedBetaAuthorization,
+          unsignedBetaPackageIdentityChecksum
+        )
+      ) {
+        changeSetApprovalV2 = createUnsignedBetaChangeSetApprovalV2Port({
+          authorizationLedger,
+          getCurrentAuthorization: () => unsignedBetaAuthorization,
+          packageIdentityChecksum: unsignedBetaPackageIdentityChecksum,
+          workspaceBindingId: agentContextScopeKey({
+            kind: "workspace",
+            workspaceKind: binding.kind,
+            workspaceId: binding.workspaceId
+          }),
+          projectId: binding.workspaceId,
+          workspaceLabel: basename(binding.contentRoot) || binding.workspaceId,
+          confirm: async (display) => {
+            const parent = activeMainWindow;
+            if (parent === undefined || parent.isDestroyed()) return false;
+            const operations = display.selectedOperations
+              .map((operation, index) => {
+                const paths = operation.paths
+                  .map((path) => `${path.role}: ${path.path}`)
+                  .join("\n");
+                return `${index + 1}. ${operation.operationKind}\n${paths}\n${operation.summary}`;
+              })
+              .join("\n\n");
+            const response = await dialog.showMessageBox(parent, {
+              type: "warning",
+              title: "Unsigned Beta Change Set",
+              message: `批准 ${display.selectedOperations.length} 项创作文件变更？`,
+              detail: [
+                `工作区: ${display.workspaceLabel}`,
+                `变更集: ${display.changeSetId} (revision ${display.changeSetRevision})`,
+                "",
+                operations,
+                "",
+                "Canonical diff:",
+                display.canonicalDiff,
+                "",
+                `Recovery: ${display.recoverySideEffect}`,
+                `Display checksum: ${display.displayChecksum}`
+              ].join("\n"),
+              buttons: ["批准变更集", "取消"],
+              defaultId: 1,
+              cancelId: 1,
+              noLink: true
+            });
+            return response.response === 0;
+          }
+        });
       }
       const creativeOperationQualifications =
         binding.kind === "creativeProject"
@@ -540,6 +650,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
               .filter((attestation) => attestation.status === "qualified")
               .map((attestation) => Date.parse(attestation.expiresAt))
               .filter((expiresAt) => Number.isFinite(expiresAt));
+      if (unsignedBetaAuthorizationExpiresAt !== undefined) {
+        creativeQualificationExpiries.push(unsignedBetaAuthorizationExpiresAt);
+      }
       creativeQualificationExpiresAt =
         creativeQualificationExpiries.length === 0
           ? undefined
@@ -732,7 +845,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
               addonLoader: engineeringFileAccessAddonLoader
             })
           : undefined;
-      const featureFlags = createProductionAgentFeatureFlags(
+      const productionFeatureFlags = createProductionAgentFeatureFlags(
         {
           agentGuidanceV3: true,
           phaseA_searchEnabled: true,
@@ -753,7 +866,8 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                 creativeTrustedReplaceV2: changeSetApprovalV2 !== undefined,
                 creativeFileCreateV2: changeSetApprovalV2 !== undefined,
                 creativeFileMoveV2: changeSetApprovalV2 !== undefined,
-                creativeFileDeleteV2: changeSetApprovalV2 !== undefined
+                creativeFileDeleteV2: changeSetApprovalV2 !== undefined,
+                creativeDirectoryCreateV2: changeSetApprovalV2 !== undefined
               }
             : {}),
           approvalBindingV2: changeSetApprovalV2 !== undefined,
@@ -767,6 +881,17 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         undefined,
         creativeOperationQualifications
       );
+      const featureFlags =
+        unsignedBetaAuthorization !== undefined && binding.kind === "creativeProject"
+          ? createUnsignedBetaAgentFeatureFlags(
+              creativeOperationQualifications,
+              hasCurrentUnsignedBetaAuthorization(
+                unsignedBetaAuthorization,
+                unsignedBetaPackageIdentityChecksum
+              ),
+              changeSetApprovalV2 !== undefined
+            )
+          : productionFeatureFlags;
       const runtime = createDesktopAgentRuntime({
         workspaceKind: binding.kind,
         projectId: binding.workspaceId,
@@ -1023,6 +1148,13 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         return;
       }
       creativeQualificationExpiresAt = undefined;
+      if (
+        unsignedBetaAuthorizationExpiresAt !== undefined &&
+        Date.now() >= unsignedBetaAuthorizationExpiresAt
+      ) {
+        unsignedBetaAuthorization = undefined;
+        void unsignedBetaAuthorizationService.revoke("qualification_expired");
+      }
       activeApprovalCoordinator?.revokeAll("qualification_expired");
       agentRuntimeManager.revokeCurrentApprovalCapabilities();
       void agentRuntimeManager.refreshCurrentWorkspace().catch(() => undefined);

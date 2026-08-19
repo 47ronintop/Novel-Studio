@@ -98,6 +98,7 @@ const DEFAULT_CHAPTER_TITLE = "第一章";
 const DEFAULT_CHAPTER_BODY = "这是第一章的正文。你可以直接开始写作。\n";
 const AI_WRITING_CONFIG_ASSET_IDS = {
   workflowId: "wf_ai_continue_chapter",
+  selectionWorkflowId: "wf_ai_rewrite_selection",
   chapterAgentId: "agent_chapter_writer",
   chapterPromptId: "prompt_continue_chapter",
   selectionAgentId: "agent_selection_rewriter",

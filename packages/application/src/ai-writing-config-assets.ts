@@ -12,6 +12,7 @@ export interface PromptTemplateConfig {
 
 export interface ResolvedWritingAssets {
   readonly workflow: WorkflowDefinition;
+  readonly selectionWorkflow: WorkflowDefinition;
   readonly chapterAgent: AgentConfig;
   readonly chapterPrompt: PromptTemplateConfig;
   readonly selectionAgent: AgentConfig;
@@ -31,6 +32,27 @@ const defaultWorkflowDefinition: WorkflowDefinition = {
       id: "write_suggestion",
       kind: "agent",
       agentId: "agent_chapter_writer",
+      nextStepId: "confirm_apply"
+    },
+    { id: "confirm_apply", kind: "confirmation" }
+  ],
+  createdAt: "2026-07-04T00:00:00.000Z",
+  updatedAt: "2026-07-04T00:00:00.000Z"
+};
+
+const defaultSelectionWorkflowDefinition: WorkflowDefinition = {
+  schemaVersion: "1.0",
+  id: "wf_ai_rewrite_selection",
+  type: "workflow.definition",
+  title: "Rewrite Selection",
+  status: "active",
+  entryStepId: "build_context",
+  steps: [
+    { id: "build_context", kind: "context", nextStepId: "rewrite_selection" },
+    {
+      id: "rewrite_selection",
+      kind: "agent",
+      agentId: "agent_selection_rewriter",
       nextStepId: "confirm_apply"
     },
     { id: "confirm_apply", kind: "confirmation" }
@@ -70,6 +92,7 @@ export async function resolveWritingAssets(
   if (loader === undefined) {
     return ok({
       workflow: defaultWorkflowDefinition,
+      selectionWorkflow: defaultSelectionWorkflowDefinition,
       chapterAgent: defaultChapterAgent,
       chapterPrompt: {
         id: defaultChapterAgent.promptTemplateId,
@@ -94,6 +117,9 @@ export async function resolveWritingAssets(
 
   const workflow = await loadConfigAsset(loader, "workflow", ids.workflowId);
   if (!workflow.ok) return workflow;
+  const selectionWorkflowId = ids.selectionWorkflowId;
+  const selectionWorkflow = await loadConfigAsset(loader, "workflow", selectionWorkflowId);
+  if (!selectionWorkflow.ok) return selectionWorkflow;
   const chapterAgent = await loadConfigAsset(loader, "agent", ids.chapterAgentId);
   if (!chapterAgent.ok) return chapterAgent;
   const chapterPrompt = await loadConfigAsset(loader, "prompt", ids.chapterPromptId);
@@ -105,6 +131,8 @@ export async function resolveWritingAssets(
 
   const parsedWorkflow = parseAssetWorkflow(workflow.value);
   if (!parsedWorkflow.ok) return parsedWorkflow;
+  const parsedSelectionWorkflow = parseAssetWorkflow(selectionWorkflow.value);
+  if (!parsedSelectionWorkflow.ok) return parsedSelectionWorkflow;
   const parsedChapterAgent = parseAssetAgent(chapterAgent.value);
   if (!parsedChapterAgent.ok) return parsedChapterAgent;
   const parsedSelectionAgent = parseAssetAgent(selectionAgent.value);
@@ -116,6 +144,7 @@ export async function resolveWritingAssets(
 
   if (
     parsedWorkflow.value.id !== ids.workflowId ||
+    parsedSelectionWorkflow.value.id !== selectionWorkflowId ||
     parsedChapterAgent.value.id !== ids.chapterAgentId ||
     parsedChapterPrompt.value.id !== ids.chapterPromptId ||
     parsedSelectionAgent.value.id !== ids.selectionAgentId ||
@@ -124,6 +153,9 @@ export async function resolveWritingAssets(
     parsedSelectionAgent.value.promptTemplateId !== parsedSelectionPrompt.value.id ||
     !parsedWorkflow.value.steps.some(
       (step) => step.kind === "agent" && step.agentId === parsedChapterAgent.value.id
+    ) ||
+    !parsedSelectionWorkflow.value.steps.some(
+      (step) => step.kind === "agent" && step.agentId === parsedSelectionAgent.value.id
     )
   ) {
     return aiWorkflowError({
@@ -135,6 +167,7 @@ export async function resolveWritingAssets(
 
   return ok({
     workflow: parsedWorkflow.value,
+    selectionWorkflow: parsedSelectionWorkflow.value,
     chapterAgent: parsedChapterAgent.value,
     chapterPrompt: parsedChapterPrompt.value,
     selectionAgent: parsedSelectionAgent.value,

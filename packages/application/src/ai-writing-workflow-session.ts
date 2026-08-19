@@ -352,7 +352,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         return validatedSelection;
       }
 
-      const parsedWorkflow = parseWorkflowDefinition(assets.value.workflow, {
+      const parsedWorkflow = parseWorkflowDefinition(assets.value.selectionWorkflow, {
         traceId: "ai-selection-preview"
       });
       if (!parsedWorkflow.ok) {
@@ -466,6 +466,29 @@ export function createAgentBackedAiWritingWorkflowSession(
         now
       });
       if (!handoff.ok) {
+        if (options.workflowRunHistory !== undefined) {
+          const recorded = await options.workflowRunHistory.recordWorkflowRun(
+            createWorkflowRunRecord({
+              workflowId: parsedWorkflow.value.id,
+              status: "failed",
+              startedAt: runState.createdAt,
+              updatedAt: now(),
+              observability: createFailureObservability({
+                workflowRunId: runState.workflowRunId,
+                workflowTitle: parsedWorkflow.value.title,
+                generatedAt: now(),
+                contextTrace: contextBundle.value.trace,
+                contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
+                modelProfile: runtimeProfile.value.modelProfile
+              }),
+              error: toWorkflowRunErrorSummary(handoff.error),
+              retryPolicy: defaultRetryPolicySummary()
+            })
+          );
+          if (!recorded.ok) {
+            return recorded;
+          }
+        }
         return handoff;
       }
 
@@ -488,10 +511,18 @@ export function createAgentBackedAiWritingWorkflowSession(
       }
       runState = afterAgent.value;
 
+      const confirmationAction = evaluateNextWorkflowAction(parsedWorkflow.value, runState);
+      if (!confirmationAction.ok) {
+        return confirmationAction;
+      }
+      if (confirmationAction.value.kind !== "wait-for-confirmation") {
+        return invalidWorkflowAction(confirmationAction.value.kind);
+      }
+
       const generatedAt = now();
       const observability = createObservability({
         workflowRunId: runState.workflowRunId,
-        workflowTitle: "Selection Preview",
+        workflowTitle: parsedWorkflow.value.title,
         generatedAt,
         contextTrace: contextBundle.value.trace,
         contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
@@ -528,6 +559,21 @@ export function createAgentBackedAiWritingWorkflowSession(
         contextTrace: contextBundle.value.trace,
         observability
       };
+      if (options.workflowRunHistory !== undefined) {
+        const recorded = await options.workflowRunHistory.recordWorkflowRun(
+          createWorkflowRunRecord({
+            workflowId: parsedWorkflow.value.id,
+            status: "pending-confirmation",
+            startedAt: runState.createdAt,
+            updatedAt: generatedAt,
+            observability,
+            retryPolicy: defaultRetryPolicySummary()
+          })
+        );
+        if (!recorded.ok) {
+          return recorded;
+        }
+      }
       selectionPreviews.set(preview.previewId, { preview });
 
       return ok(preview);

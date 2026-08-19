@@ -993,7 +993,8 @@ export function requestedCapabilitySnapshot(
           ...(flags.creativeTrustedReplaceV2 ? (["replace_file"] as const) : []),
           ...(flags.creativeFileCreateV2 ? (["create_file"] as const) : []),
           ...(flags.creativeFileMoveV2 ? (["move_file"] as const) : []),
-          ...(flags.creativeFileDeleteV2 ? (["delete_file"] as const) : [])
+          ...(flags.creativeFileDeleteV2 ? (["delete_file"] as const) : []),
+          ...(flags.creativeDirectoryCreateV2 ? (["create_directory"] as const) : [])
         ]
       : engineeringWorkspaceFileOperations;
   return freezeAgentToolCapabilitySnapshot({
@@ -1151,7 +1152,7 @@ function operationFeatureEnabled(
   workspaceKind: AgentToolCapabilitySnapshot["workspaceKind"],
   flags: AgentFeatureFlags
 ): boolean {
-  if (!flags.agentGuidanceV3) return false;
+  if (!flags.agentGuidanceV3 && !flags.unsignedBetaCreativeFileOperations) return false;
   if (workspaceKind === "creativeProject") {
     switch (operation) {
       case "chapter_replace":
@@ -1173,6 +1174,8 @@ function operationFeatureEnabled(
         return flags.creativeFileMoveV2;
       case "delete_file":
         return flags.creativeFileDeleteV2;
+      case "create_directory":
+        return flags.creativeDirectoryCreateV2;
       default:
         return false;
     }
