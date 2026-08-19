@@ -80,6 +80,66 @@ describe("M95 real provider runtime", () => {
     ).resolves.toEqual({ ok: true, value: false });
   });
 
+  test("invalidates the live-provider proof when an API key is rotated", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-secrets-rotate-"));
+    tempRoots.push(userDataRoot);
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret(apiKeyRef, "sk-old-key");
+    await secretStore.markVerified(apiKeyRef, {
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com/v1",
+      modelName: "deepseek-chat"
+    });
+    expect(
+      await secretStore.isVerified(apiKeyRef, {
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        modelName: "deepseek-chat"
+      })
+    ).toEqual({ ok: true, value: true });
+
+    await secretStore.saveSecret(apiKeyRef, "sk-new-key");
+
+    expect(
+      await secretStore.isVerified(apiKeyRef, {
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        modelName: "deepseek-chat"
+      })
+    ).toEqual({ ok: true, value: false });
+  });
+
+  test("rejects cross-profile secret references and unsafe Base URLs before network access", async () => {
+    const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-runtime-security-"));
+    tempRoots.push(userDataRoot);
+    const calls: FetchCall[] = [];
+    const secretStore = createEncryptedFileModelSecretStore({
+      userDataRoot,
+      cipher: testCipher
+    });
+    await secretStore.saveSecret("secret://model_victim/api_key", "sk-victim-key");
+    const runtime = createDesktopModelRuntime({
+      userDataRoot,
+      secretStore,
+      fetch: createJsonFetch(calls, {})
+    });
+
+    const tested = await runtime.modelConnectionTester.testConnection({
+      ...createDeepSeekProfile(),
+      apiKeyRef: "secret://model_victim/api_key",
+      baseUrl: "http://remote.example/v1"
+    });
+
+    expect(tested).toMatchObject({
+      ok: true,
+      value: { ok: false, detail: expect.stringContaining("invalid") }
+    });
+    expect(calls).toHaveLength(0);
+  });
+
   test("tests model connections by sending a real OpenAI-compatible request with the stored key", async () => {
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-runtime-test-"));
     tempRoots.push(userDataRoot);
@@ -92,11 +152,7 @@ describe("M95 real provider runtime", () => {
     const runtime = createDesktopModelRuntime({
       userDataRoot,
       secretStore,
-      fetch: createJsonFetch(calls, {
-        id: "chatcmpl_test",
-        choices: [{ message: { content: "{}" } }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
-      })
+      fetch: createConnectionStreamingFetch(calls)
     });
 
     const tested = await runtime.modelConnectionTester.testConnection(createDeepSeekProfile());
@@ -116,7 +172,7 @@ describe("M95 real provider runtime", () => {
     });
     expect(calls[0]?.body).toMatchObject({
       model: "deepseek-chat",
-      stream: false
+      stream: true
     });
     const verified = await secretStore.isVerified(apiKeyRef, {
       provider: "deepseek",
@@ -132,27 +188,19 @@ describe("M95 real provider runtime", () => {
       modelName: "claude-3-5-sonnet",
       baseUrl: "https://api.anthropic.com",
       expectedUrl: "https://api.anthropic.com/v1/messages",
-      authHeader: "x-api-key",
-      payload: {
-        content: [{ type: "text", text: "pong" }],
-        usage: { input_tokens: 1, output_tokens: 1 }
-      }
+      authHeader: "x-api-key"
     },
     {
       provider: "google-gemini",
       modelName: "gemini-1.5-pro",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       expectedUrl:
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
-      authHeader: "x-goog-api-key",
-      payload: {
-        candidates: [{ content: { role: "model", parts: [{ text: "pong" }] } }],
-        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 }
-      }
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse",
+      authHeader: "x-goog-api-key"
     }
   ] as const)(
     "routes $provider connection checks through its native protocol",
-    async ({ provider, modelName, baseUrl, expectedUrl, authHeader, payload }) => {
+    async ({ provider, modelName, baseUrl, expectedUrl, authHeader }) => {
       const userDataRoot = await mkdtemp(join(tmpdir(), `novel-studio-${provider}-runtime-`));
       tempRoots.push(userDataRoot);
       const calls: FetchCall[] = [];
@@ -165,7 +213,7 @@ describe("M95 real provider runtime", () => {
       const runtime = createDesktopModelRuntime({
         userDataRoot,
         secretStore,
-        fetch: createJsonFetch(calls, payload)
+        fetch: createConnectionStreamingFetch(calls)
       });
       const profile = {
         id: `model_${provider}`,
@@ -291,7 +339,7 @@ describe("M95 real provider runtime", () => {
     const userDataRoot = await mkdtemp(join(tmpdir(), "novel-studio-gemini-cache-runtime-"));
     tempRoots.push(userDataRoot);
     const calls: FetchCall[] = [];
-    const secretRef = "secret://model_google-gemini/cache-runtime-key";
+    const secretRef = "secret://model_google-gemini_cache/api_key";
     const modelProfile = {
       id: "model_google-gemini_cache",
       provider: "google-gemini" as const,
@@ -379,6 +427,7 @@ describe("M95 real provider runtime", () => {
     });
 
     await secretStore.saveSecret(secretRef, "gemini-cache-secret-rotated");
+    await secretStore.markVerified(secretRef, modelProfile);
     for await (const event of driver.streamRound({
       runId: "run_gemini_cache_after_secret_rotation",
       snapshot: {
@@ -1185,6 +1234,46 @@ function createJsonFetch(calls: FetchCall[], payload: unknown): typeof fetch {
       status: 200,
       headers: { "content-type": "application/json" }
     });
+  }) as typeof fetch;
+}
+
+function createConnectionStreamingFetch(calls: FetchCall[]): typeof fetch {
+  return (async (url, init) => {
+    const urlString = String(url);
+    calls.push({
+      url: urlString,
+      method: init?.method,
+      headers: normalizeHeaders(init?.headers),
+      body: JSON.parse(String(init?.body ?? "{}")) as unknown
+    });
+    const chunks = urlString.includes("/v1/messages")
+      ? [
+          { type: "message_start", message: { usage: { input_tokens: 1 } } },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "pong" }
+          }
+        ]
+      : urlString.includes(":streamGenerateContent")
+        ? [
+            {
+              candidates: [{ content: { role: "model", parts: [{ text: "pong" }] } }]
+            }
+          ]
+        : [{ choices: [{ delta: { content: "pong" }, finish_reason: "stop" }] }];
+    const encoder = new TextEncoder();
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          }
+          controller.close();
+        }
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } }
+    );
   }) as typeof fetch;
 }
 

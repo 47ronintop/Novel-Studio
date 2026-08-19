@@ -47,6 +47,10 @@ test("isolates multi-run conversation context and restores project-scoped conver
       json(response, { choices: [{ message: { role: "assistant", content: "ok" } }] });
       return;
     }
+    if (isConnectionProbe(body)) {
+      sendConnectionProbe(response);
+      return;
+    }
     modelRequests.push(body);
     const userRequest = lastUserRequest(body);
     if (userRequest.includes("Hold beta")) {
@@ -794,6 +798,13 @@ function isApplicationContextEnvelope(content: string): boolean {
   }
 }
 
+function isConnectionProbe(body: Record<string, unknown>): boolean {
+  const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
+  return body["stream"] === true && messages.some(
+    (message) => isRecord(message) && message["role"] === "user" && message["content"] === "ping"
+  );
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -865,6 +876,16 @@ function sendToolCall(
 function json(response: ServerResponse, payload: Record<string, unknown>): void {
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify(payload));
+}
+
+function sendConnectionProbe(response: ServerResponse): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
+  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "pong" } }] })}\n\n`);
+  response.end("data: [DONE]\n\n");
 }
 
 function electronEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {

@@ -604,9 +604,12 @@ async function startForeshadowProvider(): Promise<{ baseUrl: string; server: Ser
       return;
     }
 
-    for await (const chunk of request) {
-      // Drain the request before responding so the adapter sees a complete exchange.
-      void chunk;
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    if (isConnectionProbe(body)) {
+      sendConnectionProbe(response);
+      return;
     }
     response.writeHead(200, { "content-type": "application/json" });
     response.end(
@@ -646,6 +649,28 @@ async function startForeshadowProvider(): Promise<{ baseUrl: string; server: Ser
     throw new Error("Expected a TCP address for the local Story Bible provider.");
   }
   return { baseUrl: `http://127.0.0.1:${address.port}/v1`, server };
+}
+
+function isConnectionProbe(body: Record<string, unknown>): boolean {
+  const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
+  return body["stream"] === true && messages.some(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      !Array.isArray(message) &&
+      (message as Record<string, unknown>)["role"] === "user" &&
+      (message as Record<string, unknown>)["content"] === "ping"
+  );
+}
+
+function sendConnectionProbe(response: import("node:http").ServerResponse): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
+  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "pong" } }] })}\n\n`);
+  response.end("data: [DONE]\n\n");
 }
 
 async function closeServer(server: Server): Promise<void> {

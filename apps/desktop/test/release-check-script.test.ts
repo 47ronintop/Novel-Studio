@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { createPackage } from "@electron/asar";
 import { describe, expect, test } from "vitest";
 
 const root = process.cwd();
@@ -30,6 +31,31 @@ describe("release-check script", () => {
       );
     } finally {
       await rm(packageDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("recognizes a valid PE and ASAR metadata before applying signing and evidence gates", async () => {
+    const packageDirectory = await mkdtemp(join(tmpdir(), "release-check-valid-layout-"));
+    const sourceDirectory = await mkdtemp(join(tmpdir(), "release-check-asar-source-"));
+    try {
+      const resourcesDirectory = join(packageDirectory, "resources");
+      await mkdir(resourcesDirectory, { recursive: true });
+      await writeFile(join(packageDirectory, "Novel Studio.exe"), minimalPortableExecutable());
+      await writeFile(
+        join(sourceDirectory, "package.json"),
+        JSON.stringify({ main: "apps/desktop/dist/main/index.js" })
+      );
+      await createPackage(sourceDirectory, join(resourcesDirectory, "app.asar"));
+
+      const result = await runReleaseCheck(["--strict", "--package-dir", packageDirectory]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain("requires a valid Windows Authenticode signature");
+      expect(result.output).not.toContain("missing a valid Electron executable");
+      expect(result.output).not.toContain("missing expected package metadata");
+    } finally {
+      await rm(packageDirectory, { recursive: true, force: true });
+      await rm(sourceDirectory, { recursive: true, force: true });
     }
   });
 
@@ -67,4 +93,13 @@ function runReleaseCheck(
     child.once("error", reject);
     child.once("close", (exitCode) => resolveRun({ exitCode, output }));
   });
+}
+
+function minimalPortableExecutable(): Buffer {
+  const bytes = Buffer.alloc(0x80);
+  bytes[0] = 0x4d;
+  bytes[1] = 0x5a;
+  bytes.writeUInt32LE(0x40, 0x3c);
+  bytes.set([0x50, 0x45, 0x00, 0x00], 0x40);
+  return bytes;
 }

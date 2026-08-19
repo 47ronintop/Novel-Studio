@@ -253,7 +253,7 @@ describe("beta startup default project", () => {
           id: "model_project_b",
           provider: "openai-compatible",
           displayName: "Project B Model",
-          apiKeyRef: "secret://project-b/api-key",
+          apiKeyRef: "secret://model_project_b/api_key",
           modelName: "project-b-model",
           temperature: 0.4,
           maxTokens: 2048,

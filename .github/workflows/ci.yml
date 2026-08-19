@@ -47,6 +47,17 @@ jobs:
       - name: Electron E2E smoke
         run: npm run test:e2e:built
 
+      - name: Upload Playwright diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-diagnostics-${{ github.run_id }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Package preflight
         run: npm run package:verify
 

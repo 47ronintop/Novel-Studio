@@ -138,17 +138,14 @@ export function createEncryptedFileModelSecretStore(input: {
         return file;
       }
       const encrypted = input.cipher.encryptString(secret);
-      const existing = file.value.secrets[secretRef];
       return writeSecretFile(secretsFile, {
         schemaVersion: "1.0",
         secrets: {
           ...file.value.secrets,
           [secretRef]: {
-            ciphertext: encrypted.toString("base64"),
-            ...(existing?.verifiedAt === undefined ? {} : { verifiedAt: existing.verifiedAt }),
-            ...(existing?.verificationFingerprint === undefined
-              ? {}
-              : { verificationFingerprint: existing.verificationFingerprint })
+            // Replacing ciphertext invalidates the previous live-provider proof. The new
+            // credential must pass a fresh connection test before runtime calls can use it.
+            ciphertext: encrypted.toString("base64")
           }
         }
       });
@@ -285,7 +282,10 @@ export function createDesktopModelRuntime(
         }
 
         try {
-          await providerForSecret(secret.value).complete(connectionProbeRequest(profile));
+          await verifyStreamingConnection(
+            providerForSecret(secret.value),
+            connectionProbeRequest(profile)
+          );
           const marked = await secretStore.markVerified(profile.apiKeyRef, profile);
           if (!marked.ok) {
             return marked;
@@ -345,6 +345,13 @@ export function createDesktopModelRuntime(
           if (secretRef === undefined) {
             return demoProvider.complete(request);
           }
+          if (!isBoundModelSecretRef(request.modelProfile.id, secretRef)) {
+            throw new LlmProviderFailure({
+              code: "LLM_PROVIDER_ERROR",
+              message: "Model profile API key reference is not bound to the selected profile.",
+              retryable: false
+            });
+          }
           const secret = await secretStore.readSecret(secretRef);
           if (!secret.ok) {
             throw new LlmProviderFailure({
@@ -379,6 +386,13 @@ export function createDesktopModelRuntime(
           if (secretRef === undefined) {
             yield* demoProvider.stream(request);
             return;
+          }
+          if (!isBoundModelSecretRef(request.modelProfile.id, secretRef)) {
+            throw new LlmProviderFailure({
+              code: "LLM_PROVIDER_ERROR",
+              message: "Model profile API key reference is not bound to the selected profile.",
+              retryable: false
+            });
           }
           const secret = await secretStore.readSecret(secretRef);
           if (!secret.ok) {
@@ -533,7 +547,7 @@ function connectionProbeRequest(profile: ModelProfile): LlmRequest {
     schemaVersion: "1.0",
     requestId: `connection_${profile.id}`,
     traceId: `connection_${profile.id}`,
-    mode: "non-streaming",
+    mode: "streaming",
     modelProfile: {
       id: profile.id,
       provider: profile.provider as LlmProviderId,
@@ -546,6 +560,24 @@ function connectionProbeRequest(profile: ModelProfile): LlmRequest {
     messages: [{ role: "user", content: "ping" }],
     parameters: { temperature: 0, maxTokens: 1 }
   };
+}
+
+async function verifyStreamingConnection(
+  provider: LlmProvider,
+  request: LlmRequest
+): Promise<void> {
+  const iterator = provider.stream(request)[Symbol.asyncIterator]();
+  try {
+    const first = await iterator.next();
+    if (first.done === true) {
+      throw new OpenAiCompatibleHttpError({
+        status: 502,
+        message: "Provider returned an empty streaming response."
+      });
+    }
+  } finally {
+    await iterator.return?.();
+  }
 }
 
 function withRuntimeBaseUrl(request: LlmRequest): LlmRequest {
@@ -679,6 +711,7 @@ async function* streamOpenAiCompatibleJson(
   let firstSseChunkReceived = false;
   let receivedAnyBytes = false;
   let sawSseDataLine = false;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   const markFirstSseChunkReceived = () => {
     if (!firstSseChunkReceived) {
@@ -714,8 +747,18 @@ async function* streamOpenAiCompatibleJson(
         message: "Provider returned an empty streaming response."
       });
     }
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (contentType.length > 0 && !contentType.includes("text/event-stream")) {
+      const text = await response.text();
+      throw new OpenAiCompatibleHttpError({
+        status: 502,
+        message:
+          "Provider returned a non-JSON response instead of an SSE stream. Check the Base URL; it should be the provider API endpoint, not a web page or console URL.",
+        body: { contentType, bodyPreview: text.slice(0, 120) }
+      });
+    }
 
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     while (true) {
@@ -783,6 +826,9 @@ async function* streamOpenAiCompatibleJson(
     clearTimeout(firstChunkTimeout);
     if (timeout !== undefined) {
       clearTimeout(timeout);
+    }
+    if (reader !== undefined) {
+      await reader.cancel().catch(() => undefined);
     }
   }
 }
@@ -1420,15 +1466,26 @@ async function readProfileSecret(
   secretStore: ModelSecretStore,
   profile: ModelProfile
 ): Promise<Result<string | undefined, UnifiedError>> {
-  if (!isValidSecretRef(profile.apiKeyRef)) {
+  if (!isBoundModelSecretRef(profile.id, profile.apiKeyRef)) {
     return err(secretStoreError("MODEL_SECRET_INVALID", "Model secret reference is invalid."));
+  }
+  if (!isSafeModelBaseUrl(profile.baseUrl)) {
+    return err(secretStoreError("MODEL_BASE_URL_INVALID", "Model Base URL is invalid."));
   }
   return secretStore.readSecret(profile.apiKeyRef);
 }
 
 function requiredBaseUrl(profile: ModelProfile): string {
   const configured = profile.baseUrl?.trim();
-  if (configured !== undefined && configured.length > 0) return configured;
+  if (configured !== undefined && configured.length > 0) {
+    if (!isSafeModelBaseUrl(configured)) {
+      throw new OpenAiCompatibleHttpError({
+        status: 400,
+        message: "Model Base URL must be credential-free HTTPS or a loopback HTTP endpoint."
+      });
+    }
+    return configured;
+  }
   const defaultBaseUrl = MODEL_PROVIDER_CATALOG.find(
     (entry) => entry.id === profile.provider
   )?.defaultBaseUrl;
@@ -1436,6 +1493,12 @@ function requiredBaseUrl(profile: ModelProfile): string {
     throw new OpenAiCompatibleHttpError({
       status: 400,
       message: "The selected model provider requires a Base URL."
+    });
+  }
+  if (!isSafeModelBaseUrl(defaultBaseUrl)) {
+    throw new OpenAiCompatibleHttpError({
+      status: 400,
+      message: "The configured model provider has an unsafe Base URL."
     });
   }
   return defaultBaseUrl;
@@ -1597,7 +1660,52 @@ function verificationBaseUrl(baseUrl: string | undefined): string {
 }
 
 function isValidSecretRef(value: string): boolean {
-  return value.startsWith("secret://") && value.length > "secret://".length;
+  return /^secret:\/\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,127})+$/u.test(
+    value
+  );
+}
+
+function isBoundModelSecretRef(profileId: string, secretRef: string): boolean {
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(profileId) &&
+    (secretRef === `secret://${profileId}/api_key` || secretRef === `secret://${profileId}/api-key`)
+  );
+}
+
+function isSafeModelBaseUrl(baseUrl: unknown): boolean {
+  if (baseUrl === undefined) return true;
+  if (typeof baseUrl !== "string") return false;
+  if (baseUrl.trim().length === 0) return true;
+  if (
+    [...baseUrl].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return (codePoint !== undefined && codePoint <= 0x1f) || character === "\u007f";
+    })
+  ) {
+    return false;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl.trim());
+  } catch {
+    return false;
+  }
+
+  return (
+    parsed.hostname.length > 0 &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    parsed.hash === "" &&
+    parsed.search === "" &&
+    (parsed.protocol === "https:" ||
+      (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)))
+  );
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
 function secretStoreError(code: string, message: string): UnifiedError {
@@ -1625,4 +1733,4 @@ const fallbackUnavailableCipher: DesktopSecretCipher = {
   }
 };
 
-const DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT_MS = 30_000;
+const DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT_MS = 90_000;

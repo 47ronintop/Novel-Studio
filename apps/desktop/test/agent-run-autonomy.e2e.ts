@@ -93,6 +93,10 @@ async function launchScenario(): Promise<{
       json(response, { choices: [{ message: { role: "assistant", content: "ok" } }] });
       return;
     }
+    if (isStreamingPingProbe(body)) {
+      sendStreamingPing(response);
+      return;
+    }
     await providerResponseGate;
     const evidenceRef = "run-event/7/tool_completed/call_autonomy-read";
     sendToolCalls(response, [
@@ -396,6 +400,25 @@ function sendToolCalls(
 function json(response: ServerResponse, payload: Record<string, unknown>): void {
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify(payload));
+}
+
+function isStreamingPingProbe(body: Record<string, unknown>): boolean {
+  const messages = body["messages"];
+  return (
+    body["stream"] === true &&
+    Array.isArray(messages) &&
+    messages.some(
+      (message) =>
+        isRecord(message) && message["role"] === "user" && message["content"] === "ping"
+    )
+  );
+}
+
+function sendStreamingPing(response: ServerResponse): void {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  response.end(
+    `data: ${JSON.stringify({ choices: [{ delta: { content: "pong" } }] })}\n\ndata: [DONE]\n\n`
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

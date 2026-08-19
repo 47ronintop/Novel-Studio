@@ -249,9 +249,9 @@ async function hasValidWindowsAuthenticodeSignature(executablePath) {
 async function hasExpectedAsarPackageMetadata(asarPath) {
   try {
     const { extractFile, listPackage } = require("@electron/asar");
-    const packageEntry = listPackage(asarPath).find(
-      (entry) => entry.replace(/\\/g, "/").replace(/^\/+/, "") === "package.json"
-    );
+    const packageEntry = listPackage(asarPath)
+      .map((entry) => entry.replace(/\\/g, "/").replace(/^\/+/, ""))
+      .find((entry) => entry === "package.json");
     if (packageEntry === undefined) return false;
     const metadata = JSON.parse(extractFile(asarPath, packageEntry).toString("utf8"));
     return isRecord(metadata) && metadata.main === "apps/desktop/dist/main/index.js";
@@ -291,14 +291,15 @@ async function isContainedRegularDirectory(base, candidate) {
 async function isPortableExecutable(path) {
   try {
     const bytes = await readFile(path);
+    if (bytes.length < 0x40) return false;
     const peOffset = bytes.readUInt32LE(0x3c);
+    const peSignature = Buffer.from([0x50, 0x45, 0x00, 0x00]);
     return (
-      bytes.length >= 0x40 &&
       bytes[0] === 0x4d &&
       bytes[1] === 0x5a &&
       peOffset >= 0x40 &&
       peOffset + 4 <= bytes.length &&
-      bytes.subarray(peOffset, peOffset + 4).equals(Buffer.from("PE\\0\\0"))
+      bytes.subarray(peOffset, peOffset + peSignature.length).equals(peSignature)
     );
   } catch {
     return false;

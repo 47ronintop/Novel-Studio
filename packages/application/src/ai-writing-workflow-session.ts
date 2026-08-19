@@ -1,5 +1,5 @@
 ﻿import { buildContextBundle, type ContextBundleTrace } from "@novel-studio/context-engine";
-import { runAgent, type AgentConfig } from "@novel-studio/agent-engine";
+import { runAgent } from "@novel-studio/agent-engine";
 import type { LlmModelProfile, LlmProviderWarning, LlmUsage } from "@novel-studio/llm-adapter";
 import {
   completeWorkflowStep,
@@ -13,6 +13,8 @@ import {
 import { ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
+import { resolveWritingAssets } from "./ai-writing-config-assets.js";
+import { collectAiWritingContextCandidates } from "./ai-writing-context.js";
 import {
   createChapterSuggestionLlmRequest,
   createSelectionPreviewLlmRequest,
@@ -58,51 +60,6 @@ interface StoredSelectionPreview {
   readonly preview: AiWritingSelectionPreview;
 }
 
-const workflowDefinition: WorkflowDefinition = {
-  schemaVersion: "1.0",
-  id: "wf_ai_continue_chapter",
-  type: "workflow.definition",
-  title: "Continue Chapter",
-  status: "active",
-  entryStepId: "build_context",
-  steps: [
-    { id: "build_context", kind: "context", nextStepId: "write_suggestion" },
-    {
-      id: "write_suggestion",
-      kind: "agent",
-      agentId: "agent_chapter_writer",
-      nextStepId: "confirm_apply"
-    },
-    { id: "confirm_apply", kind: "confirmation" }
-  ],
-  createdAt: "2026-07-04T00:00:00.000Z",
-  updatedAt: "2026-07-04T00:00:00.000Z"
-};
-
-const agentConfig: AgentConfig = {
-  schemaVersion: "1.0",
-  id: "agent_chapter_writer",
-  type: "agent.config",
-  title: "Chapter Writer",
-  status: "active",
-  agentRole: "writer",
-  promptTemplateId: "prompt_continue_chapter",
-  inputSchemaId: "schema.ai-writing.input.v1",
-  outputSchemaId: "schema.ai-writing.output.v1",
-  modelProfileId: "mock_m14",
-  createdAt: "2026-07-04T00:00:00.000Z",
-  updatedAt: "2026-07-04T00:00:00.000Z"
-};
-
-const selectionPreviewAgentConfig: AgentConfig = {
-  ...agentConfig,
-  id: "agent_selection_rewriter",
-  title: "Selection Rewriter",
-  promptTemplateId: "prompt_rewrite_selection",
-  inputSchemaId: "schema.ai-selection-preview.input.v1",
-  outputSchemaId: "schema.ai-selection-preview.output.v1"
-};
-
 export function createAgentBackedAiWritingWorkflowSession(
   options: AiWritingWorkflowSessionOptions
 ): AiWritingWorkflowSession {
@@ -127,8 +84,12 @@ export function createAgentBackedAiWritingWorkflowSession(
           suggestedAction: "Open a project chapter before generating AI writing suggestions."
         });
       }
+      const assets = await resolveWritingAssets(options);
+      if (!assets.ok) {
+        return assets;
+      }
 
-      const parsedWorkflow = parseWorkflowDefinition(workflowDefinition, {
+      const parsedWorkflow = parseWorkflowDefinition(assets.value.workflow, {
         traceId: "ai-writing-workflow"
       });
       if (!parsedWorkflow.ok) {
@@ -149,28 +110,38 @@ export function createAgentBackedAiWritingWorkflowSession(
         return invalidWorkflowAction(contextAction.value.kind);
       }
 
+      const primaryContextCandidate = {
+        refType: "chapter" as const,
+        refId: chapterState.chapter.frontmatter.id,
+        content: chapterState.chapter.body,
+        priority: 1,
+        sourceRefs: [
+          {
+            entityType: "chapter",
+            entityId: chapterState.chapter.frontmatter.id
+          }
+        ]
+      };
+      const contextCandidates = await collectAiWritingContextCandidates({
+        provider: options.contextCandidateProvider,
+        request: {
+          goal: request.instruction,
+          chapterId: chapterState.chapter.frontmatter.id,
+          currentBody: chapterState.chapter.body
+        },
+        primary: primaryContextCandidate
+      });
+      if (!contextCandidates.ok) {
+        return contextCandidates;
+      }
       const contextBundle = buildContextBundle({
         schemaVersion: "1.0",
         contextBundleId: `ctx_${runState.workflowRunId}`,
         workflowRunId: runState.workflowRunId,
         traceId: "ai-writing-workflow",
         goal: request.instruction,
-        budget: { maxTokens: 1024 },
-        candidates: [
-          {
-            refType: "chapter",
-            refId: chapterState.chapter.frontmatter.id,
-            content: chapterState.chapter.body,
-            priority: 1,
-            tokenEstimate: 4,
-            sourceRefs: [
-              {
-                entityType: "chapter",
-                entityId: chapterState.chapter.frontmatter.id
-              }
-            ]
-          }
-        ]
+        budget: { maxTokens: options.contextBudgetTokens ?? 1024 },
+        candidates: contextCandidates.value
       });
       if (!contextBundle.ok) {
         return contextBundle;
@@ -204,7 +175,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         handoffId: createHandoffId(),
         workflowRunId: runState.workflowRunId,
         traceId: "ai-writing-workflow",
-        agent: agentConfig,
+        agent: assets.value.chapterAgent,
         toAgentId: "application",
         input: {
           instruction: request.instruction,
@@ -221,7 +192,9 @@ export function createAgentBackedAiWritingWorkflowSession(
             runtimeProfile.value.parameters,
             request.reasoningEffort
           ),
-          conversationMessages
+          conversationMessages,
+          contextItems: contextBundle.value.items,
+          promptTemplate: assets.value.chapterPrompt.template
         }),
         llmAdapter: options.llmAdapter,
         validateSchema: validateAiWritingSchema,
@@ -240,6 +213,7 @@ export function createAgentBackedAiWritingWorkflowSession(
                 workflowTitle: parsedWorkflow.value.title,
                 generatedAt: now(),
                 contextTrace: contextBundle.value.trace,
+                contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
                 modelProfile: runtimeProfile.value.modelProfile
               }),
               error: toWorkflowRunErrorSummary(handoff.error),
@@ -287,6 +261,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         workflowTitle: parsedWorkflow.value.title,
         generatedAt,
         contextTrace: contextBundle.value.trace,
+        contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
         modelProfile: runtimeProfile.value.modelProfile,
         usage: handoff.value.usage
       });
@@ -364,6 +339,10 @@ export function createAgentBackedAiWritingWorkflowSession(
           suggestedAction: "Open a project chapter before generating AI writing suggestions."
         });
       }
+      const assets = await resolveWritingAssets(options);
+      if (!assets.ok) {
+        return assets;
+      }
 
       const validatedSelection = validateSelectionRange(
         chapterState.chapter.body,
@@ -373,7 +352,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         return validatedSelection;
       }
 
-      const parsedWorkflow = parseWorkflowDefinition(workflowDefinition, {
+      const parsedWorkflow = parseWorkflowDefinition(assets.value.workflow, {
         traceId: "ai-selection-preview"
       });
       if (!parsedWorkflow.ok) {
@@ -394,28 +373,39 @@ export function createAgentBackedAiWritingWorkflowSession(
         return invalidWorkflowAction(contextAction.value.kind);
       }
 
+      const primaryContextCandidate = {
+        refType: "chapter" as const,
+        refId: chapterState.chapter.frontmatter.id,
+        content: validatedSelection.value.selectedText,
+        priority: 1,
+        tokenEstimate: estimateSelectionTokens(validatedSelection.value.selectedText),
+        sourceRefs: [
+          {
+            entityType: "chapter",
+            entityId: chapterState.chapter.frontmatter.id
+          }
+        ]
+      };
+      const contextCandidates = await collectAiWritingContextCandidates({
+        provider: options.contextCandidateProvider,
+        request: {
+          goal: request.instruction,
+          chapterId: chapterState.chapter.frontmatter.id,
+          currentBody: chapterState.chapter.body
+        },
+        primary: primaryContextCandidate
+      });
+      if (!contextCandidates.ok) {
+        return contextCandidates;
+      }
       const contextBundle = buildContextBundle({
         schemaVersion: "1.0",
         contextBundleId: `ctx_${runState.workflowRunId}`,
         workflowRunId: runState.workflowRunId,
         traceId: "ai-selection-preview",
         goal: request.instruction,
-        budget: { maxTokens: 1024 },
-        candidates: [
-          {
-            refType: "chapter",
-            refId: chapterState.chapter.frontmatter.id,
-            content: validatedSelection.value.selectedText,
-            priority: 1,
-            tokenEstimate: estimateSelectionTokens(validatedSelection.value.selectedText),
-            sourceRefs: [
-              {
-                entityType: "chapter",
-                entityId: chapterState.chapter.frontmatter.id
-              }
-            ]
-          }
-        ]
+        budget: { maxTokens: options.contextBudgetTokens ?? 1024 },
+        candidates: contextCandidates.value
       });
       if (!contextBundle.ok) {
         return contextBundle;
@@ -450,7 +440,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         handoffId: createHandoffId(),
         workflowRunId: runState.workflowRunId,
         traceId: "ai-selection-preview",
-        agent: selectionPreviewAgentConfig,
+        agent: assets.value.selectionAgent,
         toAgentId: "application",
         input: {
           instruction: request.instruction,
@@ -467,7 +457,9 @@ export function createAgentBackedAiWritingWorkflowSession(
           instruction: request.instruction,
           selection: validatedSelection.value,
           modelProfile: runtimeProfile.value.modelProfile,
-          parameters: runtimeProfile.value.parameters
+          parameters: runtimeProfile.value.parameters,
+          contextItems: contextBundle.value.items,
+          promptTemplate: assets.value.selectionPrompt.template
         }),
         llmAdapter: options.llmAdapter,
         validateSchema: validateAiWritingSchema,
@@ -502,6 +494,7 @@ export function createAgentBackedAiWritingWorkflowSession(
         workflowTitle: "Selection Preview",
         generatedAt,
         contextTrace: contextBundle.value.trace,
+        contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
         modelProfile: runtimeProfile.value.modelProfile,
         usage: handoff.value.usage
       });
@@ -683,6 +676,9 @@ function createWorkflowRunRecord(input: {
     context: {
       sourceCount: input.observability.context.sourceCount,
       tokenEstimate: input.observability.context.tokenEstimate,
+      ...(input.observability.context.budgetMaxTokens === undefined
+        ? {}
+        : { budgetMaxTokens: input.observability.context.budgetMaxTokens }),
       selectionReason: input.observability.context.selectionReason
     },
     model: {
@@ -722,6 +718,7 @@ function createObservability(input: {
   readonly workflowTitle: string;
   readonly generatedAt: string;
   readonly contextTrace: ContextBundleTrace;
+  readonly contextBudgetMaxTokens: number;
   readonly modelProfile: LlmModelProfile;
   readonly usage: LlmUsage;
 }): AiWritingWorkflowObservability {
@@ -735,6 +732,7 @@ function createObservability(input: {
         (total, ref) => total + ref.tokenEstimate,
         0
       ),
+      budgetMaxTokens: input.contextBudgetMaxTokens,
       selectionReason: input.contextTrace.selectionReason
     },
     model: {
@@ -772,6 +770,7 @@ function createFailureObservability(input: {
   readonly workflowTitle: string;
   readonly generatedAt: string;
   readonly contextTrace: ContextBundleTrace;
+  readonly contextBudgetMaxTokens: number;
   readonly modelProfile: LlmModelProfile;
 }): AiWritingWorkflowObservability {
   return {
@@ -784,6 +783,7 @@ function createFailureObservability(input: {
         (total, ref) => total + ref.tokenEstimate,
         0
       ),
+      budgetMaxTokens: input.contextBudgetMaxTokens,
       selectionReason: input.contextTrace.selectionReason
     },
     model: {

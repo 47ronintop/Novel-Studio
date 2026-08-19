@@ -391,7 +391,11 @@ async function resolveActionModelProfile(
   }
   const storedProfile = settings.value.models.profiles.find((entry) => entry.id === profileId);
   if (profileOverride === undefined) {
-    if (storedProfile !== undefined) return ok(storedProfile);
+    if (storedProfile !== undefined) {
+      const validation = validateModelProfile(storedProfile);
+      if (!validation.ok) return validation;
+      return ok(storedProfile);
+    }
     return err(
       createUnifiedError({
         code: "MODEL_PROFILE_NOT_FOUND",
@@ -408,13 +412,13 @@ async function resolveActionModelProfile(
   if (profileOverride.id !== profileId) {
     return invalidModelProfileOverride(profileId, "profile-id-mismatch");
   }
-  const validation = validateModelProfile(profileOverride);
-  if (!validation.ok) return validation;
-
   const allowedApiKeyRef = storedProfile?.apiKeyRef ?? `secret://${profileId}/api_key`;
   if (profileOverride.apiKeyRef !== allowedApiKeyRef) {
     return invalidModelProfileOverride(profileId, "secret-reference-mismatch");
   }
+
+  const validation = validateModelProfile(profileOverride);
+  if (!validation.ok) return validation;
 
   return ok(profileOverride);
 }
@@ -438,6 +442,9 @@ function invalidModelProfileOverride(
 
 function validateModelProfile(profile: ModelProfile): Result<ModelProvider, UnifiedError> {
   const provider = toSupportedProvider(profile.provider);
+  const profileIdValid = isValidModelProfileId(profile.id);
+  const secretRefValid = isModelProfileSecretRef(profile.id, profile.apiKeyRef);
+  const baseUrlValid = isSafeModelBaseUrl(profile.baseUrl);
   const maxTokensValid =
     profile.maxTokens === undefined ||
     (Number.isSafeInteger(profile.maxTokens) && profile.maxTokens > 0);
@@ -451,7 +458,9 @@ function validateModelProfile(profile: ModelProfile): Result<ModelProvider, Unif
     profile.promptCachePreference === "disabled";
   if (
     provider === undefined ||
-    !profile.apiKeyRef.startsWith("secret://") ||
+    !profileIdValid ||
+    !secretRefValid ||
+    !baseUrlValid ||
     !maxTokensValid ||
     !contextWindowValid ||
     !promptCachePreferenceValid
@@ -460,7 +469,8 @@ function validateModelProfile(profile: ModelProfile): Result<ModelProvider, Unif
       createUnifiedError({
         code: "MODEL_PROFILE_INVALID",
         category: "ValidationError",
-        message: "Model profile must use a supported provider and a secret reference.",
+        message:
+          "Model profile must use a supported provider, a bound secret reference, and a safe Base URL.",
         recoverability: "user-action",
         suggestedAction:
           "Choose a supported provider from the provider matrix and store keys as secret refs.",
@@ -477,6 +487,57 @@ function validateModelProfile(profile: ModelProfile): Result<ModelProvider, Unif
   }
 
   return ok(provider);
+}
+
+const MODEL_PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const MODEL_SECRET_REF_PATTERN = /^secret:\/\/([^/]+)\/(?:api_key|api-key)$/u;
+
+function isValidModelProfileId(profileId: string): boolean {
+  return MODEL_PROFILE_ID_PATTERN.test(profileId);
+}
+
+function isModelProfileSecretRef(profileId: string, apiKeyRef: string): boolean {
+  const match = MODEL_SECRET_REF_PATTERN.exec(apiKeyRef);
+  return match !== null && match[1] === profileId;
+}
+
+function isSafeModelBaseUrl(baseUrl: unknown): boolean {
+  if (baseUrl === undefined) return true;
+  if (typeof baseUrl !== "string") return false;
+  if (baseUrl.trim().length === 0) return true;
+  if (
+    [...baseUrl].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return (codePoint !== undefined && codePoint <= 0x1f) || character === "\u007f";
+    })
+  ) {
+    return false;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl.trim());
+  } catch {
+    return false;
+  }
+
+  if (
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.hash !== "" ||
+    parsed.search !== "" ||
+    (parsed.protocol !== "https:" &&
+      !(parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)))
+  ) {
+    return false;
+  }
+
+  return parsed.hostname.length > 0;
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
 function toSupportedProvider(provider: string): ModelProvider | undefined {

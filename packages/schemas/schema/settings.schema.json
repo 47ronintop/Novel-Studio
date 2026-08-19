@@ -48,7 +48,7 @@
               "timeoutMs"
             ],
             "properties": {
-              "id": { "type": "string" },
+              "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
               "provider": {
                 "type": "string",
                 "enum": [
@@ -67,7 +67,10 @@
               },
               "displayName": { "type": "string", "minLength": 1 },
               "baseUrl": { "type": "string" },
-              "apiKeyRef": { "type": "string", "pattern": "^secret://" },
+              "apiKeyRef": {
+                "type": "string",
+                "pattern": "^secret://[A-Za-z0-9][A-Za-z0-9._-]{0,127}/(?:api_key|api-key)$"
+              },
               "apiKey": false,
               "modelName": { "type": "string", "minLength": 1 },
               "contextWindow": { "type": "integer", "minimum": 1 },

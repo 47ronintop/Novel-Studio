@@ -1713,6 +1713,10 @@
           "type": "integer",
           "minimum": 0
         },
+        "budgetMaxTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
         "selectionReason": {
           "type": "string"
         }

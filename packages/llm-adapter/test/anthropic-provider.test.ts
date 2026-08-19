@@ -701,6 +701,28 @@ describe("Anthropic provider", () => {
     });
   });
 
+  test("redacts credentials echoed inside Anthropic error messages", async () => {
+    const leakedKey = "sk-ant-provider-error-secret-123456";
+    const provider = createAnthropicProvider({
+      transport: async () => {
+        throw new AnthropicHttpError({
+          status: 401,
+          message: `Authorization failed for ${leakedKey}.`,
+          body: { error: { message: `invalid api_key=${leakedKey}` } },
+          headers: { "x-api-key": leakedKey }
+        });
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete(request);
+
+    expect(isErr(result)).toBe(true);
+    if (result.ok) return;
+    expect(result.error.message).not.toContain(leakedKey);
+    expect(JSON.stringify(result.error.redactedDetail)).not.toContain(leakedKey);
+    expect(result.error.message).toContain("[REDACTED]");
+  });
+
   test("reports caller cancellation as LLM_ABORTED", async () => {
     const controller = new AbortController();
     controller.abort();

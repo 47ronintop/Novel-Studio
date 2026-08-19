@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "id": "prompt_continue_chapter",
+  "type": "prompt.template",
+  "title": "续写章节 Prompt",
+  "status": "active",
+  "promptRole": "writer",
+  "template": "Return JSON with proposedBody and summary for a chapter writing suggestion.",
+  "variables": [],
+  "createdAt": "2026-07-04T00:00:00.000Z",
+  "updatedAt": "2026-07-04T00:00:00.000Z"
+}

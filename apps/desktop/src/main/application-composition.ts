@@ -2,6 +2,8 @@ import { mkdir, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
+import type { ContextCandidate } from "@novel-studio/context-engine";
+
 import {
   createAgentBackedAiWritingWorkflowSession,
   createAgentFileOperationSession,
@@ -42,7 +44,8 @@ import type {
   ProjectWorkspaceSnapshot,
   ProjectSettings,
   ProjectSettingsPort,
-  StoryBibleAsset
+  StoryBibleAsset,
+  StoryBibleSnapshot
 } from "@novel-studio/application";
 import {
   createLlmAdapter,
@@ -73,7 +76,14 @@ import {
   WorkspaceStateFileRepository
 } from "@novel-studio/repository";
 import { createTrustedCreativeFileOperationsPort } from "@novel-studio/repository";
-import { createUnifiedError, err, ok, type JsonObject } from "@novel-studio/shared";
+import {
+  createUnifiedError,
+  err,
+  ok,
+  type JsonObject,
+  type Result,
+  type UnifiedError
+} from "@novel-studio/shared";
 
 import {
   createDesktopChangeSetSession,
@@ -86,6 +96,14 @@ const DEFAULT_PROJECT_TITLE = "未命名长篇项目";
 const DEFAULT_PROJECT_ID = "prj_minimal_chapter";
 const DEFAULT_CHAPTER_TITLE = "第一章";
 const DEFAULT_CHAPTER_BODY = "这是第一章的正文。你可以直接开始写作。\n";
+const AI_WRITING_CONFIG_ASSET_IDS = {
+  workflowId: "wf_ai_continue_chapter",
+  chapterAgentId: "agent_chapter_writer",
+  chapterPromptId: "prompt_continue_chapter",
+  selectionAgentId: "agent_selection_rewriter",
+  selectionPromptId: "prompt_rewrite_selection"
+} as const;
+const AI_WRITING_CONTEXT_BUDGET_TOKENS = 1024;
 
 export interface ProjectDesktopApplicationOptions {
   readonly projectRoot: string;
@@ -697,6 +715,21 @@ export function createProjectDesktopApplication(
             }) ?? createDesktopMockAiProvider(activeChapterEditorSession),
           clock: () => options.now?.() ?? new Date().toISOString()
         }),
+        configAssetLoader: {
+          loadConfigAsset: async (assetType, assetId) => {
+            const projectRoot = requireActiveProjectRoot();
+            const migrated = await new ProjectFileRepository({
+              projectRoot,
+              traceId: "trace_desktop_ai_writing_asset_migration",
+              ...(options.now === undefined ? {} : { now: options.now })
+            }).ensureDefaultAiWritingAssets();
+            if (!migrated.ok) return err(migrated.error);
+            return createConfigAssetRepository().readConfigAsset(assetType, assetId);
+          }
+        },
+        configAssetIds: AI_WRITING_CONFIG_ASSET_IDS,
+        contextCandidateProvider: buildAiWritingProjectContextCandidates,
+        contextBudgetTokens: AI_WRITING_CONTEXT_BUDGET_TOKENS,
         resolveModelRuntimeProfile: async () => {
           const settings = await settingsPort.readSettings();
           if (!settings.ok) {
@@ -790,6 +823,33 @@ export function createProjectDesktopApplication(
     });
   }
 
+  async function buildAiWritingProjectContextCandidates(input: {
+    readonly goal: string;
+    readonly chapterId: string;
+    readonly currentBody: string;
+  }): Promise<Result<readonly ContextCandidate[], UnifiedError>> {
+    const candidates: ContextCandidate[] = [];
+    const storyBible = await createStoryBibleRepository().readStoryBible();
+    if (storyBible.ok) {
+      candidates.push(...storyBibleSnapshotContextCandidates(storyBible.value));
+    }
+
+    if (input.goal.trim().length > 0) {
+      const search = await createProjectSearchSession({
+        repository: new SearchIndexFileRepository({
+          projectRoot: requireActiveProjectRoot(),
+          traceId: "trace_desktop_ai_writing_search_repository",
+          ...(options.now === undefined ? {} : { now: options.now })
+        })
+      }).search({ query: input.goal, limit: 8 });
+      if (search.ok) {
+        candidates.push(...search.value.results.map(searchResultContextCandidate));
+      }
+    }
+
+    return ok(candidates);
+  }
+
   function createConfigAssetRepository(): ConfigAssetRepository {
     const projectRoot = requireActiveProjectRoot();
     return new ConfigAssetRepository({
@@ -824,6 +884,94 @@ export function createProjectDesktopApplication(
     }
     return activeProjectRoot;
   }
+}
+
+function storyBibleSnapshotContextCandidates(
+  snapshot: StoryBibleSnapshot
+): readonly ContextCandidate[] {
+  const candidates: ContextCandidate[] = [];
+  const assets = [
+    ...snapshot.characters,
+    ...snapshot.worldAssets,
+    ...(snapshot.outline === undefined ? [] : [snapshot.outline]),
+    ...(snapshot.timeline === undefined ? [] : [snapshot.timeline]),
+    ...snapshot.foreshadows
+  ];
+  for (const asset of assets) {
+    if (asset.status !== "active" || asset.summary.trim().length === 0) continue;
+    const refType: ContextCandidate["refType"] =
+      asset.type === "character"
+        ? "character"
+        : asset.type === "timeline.events"
+          ? "timeline"
+          : asset.type === "outline" || asset.type === "foreshadow"
+            ? "goal"
+            : "world";
+    candidates.push({
+      refType,
+      refId: asset.id,
+      content: asset.summary,
+      priority: refType === "character" ? 100 : refType === "world" ? 200 : 300,
+      sourceRefs: [{ entityType: asset.type, entityId: asset.id }]
+    });
+  }
+  for (const memory of snapshot.memories) {
+    if (memory.status !== "active" || memory.content.trim().length === 0) continue;
+    candidates.push({
+      refType: "memory",
+      refId: memory.id,
+      content: memory.content,
+      priority: 400,
+      memoryConfidence:
+        memory.confidence === "confirmed" && memory.origin !== "ai-unconfirmed"
+          ? "confirmed"
+          : memory.origin === "ai-unconfirmed" || memory.confidence === "needs-review"
+            ? "ai-unconfirmed"
+            : "low",
+      sourceRefs: [{ entityType: "memory", entityId: memory.id }]
+    });
+  }
+  return candidates;
+}
+
+function searchResultContextCandidate(input: {
+  readonly id: string;
+  readonly type:
+    | "chapter"
+    | "story.character"
+    | "story.world"
+    | "story.outline"
+    | "story.timeline"
+    | "story.foreshadow"
+    | "memory";
+  readonly title: string;
+  readonly snippet: string;
+  readonly score: number;
+  readonly sourceRef: {
+    readonly kind: "chapter" | "story-asset" | "memory";
+    readonly id: string;
+    readonly relativePath: string;
+  };
+}): ContextCandidate {
+  const refType: ContextCandidate["refType"] =
+    input.type === "chapter"
+      ? "chapter"
+      : input.type === "story.character"
+        ? "character"
+        : input.type === "story.world"
+          ? "world"
+          : input.type === "story.timeline"
+            ? "timeline"
+            : input.type === "memory"
+              ? "memory"
+              : "goal";
+  return {
+    refType,
+    refId: input.id,
+    content: input.snippet,
+    priority: Math.max(10, Math.round(500 - input.score * 100)),
+    sourceRefs: [{ entityType: input.sourceRef.kind, entityId: input.sourceRef.id }]
+  };
 }
 
 function createStoryAnalysisUsageRecord(input: {

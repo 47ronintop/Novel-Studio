@@ -49,6 +49,10 @@ test("tests and discovers an unsaved model draft through real Electron IPC", asy
       authorization: request.headers.authorization,
       body
     });
+    if (isStreamingPingProbe(body)) {
+      sendStreamingPing(response);
+      return;
+    }
     json(response, {
       choices: [{ message: { role: "assistant", content: "ok" } }],
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
@@ -134,6 +138,29 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 function json(response: ServerResponse, payload: Record<string, unknown>): void {
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify(payload));
+}
+
+function isStreamingPingProbe(body: Record<string, unknown>): boolean {
+  const messages = body["messages"];
+  return (
+    body["stream"] === true &&
+    Array.isArray(messages) &&
+    messages.some(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        !Array.isArray(message) &&
+        message["role"] === "user" &&
+        message["content"] === "ping"
+    )
+  );
+}
+
+function sendStreamingPing(response: ServerResponse): void {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  response.end(
+    `data: ${JSON.stringify({ choices: [{ delta: { content: "pong" } }] })}\n\ndata: [DONE]\n\n`
+  );
 }
 
 function electronEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

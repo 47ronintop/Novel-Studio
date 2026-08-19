@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0",
+  "id": "agent_chapter_writer",
+  "type": "agent.config",
+  "title": "章节写作 Agent",
+  "status": "active",
+  "agentRole": "writer",
+  "promptTemplateId": "prompt_continue_chapter",
+  "inputSchemaId": "schema.ai-writing.input.v1",
+  "outputSchemaId": "schema.ai-writing.output.v1",
+  "modelProfileId": "model_default",
+  "tools": [],
+  "limits": { "maxRetries": 1, "timeoutMs": 90000 },
+  "createdAt": "2026-07-04T00:00:00.000Z",
+  "updatedAt": "2026-07-04T00:00:00.000Z"
+}

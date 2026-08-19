@@ -1,6 +1,6 @@
 import type { JsonObject, JsonValue } from "@novel-studio/shared";
 
-import { LlmProviderFailure } from "./errors.js";
+import { LlmProviderFailure, redactProviderMessage } from "./errors.js";
 import {
   checksumProviderPayload,
   rejectLlmPromptCacheRequest,
@@ -863,8 +863,8 @@ function normalizeAnthropicError(
     });
   }
   if (error instanceof AnthropicHttpError) {
-    const detail: JsonObject = { providerStatus: error.status };
     const providerMessage = readProviderErrorMessage(error.body);
+    const detail: JsonObject = { providerStatus: error.status };
     const providerRequestId = readProviderRequestId(error.body, error.headers);
     if (providerRequestId !== undefined) detail["providerRequestId"] = providerRequestId;
     if (error.headers !== undefined) {
@@ -879,7 +879,7 @@ function normalizeAnthropicError(
           : error.status === 429
             ? "LLM_RATE_LIMITED"
             : "LLM_PROVIDER_ERROR",
-      message: providerMessage ?? error.message,
+      message: providerMessage ?? redactProviderMessage(error.message),
       retryable: error.status === 408 || error.status === 429 || error.status >= 500,
       redactedDetail: detail
     });
@@ -894,7 +894,8 @@ function normalizeAnthropicError(
 function readProviderErrorMessage(body: unknown): string | undefined {
   if (!isRecord(body)) return undefined;
   const error = isRecord(body["error"]) ? body["error"] : body;
-  return stringValue(error["message"]);
+  const message = stringValue(error["message"]);
+  return message === undefined ? undefined : redactProviderMessage(message);
 }
 
 function readProviderRequestId(body: unknown, headers: JsonObject | undefined): string | undefined {

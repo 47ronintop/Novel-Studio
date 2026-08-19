@@ -348,6 +348,28 @@ describe("OpenAI-compatible provider", () => {
     });
   });
 
+  test("redacts credentials echoed inside provider error messages", async () => {
+    const leakedKey = "sk-provider-error-secret-123456";
+    const provider = createOpenAiCompatibleProvider({
+      transport: async () => {
+        throw new OpenAiCompatibleHttpError({
+          status: 401,
+          message: `Authorization failed for ${leakedKey}.`,
+          body: { error: { message: `invalid api_key=${leakedKey}` } },
+          headers: { authorization: `Bearer ${leakedKey}` }
+        });
+      }
+    });
+
+    const result = await createLlmAdapter({ provider }).complete(request);
+
+    expect(isErr(result)).toBe(true);
+    if (result.ok) return;
+    expect(result.error.message).not.toContain(leakedKey);
+    expect(JSON.stringify(result.error.redactedDetail)).not.toContain(leakedKey);
+    expect(result.error.message).toContain("[REDACTED]");
+  });
+
   test("estimates cost from model profile token pricing when provider returns usage", async () => {
     const provider = createOpenAiCompatibleProvider({
       transport: async () => readFixture("openai-compatible-chat-success.json")

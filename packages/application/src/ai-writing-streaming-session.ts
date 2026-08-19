@@ -18,6 +18,8 @@ import {
 } from "@novel-studio/shared";
 
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
+import { resolveWritingAssets } from "./ai-writing-config-assets.js";
+import { collectAiWritingContextCandidates } from "./ai-writing-context.js";
 import { createChapterSuggestionLlmRequest } from "./ai-writing-llm-requests.js";
 import { warningRuntimeNotice } from "./ai-writing-runtime-notices.js";
 import { reviewAiWritingStyle } from "./ai-writing-style-rules.js";
@@ -34,27 +36,6 @@ import type {
   WorkflowRunRecordStatus,
   WorkflowRunRetryPolicySummary
 } from "./ai-writing-workflow-types.js";
-
-const streamingWorkflowDefinition: WorkflowDefinition = {
-  schemaVersion: "1.0",
-  id: "wf_ai_continue_chapter",
-  type: "workflow.definition",
-  title: "Continue Chapter",
-  status: "active",
-  entryStepId: "build_context",
-  steps: [
-    { id: "build_context", kind: "context", nextStepId: "write_suggestion" },
-    {
-      id: "write_suggestion",
-      kind: "agent",
-      agentId: "agent_chapter_writer",
-      nextStepId: "confirm_apply"
-    },
-    { id: "confirm_apply", kind: "confirmation" }
-  ],
-  createdAt: "2026-07-04T00:00:00.000Z",
-  updatedAt: "2026-07-04T00:00:00.000Z"
-};
 
 export interface StreamChapterSuggestionForSessionInput {
   readonly options: AiWritingWorkflowSessionOptions;
@@ -84,8 +65,13 @@ export async function* streamChapterSuggestionForSession(
     });
     return;
   }
+  const assets = await resolveWritingAssets(options);
+  if (!assets.ok) {
+    yield assets;
+    return;
+  }
 
-  const parsedWorkflow = parseWorkflowDefinition(streamingWorkflowDefinition, {
+  const parsedWorkflow = parseWorkflowDefinition(assets.value.workflow, {
     traceId: "ai-writing-workflow"
   });
   if (!parsedWorkflow.ok) {
@@ -109,28 +95,39 @@ export async function* streamChapterSuggestionForSession(
     return;
   }
 
+  const primaryContextCandidate = {
+    refType: "chapter" as const,
+    refId: chapterState.chapter.frontmatter.id,
+    content: chapterState.chapter.body,
+    priority: 1,
+    sourceRefs: [
+      {
+        entityType: "chapter",
+        entityId: chapterState.chapter.frontmatter.id
+      }
+    ]
+  };
+  const contextCandidates = await collectAiWritingContextCandidates({
+    provider: options.contextCandidateProvider,
+    request: {
+      goal: request.instruction,
+      chapterId: chapterState.chapter.frontmatter.id,
+      currentBody: chapterState.chapter.body
+    },
+    primary: primaryContextCandidate
+  });
+  if (!contextCandidates.ok) {
+    yield contextCandidates;
+    return;
+  }
   const contextBundle = buildContextBundle({
     schemaVersion: "1.0",
     contextBundleId: `ctx_${runState.workflowRunId}`,
     workflowRunId: runState.workflowRunId,
     traceId: "ai-writing-workflow",
     goal: request.instruction,
-    budget: { maxTokens: 1024 },
-    candidates: [
-      {
-        refType: "chapter",
-        refId: chapterState.chapter.frontmatter.id,
-        content: chapterState.chapter.body,
-        priority: 1,
-        tokenEstimate: 4,
-        sourceRefs: [
-          {
-            entityType: "chapter",
-            entityId: chapterState.chapter.frontmatter.id
-          }
-        ]
-      }
-    ]
+    budget: { maxTokens: options.contextBudgetTokens ?? 1024 },
+    candidates: contextCandidates.value
   });
   if (!contextBundle.ok) {
     yield contextBundle;
@@ -175,6 +172,8 @@ export async function* streamChapterSuggestionForSession(
       request.reasoningEffort
     ),
     conversationMessages: input.conversationMessages,
+    contextItems: contextBundle.value.items,
+    promptTemplate: assets.value.chapterPrompt.template,
     mode: "streaming",
     ...(request.abortSignal === undefined ? {} : { abortSignal: request.abortSignal })
   });
@@ -194,6 +193,7 @@ export async function* streamChapterSuggestionForSession(
           runState,
           generatedAt: now(),
           contextTrace: contextBundle.value.trace,
+          contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
           modelProfile: runtimeProfile.value.modelProfile,
           workflowTitle: parsedWorkflow.value.title,
           error: result.error
@@ -236,6 +236,7 @@ export async function* streamChapterSuggestionForSession(
       runState,
       generatedAt: now(),
       contextTrace: contextBundle.value.trace,
+      contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
       modelProfile: runtimeProfile.value.modelProfile,
       workflowTitle: parsedWorkflow.value.title,
       error: failure
@@ -264,6 +265,7 @@ export async function* streamChapterSuggestionForSession(
       runState,
       generatedAt: now(),
       contextTrace: contextBundle.value.trace,
+      contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
       modelProfile: runtimeProfile.value.modelProfile,
       workflowTitle: parsedWorkflow.value.title,
       error: failure
@@ -299,6 +301,7 @@ export async function* streamChapterSuggestionForSession(
     workflowTitle: parsedWorkflow.value.title,
     generatedAt,
     contextTrace: contextBundle.value.trace,
+    contextBudgetMaxTokens: contextBundle.value.budget.maxTokens,
     modelProfile: runtimeProfile.value.modelProfile,
     usage
   });
@@ -438,6 +441,9 @@ function createWorkflowRunRecord(input: {
     context: {
       sourceCount: input.observability.context.sourceCount,
       tokenEstimate: input.observability.context.tokenEstimate,
+      ...(input.observability.context.budgetMaxTokens === undefined
+        ? {}
+        : { budgetMaxTokens: input.observability.context.budgetMaxTokens }),
       selectionReason: input.observability.context.selectionReason
     },
     model: {
@@ -477,6 +483,7 @@ function createObservability(input: {
   readonly workflowTitle: string;
   readonly generatedAt: string;
   readonly contextTrace: ContextBundleTrace;
+  readonly contextBudgetMaxTokens: number;
   readonly modelProfile: LlmModelProfile;
   readonly usage: LlmUsage;
 }): AiWritingWorkflowObservability {
@@ -490,6 +497,7 @@ function createObservability(input: {
         (total, ref) => total + ref.tokenEstimate,
         0
       ),
+      budgetMaxTokens: input.contextBudgetMaxTokens,
       selectionReason: input.contextTrace.selectionReason
     },
     model: {
@@ -527,6 +535,7 @@ function createFailureObservability(input: {
   readonly workflowTitle: string;
   readonly generatedAt: string;
   readonly contextTrace: ContextBundleTrace;
+  readonly contextBudgetMaxTokens: number;
   readonly modelProfile: LlmModelProfile;
 }): AiWritingWorkflowObservability {
   return {
@@ -539,6 +548,7 @@ function createFailureObservability(input: {
         (total, ref) => total + ref.tokenEstimate,
         0
       ),
+      budgetMaxTokens: input.contextBudgetMaxTokens,
       selectionReason: input.contextTrace.selectionReason
     },
     model: {
@@ -577,6 +587,7 @@ async function recordFailedRun(input: {
   readonly runState: WorkflowRunState;
   readonly generatedAt: string;
   readonly contextTrace: ContextBundleTrace;
+  readonly contextBudgetMaxTokens: number;
   readonly modelProfile: LlmModelProfile;
   readonly workflowTitle: string;
   readonly error: UnifiedError;
@@ -596,6 +607,7 @@ async function recordFailedRun(input: {
         workflowTitle: input.workflowTitle,
         generatedAt: input.generatedAt,
         contextTrace: input.contextTrace,
+        contextBudgetMaxTokens: input.contextBudgetMaxTokens,
         modelProfile: input.modelProfile
       }),
       error: toWorkflowRunErrorSummary(input.error),

@@ -46,6 +46,10 @@ test("persists a plan review and fails closed when the provider stream is incomp
       json(response, { choices: [{ message: { role: "assistant", content: "ok" } }] });
       return;
     }
+    if (isConnectionProbe(body)) {
+      sendConnectionProbe(response);
+      return;
+    }
 
     if (!planSent) {
       planSent = true;
@@ -278,9 +282,31 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
+function isConnectionProbe(body: Record<string, unknown>): boolean {
+  const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
+  return body["stream"] === true && messages.some(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      !Array.isArray(message) &&
+      (message as Record<string, unknown>)["role"] === "user" &&
+      (message as Record<string, unknown>)["content"] === "ping"
+  );
+}
+
 function json(response: ServerResponse, payload: Record<string, unknown>): void {
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify(payload));
+}
+
+function sendConnectionProbe(response: ServerResponse): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
+  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "pong" } }] })}\n\n`);
+  response.end("data: [DONE]\n\n");
 }
 
 async function listen(server: ReturnType<typeof createServer>): Promise<void> {

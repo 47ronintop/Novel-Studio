@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "id": "wf_ai_continue_chapter",
+  "type": "workflow.definition",
+  "title": "AI 续写章节",
+  "status": "active",
+  "entryStepId": "build_context",
+  "steps": [
+    { "id": "build_context", "kind": "context", "nextStepId": "write_suggestion" },
+    {
+      "id": "write_suggestion",
+      "kind": "agent",
+      "agentId": "agent_chapter_writer",
+      "nextStepId": "confirm_apply"
+    },
+    { "id": "confirm_apply", "kind": "confirmation" }
+  ],
+  "createdAt": "2026-07-04T00:00:00.000Z",
+  "updatedAt": "2026-07-04T00:00:00.000Z"
+}

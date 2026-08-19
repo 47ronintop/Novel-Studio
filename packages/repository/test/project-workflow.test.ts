@@ -62,6 +62,21 @@ describe("M12 project workflow repository support", () => {
     expect(
       await readFile(join(projectRoot, "workflow", "wf_review_chapter.json"), "utf8")
     ).toContain("审稿当前章节");
+    expect(
+      await readFile(join(projectRoot, "prompts", "prompt_continue_chapter.json"), "utf8")
+    ).toContain("续写章节 Prompt");
+    expect(
+      await readFile(join(projectRoot, "prompts", "prompt_rewrite_selection.json"), "utf8")
+    ).toContain("选中文本改写 Prompt");
+    expect(
+      await readFile(join(projectRoot, "agents", "agent_chapter_writer.json"), "utf8")
+    ).toContain("prompt_continue_chapter");
+    expect(
+      await readFile(join(projectRoot, "agents", "agent_selection_rewriter.json"), "utf8")
+    ).toContain("prompt_rewrite_selection");
+    expect(
+      await readFile(join(projectRoot, "workflow", "wf_ai_continue_chapter.json"), "utf8")
+    ).toContain("agent_chapter_writer");
   });
 
   test("does not overwrite existing files when initializing a folder as a project", async () => {
@@ -84,6 +99,37 @@ describe("M12 project workflow repository support", () => {
       expect(created.error.redactedDetail).toEqual({ relativePath: "project.json" });
     }
     expect(await readFile(join(projectRoot, "project.json"), "utf8")).toBe('{"user":"draft"}\n');
+  });
+
+  test("backfills missing AI writing assets without overwriting an existing asset", async () => {
+    const projectRoot = await createTempRoot();
+    await mkdir(join(projectRoot, "prompts"), { recursive: true });
+    const customPrompt = '{"id":"prompt_continue_chapter","custom":true}\n';
+    await writeFile(
+      join(projectRoot, "prompts", "prompt_continue_chapter.json"),
+      customPrompt,
+      "utf8"
+    );
+    const repository = new ProjectFileRepository({
+      projectRoot,
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+
+    const migrated = await repository.ensureDefaultAiWritingAssets();
+
+    expect(isOk(migrated)).toBe(true);
+    expect(
+      await readFile(join(projectRoot, "prompts", "prompt_continue_chapter.json"), "utf8")
+    ).toBe(customPrompt);
+    expect(
+      await readFile(join(projectRoot, "prompts", "prompt_rewrite_selection.json"), "utf8")
+    ).toContain("选中文本改写 Prompt");
+    expect(
+      await readFile(join(projectRoot, "agents", "agent_chapter_writer.json"), "utf8")
+    ).toContain("agent_chapter_writer");
+    expect(
+      await readFile(join(projectRoot, "workflow", "wf_ai_continue_chapter.json"), "utf8")
+    ).toContain("wf_ai_continue_chapter");
   });
 
   test("creates, lists, and reads chapters in project order", async () => {

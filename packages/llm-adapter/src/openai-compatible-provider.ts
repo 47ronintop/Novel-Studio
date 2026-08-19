@@ -1,6 +1,6 @@
 import type { JsonObject } from "@novel-studio/shared";
 
-import { LlmProviderFailure } from "./errors.js";
+import { LlmProviderFailure, redactProviderMessage } from "./errors.js";
 import {
   checksumProviderPayload,
   rejectLlmPromptCacheRequest,
@@ -818,17 +818,17 @@ function normalizeOpenAiCompatibleError(
   }
 
   if (error instanceof OpenAiCompatibleHttpError) {
+    const providerMessage = readProviderErrorMessage(error.body);
     const detail: JsonObject = {
       providerStatus: error.status
     };
-    const providerMessage = readProviderErrorMessage(error.body);
     const providerRequestId = readProviderRequestId(error.body);
     if (providerRequestId !== undefined) {
       detail.providerRequestId = providerRequestId;
     }
     if (error.headers !== undefined) {
       for (const [key, value] of Object.entries(error.headers)) {
-        detail[key] = value;
+        detail[key] = isSensitiveHeader(key) ? "[REDACTED]" : value;
       }
     }
 
@@ -839,7 +839,7 @@ function normalizeOpenAiCompatibleError(
           : error.status === 429
             ? "LLM_RATE_LIMITED"
             : "LLM_PROVIDER_ERROR",
-      message: providerMessage ?? error.message,
+      message: providerMessage ?? redactProviderMessage(error.message),
       retryable: error.status === 408 || error.status === 429 || error.status >= 500,
       redactedDetail: detail
     });
@@ -884,14 +884,16 @@ function readProviderErrorMessage(body: unknown): string | undefined {
     return undefined;
   }
   if (typeof body.message === "string" && body.message.trim().length > 0) {
-    return body.message;
+    return redactProviderMessage(body.message);
   }
   if (typeof body.error === "string" && body.error.trim().length > 0) {
-    return body.error;
+    return redactProviderMessage(body.error);
   }
   if (isRecord(body.error)) {
     const message = body.error.message;
-    return typeof message === "string" && message.trim().length > 0 ? message : undefined;
+    return typeof message === "string" && message.trim().length > 0
+      ? redactProviderMessage(message)
+      : undefined;
   }
   return undefined;
 }
@@ -921,6 +923,18 @@ function readProviderRequestId(body: unknown): string | undefined {
   }
 
   return typeof body.error.request_id === "string" ? body.error.request_id : undefined;
+}
+
+function isSensitiveHeader(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return (
+    normalized.includes("authorization") ||
+    normalized.includes("api-key") ||
+    normalized.includes("apikey") ||
+    normalized.includes("api_key") ||
+    normalized.includes("token") ||
+    normalized.includes("secret")
+  );
 }
 
 function malformedResponse(root: UnknownRecord): LlmProviderFailure {

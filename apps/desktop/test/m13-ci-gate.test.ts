@@ -32,6 +32,7 @@ describe("M13 real E2E and CI gate", () => {
     );
     expect(packageJson.scripts["test:e2e"]).not.toContain("--list");
     expect(playwrightConfig).toContain('testMatch: "**/*.e2e.ts"');
+    expect(playwrightConfig).toContain("retries: process.env.CI ? 2 : 0");
     expect(playwrightConfig).toContain('"**/agent-write.e2e.ts"');
     expect(playwrightConfig).toContain('"**/agent-writing-domain.e2e.ts"');
     expect(playwrightConfig).toContain('"**/agent-creative-general.e2e.ts"');
@@ -61,6 +62,11 @@ describe("M13 real E2E and CI gate", () => {
     expect(workflow).toContain("npm run alpha:verify");
     expect(workflow).toContain("npm run package:dir:built");
     expect(workflow).toContain("npm audit");
+    expect(workflow).toContain("uses: actions/upload-artifact@v4");
+    expect(workflow).toContain("if: ${{ failure() }}");
+    expect(workflow).toContain("test-results/");
+    expect(workflow).toContain("playwright-report/");
+    expect(workflow).toContain("retention-days: 7");
     expect(workflow).toContain("--omit=dev --audit-level=high");
     expect(workflow).not.toMatch(
       /rust-toolchain|cargo(?:-deny)?|agent-sandbox|agent-file-operations/u

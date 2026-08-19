@@ -52,6 +52,60 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
     });
   }
 
+  /**
+   * Backfills only the AI writing assets introduced after older projects were created.
+   * Existing files are never replaced, so user-authored configuration remains authoritative.
+   */
+  public async ensureDefaultAiWritingAssets(): Promise<Result<void, UnifiedError>> {
+    const now = this.options.now?.() ?? new Date().toISOString();
+    const assets = createDefaultConfigAssets(now).filter((asset) =>
+      AI_WRITING_CONFIG_ASSET_RELATIVE_PATHS.has(asset.relativePath.replace(/\\/g, "/"))
+    );
+
+    try {
+      for (const directory of ["prompts", "agents", "workflow"]) {
+        const directoryPath = join(this.options.projectRoot, directory);
+        const pathCheck = await this.verifyCreatePath(directoryPath);
+        if (!pathCheck.ok) return pathCheck;
+        await mkdir(directoryPath, { recursive: true });
+        const createdPathCheck = await this.verifyCreatePath(directoryPath);
+        if (!createdPathCheck.ok) return createdPathCheck;
+      }
+
+      for (const asset of assets) {
+        const targetPath = join(this.options.projectRoot, asset.relativePath);
+        try {
+          await access(targetPath);
+          continue;
+        } catch {
+          // Missing AI assets are the only files this compatibility path creates.
+        }
+        const write = await writeJsonFile(
+          targetPath,
+          asset.content,
+          this.traceId,
+          this.options.pathGuard
+        );
+        if (!write.ok) return write;
+      }
+    } catch (error) {
+      return err(
+        storageError({
+          code: "PROJECT_AI_ASSET_MIGRATION_FAILED",
+          message: "Default AI writing assets could not be restored.",
+          suggestedAction:
+            "Check project folder permissions and retry opening the writing workflow.",
+          traceId: this.traceId,
+          redactedDetail: {
+            reason: error instanceof Error ? error.message : "Unknown AI asset migration error"
+          }
+        })
+      );
+    }
+
+    return ok(undefined);
+  }
+
   public async createProject(
     input: CreateProjectInput
   ): Promise<Result<ProjectSnapshot, UnifiedError>> {
@@ -470,6 +524,123 @@ function createDefaultConfigAssets(now: string): readonly {
         createdAt: now,
         updatedAt: now
       }
+    },
+    {
+      schemaName: "prompt-template",
+      relativePath: join("prompts", "prompt_continue_chapter.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "prompt_continue_chapter",
+        type: "prompt.template",
+        title: "续写章节 Prompt",
+        status: "active",
+        promptRole: "writer",
+        template: "Return JSON with proposedBody and summary for a chapter writing suggestion.",
+        variables: [],
+        createdAt: now,
+        updatedAt: now
+      }
+    },
+    {
+      schemaName: "prompt-template",
+      relativePath: join("prompts", "prompt_rewrite_selection.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "prompt_rewrite_selection",
+        type: "prompt.template",
+        title: "选中文本改写 Prompt",
+        status: "active",
+        promptRole: "writer",
+        template: "Return JSON with proposedText and summary for a selected text rewrite.",
+        variables: [],
+        createdAt: now,
+        updatedAt: now
+      }
+    },
+    {
+      schemaName: "agent-config",
+      relativePath: join("agents", "agent_chapter_writer.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "agent_chapter_writer",
+        type: "agent.config",
+        title: "章节写作 Agent",
+        status: "active",
+        agentRole: "writer",
+        promptTemplateId: "prompt_continue_chapter",
+        inputSchemaId: "schema.ai-writing.input.v1",
+        outputSchemaId: "schema.ai-writing.output.v1",
+        modelProfileId: "model_default",
+        tools: [],
+        limits: {
+          maxRetries: 1,
+          timeoutMs: 90000
+        },
+        createdAt: now,
+        updatedAt: now
+      }
+    },
+    {
+      schemaName: "agent-config",
+      relativePath: join("agents", "agent_selection_rewriter.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "agent_selection_rewriter",
+        type: "agent.config",
+        title: "选中文本改写 Agent",
+        status: "active",
+        agentRole: "writer",
+        promptTemplateId: "prompt_rewrite_selection",
+        inputSchemaId: "schema.ai-selection-preview.input.v1",
+        outputSchemaId: "schema.ai-selection-preview.output.v1",
+        modelProfileId: "model_default",
+        tools: [],
+        limits: {
+          maxRetries: 1,
+          timeoutMs: 90000
+        },
+        createdAt: now,
+        updatedAt: now
+      }
+    },
+    {
+      schemaName: "workflow-definition",
+      relativePath: join("workflow", "wf_ai_continue_chapter.json"),
+      content: {
+        schemaVersion: "1.0",
+        id: "wf_ai_continue_chapter",
+        type: "workflow.definition",
+        title: "AI 续写章节",
+        status: "active",
+        entryStepId: "build_context",
+        steps: [
+          {
+            id: "build_context",
+            kind: "context",
+            nextStepId: "write_suggestion"
+          },
+          {
+            id: "write_suggestion",
+            kind: "agent",
+            agentId: "agent_chapter_writer",
+            nextStepId: "confirm_apply"
+          },
+          {
+            id: "confirm_apply",
+            kind: "confirmation"
+          }
+        ],
+        createdAt: now,
+        updatedAt: now
+      }
     }
   ];
 }
+
+const AI_WRITING_CONFIG_ASSET_RELATIVE_PATHS = new Set([
+  "prompts/prompt_continue_chapter.json",
+  "prompts/prompt_rewrite_selection.json",
+  "agents/agent_chapter_writer.json",
+  "agents/agent_selection_rewriter.json",
+  "workflow/wf_ai_continue_chapter.json"
+]);

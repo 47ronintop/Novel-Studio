@@ -1,4 +1,5 @@
 ﻿import type { ContextBundleTrace } from "@novel-studio/context-engine";
+import type { ContextCandidate } from "@novel-studio/context-engine";
 import type {
   LlmAdapter,
   LlmCostStatus,
@@ -157,6 +158,8 @@ export interface AiWritingWorkflowObservability {
   readonly context: {
     readonly sourceCount: number;
     readonly tokenEstimate: number;
+    /** Configured upper bound used when packing context for this run. */
+    readonly budgetMaxTokens?: number;
     readonly selectionReason: string;
   };
   readonly model: {
@@ -174,6 +177,8 @@ export type WorkflowRunRecordStatus = "pending-confirmation" | "applied" | "fail
 export interface WorkflowRunContextSummary extends JsonObject {
   sourceCount: number;
   tokenEstimate: number;
+  /** Optional for backward compatibility with previously persisted run records. */
+  budgetMaxTokens?: number;
   selectionReason: string;
 }
 
@@ -272,6 +277,13 @@ export interface AiWritingWorkflowSession {
 export interface AiWritingWorkflowSessionOptions {
   readonly chapterEditorSession: ChapterEditorSession;
   readonly llmAdapter: LlmAdapter;
+  /** Optional project-backed config asset loader. When present, AI writing uses these assets. */
+  readonly configAssetLoader?: AiWritingConfigAssetLoader;
+  readonly configAssetIds?: AiWritingConfigAssetIds;
+  /** Optional project-backed Story Bible, memory, and search context provider. */
+  readonly contextCandidateProvider?: AiWritingContextCandidateProvider;
+  /** Maximum context material included in one writing request. */
+  readonly contextBudgetTokens?: number;
   readonly modelProfile?: LlmModelProfile;
   readonly parameters?: LlmParameters;
   readonly resolveModelRuntimeProfile?: () => Promise<Result<ModelRuntimeProfile, UnifiedError>>;
@@ -283,3 +295,30 @@ export interface AiWritingWorkflowSessionOptions {
   readonly createHandoffId?: () => string;
   readonly workflowRunHistory?: Pick<WorkflowRunHistoryPort, "recordWorkflowRun">;
 }
+
+export interface AiWritingConfigAssetIds {
+  readonly workflowId: string;
+  readonly chapterAgentId: string;
+  readonly chapterPromptId: string;
+  readonly selectionAgentId: string;
+  readonly selectionPromptId: string;
+}
+
+export type AiWritingConfigAssetType = "prompt" | "agent" | "workflow";
+
+export interface AiWritingConfigAssetLoader {
+  loadConfigAsset(
+    assetType: AiWritingConfigAssetType,
+    assetId: string
+  ): Promise<Result<JsonObject, UnifiedError>>;
+}
+
+export interface AiWritingContextCandidateProviderInput {
+  readonly goal: string;
+  readonly chapterId: string;
+  readonly currentBody: string;
+}
+
+export type AiWritingContextCandidateProvider = (
+  input: AiWritingContextCandidateProviderInput
+) => Promise<Result<readonly ContextCandidate[], UnifiedError>>;

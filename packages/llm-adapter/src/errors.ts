@@ -24,6 +24,22 @@ export class LlmProviderFailure extends Error {
   }
 }
 
+/**
+ * Keeps provider diagnostics useful while removing the common credential forms that
+ * gateways echo in an error message. Raw provider bodies are never exposed, but a
+ * provider's short operational message is still valuable to the caller.
+ */
+export function redactProviderMessage(message: string): string {
+  return message
+    .replace(/\bBearer\s+[^\s,;]+/giu, "Bearer [REDACTED]")
+    .replace(
+      /\b(?:api[-_ ]?key|authorization|access[-_ ]?token|refresh[-_ ]?token|secret|token)\s*[:=]\s*[^\s,;]+/giu,
+      (match) => `${match.slice(0, match.search(/[:=]/u) + 1)} [REDACTED]`
+    )
+    .replace(/\b(?:sk|key|token|secret)[-_][A-Za-z0-9][A-Za-z0-9._-]{7,}/gu, "[REDACTED]")
+    .slice(0, 1024);
+}
+
 export interface NormalizedLlmFailure {
   readonly code: LlmErrorCode;
   readonly retryable: boolean;

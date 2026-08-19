@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "id": "prompt_rewrite_selection",
+  "type": "prompt.template",
+  "title": "选中文本改写 Prompt",
+  "status": "active",
+  "promptRole": "writer",
+  "template": "Return JSON with proposedText and summary for a selected text rewrite.",
+  "variables": [],
+  "createdAt": "2026-07-04T00:00:00.000Z",
+  "updatedAt": "2026-07-04T00:00:00.000Z"
+}

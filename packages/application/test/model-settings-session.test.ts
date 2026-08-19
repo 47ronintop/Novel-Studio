@@ -823,6 +823,53 @@ describe("model settings session", () => {
     expect(writes).toEqual([]);
   });
 
+  test.each([
+    {
+      label: "a secret reference from another profile",
+      update: { apiKeyRef: "secret://model_other/api_key" }
+    },
+    { label: "a remote HTTP Base URL", update: { baseUrl: "http://api.example.com/v1" } },
+    {
+      label: "a credential-bearing HTTPS Base URL",
+      update: { baseUrl: "https://user:password@api.example.com/v1" }
+    },
+    { label: "a URL with a fragment", update: { baseUrl: "https://api.example.com/v1#secret" } },
+    {
+      label: "a URL with a query string",
+      update: { baseUrl: "https://api.example.com/v1?api_key=x" }
+    }
+  ])("rejects $label before writing settings", async ({ update }) => {
+    const writes: ProjectSettings[] = [];
+    const port: ProjectSettingsPort = {
+      async readSettings() {
+        return ok(settings);
+      },
+      async writeSettings(nextSettings) {
+        writes.push(nextSettings);
+        return ok(nextSettings);
+      }
+    };
+    const session = createModelSettingsSession({ settingsPort: port });
+
+    const result = await session.saveModelProfile({ ...secondaryProfile, ...update });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "MODEL_PROFILE_INVALID" } });
+    expect(writes).toEqual([]);
+  });
+
+  test("accepts loopback HTTP Base URLs for local model servers", async () => {
+    const session = createModelSettingsSession({ settingsPort: staticSettingsPort(settings) });
+
+    const result = await session.saveModelProfile({
+      ...secondaryProfile,
+      provider: "ollama",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiKeyRef: "secret://model_secondary/api_key"
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   test("saves every constitution-required model provider", async () => {
     const writes: ProjectSettings[] = [];
     let currentSettings: ProjectSettings = settings;

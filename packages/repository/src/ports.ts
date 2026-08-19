@@ -149,6 +149,7 @@ export interface StoryBibleStatusTransitionRecord extends JsonObject {
 export interface WorkflowRunContextSummary extends JsonObject {
   sourceCount: number;
   tokenEstimate: number;
+  budgetMaxTokens?: number;
   selectionReason: string;
 }
 

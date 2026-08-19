@@ -600,7 +600,7 @@ export function createSettingsBridge(
 
     const existingProfile = profiles.find((entry) => entry.id === nextDraft.id.trim());
     const apiKeyRef = apiKeyRefFromDraft(nextDraft, existingProfile?.apiKeyRef);
-    if (apiKeyRef === undefined || !apiKeyRef.startsWith("secret://")) {
+    if (apiKeyRef === undefined || !isBoundModelSecretRef(nextDraft.id.trim(), apiKeyRef)) {
       return undefined;
     }
 
@@ -1009,13 +1009,25 @@ function apiKeyRefFromDraft(
   existingApiKeyRef: string | undefined
 ): string | undefined {
   const input = nextDraft.apiKeyRefInput.trim();
+  const canonicalRef = `secret://${nextDraft.id.trim()}/api_key`;
   if (input.startsWith("secret://")) {
-    return input;
+    return isBoundModelSecretRef(nextDraft.id.trim(), input) ? input : undefined;
   }
   if (input.length > 0) {
-    return existingApiKeyRef ?? `secret://${nextDraft.id.trim()}/api_key`;
+    return isBoundModelSecretRef(nextDraft.id.trim(), existingApiKeyRef ?? "")
+      ? existingApiKeyRef
+      : canonicalRef;
   }
-  return existingApiKeyRef;
+  return isBoundModelSecretRef(nextDraft.id.trim(), existingApiKeyRef ?? "")
+    ? existingApiKeyRef
+    : undefined;
+}
+
+function isBoundModelSecretRef(profileId: string, secretRef: string): boolean {
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(profileId) &&
+    (secretRef === `secret://${profileId}/api_key` || secretRef === `secret://${profileId}/api-key`)
+  );
 }
 
 function parseInteger(value: string): number | undefined {

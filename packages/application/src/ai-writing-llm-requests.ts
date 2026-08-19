@@ -1,4 +1,4 @@
-import type { ContextBundleTrace } from "@novel-studio/context-engine";
+import type { ContextBundleItem, ContextBundleTrace } from "@novel-studio/context-engine";
 import type {
   LlmMode,
   LlmModelProfile,
@@ -20,6 +20,8 @@ export function createChapterSuggestionLlmRequest(input: {
   readonly modelProfile: LlmModelProfile;
   readonly parameters: LlmParameters;
   readonly conversationMessages: readonly AiWritingConversationMessage[];
+  readonly contextItems?: readonly ContextBundleItem[];
+  readonly promptTemplate?: string;
   readonly mode?: LlmMode;
   readonly abortSignal?: AbortSignal;
 }): LlmRequest {
@@ -33,7 +35,8 @@ export function createChapterSuggestionLlmRequest(input: {
       {
         role: "system",
         content: [
-          "Return JSON with proposedBody and summary for a chapter writing suggestion.",
+          input.promptTemplate ??
+            "Return JSON with proposedBody and summary for a chapter writing suggestion.",
           formatAiWritingStyleRulesForPrompt()
         ].join("\n\n")
       },
@@ -43,6 +46,7 @@ export function createChapterSuggestionLlmRequest(input: {
           `Instruction: ${input.instruction}`,
           formatPreviousConversation(input.conversationMessages),
           `Current chapter body:\n${input.currentBody}`,
+          formatContextItems(input.contextItems),
           `Available context refs: ${input.contextTrace.includedRefs
             .map((ref) => `${ref.refType}:${ref.refId}`)
             .join(", ")}`
@@ -71,6 +75,8 @@ export function createSelectionPreviewLlmRequest(input: {
   readonly selection: AiWritingSelectionRange;
   readonly modelProfile: LlmModelProfile;
   readonly parameters: LlmParameters;
+  readonly contextItems?: readonly ContextBundleItem[];
+  readonly promptTemplate?: string;
 }): LlmRequest {
   return {
     schemaVersion: "1.0",
@@ -82,7 +88,8 @@ export function createSelectionPreviewLlmRequest(input: {
       {
         role: "system",
         content: [
-          "Return JSON with proposedText and summary for a selected text rewrite.",
+          input.promptTemplate ??
+            "Return JSON with proposedText and summary for a selected text rewrite.",
           formatAiWritingStyleRulesForPrompt()
         ].join("\n\n")
       },
@@ -91,7 +98,8 @@ export function createSelectionPreviewLlmRequest(input: {
         content: [
           `Instruction: ${input.instruction}`,
           `Selection offsets: ${input.selection.startOffset}-${input.selection.endOffset}`,
-          `Selected text: ${input.selection.selectedText}`
+          `Selected text: ${input.selection.selectedText}`,
+          formatContextItems(input.contextItems)
         ].join("\n")
       }
     ],
@@ -121,4 +129,12 @@ function formatPreviousConversation(messages: readonly AiWritingConversationMess
       return `${label}: ${message.content}`;
     })
   ].join("\n");
+}
+
+function formatContextItems(items: readonly ContextBundleItem[] | undefined): string {
+  if (items === undefined || items.length === 0) return "";
+  return [
+    "Context material:",
+    ...items.map((item) => `[${item.refType}:${item.refId}]\n${item.content}`)
+  ].join("\n\n");
 }

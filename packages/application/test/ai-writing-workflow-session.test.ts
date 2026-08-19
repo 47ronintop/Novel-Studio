@@ -5,7 +5,7 @@ import type { WorkflowRunRecord } from "../src/ai-writing-workflow-session.js";
 import { createChapterEditorSession } from "../src/chapter-editor-session.js";
 import { createLlmAdapter, createMockProvider } from "@novel-studio/llm-adapter";
 import type { LlmProvider, LlmRequest } from "@novel-studio/llm-adapter";
-import { isErr, isOk, ok, type ChapterDocument } from "@novel-studio/shared";
+import { isErr, isOk, ok, type ChapterDocument, type JsonObject } from "@novel-studio/shared";
 import type { ChapterVersionSnapshotInput } from "@novel-studio/shared";
 import type { ChapterDraftRepositoryPort } from "../src/chapter-editor-session.js";
 
@@ -96,7 +96,7 @@ describe("M14 AI writing workflow session", () => {
       {
         refType: "chapter",
         refId: "ch_m14",
-        tokenEstimate: 4
+        tokenEstimate: 3
       }
     ]);
     expect(generated.value.observability).toMatchObject({
@@ -104,7 +104,8 @@ describe("M14 AI writing workflow session", () => {
       workflowTitle: "Continue Chapter",
       context: {
         sourceCount: 1,
-        tokenEstimate: 4,
+        tokenEstimate: 3,
+        budgetMaxTokens: 1024,
         selectionReason: "Continue the chapter."
       },
       model: {
@@ -153,7 +154,8 @@ describe("M14 AI writing workflow session", () => {
         updatedAt: "2026-07-04T00:00:00.000Z",
         context: {
           sourceCount: 1,
-          tokenEstimate: 4,
+          tokenEstimate: 3,
+          budgetMaxTokens: 1024,
           selectionReason: "Continue the chapter."
         },
         model: {
@@ -456,6 +458,25 @@ describe("M14 AI writing workflow session", () => {
         provider: createStreamingJsonProvider(requests),
         clock: () => "2026-07-04T00:00:00.000Z"
       }),
+      configAssetIds: {
+        workflowId: "wf_ai_continue_chapter",
+        chapterAgentId: "agent_chapter_writer",
+        chapterPromptId: "prompt_continue_chapter",
+        selectionAgentId: "agent_selection_rewriter",
+        selectionPromptId: "prompt_rewrite_selection"
+      },
+      configAssetLoader: createDefaultWritingAssetLoader("STREAM CONFIGURED PROMPT"),
+      contextCandidateProvider: async () =>
+        ok([
+          {
+            refType: "world",
+            refId: "world_stream",
+            content: "STREAM CONFIGURED CONTEXT",
+            priority: 10,
+            sourceRefs: [{ entityType: "world.rule", entityId: "world_stream" }]
+          }
+        ]),
+      contextBudgetTokens: 64,
       now: () => "2026-07-04T00:00:00.000Z",
       createWorkflowRunId: createSequence("wfrun_stream"),
       createSuggestionId: createSequence("sug_stream"),
@@ -473,6 +494,9 @@ describe("M14 AI writing workflow session", () => {
 
     expect(requests[0]?.mode).toBe("streaming");
     expect(requests[0]?.abortSignal).toBe(controller.signal);
+    const requestText = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(requestText).toContain("STREAM CONFIGURED PROMPT");
+    expect(requestText).toContain("STREAM CONFIGURED CONTEXT");
     expect(events[0]).toEqual(ok({ type: "delta", value: '{"proposedBody":' }));
     expect(events[1]).toEqual(
       ok({ type: "delta", value: '"Opening line.\\nAI continuation.\\n"' })
@@ -488,7 +512,10 @@ describe("M14 AI writing workflow session", () => {
           suggestionId: "sug_stream_1",
           workflowRunId: "wfrun_stream_1",
           proposedBody,
-          summary: "Continues the current scene."
+          summary: "Continues the current scene.",
+          observability: {
+            context: { sourceCount: 2, budgetMaxTokens: 64 }
+          }
         }
       }
     });
@@ -658,7 +685,8 @@ describe("M14 AI writing workflow session", () => {
         status: "failed",
         context: {
           sourceCount: 1,
-          tokenEstimate: 4,
+          tokenEstimate: 3,
+          budgetMaxTokens: 1024,
           selectionReason: "Continue after a temporary provider failure."
         },
         error: {
@@ -912,6 +940,238 @@ describe("M14 AI writing workflow session", () => {
       }
     ]);
   });
+  test("loads configured workflow, agent, and prompt assets", async () => {
+    const requests: LlmRequest[] = [];
+    const workflowRunRecords: WorkflowRunRecord[] = [];
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_assets",
+      repository: createRepository([]),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) throw new Error(loaded.error.message);
+    const assets = {
+      workflow: {
+        schemaVersion: "1.0",
+        id: "wf_custom",
+        type: "workflow.definition",
+        title: "Custom",
+        status: "active",
+        entryStepId: "build_context",
+        steps: [
+          { id: "build_context", kind: "context", nextStepId: "write_suggestion" },
+          {
+            id: "write_suggestion",
+            kind: "agent",
+            agentId: "agent_custom",
+            nextStepId: "confirm_apply"
+          },
+          { id: "confirm_apply", kind: "confirmation" }
+        ],
+        createdAt: "2026-07-04T00:00:00.000Z",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      },
+      agent: {
+        schemaVersion: "1.0",
+        id: "agent_custom",
+        type: "agent.config",
+        title: "Custom",
+        status: "active",
+        agentRole: "writer",
+        promptTemplateId: "prompt_custom",
+        inputSchemaId: "schema.ai-writing.input.v1",
+        outputSchemaId: "schema.ai-writing.output.v1",
+        modelProfileId: "mock_m14",
+        createdAt: "2026-07-04T00:00:00.000Z",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      },
+      prompt: {
+        schemaVersion: "1.0",
+        id: "prompt_custom",
+        type: "prompt.template",
+        title: "Custom",
+        status: "active",
+        promptRole: "writer",
+        template: "CUSTOM PROMPT",
+        variables: [],
+        createdAt: "2026-07-04T00:00:00.000Z",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      }
+    } as const;
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({
+        provider: createCapturingProvider(requests),
+        clock: () => "2026-07-04T00:00:00.000Z"
+      }),
+      configAssetIds: {
+        workflowId: "wf_custom",
+        chapterAgentId: "agent_custom",
+        chapterPromptId: "prompt_custom",
+        selectionAgentId: "agent_custom",
+        selectionPromptId: "prompt_custom"
+      },
+      configAssetLoader: {
+        async loadConfigAsset(type) {
+          if (type === "workflow") return ok(assets.workflow as unknown as JsonObject);
+          if (type === "agent") return ok(assets.agent as unknown as JsonObject);
+          return ok(assets.prompt as unknown as JsonObject);
+        }
+      },
+      contextCandidateProvider: async () =>
+        ok([
+          {
+            refType: "character",
+            refId: "chr_custom",
+            content: "CUSTOM STORY BIBLE CONTEXT",
+            priority: 10,
+            sourceRefs: [{ entityType: "character", entityId: "chr_custom" }]
+          },
+          {
+            refType: "memory",
+            refId: "mem_custom",
+            content: "CUSTOM CONFIRMED MEMORY",
+            priority: 20,
+            memoryConfidence: "confirmed",
+            sourceRefs: [{ entityType: "memory", entityId: "mem_custom" }]
+          },
+          {
+            refType: "chapter",
+            refId: "ch_search_result",
+            content: "CUSTOM SEARCH RESULT",
+            priority: 30,
+            sourceRefs: [{ entityType: "chapter", entityId: "ch_search_result" }]
+          }
+        ]),
+      contextBudgetTokens: 128,
+      workflowRunHistory: {
+        async recordWorkflowRun(record) {
+          workflowRunRecords.push(record);
+          return ok(record);
+        }
+      },
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const result = await aiWorkflow.generateChapterSuggestion({ instruction: "Continue." });
+    expect(isOk(result)).toBe(true);
+    if (isErr(result)) throw new Error(result.error.message);
+    expect(result.value.workflowRunId).toBeTruthy();
+    expect(result.value.observability).toMatchObject({
+      workflowTitle: "Custom",
+      context: { sourceCount: 4, budgetMaxTokens: 128 }
+    });
+    const requestText = requests[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(requestText).toContain("CUSTOM PROMPT");
+    expect(requestText).toContain("CUSTOM STORY BIBLE CONTEXT");
+    expect(requestText).toContain("CUSTOM CONFIRMED MEMORY");
+    expect(requestText).toContain("CUSTOM SEARCH RESULT");
+    expect(workflowRunRecords[0]).toMatchObject({
+      workflowId: "wf_custom",
+      context: { sourceCount: 4, budgetMaxTokens: 128 }
+    });
+  });
+
+  test("rejects configured agents that are not linked to their prompt asset", async () => {
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_unlinked",
+      repository: createRepository([])
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) throw new Error(loaded.error.message);
+    const workflow = {
+      schemaVersion: "1.0",
+      id: "wf_unlinked",
+      type: "workflow.definition",
+      title: "Unlinked",
+      status: "active",
+      entryStepId: "build_context",
+      steps: [
+        { id: "build_context", kind: "context", nextStepId: "write_suggestion" },
+        {
+          id: "write_suggestion",
+          kind: "agent",
+          agentId: "agent_unlinked",
+          nextStepId: "confirm_apply"
+        },
+        { id: "confirm_apply", kind: "confirmation" }
+      ],
+      createdAt: "2026-07-04T00:00:00.000Z",
+      updatedAt: "2026-07-04T00:00:00.000Z"
+    } as const;
+    const agent = {
+      schemaVersion: "1.0",
+      id: "agent_unlinked",
+      type: "agent.config",
+      title: "Unlinked",
+      status: "active",
+      agentRole: "writer",
+      promptTemplateId: "prompt_other",
+      inputSchemaId: "schema.ai-writing.input.v1",
+      outputSchemaId: "schema.ai-writing.output.v1",
+      modelProfileId: "mock_m14",
+      createdAt: "2026-07-04T00:00:00.000Z",
+      updatedAt: "2026-07-04T00:00:00.000Z"
+    } as const;
+    const prompt = { id: "prompt_unlinked", template: "PROMPT" } as const;
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({ provider: createCapturingProvider([]) }),
+      configAssetIds: {
+        workflowId: workflow.id,
+        chapterAgentId: agent.id,
+        chapterPromptId: prompt.id,
+        selectionAgentId: agent.id,
+        selectionPromptId: prompt.id
+      },
+      configAssetLoader: {
+        async loadConfigAsset(type) {
+          if (type === "workflow") return ok(workflow as unknown as JsonObject);
+          if (type === "agent") return ok(agent as unknown as JsonObject);
+          return ok(prompt as unknown as JsonObject);
+        }
+      }
+    });
+
+    const result = await aiWorkflow.generateChapterSuggestion({ instruction: "Continue." });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AI_WORKFLOW_CONFIG_ASSET_INVALID" }
+    });
+  });
+
+  test("returns a typed error when configured assets are missing", async () => {
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_missing",
+      repository: createRepository([])
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) throw new Error(loaded.error.message);
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({ provider: createCapturingProvider([]) }),
+      configAssetIds: {
+        workflowId: "wf_missing",
+        chapterAgentId: "agent_missing",
+        chapterPromptId: "prompt_missing",
+        selectionAgentId: "agent_missing",
+        selectionPromptId: "prompt_missing"
+      },
+      configAssetLoader: {
+        async loadConfigAsset() {
+          return {
+            ok: false,
+            error: { code: "CONFIG_ASSET_MISSING", message: "missing" }
+          } as never;
+        }
+      }
+    });
+    const result = await aiWorkflow.generateChapterSuggestion({ instruction: "Continue." });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AI_WORKFLOW_CONFIG_ASSET_MISSING" }
+    });
+  });
 });
 
 function createRepository(writes: ChapterDocument[]): ChapterDraftRepositoryPort {
@@ -1033,6 +1293,71 @@ function createSelectionPreviewProvider(
         type: "delta",
         value: ""
       };
+    }
+  };
+}
+
+function createDefaultWritingAssetLoader(chapterPromptTemplate: string) {
+  return {
+    async loadConfigAsset(type: "prompt" | "agent" | "workflow", assetId: string) {
+      if (type === "workflow") {
+        return ok({
+          schemaVersion: "1.0",
+          id: "wf_ai_continue_chapter",
+          type: "workflow.definition",
+          title: "Configured Continue Chapter",
+          status: "active",
+          entryStepId: "build_context",
+          steps: [
+            { id: "build_context", kind: "context", nextStepId: "write_suggestion" },
+            {
+              id: "write_suggestion",
+              kind: "agent",
+              agentId: "agent_chapter_writer",
+              nextStepId: "confirm_apply"
+            },
+            { id: "confirm_apply", kind: "confirmation" }
+          ],
+          createdAt: "2026-07-04T00:00:00.000Z",
+          updatedAt: "2026-07-04T00:00:00.000Z"
+        });
+      }
+      if (type === "agent") {
+        const selection = assetId === "agent_selection_rewriter";
+        return ok({
+          schemaVersion: "1.0",
+          id: selection ? "agent_selection_rewriter" : "agent_chapter_writer",
+          type: "agent.config",
+          title: selection ? "Selection Rewriter" : "Chapter Writer",
+          status: "active",
+          agentRole: "writer",
+          promptTemplateId: selection ? "prompt_rewrite_selection" : "prompt_continue_chapter",
+          inputSchemaId: selection
+            ? "schema.ai-selection-preview.input.v1"
+            : "schema.ai-writing.input.v1",
+          outputSchemaId: selection
+            ? "schema.ai-selection-preview.output.v1"
+            : "schema.ai-writing.output.v1",
+          modelProfileId: "mock_m14",
+          createdAt: "2026-07-04T00:00:00.000Z",
+          updatedAt: "2026-07-04T00:00:00.000Z"
+        });
+      }
+      return ok({
+        schemaVersion: "1.0",
+        id: assetId,
+        type: "prompt.template",
+        title: "Configured Prompt",
+        status: "active",
+        promptRole: "writer",
+        template:
+          assetId === "prompt_continue_chapter"
+            ? chapterPromptTemplate
+            : "Return JSON with proposedText and summary for a selected text rewrite.",
+        variables: [],
+        createdAt: "2026-07-04T00:00:00.000Z",
+        updatedAt: "2026-07-04T00:00:00.000Z"
+      });
     }
   };
 }

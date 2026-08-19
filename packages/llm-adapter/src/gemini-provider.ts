@@ -1,6 +1,6 @@
 import type { JsonObject, JsonValue } from "@novel-studio/shared";
 
-import { LlmProviderFailure } from "./errors.js";
+import { LlmProviderFailure, redactProviderMessage } from "./errors.js";
 import {
   checksumProviderPayload,
   rejectLlmPromptCacheRequest,
@@ -665,7 +665,7 @@ function normalizeGeminiError(
           : error.status === 429
             ? "LLM_RATE_LIMITED"
             : "LLM_PROVIDER_ERROR",
-      message: readProviderErrorMessage(error.body) ?? error.message,
+      message: readProviderErrorMessage(error.body) ?? redactProviderMessage(error.message),
       retryable: error.status === 408 || error.status === 429 || error.status >= 500,
       redactedDetail: detail
     });
@@ -680,7 +680,8 @@ function normalizeGeminiError(
 function readProviderErrorMessage(body: unknown): string | undefined {
   if (!isRecord(body)) return undefined;
   const error = isRecord(body["error"]) ? body["error"] : body;
-  return stringValue(error["message"]);
+  const message = stringValue(error["message"]);
+  return message === undefined ? undefined : redactProviderMessage(message);
 }
 
 function readProviderRequestId(body: unknown, headers: JsonObject | undefined): string | undefined {
