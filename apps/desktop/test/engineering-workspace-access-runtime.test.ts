@@ -38,7 +38,7 @@ describe("engineering workspace access runtime", () => {
     const loader = { load: vi.fn() };
     const issueRootBinding = vi.fn(() => binding());
     const runtime = createEngineeringWorkspaceAccessRuntime({
-      qualificationService: qualificationService(),
+      capabilityAuthority: qualificationService(),
       issueRootBinding,
       pathPolicy: defaultEngineeringPathPolicy,
       addonLoader: loader
@@ -57,7 +57,7 @@ describe("engineering workspace access runtime", () => {
     qualification.hasAccess.mockReturnValue(true);
     const addon = validAddon();
     const runtime = createEngineeringWorkspaceAccessRuntime({
-      qualificationService: qualificationService(),
+      capabilityAuthority: qualificationService(),
       issueRootBinding: (identity) => ({ ...binding(), ...identity }),
       pathPolicy: defaultEngineeringPathPolicy,
       addonLoader: {
@@ -153,6 +153,48 @@ describe("engineering workspace access runtime", () => {
     expect(addon.closeWorkspaceRoot).toHaveBeenCalledOnce();
     expect(addon.listDirectory).not.toHaveBeenCalled();
   });
+
+  test("closes an active native root immediately when its capability authority is revoked", async () => {
+    qualification.hasAccess.mockReturnValue(true);
+    const addon = validAddon();
+    let revoke: (() => void) | undefined;
+    const onQualificationRevoked = vi.fn();
+    const runtime = createEngineeringWorkspaceAccessRuntime({
+      capabilityAuthority: {
+        hasCapability: async () => qualification.hasAccess(),
+        subscribeRevocation(listener) {
+          revoke = listener;
+          return () => {
+            revoke = undefined;
+          };
+        }
+      },
+      issueRootBinding: (identity) => ({ ...binding(), ...identity }),
+      pathPolicy: defaultEngineeringPathPolicy,
+      addonLoader: {
+        load: vi.fn(() => ({
+          status: "loaded" as const,
+          addon,
+          metadata: metadata()
+        }))
+      },
+      onQualificationRevoked
+    });
+    const opened = await runtime.openWorkspace({ rootPath: "C:\\workspace" });
+    if (opened.status !== "available") throw new Error("expected an available session");
+
+    revoke?.();
+    await vi.waitFor(() => expect(addon.closeWorkspaceRoot).toHaveBeenCalledOnce());
+
+    await expect(opened.session.listDirectory()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ENGINEERING_WORKSPACE_ACCESS_UNAVAILABLE" }
+    });
+    expect(onQualificationRevoked).toHaveBeenCalledWith({
+      rootBindingId: opened.session.binding.rootBindingId
+    });
+    expect(addon.listDirectory).not.toHaveBeenCalled();
+  });
 });
 
 function runtimeWith(
@@ -160,7 +202,7 @@ function runtimeWith(
   issueRootBinding: (identity: EngineeringWorkspaceNativeRootIdentity) => unknown
 ) {
   return createEngineeringWorkspaceAccessRuntime({
-    qualificationService: qualificationService(),
+    capabilityAuthority: qualificationService(),
     issueRootBinding,
     pathPolicy: defaultEngineeringPathPolicy,
     addonLoader: {

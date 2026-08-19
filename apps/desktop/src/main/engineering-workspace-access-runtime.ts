@@ -7,7 +7,7 @@ import {
 import { createUnifiedError, err, type Result, type UnifiedError } from "@novel-studio/shared";
 import type { EngineeringPathPolicy } from "@novel-studio/agent-engine";
 
-import type { EngineeringFileAccessQualificationService } from "./engineering-file-access-qualification.js";
+import type { EngineeringFileCapabilityAuthority } from "./engineering-file-capability-authority.js";
 import {
   ENGINEERING_WORKSPACE_ACCESS_OPERATIONS,
   createEngineeringFileAccessAddonLoader,
@@ -45,8 +45,8 @@ export interface EngineeringWorkspaceAccessRuntime {
 }
 
 export interface EngineeringWorkspaceAccessRuntimeOptions {
-  /** Required Main-owned qualification authority. */
-  readonly qualificationService: EngineeringFileAccessQualificationService;
+  /** Required Main-owned signed-production or explicitly authorized unsigned-beta authority. */
+  readonly capabilityAuthority: EngineeringFileCapabilityAuthority;
   /** Required Main-owned binding issuer, invoked only after native root identity verification. */
   readonly issueRootBinding: EngineeringWorkspaceRootBindingIssuer;
   /** Required Main-owned policy associated with every session opened by this runtime. */
@@ -78,8 +78,8 @@ export function createEngineeringWorkspaceAccessRuntime(
       request: EngineeringWorkspaceAccessRuntimeOpenRequest
     ): Promise<EngineeringWorkspaceAccessRuntimeOpenResult> {
       if (
-        !(await hasCurrentQualification(options.qualificationService, "root")) ||
-        !(await hasCurrentQualification(options.qualificationService, "access"))
+        !(await hasCurrentQualification(options.capabilityAuthority, "root")) ||
+        !(await hasCurrentQualification(options.capabilityAuthority, "access"))
       ) {
         return unavailable("qualification_unavailable");
       }
@@ -102,7 +102,7 @@ export function createEngineeringWorkspaceAccessRuntime(
           opened.value,
           options.onRootChanged,
           options.onQualificationRevoked,
-          options.qualificationService
+          options.capabilityAuthority
         )
       });
     }
@@ -121,10 +121,10 @@ class MainOwnedEngineeringWorkspaceAccessSession implements EngineeringWorkspace
     private readonly delegate: EngineeringWorkspaceAccessSession,
     private readonly onRootChanged: EngineeringWorkspaceAccessRuntimeOptions["onRootChanged"],
     private readonly onQualificationRevoked: EngineeringWorkspaceAccessRuntimeOptions["onQualificationRevoked"],
-    private readonly qualificationService: EngineeringFileAccessQualificationService
+    private readonly capabilityAuthority: EngineeringFileCapabilityAuthority
   ) {
     this.binding = delegate.binding;
-    const unsubscribe = qualificationService.subscribeRevocation(() => {
+    const unsubscribe = capabilityAuthority.subscribeRevocation(() => {
       this.invalidateForQualificationRevocation();
     });
     if (this.closing !== undefined) unsubscribe();
@@ -199,8 +199,8 @@ class MainOwnedEngineeringWorkspaceAccessSession implements EngineeringWorkspace
 
   private async isQualified(): Promise<boolean> {
     const [root, access] = await Promise.all([
-      hasCurrentQualification(this.qualificationService, "root"),
-      hasCurrentQualification(this.qualificationService, "access")
+      hasCurrentQualification(this.capabilityAuthority, "root"),
+      hasCurrentQualification(this.capabilityAuthority, "access")
     ]);
     if (root && access) return true;
     this.invalidateForQualificationRevocation();
@@ -225,11 +225,11 @@ class MainOwnedEngineeringWorkspaceAccessSession implements EngineeringWorkspace
 }
 
 async function hasCurrentQualification(
-  qualificationService: EngineeringFileAccessQualificationService,
+  capabilityAuthority: EngineeringFileCapabilityAuthority,
   capability: "root" | "access"
 ): Promise<boolean> {
   try {
-    return await qualificationService.hasCapability(capability);
+    return await capabilityAuthority.hasCapability(capability);
   } catch {
     return false;
   }

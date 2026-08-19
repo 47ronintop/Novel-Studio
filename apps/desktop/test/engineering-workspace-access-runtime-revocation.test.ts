@@ -14,7 +14,7 @@ describe("engineering workspace access runtime qualification revocation", () => 
     const addon = nativeAddon();
     const onQualificationRevoked = vi.fn();
     const runtime = createEngineeringWorkspaceAccessRuntime({
-      qualificationService: service,
+      capabilityAuthority: service,
       issueRootBinding: (identity) => ({ ...binding(), ...identity }),
       pathPolicy: defaultEngineeringPathPolicy,
       addonLoader: {

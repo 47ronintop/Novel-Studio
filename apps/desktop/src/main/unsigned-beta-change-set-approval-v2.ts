@@ -22,6 +22,7 @@ export interface UnsignedBetaChangeSetApprovalV2Options {
   readonly packageIdentityChecksum: string;
   readonly workspaceBindingId: string;
   readonly projectId: string;
+  readonly workspaceKind?: "creativeProject" | "engineeringWorkspace";
   /** Direct native confirmation, injected for tests and the unsigned beta shell. */
   readonly confirm: (display: TrustedApprovalSafeDisplayDtoV1) => Promise<boolean>;
   readonly workspaceLabel: string;
@@ -58,7 +59,9 @@ export function createUnsignedBetaChangeSetApprovalV2Port(
       ) {
         return failure(
           "CHANGE_SET_UNSIGNED_BETA_SCOPE_REJECTED",
-          "Unsigned beta approval is limited to the current creative workspace and operation set."
+          `Unsigned beta approval is limited to the current ${
+            options.workspaceKind === "engineeringWorkspace" ? "engineering" : "creative"
+          } workspace and operation set.`
         );
       }
 
@@ -213,6 +216,7 @@ function isAllowedOperation(operation: string): boolean {
     operation === "replace_file" ||
     operation === "create_file" ||
     operation === "move_file" ||
+    operation === "delete_file" ||
     operation === "create_directory"
   );
 }

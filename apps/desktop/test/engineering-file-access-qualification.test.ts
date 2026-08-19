@@ -121,6 +121,36 @@ describe("Main-owned engineering file access qualification", () => {
     expect(packagedConfig).toContain("engineering-file-access-package.e2e.ts");
   });
 
+  test("requires the complete Batch 8 lifecycle contract for an unsigned beta native candidate", async () => {
+    const [buildScript, packageCheck] = await Promise.all([
+      readFile(ENGINEERING_FILE_ACCESS_PACKAGING_CONTRACT.buildScript, "utf8"),
+      readFile("scripts/package-check.mjs", "utf8")
+    ]);
+    const requiredLifecyclePrimitives = [
+      "move",
+      "caseOnlyTwoStepWal",
+      "volumeLocalRecoveryRoot",
+      "quarantineDelete",
+      "restoreNoOverwrite",
+      "localPurge",
+      "singleLevelCreateDirectory",
+      "quarantineInventory",
+      "lifecycleRecoveryInspection",
+      "lifecycleIntermediateResume",
+      "lifecycleRecoveryBoundStateDurability",
+      "lifecycleReverseCompensation",
+      "lifecycleDurableFinalize"
+    ];
+
+    expect(packageCheck).toContain("isUnsignedBetaEngineeringManifest");
+    expect(packageCheck).toContain('probe.batch === "8"');
+    expect(packageCheck).toContain("qualification.productionQualified === false");
+    for (const primitive of requiredLifecyclePrimitives) {
+      expect(buildScript).toContain(`${primitive}: "available"`);
+      expect(packageCheck).toContain(`${primitive}: "available"`);
+    }
+  });
+
   test.each([
     ["missing", false, "host_missing"],
     ["partial", true, "host_partial"],

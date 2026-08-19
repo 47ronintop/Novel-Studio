@@ -27,7 +27,7 @@ describe("B6 engineering root-binding liveness", () => {
       throw failure;
     });
     const runtime = createEngineeringWorkspaceAccessRuntime({
-      qualificationService: qualificationService(),
+      capabilityAuthority: qualificationService(),
       issueRootBinding: (identity) => ({ ...rootBinding("root-before-change"), ...identity }),
       pathPolicy: defaultEngineeringPathPolicy,
       addonLoader: {

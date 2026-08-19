@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import {
   createUnsignedBetaAuthorizationService,
@@ -51,5 +51,34 @@ describe("unsigned beta authorization", () => {
     expect(hasCurrentUnsignedBetaAuthorization(granted, checksum, "2026-08-19T00:00:00.000Z")).toBe(
       false
     );
+    const confirm = vi.fn(async () => true);
+    await expect(service.requestAuthorization(confirm)).resolves.toBeUndefined();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  test("notifies subscribers and removes authority when the grant expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-19T00:00:00.000Z"));
+    try {
+      const root = await mkdtemp(join(tmpdir(), "unsigned-beta-expiry-"));
+      const checksum = "c".repeat(64);
+      const service = createUnsignedBetaAuthorizationService({
+        userDataRoot: root,
+        packageIdentityChecksum: checksum
+      });
+      const revoked = vi.fn();
+      service.subscribeRevocation(revoked);
+      const granted = await service.requestAuthorization(async () => true);
+
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+
+      expect(revoked).toHaveBeenCalledOnce();
+      await expect(service.read()).resolves.toBeUndefined();
+      expect(hasCurrentUnsignedBetaAuthorization(granted, checksum, new Date().toISOString())).toBe(
+        false
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

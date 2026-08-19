@@ -655,7 +655,7 @@ function createHarness(
     workspaceAccessSession,
     pathPolicy: defaultEngineeringPathPolicy,
     refCapabilityRevision: "capability_01",
-    qualificationService: createQualificationService({
+    capabilityAuthority: createQualificationService({
       mutation: input.mutationQualified ?? true,
       recovery: input.recoveryQualified ?? true
     }),

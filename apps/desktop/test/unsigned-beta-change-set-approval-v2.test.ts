@@ -6,7 +6,9 @@ import { describe, expect, test, vi } from "vitest";
 import {
   checksumChangeSetSelection,
   checksumChangeSetText,
+  createOperationsChangeSetRevisionV2,
   createChangeSetRevisionV2,
+  deleteFileOperation,
   type ChangeSetV2
 } from "@novel-studio/agent-engine";
 import type {
@@ -193,44 +195,89 @@ describe("Unsigned beta Change Set Approval v2", () => {
     }
   });
 
-  test("rejects another workspace and operations outside the creative beta scope", async () => {
-    const ledger = new ApprovalAuthorizationLedger();
-    const confirm = vi.fn(async () => true);
-    const port = createUnsignedBetaChangeSetApprovalV2Port({
-      authorizationLedger: ledger,
-      getCurrentAuthorization: () => undefined,
-      packageIdentityChecksum: checksum,
-      workspaceBindingId: "workspace_01",
-      projectId: "project_01",
-      confirm,
-      workspaceLabel: "workspace"
-    });
-    const changeSet = await changeSetV2();
-    const current = input(changeSet);
+  test("accepts authorized delete_file while rejecting unsupported creative beta operations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "novel-studio-unsigned-beta-"));
+    try {
+      const clock = { value: "2099-01-01T00:00:00.000Z" };
+      const packageIdentityChecksum = createUnsignedBetaPackageIdentityChecksum({
+        appVersion: "1",
+        appRoot: root
+      });
+      const authorization = createUnsignedBetaAuthorizationService({
+        userDataRoot: root,
+        packageIdentityChecksum,
+        now: () => clock.value
+      });
+      const grant = await authorization.requestAuthorization(async () => true);
+      const ledger = new ApprovalAuthorizationLedger({ now: () => clock.value });
+      const confirm = vi.fn(async () => true);
+      const port = createUnsignedBetaChangeSetApprovalV2Port({
+        authorizationLedger: ledger,
+        getCurrentAuthorization: () => grant,
+        packageIdentityChecksum,
+        workspaceBindingId: "workspace_01",
+        projectId: "project_01",
+        confirm,
+        workspaceLabel: "workspace",
+        now: () => clock.value
+      });
+      const changeSet = deleteChangeSetV2();
+      const current = input(changeSet);
 
-    await expect(
-      port.prepare({
-        ...current,
-        approvalContext: { ...current.approvalContext, workspaceBindingId: "workspace_02" }
-      })
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { code: "CHANGE_SET_UNSIGNED_BETA_SCOPE_REJECTED" }
-    });
-    await expect(
-      port.prepare({
+      const deletion = await port.prepare({
         ...current,
         approvalContext: {
           ...current.approvalContext,
           operation: "delete_file",
           approvalBindingOperationKind: "delete_file"
         }
-      })
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { code: "CHANGE_SET_UNSIGNED_BETA_SCOPE_REJECTED" }
-    });
-    expect(confirm).not.toHaveBeenCalled();
+      });
+      expect(deletion).toMatchObject({
+        ok: true,
+        value: {
+          binding: {
+            operationKind: "delete_file",
+            recoveryRootBindingId: expect.stringMatching(/^creative_recovery_[a-f0-9]{64}$/u),
+            recoveryGrantRevision: expect.stringMatching(/^creative_recovery_v1_[a-f0-9]{64}$/u),
+            recoverySideEffectChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+          }
+        }
+      });
+      await expect(
+        port.prepare({
+          ...current,
+          approvalContext: { ...current.approvalContext, workspaceBindingId: "workspace_02" }
+        })
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "CHANGE_SET_UNSIGNED_BETA_SCOPE_REJECTED" }
+      });
+      await expect(
+        port.prepare({
+          ...current,
+          changeSet: { ...current.changeSet, projectId: "project_02" }
+        })
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "CHANGE_SET_UNSIGNED_BETA_SCOPE_REJECTED" }
+      });
+      await expect(
+        port.prepare({
+          ...current,
+          approvalContext: {
+            ...current.approvalContext,
+            operation: "chapter_replace",
+            approvalBindingOperationKind: "chapter_replace"
+          }
+        })
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "CHANGE_SET_UNSIGNED_BETA_SCOPE_REJECTED" }
+      });
+      expect(confirm).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("fails closed on confirmation and reservation faults and revokes issued authority", async () => {
@@ -335,6 +382,28 @@ async function changeSetV2(): Promise<ChangeSetV2> {
     },
     { createHunkId: () => "hunk_01" }
   );
+}
+
+function deleteChangeSetV2(): ChangeSetV2 {
+  const base = "obsolete\n";
+  return createOperationsChangeSetRevisionV2({
+    changeSetId: "unsigned_beta_delete_01",
+    runId: "run_01",
+    projectId: "project_01",
+    checkpointId: "checkpoint_01",
+    contextSnapshotId: "context_01",
+    writePolicy: "write_before_confirmation",
+    createdAt: "2099-01-01T00:00:00.000Z",
+    providerSemanticVersionSetChecksum: checksum,
+    operations: [
+      deleteFileOperation({
+        operationId: "delete_01",
+        relativePath: "notes/obsolete.md",
+        baseChecksum: checksumChangeSetText(base),
+        toolCallIdempotencyKey: "tool_delete_01"
+      })
+    ]
+  });
 }
 
 function approvalContext(changeSet: ChangeSetV2): AgentRunChangeSetApprovalV2ApprovalContext {

@@ -23,6 +23,7 @@ import {
   arePinnedEngineeringFileAccessPublishers,
   hasConfiguredEngineeringFileAccessPublisherPolicy
 } from "./engineering-file-access-publisher-policy.js";
+import type { EngineeringFileCapabilityAuthority } from "./engineering-file-capability-authority.js";
 
 const exec = promisify(execFile);
 
@@ -65,7 +66,7 @@ export interface EngineeringFileCandidateInspector {
   inspect(): Promise<EngineeringFileCandidateArtifactState>;
 }
 
-export interface EngineeringFileAccessQualificationService {
+export interface EngineeringFileAccessQualificationService extends EngineeringFileCapabilityAuthority {
   /** One-shot, cached Main-owned observation. There is deliberately no Renderer refresh method. */
   readAttestation(): Promise<EngineeringFileQualificationAttestationV1>;
   /** Main-only liveness check; expired evidence can never be reused by a pre-opened session. */

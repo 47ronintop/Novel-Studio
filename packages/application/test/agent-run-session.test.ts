@@ -8,8 +8,10 @@ import {
   computeAgentToolDescriptorDigest,
   createAgentContextSnapshot,
   createChangeSetRevisionV2,
+  createOperationsChangeSetRevisionV2,
   createDeterministicTokenEstimator,
   createEffectiveCapabilityState,
+  deleteFileOperation,
   revokeCapability,
   type AgentRunEventV20,
   type AgentRunSnapshotV20,
@@ -9787,6 +9789,150 @@ describe("AgentRunSession v2 tool facade", () => {
     expect(prepared).toHaveLength(1);
   });
 
+  test("carries the creative delete recovery binding from the persisted proof into approval", async () => {
+    const runId = "run_v2_creative_delete_approval";
+    const baseContent = "obsolete\n";
+    const baseChecksum = checksumChangeSetText(baseContent);
+    let providerSemanticVersionSetChecksum = "";
+    let changeSet = creativeDeleteChangeSetV2(
+      runId,
+      "a".repeat(64),
+      "notes/obsolete.md",
+      baseChecksum
+    );
+    const proofWrites: Record<string, unknown>[] = [];
+    const prepared: Record<string, unknown>[] = [];
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => runId },
+      repository: durableMemoryRepository(),
+      newRunToolFacadeVersion: "v2",
+      agentGuidanceV3: true,
+      capabilitySnapshot: {
+        ...creativeV2Capabilities(),
+        workspaceFileOperations: ["delete_file"]
+      },
+      modelDriver: {
+        async *streamRound() {
+          yield toolCall("v2-delete-approval", "propose_file_delete", {
+            ref: "file:notes/obsolete.md",
+            baseHash: baseChecksum
+          });
+          yield { type: "round_completed" as const, finishReason: "tool_calls" as const };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      generalFilePathPolicy(path: string) {
+        return { ok: true as const, value: path };
+      },
+      fileOperationSession: {
+        proposeFileDelete(input: Record<string, unknown>) {
+          return {
+            ok: true as const,
+            value: {
+              operation: deleteFileOperation({
+                operationId: "delete_op_01",
+                relativePath: String(input["relativePath"]),
+                baseChecksum: String(input["baseChecksum"]),
+                toolCallIdempotencyKey: "tool_delete_01"
+              }),
+              operationId: "delete_op_01"
+            }
+          };
+        }
+      },
+      changeSetSession: {
+        bindRunProviderSemanticVersionSet(_runId: string, checksum: string) {
+          providerSemanticVersionSetChecksum = checksum;
+          return { ok: true as const, value: undefined };
+        },
+        async proposeWorkspaceFileMutation() {
+          changeSet = creativeDeleteChangeSetV2(
+            runId,
+            providerSemanticVersionSetChecksum,
+            "notes/obsolete.md",
+            baseChecksum
+          );
+          return { ok: true as const, value: changeSet };
+        },
+        async persistApprovalDecisionProof(input: Record<string, unknown>) {
+          proofWrites.push(input);
+          const proof = input["proof"] as Parameters<typeof approvalDecisionProofChecksum>[0];
+          return {
+            ok: true as const,
+            value: {
+              proofId: proof.proofId,
+              proofChecksum: approvalDecisionProofChecksum(proof)
+            }
+          };
+        },
+        async decideV2() {
+          return { ok: true as const, value: v2Approval(changeSet, "apply_selected") };
+        },
+        async rejectV2() {
+          throw new Error("apply must not reject the Change Set");
+        }
+      },
+      changeSetApprovalV2: {
+        async prepare(input: Record<string, unknown>) {
+          prepared.push(input);
+          return {
+            ok: true as const,
+            value: {
+              changeSet,
+              decision: "apply_selected" as const,
+              displayBindingChecksum: changeSet.displayBindingChecksum,
+              binding: { mainOnly: true },
+              authorizationId: "auth_v2_delete",
+              reservationTransactionId: "reservation_v2_delete",
+              resolvedAt: "2026-08-06T00:00:00.000Z"
+            }
+          };
+        }
+      },
+      versionGroupExecutor: {
+        async apply() {
+          return { ok: true as const, value: { versionGroupId: "version_group_v2_delete" } };
+        },
+        async undoRun() {
+          throw new Error("unused");
+        }
+      }
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      contextMode: "general_file",
+      writePolicyAcknowledged: true
+    });
+    const pending = await awaitPendingChangeSet(session, runId);
+    await expect(
+      session.decideChangeSet(changeSetCommand(runId, pending, changeSet, "apply_selected"))
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(proofWrites).toHaveLength(1);
+    expect(prepared).toHaveLength(1);
+    const proof = proofWrites[0]?.["proof"] as {
+      readonly proofId: string;
+      readonly binding: Record<string, unknown>;
+    };
+    expect(proof).toMatchObject({
+      operation: "delete_file",
+      binding: {
+        recoveryRootBindingId: expect.stringMatching(/^creative_recovery_[a-f0-9]{64}$/u),
+        recoveryGrantRevision: expect.stringMatching(/^creative_recovery_v1_[a-f0-9]{64}$/u),
+        recoverySideEffectChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      }
+    });
+    expect(prepared[0]).toMatchObject({
+      approvalContext: {
+        operation: "delete_file",
+        approvalBindingOperationKind: "delete_file",
+        proofRef: { proofId: proof.proofId }
+      }
+    });
+  });
+
   test("binds Engineering approval proof and preview to the durable raw-byte proposal before finalizing facts", async () => {
     const runId = "run_engineering_v2_raw_approval";
     const fileRef = `engineering_file_ref:${"a".repeat(64)}`;
@@ -10905,6 +11051,32 @@ async function engineeringV2DiagnosticChangeSet(
     },
     { createHunkId: () => `engineering_hunk_v2_${runId}` }
   );
+}
+
+function creativeDeleteChangeSetV2(
+  runId: string,
+  providerSemanticVersionSetChecksum: string,
+  relativePath: string,
+  baseChecksum: string
+) {
+  return createOperationsChangeSetRevisionV2({
+    changeSetId: `creative_delete_${runId}`,
+    runId,
+    projectId: "project-01",
+    checkpointId: `creative_delete_checkpoint_${runId}`,
+    contextSnapshotId: `creative_delete_context_${runId}`,
+    writePolicy: "write_before_confirmation",
+    createdAt: "2026-08-06T00:00:00.000Z",
+    providerSemanticVersionSetChecksum,
+    operations: [
+      deleteFileOperation({
+        operationId: "delete_op_01",
+        relativePath,
+        baseChecksum,
+        toolCallIdempotencyKey: "tool_delete_01"
+      })
+    ]
+  });
 }
 
 async function* v2ChapterProposalRound() {

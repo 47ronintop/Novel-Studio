@@ -17,7 +17,10 @@ import type {
   AgentRunChangeSetApprovalV2Port,
   AgentRunChangeSetApprovalV2ApprovalContext
 } from "@novel-studio/application";
-import { buildEngineeringApprovalBindingV2 } from "@novel-studio/application";
+import {
+  buildEngineeringApprovalBindingV2,
+  createCreativeFileRecoveryBindingV1
+} from "@novel-studio/application";
 import type { ApprovalAuthorizationLedger } from "@novel-studio/repository";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
@@ -224,6 +227,18 @@ export function buildTrustedApprovalPreparation(input: {
   }
   const expiresAt = new Date(issuedAtMs + APPROVAL_EXPIRY_MS).toISOString();
   const fileBinding = fileEncodingBinding(selectedFiles);
+  const creativeRecoveryBinding =
+    operationKind === "delete_file" && context.engineeringApprovalFacts === undefined
+      ? createCreativeFileRecoveryBindingV1({
+          workspaceBindingId: context.workspaceBindingId,
+          canonicalRootIdentityChecksum: context.capabilityBoundary.canonicalRootIdentityChecksum,
+          policyRevision: context.capabilityBoundary.policyRevision,
+          capabilityRevision: context.approvalRuleSet.catalogRevision,
+          changeSetId: changeSet.changeSetId,
+          changeSetRevision: changeSet.revision,
+          changeSetChecksum: changeSet.checksum
+        })
+      : undefined;
 
   let binding: ReturnType<typeof createApprovalBindingV2>;
   try {
@@ -270,6 +285,7 @@ export function buildTrustedApprovalPreparation(input: {
         executionWritePolicy: changeSet.writePolicy ?? "write_before_confirmation",
         policyRevision: context.capabilityBoundary.policyRevision,
         capabilityRevision: context.approvalRuleSet.catalogRevision,
+        ...(creativeRecoveryBinding ?? {}),
         approvalSource: "human_confirmation",
         issuedAt: input.issuedAt,
         expiresAt

@@ -377,7 +377,105 @@ describe("desktop Agent Run runtime", () => {
     ).toMatchObject({ writingOperations: [], workspaceFileOperations: [] });
   });
 
-  test("unsigned beta projects only qualified creative replace/create/move operations", async () => {
+  test("projects each engineering file operation through feature, backend, approval, and recovery authority", () => {
+    const operations = [
+      "replace_file",
+      "create_file",
+      "move_file",
+      "delete_file",
+      "create_directory"
+    ] as const;
+    const featureKeyForOperation = {
+      replace_file: "engineeringReplaceV2",
+      create_file: "engineeringCreateV2",
+      move_file: "engineeringMoveV2",
+      delete_file: "engineeringDeleteV2",
+      create_directory: "engineeringDirectoryCreateV1"
+    } as const;
+    const featureFlags = {
+      ...createAgentFeatureFlags({ revision: "engineering-operation-projection" }),
+      agentGuidanceV3: true,
+      approvalBindingV2: true,
+      engineeringHardenedAccessV1: true,
+      engineeringReplaceV2: true,
+      engineeringCreateV2: true,
+      engineeringMoveV2: true,
+      engineeringDeleteV2: true,
+      engineeringDirectoryCreateV1: true
+    };
+    const requested = runtimeExports.requestedCapabilitySnapshot({
+      workspaceKind: "engineeringWorkspace",
+      projectId: "engineering-operation-projection",
+      contentRoot: "content-root",
+      stateRoot: "state-root",
+      featureFlags,
+      engineeringWorkspaceAccessSession: {} as never,
+      engineeringFileMutationV2: {} as never,
+      engineeringMutationRuntimeV2: {} as never
+    });
+
+    expect(requested.workspaceFileOperations).toEqual(operations);
+
+    const qualified = {
+      requested,
+      featureFlags,
+      engineeringFileMutationV2: {} as never,
+      engineeringMutationRuntimeV2: {} as never,
+      hasVersionGroupExecutor: false,
+      hasTrustedApprovalV2: true
+    };
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot(qualified).workspaceFileOperations
+    ).toEqual(operations);
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        ...qualified,
+        hasTrustedApprovalV2: false
+      }).workspaceFileOperations
+    ).toEqual([]);
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        ...qualified,
+        engineeringFileMutationV2: undefined
+      }).workspaceFileOperations
+    ).toEqual([]);
+    expect(
+      runtimeExports.buildRuntimeCapabilitySnapshot({
+        ...qualified,
+        engineeringMutationRuntimeV2: undefined
+      }).workspaceFileOperations
+    ).toEqual([]);
+
+    for (const operation of operations) {
+      const requestedWithoutFeature = runtimeExports.requestedCapabilitySnapshot({
+        workspaceKind: "engineeringWorkspace",
+        projectId: "engineering-operation-projection",
+        contentRoot: "content-root",
+        stateRoot: "state-root",
+        featureFlags: {
+          ...featureFlags,
+          [featureKeyForOperation[operation]]: false
+        },
+        engineeringWorkspaceAccessSession: {} as never,
+        engineeringFileMutationV2: {} as never,
+        engineeringMutationRuntimeV2: {} as never
+      });
+      expect(requestedWithoutFeature.workspaceFileOperations).not.toContain(operation);
+      expect(
+        runtimeExports.buildRuntimeCapabilitySnapshot({
+          ...qualified,
+          requested: {
+            ...requested,
+            workspaceFileOperations: requested.workspaceFileOperations?.filter(
+              (candidate) => candidate !== operation
+            )
+          }
+        }).workspaceFileOperations
+      ).not.toContain(operation);
+    }
+  });
+
+  test("unsigned beta projects only qualified creative file operations", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "novel-studio-unsigned-beta-runtime-"));
     roots.push(projectRoot);
     const qualifications = await createCreativeFileOperationQualificationService({
@@ -411,6 +509,7 @@ describe("desktop Agent Run runtime", () => {
       "replace_file",
       "create_file",
       "move_file",
+      "delete_file",
       "create_directory"
     ]);
 
@@ -442,6 +541,7 @@ describe("desktop Agent Run runtime", () => {
       "replace_file",
       "create_file",
       "move_file",
+      "delete_file",
       "create_directory"
     ]);
 

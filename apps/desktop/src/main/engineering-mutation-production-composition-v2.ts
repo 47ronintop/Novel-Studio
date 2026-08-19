@@ -47,7 +47,7 @@ import {
   createEngineeringStateDurabilityPortV2,
   type EngineeringFileAccessAddonLoader
 } from "./engineering-file-access-adapter.js";
-import type { EngineeringFileAccessQualificationService } from "./engineering-file-access-qualification.js";
+import type { EngineeringFileCapabilityAuthority } from "./engineering-file-capability-authority.js";
 import { createDesktopEngineeringFileMutationSessionV2 } from "./engineering-file-mutation-session-v2.js";
 import type { EngineeringEditorStateRegistry } from "./engineering-editor-state-registry.js";
 import {
@@ -124,7 +124,7 @@ export interface DesktopEngineeringMutationProductionCompositionV2Options {
   readonly pathPolicy: EngineeringPathPolicy;
   /** Main-owned capability revision used to bind opaque source references. */
   readonly refCapabilityRevision: string;
-  readonly qualificationService: EngineeringFileAccessQualificationService;
+  readonly capabilityAuthority: EngineeringFileCapabilityAuthority;
   /** Shared with trusted approval; never create a separate ledger for the transaction path. */
   readonly authorizationLedger: DesktopEngineeringMutationAuthorizationLedgerV2;
   readonly trustedApprovalQualified: () => boolean;
@@ -238,7 +238,7 @@ interface NativeRecoveryScan {
 export async function createDesktopEngineeringMutationProductionCompositionV2(
   options: DesktopEngineeringMutationProductionCompositionV2Options
 ): Promise<DesktopEngineeringMutationProductionCompositionV2 | undefined> {
-  if (!(await hasCurrentBatch7Qualification(options.qualificationService))) return undefined;
+  if (!(await hasCurrentBatch7Qualification(options.capabilityAuthority))) return undefined;
 
   const rootBinding = readRootBinding(options.workspaceAccessSession);
   if (rootBinding === undefined) return undefined;
@@ -330,11 +330,11 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
     };
 
     try {
-      unsubscribe = options.qualificationService.subscribeRevocation(deactivate);
+      unsubscribe = options.capabilityAuthority.subscribeRevocation(deactivate);
     } catch {
       return undefined;
     }
-    if (!active || !(await hasCurrentBatch7Qualification(options.qualificationService))) {
+    if (!active || !(await hasCurrentBatch7Qualification(options.capabilityAuthority))) {
       unsubscribe();
       return undefined;
     }
@@ -361,7 +361,7 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
     };
 
     const verifyRootAvailable = async (): Promise<Result<void, UnifiedError>> => {
-      if (!active || !(await hasCurrentBatch7Qualification(options.qualificationService))) {
+      if (!active || !(await hasCurrentBatch7Qualification(options.capabilityAuthority))) {
         deactivate();
         return unavailable("ENGINEERING_MUTATION_PRODUCTION_QUALIFICATION_UNAVAILABLE", traceId);
       }
@@ -1193,12 +1193,12 @@ export async function createDesktopEngineeringMutationProductionCompositionV2(
 }
 
 async function hasCurrentBatch7Qualification(
-  qualificationService: EngineeringFileAccessQualificationService
+  capabilityAuthority: EngineeringFileCapabilityAuthority
 ): Promise<boolean> {
   try {
     const [mutation, recovery] = await Promise.all([
-      qualificationService.hasCapability("mutation"),
-      qualificationService.hasCapability("recovery")
+      capabilityAuthority.hasCapability("mutation"),
+      capabilityAuthority.hasCapability("recovery")
     ]);
     return mutation && recovery;
   } catch {

@@ -10,6 +10,7 @@ import {
   createMainOnlyApprovalDecisionProofV1,
   createChangeSetRevisionV2,
   createOperationsChangeSetRevisionV2,
+  deleteFileOperation,
   type ChangeSetV2
 } from "@novel-studio/agent-engine";
 import {
@@ -204,6 +205,29 @@ describe("Trusted Change Set Approval v2", () => {
     ).toMatchObject({
       ok: false,
       error: { code: "CHANGE_SET_TRUSTED_APPROVAL_RECOVERY_BINDING_REQUIRED" }
+    });
+  });
+
+  test("binds a creative file delete to its deterministic recovery authority", () => {
+    const changeSet = creativeDeleteChangeSetV2();
+    const context = creativeDeleteApprovalContext(changeSet);
+    const built = buildTrustedApprovalPreparation({
+      changeSet,
+      context,
+      workspaceLabel: "Creative workspace",
+      issuedAt: "2099-01-01T00:00:00.000Z"
+    });
+
+    expect(built).toMatchObject({
+      ok: true,
+      value: {
+        binding: {
+          operationKind: "delete_file",
+          recoveryRootBindingId: expect.stringMatching(/^creative_recovery_[a-f0-9]{64}$/u),
+          recoveryGrantRevision: expect.stringMatching(/^creative_recovery_v1_[a-f0-9]{64}$/u),
+          recoverySideEffectChecksum: expect.stringMatching(/^[a-f0-9]{64}$/u)
+        }
+      }
     });
   });
 
@@ -512,6 +536,63 @@ function engineeringMoveChangeSetV2(): ChangeSetV2 {
     providerSemanticVersionSetChecksum: checksum,
     writePolicy: "write_before_confirmation"
   });
+}
+
+function creativeDeleteChangeSetV2(): ChangeSetV2 {
+  return createOperationsChangeSetRevisionV2({
+    changeSetId: "creative_delete_changes_01",
+    runId: "run_01",
+    projectId: "project_01",
+    checkpointId: "checkpoint_01",
+    contextSnapshotId: "context_01",
+    operations: [
+      deleteFileOperation({
+        operationId: "delete_op_01",
+        relativePath: "notes/obsolete.md",
+        baseChecksum: checksumChangeSetText("obsolete\n"),
+        toolCallIdempotencyKey: "tool_delete_01"
+      })
+    ],
+    createdAt: "2099-01-01T00:00:00.000Z",
+    providerSemanticVersionSetChecksum: checksum,
+    writePolicy: "write_before_confirmation"
+  });
+}
+
+function creativeDeleteApprovalContext(
+  changeSet: ChangeSetV2
+): AgentRunChangeSetApprovalV2ApprovalContext {
+  const selectionChecksum = checksumChangeSetSelection(changeSet, []);
+  return {
+    proofRef: { proofId: "creative_delete_proof_01", proofChecksum: checksum },
+    workspaceBindingId: "workspace_01",
+    operation: "delete_file",
+    approvalBindingOperationKind: "delete_file",
+    approvalRuleSet: {
+      version: LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_VERSION,
+      checksum: LEGACY_ALL_HUMAN_APPROVAL_RULE_SET_CHECKSUM,
+      catalogRevision: "catalog_01"
+    },
+    capabilityBoundary: {
+      canonicalRootIdentityChecksum: "root_01",
+      effectiveCapabilityStateChecksum: checksum,
+      sharingDefaultsRevision: checksum,
+      sharingGrantRevision: checksum,
+      policyRevision: "policy_01",
+      providerToolProjectionChecksum: checksum,
+      providerSemanticVersionSetChecksum: checksum
+    },
+    preview: {
+      changeSetId: changeSet.changeSetId,
+      revision: changeSet.revision,
+      checksum: changeSet.checksum,
+      displayBindingChecksum: changeSet.displayBindingChecksum,
+      providerSemanticVersionSetChecksum: checksum,
+      selectionChecksum,
+      baseManifestChecksum: checksum,
+      candidateManifestChecksum: candidateChecksum
+    }
+  };
 }
 
 function engineeringMoveApprovalContext(

@@ -29,6 +29,8 @@ export interface UnsignedBetaAuthorizationService {
     confirm: () => Promise<boolean>
   ): Promise<UnsignedBetaAuthorizationV1 | undefined>;
   revoke(reason: string): Promise<void>;
+  /** Main-only signal used to close active native sessions as soon as the grant is revoked. */
+  subscribeRevocation(listener: () => void): () => void;
   readonly packageIdentityChecksum: string;
 }
 
@@ -54,6 +56,38 @@ export function createUnsignedBetaAuthorizationService(input: {
   const now = input.now ?? (() => new Date().toISOString());
   let revoked = false;
   let current: UnsignedBetaAuthorizationV1 | undefined;
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  const revocationListeners = new Set<() => void>();
+
+  const revokeInMemory = (): void => {
+    if (revoked) return;
+    revoked = true;
+    if (expiryTimer !== undefined) clearTimeout(expiryTimer);
+    expiryTimer = undefined;
+    if (current !== undefined) REVOKED.add(current);
+    current = undefined;
+    for (const listener of revocationListeners) {
+      try {
+        listener();
+      } catch {
+        // Revocation remains authoritative even if a consumer's cleanup fails.
+      }
+    }
+  };
+
+  const scheduleExpiry = (authorization: UnsignedBetaAuthorizationV1): void => {
+    const expire = (): void => {
+      const observedAt = Date.parse(now());
+      const expiresAt = Date.parse(authorization.expiresAt);
+      if (!Number.isFinite(observedAt) || !Number.isFinite(expiresAt) || observedAt >= expiresAt) {
+        revokeInMemory();
+        return;
+      }
+      expiryTimer = setTimeout(expire, Math.min(expiresAt - observedAt, 2_147_483_647));
+      expiryTimer.unref();
+    };
+    expire();
+  };
 
   const read = async (): Promise<UnsignedBetaAuthorizationV1 | undefined> => {
     // A JSON file is advisory persistence only. It cannot grant Main authority after restart,
@@ -68,6 +102,7 @@ export function createUnsignedBetaAuthorizationService(input: {
       observedAt < Date.parse(value.issuedAt) ||
       observedAt >= Date.parse(value.expiresAt)
     ) {
+      revokeInMemory();
       return undefined;
     }
     return value;
@@ -77,7 +112,9 @@ export function createUnsignedBetaAuthorizationService(input: {
     packageIdentityChecksum: input.packageIdentityChecksum,
     read,
     async requestAuthorization(confirm: () => Promise<boolean>) {
+      if (revoked) return undefined;
       if (!(await confirm())) return undefined;
+      if (revoked) return undefined;
       const issuedAt = now();
       const issuedMs = Date.parse(issuedAt);
       if (!Number.isFinite(issuedMs) || !TIMESTAMP.test(issuedAt)) return undefined;
@@ -99,15 +136,14 @@ export function createUnsignedBetaAuthorizationService(input: {
         content: `${JSON.stringify(value, null, 2)}\n`,
         traceId: "desktop-unsigned-beta-authorization"
       });
-      if (!written.ok) return undefined;
+      if (!written.ok || revoked) return undefined;
       MAIN_OWNED.add(value);
       current = value;
+      scheduleExpiry(value);
       return value;
     },
     async revoke() {
-      revoked = true;
-      if (current !== undefined) REVOKED.add(current);
-      current = undefined;
+      revokeInMemory();
       try {
         await writeTextAtomically({
           targetPath: path,
@@ -117,6 +153,11 @@ export function createUnsignedBetaAuthorizationService(input: {
       } catch {
         // In-memory revocation remains authoritative for this process.
       }
+    },
+    subscribeRevocation(listener: () => void) {
+      revocationListeners.add(listener);
+      if (revoked) listener();
+      return () => revocationListeners.delete(listener);
     }
   });
 }

@@ -14,6 +14,7 @@ import {
 } from "./creative-file-operation-qualification.js";
 import { isMainOwnedApprovalSurfaceQualification } from "./approval-surface-qualification.js";
 import type { TrustedApprovalSurfaceQualificationV1 } from "./agent-approval-confirmation.js";
+import type { EngineeringFileCapabilityAuthority } from "./engineering-file-capability-authority.js";
 
 /**
  * Main-owned feature flags for the Agent capabilities that remain in product scope.
@@ -208,6 +209,7 @@ export function createUnsignedBetaAgentFeatureFlags(
     (operation === "replace_file" ||
       operation === "create_file" ||
       operation === "move_file" ||
+      operation === "delete_file" ||
       operation === "create_directory") &&
     hasMainOwnedUnsignedBetaCreativeFileOperationQualification(
       creativeQualifications?.[operation],
@@ -218,6 +220,7 @@ export function createUnsignedBetaAgentFeatureFlags(
     qualified("replace_file") ||
     qualified("create_file") ||
     qualified("move_file") ||
+    qualified("delete_file") ||
     qualified("create_directory");
   const flags = createAgentFeatureFlags({
     agentGuidanceV3: hasQualifiedMutation,
@@ -225,7 +228,7 @@ export function createUnsignedBetaAgentFeatureFlags(
     creativeTrustedReplaceV2: qualified("replace_file"),
     creativeFileCreateV2: qualified("create_file"),
     creativeFileMoveV2: qualified("move_file"),
-    creativeFileDeleteV2: false,
+    creativeFileDeleteV2: qualified("delete_file"),
     creativeDirectoryCreateV2: qualified("create_directory"),
     approvalBindingV2: hasQualifiedMutation,
     revision: `desktop-main:unsigned-beta:${mutationAuthority ? "authorized" : "unavailable"}`
@@ -235,6 +238,55 @@ export function createUnsignedBetaAgentFeatureFlags(
     revision: `${flags.revision}:creative-qualification:${creativeQualificationRevision(
       creativeQualifications
     )}`
+  });
+}
+
+/** Resolves the engineering workspace's explicit unsigned-beta channel without creating a
+ * production qualification attestation or weakening the signed release resolver. */
+export async function createUnsignedBetaEngineeringAgentFeatureFlags(input: {
+  readonly authorized: boolean;
+  readonly approvalBindingAvailable: boolean;
+  readonly capabilityAuthority: EngineeringFileCapabilityAuthority;
+  readonly mutationBackendAvailable: boolean;
+  readonly lifecycleCapabilities?: Readonly<{
+    readonly move: boolean;
+    readonly delete: boolean;
+    readonly createDirectory: boolean;
+  }>;
+}): Promise<AgentFeatureFlags> {
+  const [root, access, mutation, recovery] = await Promise.all([
+    input.capabilityAuthority.hasCapability("root"),
+    input.capabilityAuthority.hasCapability("access"),
+    input.capabilityAuthority.hasCapability("mutation"),
+    input.capabilityAuthority.hasCapability("recovery")
+  ]).catch(() => [false, false, false, false] as const);
+  const accessEnabled = input.authorized && input.approvalBindingAvailable && root && access;
+  const mutationEnabled = accessEnabled && input.mutationBackendAvailable && mutation && recovery;
+  const flags = createAgentFeatureFlags({
+    agentGuidanceV3: accessEnabled,
+    phaseA_searchEnabled: accessEnabled,
+    approvalBindingV2: input.authorized && input.approvalBindingAvailable,
+    engineeringHardenedAccessV1: accessEnabled,
+    engineeringReplaceV2: mutationEnabled,
+    engineeringCreateV2: mutationEnabled,
+    engineeringMoveV2: mutationEnabled && input.lifecycleCapabilities?.move === true,
+    engineeringDeleteV2: mutationEnabled && input.lifecycleCapabilities?.delete === true,
+    engineeringDirectoryCreateV1:
+      mutationEnabled && input.lifecycleCapabilities?.createDirectory === true,
+    revision: `desktop-main:unsigned-beta-engineering:${
+      input.authorized ? "authorized" : "unavailable"
+    }`
+  });
+  return Object.freeze({
+    ...flags,
+    engineeringHardenedAccessV1: accessEnabled,
+    engineeringReplaceV2: mutationEnabled,
+    engineeringCreateV2: mutationEnabled,
+    engineeringMoveV2: mutationEnabled && input.lifecycleCapabilities?.move === true,
+    engineeringDeleteV2: mutationEnabled && input.lifecycleCapabilities?.delete === true,
+    engineeringDirectoryCreateV1:
+      mutationEnabled && input.lifecycleCapabilities?.createDirectory === true,
+    revision: `${flags.revision}:native-${mutationEnabled ? "available" : "unavailable"}`
   });
 }
 

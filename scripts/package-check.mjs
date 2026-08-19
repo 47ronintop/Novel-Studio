@@ -6,10 +6,15 @@ import { join } from "node:path";
 const require = createRequire(import.meta.url);
 const root = process.cwd();
 const failures = [];
-const engineeringFileAccessArtifacts = [
+const engineeringFileAccessBetaArtifacts = [
   "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node",
-  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json",
-  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s"
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json"
+];
+const engineeringFileAccessSignature =
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s";
+const engineeringFileAccessArtifacts = [
+  ...engineeringFileAccessBetaArtifacts,
+  engineeringFileAccessSignature
 ];
 
 await checkPackageScripts();
@@ -289,19 +294,29 @@ async function checkEngineeringFileAccessPackagingContract() {
   const configuredFiles = Array.isArray(config.files) ? config.files : [];
   const configuredAsarUnpack = Array.isArray(config.asarUnpack) ? config.asarUnpack : [];
 
-  for (const artifact of engineeringFileAccessArtifacts) {
+  for (const artifact of engineeringFileAccessBetaArtifacts) {
     if (configuredFiles.filter((entry) => entry === artifact).length !== 1) {
       failures.push(`Engineering native package allowlist must contain exactly once: ${artifact}`);
     }
   }
+  const configuredSignatureCount = configuredFiles.filter(
+    (entry) => entry === engineeringFileAccessSignature
+  ).length;
+  if (configuredSignatureCount > 1) {
+    failures.push("Engineering native detached signature may appear at most once.");
+  }
+  const expectedUnpacked = [
+    ...engineeringFileAccessBetaArtifacts,
+    ...(configuredSignatureCount === 1 ? [engineeringFileAccessSignature] : [])
+  ];
   if (
-    configuredAsarUnpack.length !== engineeringFileAccessArtifacts.length ||
-    engineeringFileAccessArtifacts.some(
+    configuredAsarUnpack.length !== expectedUnpacked.length ||
+    expectedUnpacked.some(
       (artifact) => configuredAsarUnpack.filter((entry) => entry === artifact).length !== 1
     )
   ) {
     failures.push(
-      "Engineering native asarUnpack must contain only the exact addon, manifest, and detached signature paths."
+      "Engineering native asarUnpack must contain the exact beta pair and only include the detached signature when present."
     );
   }
   if (Array.isArray(config.extraResources) && config.extraResources.length !== 0) {
@@ -339,17 +354,135 @@ async function checkEngineeringFileAccessPackagingContract() {
   const candidatePresence = await Promise.all(
     engineeringFileAccessArtifacts.map((artifact) => fileExists(join(root, artifact)))
   );
-  const candidateCount = candidatePresence.filter(Boolean).length;
-  if (candidateCount > 0 && candidateCount < engineeringFileAccessArtifacts.length) {
+  const [addonPresent, manifestPresent, signaturePresent] = candidatePresence;
+  if (addonPresent !== manifestPresent || (signaturePresent && !addonPresent)) {
     failures.push(
-      "Engineering native candidate is partial; addon, canonical manifest, and detached signature must appear together."
+      "Engineering native candidate is partial; the addon and canonical manifest must appear together."
     );
-  }
-  if (candidateCount === engineeringFileAccessArtifacts.length) {
+  } else if (addonPresent && manifestPresent && signaturePresent) {
     await checkSignedEngineeringFileAccessCandidate(
       engineeringFileAccessArtifacts.map((artifact) => join(root, artifact))
     );
+  } else if (addonPresent && manifestPresent) {
+    await checkUnsignedBetaEngineeringFileAccessCandidate(
+      engineeringFileAccessBetaArtifacts.map((artifact) => join(root, artifact))
+    );
   }
+}
+
+async function checkUnsignedBetaEngineeringFileAccessCandidate([addonPath, manifestPath]) {
+  let addon;
+  let manifest;
+  try {
+    [addon, manifest] = await Promise.all([
+      readFile(addonPath),
+      readFile(manifestPath, "utf8").then(JSON.parse)
+    ]);
+  } catch {
+    failures.push(
+      "Engineering unsigned beta candidate must contain a readable addon and manifest."
+    );
+    return;
+  }
+  if (!isUnsignedBetaEngineeringManifest(manifest, sha256(addon))) {
+    failures.push(
+      "Engineering unsigned beta candidate must be digest-bound and explicitly non-production."
+    );
+  }
+}
+
+function isUnsignedBetaEngineeringManifest(value, addonSha256) {
+  if (!isRecord(value)) return false;
+  const artifact = value.artifact;
+  const signing = value.signing;
+  const eligibility = value.eligibility;
+  const qualification = value.qualification;
+  const probe = value.developmentMutationV2Probe;
+  return (
+    value.adapterId === "novel_studio_engineering_file_access" &&
+    value.target === "win32-x64" &&
+    isRecord(artifact) &&
+    artifact.sha256 === addonSha256 &&
+    hasExactValues(signing, {
+      authenticode: "required-for-production",
+      detachedCms: "required-for-production",
+      developmentUnsigned: true
+    }) &&
+    hasExactValues(eligibility, {
+      batch: "6",
+      access: "available",
+      root: "available",
+      read: "available",
+      index: "available",
+      mutation: "unavailable",
+      recovery: "unavailable"
+    }) &&
+    isRecord(qualification) &&
+    hasExactKeys(qualification, [
+      "eligibleCapabilities",
+      "productionQualified",
+      "unavailableCapabilities"
+    ]) &&
+    qualification.productionQualified === false &&
+    hasExactArray(qualification.eligibleCapabilities, []) &&
+    hasExactArray(qualification.unavailableCapabilities, [
+      "root",
+      "access",
+      "read",
+      "index",
+      "mutation",
+      "recovery"
+    ]) &&
+    isRecord(probe) &&
+    hasExactKeys(probe, [
+      "batch",
+      "lifecyclePrimitives",
+      "primitives",
+      "productCapability",
+      "schemaVersion",
+      "sourceIdentitySha256",
+      "toolchainIdentitySha256"
+    ]) &&
+    probe.schemaVersion === "1.1" &&
+    probe.batch === "8" &&
+    typeof probe.sourceIdentitySha256 === "string" &&
+    /^[a-f0-9]{64}$/iu.test(probe.sourceIdentitySha256) &&
+    typeof probe.toolchainIdentitySha256 === "string" &&
+    /^[a-f0-9]{64}$/iu.test(probe.toolchainIdentitySha256) &&
+    hasExactValues(probe.primitives, {
+      rawByteBlobs: "available",
+      absenceProof: "available",
+      absenceProofV2: "available",
+      objectMutationAbi: "available",
+      targetInspection: "available",
+      operationStateReconciliation: "available",
+      handleRelativeRevalidation: "available",
+      finalRenameNamespaceRevalidation: "available",
+      hardLinkPolicy: "reject_multiple_links",
+      copyOnReplace: "not_enabled",
+      fixedCreateMetadata: "available",
+      receiptDurability: "available",
+      stagingWalRecoveryScan: "available",
+      faultProbe: "available",
+      stateDurability: "available"
+    }) &&
+    hasExactValues(probe.lifecyclePrimitives, {
+      move: "available",
+      caseOnlyTwoStepWal: "available",
+      volumeLocalRecoveryRoot: "available",
+      quarantineDelete: "available",
+      restoreNoOverwrite: "available",
+      localPurge: "available",
+      singleLevelCreateDirectory: "available",
+      quarantineInventory: "available",
+      lifecycleRecoveryInspection: "available",
+      lifecycleIntermediateResume: "available",
+      lifecycleRecoveryBoundStateDurability: "available",
+      lifecycleReverseCompensation: "available",
+      lifecycleDurableFinalize: "available"
+    }) &&
+    probe.productCapability === "unavailable"
+  );
 }
 
 /**
@@ -464,6 +597,10 @@ function hasExactValues(value, expected) {
     Object.keys(value).length === Object.keys(expected).length &&
     Object.entries(expected).every(([key, expectedValue]) => value[key] === expectedValue)
   );
+}
+
+function hasExactKeys(value, expected) {
+  return isRecord(value) && Object.keys(value).sort().join(",") === [...expected].sort().join(",");
 }
 
 function hasExactArray(value, expected) {

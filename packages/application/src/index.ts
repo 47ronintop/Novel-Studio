@@ -601,6 +601,7 @@ export type {
 } from "./agent-send-preview-session.js";
 export {
   createAgentRunSession,
+  createCreativeFileRecoveryBindingV1,
   evaluateContextBudgetPressure,
   estimateAgentSystemReserveTokens
 } from "./agent-run-session.js";
@@ -968,6 +969,7 @@ export type {
   AgentRunContextSharingPort,
   AgentRunContextSharingState,
   AgentContextBudgetPressure,
+  CreativeFileRecoveryBindingV1,
   AgentUsageBudgetFacts,
   AgentUsageTimeFacts,
   AgentVersionGroupExecutor,

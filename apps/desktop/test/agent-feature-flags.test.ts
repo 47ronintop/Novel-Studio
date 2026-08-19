@@ -10,7 +10,8 @@ import {
   DEFAULT_AGENT_FEATURE_FLAGS,
   createAgentFeatureFlags,
   createProductionAgentFeatureFlags,
-  createUnsignedBetaAgentFeatureFlags
+  createUnsignedBetaAgentFeatureFlags,
+  createUnsignedBetaEngineeringAgentFeatureFlags
 } from "../../../apps/desktop/src/main/agent-feature-flags.js";
 import { createCreativeFileOperationQualificationService } from "../../../apps/desktop/src/main/creative-file-operation-qualification.js";
 import { createEngineeringFileAccessQualificationService } from "../../../apps/desktop/src/main/engineering-file-access-qualification.js";
@@ -171,7 +172,7 @@ describe("AgentFeatureFlags", () => {
     expect(flags.revision).toBe("test-revision:approval-surface:unavailable");
   });
 
-  test("unsigned beta exposes only fresh creative operations when its V2 port exists", async () => {
+  test("unsigned beta enables only qualified delete_file when its V2 port exists", async () => {
     const qualifications = await createCreativeFileOperationQualificationService({
       packageKind: "unsigned-beta",
       now: () => "2026-08-07T00:30:00.000Z",
@@ -184,12 +185,7 @@ describe("AgentFeatureFlags", () => {
                 issuedAt: "2026-08-01T00:00:00.000Z",
                 expiresAt: "2026-08-20T00:00:00.000Z"
               }
-            : {
-                status: "qualified" as const,
-                evidenceChecksum: "f".repeat(64),
-                issuedAt: "2026-08-01T00:00:00.000Z",
-                expiresAt: "2026-08-20T00:00:00.000Z"
-              };
+            : { status: "unqualified" as const, reason: "not qualified for beta" };
         }
       }
     }).readAll();
@@ -203,11 +199,11 @@ describe("AgentFeatureFlags", () => {
       unsignedBetaCreativeFileOperations: true,
       agentGuidanceV3: true,
       approvalBindingV2: true,
-      creativeTrustedReplaceV2: true,
-      creativeFileCreateV2: true,
-      creativeFileMoveV2: true,
-      creativeFileDeleteV2: false,
-      creativeDirectoryCreateV2: true,
+      creativeTrustedReplaceV2: false,
+      creativeFileCreateV2: false,
+      creativeFileMoveV2: false,
+      creativeFileDeleteV2: true,
+      creativeDirectoryCreateV2: false,
       engineeringHardenedAccessV1: false
     });
     expect(
@@ -219,6 +215,7 @@ describe("AgentFeatureFlags", () => {
       creativeTrustedReplaceV2: false,
       creativeFileCreateV2: false,
       creativeFileMoveV2: false,
+      creativeFileDeleteV2: false,
       creativeDirectoryCreateV2: false
     });
     expect(
@@ -227,6 +224,48 @@ describe("AgentFeatureFlags", () => {
         creativeFileDeleteV2: true
       }).creativeFileDeleteV2
     ).toBe(false);
+  });
+
+  test("unsigned engineering beta projects five operations only through current native authority", async () => {
+    const authority = {
+      hasCapability: vi.fn(async () => true),
+      subscribeRevocation: () => () => undefined
+    };
+    const flags = await createUnsignedBetaEngineeringAgentFeatureFlags({
+      authorized: true,
+      approvalBindingAvailable: true,
+      capabilityAuthority: authority,
+      mutationBackendAvailable: true,
+      lifecycleCapabilities: { move: true, delete: true, createDirectory: true }
+    });
+    expect(flags).toMatchObject({
+      agentGuidanceV3: true,
+      phaseA_searchEnabled: true,
+      approvalBindingV2: true,
+      engineeringHardenedAccessV1: true,
+      engineeringReplaceV2: true,
+      engineeringCreateV2: true,
+      engineeringMoveV2: true,
+      engineeringDeleteV2: true,
+      engineeringDirectoryCreateV1: true
+    });
+
+    expect(
+      await createUnsignedBetaEngineeringAgentFeatureFlags({
+        authorized: true,
+        approvalBindingAvailable: false,
+        capabilityAuthority: authority,
+        mutationBackendAvailable: true,
+        lifecycleCapabilities: { move: true, delete: true, createDirectory: true }
+      })
+    ).toMatchObject({
+      engineeringHardenedAccessV1: false,
+      engineeringReplaceV2: false,
+      engineeringCreateV2: false,
+      engineeringMoveV2: false,
+      engineeringDeleteV2: false,
+      engineeringDirectoryCreateV1: false
+    });
   });
 
   test("createAgentFeatureFlags result is frozen", () => {

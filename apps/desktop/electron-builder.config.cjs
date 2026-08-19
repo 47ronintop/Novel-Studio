@@ -1,7 +1,17 @@
-const engineeringFileAccessArtifacts = [
+const { existsSync } = process.getBuiltinModule("node:fs");
+const { join } = process.getBuiltinModule("node:path");
+
+const engineeringFileAccessBetaArtifacts = [
   "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.node",
-  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json",
-  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s"
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.json"
+];
+const engineeringFileAccessSignature =
+  "native/engineering-file-access-win32/dist/win32-x64/engineering_file_access.manifest.p7s";
+const engineeringFileAccessArtifacts = [
+  ...engineeringFileAccessBetaArtifacts,
+  ...(existsSync(join(process.cwd(), engineeringFileAccessSignature))
+    ? [engineeringFileAccessSignature]
+    : [])
 ];
 
 module.exports = {

@@ -760,6 +760,46 @@ export interface AgentRunCapabilityBoundary {
   readonly providerSemanticVersionSetChecksum: string;
 }
 
+export interface CreativeFileRecoveryBindingV1 {
+  readonly recoveryRootBindingId: string;
+  readonly recoveryGrantRevision: string;
+  readonly recoverySideEffectChecksum: string;
+}
+
+/** Binds a creative delete to the workspace-scoped RecoveryRepository used by AgentWriteTransaction. */
+export function createCreativeFileRecoveryBindingV1(input: {
+  readonly workspaceBindingId: string;
+  readonly canonicalRootIdentityChecksum: string;
+  readonly policyRevision: string;
+  readonly capabilityRevision: string;
+  readonly changeSetId: string;
+  readonly changeSetRevision: number;
+  readonly changeSetChecksum: string;
+}): CreativeFileRecoveryBindingV1 {
+  const digest = (domain: string, values: readonly (string | number)[]): string =>
+    createHash("sha256")
+      .update([domain, ...values.map(String)].join("\n"), "utf8")
+      .digest("hex");
+  return Object.freeze({
+    recoveryRootBindingId: `creative_recovery_${digest("creative-recovery-root-v1", [
+      input.workspaceBindingId,
+      input.canonicalRootIdentityChecksum
+    ])}`,
+    recoveryGrantRevision: `creative_recovery_v1_${digest("creative-recovery-grant-v1", [
+      input.workspaceBindingId,
+      input.policyRevision,
+      input.capabilityRevision
+    ])}`,
+    recoverySideEffectChecksum: digest("creative-recovery-delete-v1", [
+      input.workspaceBindingId,
+      input.canonicalRootIdentityChecksum,
+      input.changeSetId,
+      input.changeSetRevision,
+      input.changeSetChecksum
+    ])
+  });
+}
+
 export interface InvalidateAgentRunCapabilitiesCommand {
   readonly scope?: AgentContextScope;
   readonly projectId?: string;
@@ -11435,6 +11475,28 @@ function createV2AgentRunApprovalProof(input: {
   }
   const evidence =
     input.engineeringProofInput?.evidence ?? v2ApprovalEvidence(input.changeSet, operation);
+  const creativeRecoveryBinding =
+    operation === "delete_file" && input.engineeringProofInput === undefined
+      ? createCreativeFileRecoveryBindingV1({
+          workspaceBindingId: agentContextScopeKey(input.scope),
+          canonicalRootIdentityChecksum: input.boundary.canonicalRootIdentityChecksum,
+          policyRevision: input.boundary.policyRevision,
+          capabilityRevision: input.catalog.catalogRevision,
+          changeSetId: input.changeSet.changeSetId,
+          changeSetRevision: input.changeSet.revision,
+          changeSetChecksum: input.changeSet.checksum
+        })
+      : undefined;
+  const approvalRecoveryBinding =
+    input.engineeringProofInput?.recoveryRootBindingId !== undefined &&
+    input.engineeringProofInput.recoveryGrantRevision !== undefined &&
+    input.engineeringProofInput.recoverySideEffectChecksum !== undefined
+      ? {
+          recoveryRootBindingId: input.engineeringProofInput.recoveryRootBindingId,
+          recoveryGrantRevision: input.engineeringProofInput.recoveryGrantRevision,
+          recoverySideEffectChecksum: input.engineeringProofInput.recoverySideEffectChecksum
+        }
+      : creativeRecoveryBinding;
   const binding = {
     workspaceBindingId: agentContextScopeKey(input.scope),
     ...((input.engineeringProofInput?.rootBindingId ??
@@ -11469,13 +11531,7 @@ function createV2AgentRunApprovalProof(input: {
     executionWritePolicy: input.changeSet.writePolicy ?? "write_before_confirmation",
     policyRevision: input.boundary.policyRevision,
     capabilityRevision: input.catalog.catalogRevision,
-    ...(input.engineeringProofInput?.recoveryRootBindingId === undefined
-      ? {}
-      : {
-          recoveryRootBindingId: input.engineeringProofInput.recoveryRootBindingId,
-          recoveryGrantRevision: input.engineeringProofInput.recoveryGrantRevision,
-          recoverySideEffectChecksum: input.engineeringProofInput.recoverySideEffectChecksum
-        })
+    ...(approvalRecoveryBinding ?? {})
   } as const;
   try {
     const effectRuleId = approvalEffectRuleFor(input.catalog, operation);

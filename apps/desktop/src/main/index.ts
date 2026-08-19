@@ -28,6 +28,7 @@ import {
 import {
   createProductionAgentFeatureFlags,
   createUnsignedBetaAgentFeatureFlags,
+  createUnsignedBetaEngineeringAgentFeatureFlags,
   hasCurrentMainOwnedApprovalSurfaceQualification
 } from "./agent-feature-flags.js";
 import { createCreativeFileOperationQualificationService } from "./creative-file-operation-qualification.js";
@@ -38,6 +39,7 @@ import {
   hasMainOwnedEngineeringFileQualification
 } from "./engineering-file-access-qualification.js";
 import { createEngineeringFileAccessAddonLoader } from "./engineering-file-access-adapter.js";
+import { createUnsignedBetaEngineeringCapabilityAuthority } from "./unsigned-beta-engineering-authority.js";
 import { createEngineeringWorkspaceAccessRuntime } from "./engineering-workspace-access-runtime.js";
 import { createEngineeringMutationRendererSyncCoordinatorV2 } from "./engineering-mutation-renderer-sync-v2.js";
 import { createDesktopEngineeringMutationProductionCompositionV2 } from "./engineering-mutation-production-composition-v2.js";
@@ -384,9 +386,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
             await dialog.showMessageBox({
               type: "warning",
               title: "Unsigned Beta",
-              message: "启用无签名 Beta 的创作文件操作？",
+              message: "启用无签名 Beta 的项目文件操作？",
               detail:
-                "将允许 Agent 在当前项目内替换、创建和移动文件，以及创建目录。每个变更集仍需单独确认，此授权将在 24 小时后失效。",
+                "将允许 Agent 在创作项目和工程工作台内替换、创建、移动和删除文件，以及创建目录。每个变更集仍需单独确认，此授权将在 24 小时后失效。",
               buttons: ["启用", "暂不启用"],
               defaultId: 1,
               cancelId: 1,
@@ -422,6 +424,13 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     productionProbe: createMainOwnedEngineeringFileAccessFreshProbe()
   });
   const engineeringFileAccessAddonLoader = createEngineeringFileAccessAddonLoader();
+  const unsignedBetaEngineeringCapabilityAuthority =
+    createUnsignedBetaEngineeringCapabilityAuthority({
+      authorizationService: unsignedBetaAuthorizationService,
+      getCurrentAuthorization: () => unsignedBetaAuthorization,
+      packageIdentityChecksum: unsignedBetaPackageIdentityChecksum,
+      addonLoader: engineeringFileAccessAddonLoader
+    });
   let creativeQualificationExpiresAt: number | undefined;
   let creativeQualificationExpiryTimer: NodeJS.Timeout | undefined;
   const unsignedBetaAuthorizationExpiresAt = unsignedBetaAuthorization
@@ -528,6 +537,15 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     );
   const agentRuntimeManager = createDesktopAgentRuntimeManager({
     createRuntime: async (binding) => {
+      const usingUnsignedBetaEngineering =
+        binding.kind === "engineeringWorkspace" &&
+        hasCurrentUnsignedBetaAuthorization(
+          unsignedBetaAuthorization,
+          unsignedBetaPackageIdentityChecksum
+        );
+      const engineeringCapabilityAuthority = usingUnsignedBetaEngineering
+        ? unsignedBetaEngineeringCapabilityAuthority
+        : engineeringFileAccessQualification;
       const workspaceContextPolicy = await workspaceContextPolicyStore.read({
         workspaceKind: binding.kind,
         workspaceId: binding.workspaceId,
@@ -586,7 +604,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         });
         nextApprovalCoordinator = coordinator;
       } else if (
-        binding.kind === "creativeProject" &&
+        (binding.kind === "creativeProject" || binding.kind === "engineeringWorkspace") &&
         hasCurrentUnsignedBetaAuthorization(
           unsignedBetaAuthorization,
           unsignedBetaPackageIdentityChecksum
@@ -602,6 +620,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
             workspaceId: binding.workspaceId
           }),
           projectId: binding.workspaceId,
+          workspaceKind: binding.kind,
           workspaceLabel: basename(binding.contentRoot) || binding.workspaceId,
           confirm: async (display) => {
             const parent = activeMainWindow;
@@ -617,7 +636,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
             const response = await dialog.showMessageBox(parent, {
               type: "warning",
               title: "Unsigned Beta Change Set",
-              message: `批准 ${display.selectedOperations.length} 项创作文件变更？`,
+              message: `批准 ${display.selectedOperations.length} 项${
+                binding.kind === "engineeringWorkspace" ? "工程工作台" : "创作项目"
+              }文件变更？`,
               detail: [
                 `工作区: ${display.workspaceLabel}`,
                 `变更集: ${display.changeSetId} (revision ${display.changeSetRevision})`,
@@ -699,7 +720,7 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         binding.kind !== "engineeringWorkspace"
           ? undefined
           : await createEngineeringWorkspaceAccessRuntime({
-              qualificationService: engineeringFileAccessQualification,
+              capabilityAuthority: engineeringCapabilityAuthority,
               addonLoader: engineeringFileAccessAddonLoader,
               pathPolicy: defaultEngineeringPathPolicy,
               onRootChanged: ({ rootBindingId }) => revokeEngineeringRootBinding(rootBindingId),
@@ -733,6 +754,9 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         binding.kind === "engineeringWorkspace"
           ? await engineeringFileAccessQualification.readAttestation()
           : undefined;
+      const engineeringAuthorityRevision = usingUnsignedBetaEngineering
+        ? unsignedBetaEngineeringCapabilityAuthority.currentRevision()
+        : engineeringQualification?.attestationChecksum;
       const engineeringMutationRootBinding = (() => {
         if (engineeringWorkspaceAccessSession === undefined) return undefined;
         try {
@@ -742,11 +766,11 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         }
       })();
       const engineeringMutationRefCapabilityRevision =
-        engineeringMutationRootBinding === undefined || engineeringQualification === undefined
+        engineeringMutationRootBinding === undefined || engineeringAuthorityRevision === undefined
           ? undefined
           : `engineering-ref:${createHash("sha256")
               .update(
-                `${engineeringMutationRootBinding.contentRootBindingId}:${engineeringMutationRootBinding.pathPolicyRevision}:${engineeringQualification.attestationChecksum}`,
+                `${engineeringMutationRootBinding.contentRootBindingId}:${engineeringMutationRootBinding.pathPolicyRevision}:${engineeringAuthorityRevision}`,
                 "utf8"
               )
               .digest("hex")}`;
@@ -769,8 +793,10 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         return current !== undefined &&
           current.contentRootBindingId === input.rootBinding.contentRootBindingId &&
           current.rootId === input.rootBinding.rootId &&
-          hasMainOwnedEngineeringFileQualification(engineeringQualification, "mutation") &&
-          hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery")
+          (usingUnsignedBetaEngineering
+            ? unsignedBetaEngineeringCapabilityAuthority.currentRevision() !== "unavailable"
+            : hasMainOwnedEngineeringFileQualification(engineeringQualification, "mutation") &&
+              hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery"))
           ? ok(undefined)
           : err(engineeringMutationAuthorityError("ENGINEERING_MUTATION_NATIVE_EVIDENCE_REJECTED"));
       };
@@ -778,21 +804,29 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         binding.kind === "engineeringWorkspace" &&
         engineeringWorkspaceAccessSession !== undefined &&
         engineeringContentRootNativeIdentity !== undefined &&
-        engineeringQualification !== undefined &&
         engineeringMutationRefCapabilityRevision !== undefined &&
         changeSetApprovalV2 !== undefined
           ? await createDesktopEngineeringMutationProductionCompositionV2({
               projectId: binding.workspaceId,
-              workspaceBindingId: binding.workspaceId,
+              workspaceBindingId: agentContextScopeKey({
+                kind: "workspace",
+                workspaceKind: binding.kind,
+                workspaceId: binding.workspaceId
+              }),
               stateRoot: binding.stateRoot,
               workspaceAccessSession: engineeringWorkspaceAccessSession,
               contentRootNativeIdentity: engineeringContentRootNativeIdentity,
               pathPolicy: defaultEngineeringPathPolicy,
               refCapabilityRevision: engineeringMutationRefCapabilityRevision,
-              qualificationService: engineeringFileAccessQualification,
+              capabilityAuthority: engineeringCapabilityAuthority,
               authorizationLedger,
               trustedApprovalQualified: () =>
-                hasCurrentMainOwnedApprovalSurfaceQualification(approvalSurfaceQualification),
+                hasCurrentMainOwnedApprovalSurfaceQualification(approvalSurfaceQualification) ||
+                (usingUnsignedBetaEngineering &&
+                  hasCurrentUnsignedBetaAuthorization(
+                    unsignedBetaAuthorization,
+                    unsignedBetaPackageIdentityChecksum
+                  )),
               readApprovalDecisionProof: (runId, proofId) =>
                 approvalDecisionProofRepository.readApprovalDecisionProof(runId, proofId),
               authenticateNativeEvidence: authenticateEngineeringNativeBoundary,
@@ -827,9 +861,14 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
                   acceptableStates
                 ),
               lifecycleRecoveryQualified: () =>
-                hasMainOwnedEngineeringFileQualification(engineeringQualification, "mutation") &&
-                hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery"),
-              lifecycleRecoveryQualificationRevision: engineeringQualification.attestationChecksum,
+                usingUnsignedBetaEngineering
+                  ? unsignedBetaEngineeringCapabilityAuthority.currentRevision() !== "unavailable"
+                  : hasMainOwnedEngineeringFileQualification(
+                      engineeringQualification,
+                      "mutation"
+                    ) &&
+                    hasMainOwnedEngineeringFileQualification(engineeringQualification, "recovery"),
+              lifecycleRecoveryQualificationRevision: engineeringAuthorityRevision ?? "unavailable",
               validateStagingReservation: validateEngineeringStagingReservation,
               saveAuthority: agentWriteSaveCoordinator,
               editorStateRegistry: engineeringEditorStateRegistry,
@@ -881,8 +920,20 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
         undefined,
         creativeOperationQualifications
       );
-      const featureFlags =
-        unsignedBetaAuthorization !== undefined && binding.kind === "creativeProject"
+      const featureFlags = usingUnsignedBetaEngineering
+        ? await createUnsignedBetaEngineeringAgentFeatureFlags({
+            authorized: hasCurrentUnsignedBetaAuthorization(
+              unsignedBetaAuthorization,
+              unsignedBetaPackageIdentityChecksum
+            ),
+            approvalBindingAvailable: changeSetApprovalV2 !== undefined,
+            capabilityAuthority: unsignedBetaEngineeringCapabilityAuthority,
+            mutationBackendAvailable: engineeringMutationComposition !== undefined,
+            ...(engineeringMutationComposition === undefined
+              ? {}
+              : { lifecycleCapabilities: engineeringMutationComposition.lifecycleCapabilities })
+          })
+        : unsignedBetaAuthorization !== undefined && binding.kind === "creativeProject"
           ? createUnsignedBetaAgentFeatureFlags(
               creativeOperationQualifications,
               hasCurrentUnsignedBetaAuthorization(

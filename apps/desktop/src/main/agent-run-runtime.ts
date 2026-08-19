@@ -948,7 +948,10 @@ export function requestedCapabilitySnapshot(
     engineeringMutationEnabled
       ? ([
           ...(flags.engineeringReplaceV2 ? (["replace_file"] as const) : []),
-          ...(flags.engineeringCreateV2 ? (["create_file"] as const) : [])
+          ...(flags.engineeringCreateV2 ? (["create_file"] as const) : []),
+          ...(flags.engineeringMoveV2 ? (["move_file"] as const) : []),
+          ...(flags.engineeringDeleteV2 ? (["delete_file"] as const) : []),
+          ...(flags.engineeringDirectoryCreateV1 ? (["create_directory"] as const) : [])
         ] satisfies readonly ProviderVisibleWorkspaceFileOperation[])
       : [];
   if (explicit !== undefined) {
@@ -1112,7 +1115,7 @@ export function buildRuntimeCapabilitySnapshot(input: {
       ) {
         return false;
       }
-      if (engineering) return operation === "replace_file" || operation === "create_file";
+      if (engineering) return true;
       if (operation === "replace_file") return hasReplaceBackend;
       return input.fileOperationSession !== undefined && hasLifecycleBackend;
     }
