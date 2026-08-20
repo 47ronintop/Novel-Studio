@@ -760,6 +760,10 @@ textarea:focus-visible,
   color: var(--ns-primary-strong);
 }
 
+.ns-activity-button-compact-only {
+  display: none;
+}
+
 .ns-navigator {
   background: var(--ns-surface);
   border-right: 1px solid var(--ns-border);
@@ -11241,6 +11245,10 @@ textarea:focus-visible,
 }
 
 @media (max-width: 900px) {
+  .ns-activity-button-compact-only {
+    display: inline-flex;
+  }
+
   .ns-story-responsive-kind-switch {
     display: block;
     margin-left: auto;

@@ -79,6 +79,9 @@ describe("WorkspaceShell", () => {
       "storyBible",
       "search"
     ]);
+    expect(
+      groups.projectActivities.find((activity) => activity.id === "storyBible")?.compactOnly
+    ).toBe(true);
     expect(groups.bottomActivities.map((activity) => activity.id)).toEqual(["settings"]);
 
     const html = renderToStaticMarkup(
@@ -99,6 +102,7 @@ describe("WorkspaceShell", () => {
       activityBar.indexOf('data-region="bottom-activities"')
     );
     expect(activityBar).not.toContain(`data-activity-id="${legacyActivityId}"`);
+    expect(activityBar).toContain("ns-activity-button-compact-only");
   });
 
   test("keeps only settings in the engineering bottom activity group", () => {

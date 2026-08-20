@@ -77,24 +77,22 @@ test("accepts Story Bible views, themes, responsive layouts, and keyboard workfl
 });
 
 async function exerciseKeyboardWorkflow(page: Page): Promise<void> {
-  await page.getByRole("tab", { name: "故事资料", exact: true }).click();
+  const storyMode = page.getByRole("tab", { name: "故事资料", exact: true });
+  await storyMode.focus();
+  await page.keyboard.press("Enter");
+  await expect(storyMode).toHaveAttribute("aria-selected", "true");
+
+  const characterCategory = page.locator('[data-story-kind="character"]');
+  await characterCategory.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("故事圣经")).toBeVisible();
+  await expect(page.getByLabel("人物列表")).toBeVisible();
+
   const analysisReviewTrigger = page.getByRole("button", { name: "打开资料更新建议" });
   await expect(analysisReviewTrigger).toBeVisible({ timeout: 15_000 });
   await analysisReviewTrigger.click();
   await expect(page.getByRole("heading", { name: "资料更新建议", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "关闭资料更新建议" }).click();
-  await expect(page.getByLabel("人物列表")).toBeVisible();
-
-  const storyActivity = page
-    .getByLabel("活动栏")
-    .getByRole("button", { name: "故事资料", exact: true });
-  await storyActivity.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByLabel("故事圣经")).toBeVisible();
-
-  const characterCategory = page.locator('[data-story-kind="character"]');
-  await characterCategory.focus();
-  await page.keyboard.press("Enter");
   await expect(page.getByLabel("人物列表")).toBeVisible();
 
   const characterList = page.getByLabel("人物列表");
@@ -222,8 +220,17 @@ async function captureStoryViews(page: Page, prefix: string): Promise<void> {
 }
 
 async function openStoryActivity(page: Page): Promise<void> {
-  await page.getByLabel("活动栏").getByRole("button", { name: "故事资料", exact: true }).click();
-  await expect(page.getByLabel("故事圣经")).toBeVisible();
+  const storyBible = page.getByLabel("故事圣经");
+  if (await storyBible.isVisible()) return;
+
+  const storyMode = page.getByRole("tab", { name: "故事资料", exact: true });
+  if (await storyMode.isVisible()) {
+    await storyMode.click();
+    await page.locator('[data-story-kind="character"]').click();
+  } else {
+    await page.getByLabel("活动栏").getByRole("button", { name: "故事资料", exact: true }).click();
+  }
+  await expect(storyBible).toBeVisible();
 }
 
 async function selectStoryKind(

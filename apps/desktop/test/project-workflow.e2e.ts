@@ -487,19 +487,22 @@ test("switches visible beta activity views without a duplicate timeline activity
     const page = await electronApp.firstWindow();
     await expectCreativeWorkspaceReady(page, { requireWritingSurface: false });
     const activityBar = page.getByLabel("活动栏");
+    const storyMode = page
+      .getByRole("tablist", { name: "创作导航模式" })
+      .getByRole("tab", { name: "故事资料" });
+
+    await storyMode.click();
+    const storyKinds = page.getByLabel("故事资料分类");
+    const timelineKind = storyKinds.getByRole("button", { name: /时间线/u });
+    await expect(timelineKind).toBeVisible();
+    await timelineKind.click();
+    await expect(page.getByLabel("故事圣经")).toBeVisible();
+    await expect(activityBar.getByRole("button", { name: "故事资料" })).toBeHidden();
 
     await activityBar.getByRole("button", { name: "搜索" }).click();
     await expect(page.getByRole("heading", { name: "搜索项目" })).toBeVisible();
 
     await expect(activityBar.getByRole("button", { name: "时间线" })).toHaveCount(0);
-    await activityBar.getByRole("button", { name: "故事资料" }).click();
-    await expect(page.getByLabel("故事圣经")).toBeVisible();
-    await page
-      .getByRole("tablist", { name: "创作导航模式" })
-      .getByRole("tab", { name: "故事资料" })
-      .click();
-    const storyKinds = page.getByLabel("故事资料分类");
-    await expect(storyKinds.getByRole("button", { name: /时间线/u })).toBeVisible();
 
     await activityBar.getByRole("button", { name: "工作区" }).click();
     await expect(page.getByLabel("编辑区")).toBeVisible();

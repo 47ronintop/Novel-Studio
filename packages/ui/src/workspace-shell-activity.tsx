@@ -5,11 +5,12 @@ export interface WorkspaceActivityDescriptor {
   readonly id: ActivityId;
   readonly label: string;
   readonly icon: typeof FolderTree;
+  readonly compactOnly?: boolean;
 }
 
 export const projectActivities: readonly WorkspaceActivityDescriptor[] = [
   { id: "workspace", label: "工作区", icon: FolderTree },
-  { id: "storyBible", label: "故事资料", icon: BookOpenText },
+  { id: "storyBible", label: "故事资料", icon: BookOpenText, compactOnly: true },
   { id: "search", label: "搜索", icon: Search }
 ];
 
@@ -75,7 +76,9 @@ export function WorkspaceActivityBar({
               <button
                 {...(selected ? { "aria-current": "page" as const } : {})}
                 aria-label={activity.label}
-                className="ns-activity-button"
+                className={`ns-activity-button${
+                  activity.compactOnly === true ? " ns-activity-button-compact-only" : ""
+                }`}
                 data-activity-id={activity.id}
                 data-focus-order={selected ? "2" : undefined}
                 data-selected={selected}
