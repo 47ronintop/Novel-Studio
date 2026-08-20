@@ -614,7 +614,6 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       snapshot === undefined ||
       questionId === undefined ||
       snapshot.status !== "awaiting_user_input" ||
-      snapshot.pendingUserInputId !== questionId ||
       isStandaloneScope(scopeForSnapshot(snapshot))
     ) {
       return Promise.resolve(toProps());

@@ -413,6 +413,72 @@ describe("Agent Run renderer bridge", () => {
     expect(bridge.getProps()?.answerPending).toBeUndefined();
   });
 
+  test("answers a live question before the compatibility snapshot pointer is hydrated", async () => {
+    const pendingQuestion = {
+      questionId: "question-live-01",
+      prompt: "请选择后续方向。",
+      reason: "这个选择会改变后续内容。",
+      options: [
+        { id: "keep", label: "继续当前方向" },
+        { id: "change", label: "更换方向" }
+      ],
+      allowFreeText: false
+    };
+    const resolvedSnapshot = {
+      ...snapshot,
+      status: "executing_model" as const,
+      runRevision: 13,
+      lastSequence: 13,
+      pendingUserInputId: null
+    } as AgentRunSnapshot;
+    let current = snapshot;
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    const answers: Record<string, unknown>[] = [];
+    const api = {
+      agentRuns: {
+        onEvent: (next: (event: AgentRunEvent) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+        list: async () => ok([current]),
+        read: async () => ok({ snapshot: current, events: [] }),
+        answerUserInput: async (command: Record<string, unknown>) => {
+          answers.push(structuredClone(command));
+          current = resolvedSnapshot;
+          return ok(resolvedSnapshot);
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+
+    await bridge.load("project-01");
+    listener?.({
+      schemaVersion: "1.0",
+      runId: snapshot.runId,
+      projectId: "project-01",
+      sequence: 12,
+      runRevision: 12,
+      type: "user_input_requested",
+      createdAt: "2026-07-13T00:00:12.000Z",
+      detail: pendingQuestion
+    });
+
+    expect(bridge.getProps()?.pendingUserInput).toEqual(pendingQuestion);
+    await bridge.answerUserInput("keep");
+
+    expect(answers).toEqual([
+      expect.objectContaining({
+        runId: "run-bridge",
+        projectId: "project-01",
+        expectedRunRevision: 12,
+        questionId: pendingQuestion.questionId,
+        answer: "keep"
+      })
+    ]);
+    expect(bridge.getProps()?.pendingUserInput).toBeUndefined();
+  });
+
   test("projects a durable context-sharing request and sends its bound decision", async () => {
     const approvalBinding = "c".repeat(64);
     const pendingSnapshot = {
