@@ -11,10 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expectCreativeWorkspaceReady } from "./helpers/workspace-readiness.js";
-import {
-  BRAINSTORMING_REQUEST,
-  CONTINUE_WRITING_REQUEST
-} from "../src/renderer/brainstorming-entry.js";
+import { BRAINSTORMING_REQUEST } from "../src/renderer/brainstorming-entry.js";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const electronMain = join(repositoryRoot, "apps", "desktop", "dist", "main", "index.js");
@@ -225,16 +222,11 @@ test("prefills and focuses brainstorming for an empty project without sending or
     const emptyWorkspace = page.getByRole("region", { name: "空章节工作区" });
     const quickActions = page.getByRole("toolbar", { name: "Agent 快捷动作" });
     const startBrainstorming = emptyWorkspace.getByRole("button", { name: "开始构思" });
-    const quickBrainstorming = quickActions.getByRole("button", { name: "开始构思" });
-    const continueWriting = quickActions.getByRole("button", { name: "继续写作" });
     const request = page.getByLabel("Agent 请求");
-    await expect(quickActions).toBeVisible();
-    await expect(continueWriting).toBeDisabled();
-    await expect(continueWriting).toHaveAttribute("title", "请先创建或打开一个章节。");
+    await expect(quickActions).toHaveCount(0);
     await expect(startBrainstorming).toBeEnabled();
     await request.fill("保留这份草稿");
     await expect(startBrainstorming).toBeDisabled();
-    await expect(quickBrainstorming).toBeDisabled();
     await expect(startBrainstorming).toHaveAttribute("title", "请先发送或清空当前 Agent 草稿。");
     await expect(request).toHaveValue("保留这份草稿");
 
@@ -274,26 +266,12 @@ test("starts public install users in a ready default project without quick start
     await expect(page.getByRole("tab", { name: "第一章.md" })).toBeVisible();
     await expect(chapterBody(page)).toContainText(/这是第一章的正文/);
 
-    const quickActions = page.getByRole("toolbar", { name: "Agent 快捷动作" });
     const request = page.getByLabel("Agent 请求");
-    const startBrainstorming = quickActions.getByRole("button", { name: "开始构思" });
-    const continueWriting = quickActions.getByRole("button", { name: "继续写作" });
-    await expect(quickActions).toBeVisible();
-    await expect(startBrainstorming).toBeEnabled();
-    await expect(continueWriting).toBeEnabled();
-
-    await startBrainstorming.click();
-    await expect(request).toHaveValue(BRAINSTORMING_REQUEST);
-    await expect(request).toBeFocused();
+    await expect(page.getByRole("toolbar", { name: "Agent 快捷动作" })).toHaveCount(0);
+    await expect(request).toBeEnabled();
     await expect(page.getByRole("button", { name: "计划", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "停止 Agent 运行" })).toHaveCount(0);
-
-    await request.fill("");
-    await continueWriting.click();
-    await expect(request).toHaveValue(CONTINUE_WRITING_REQUEST);
-    await expect(request).toBeFocused();
-    await expect(page.getByRole("button", { name: "执行", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "停止 Agent 运行" })).toHaveCount(0);
+    await request.fill("检查当前工作区的创作计划");
+    await expect(page.getByRole("button", { name: "启动 Agent 运行" })).toBeEnabled();
 
     await page.getByRole("button", { name: "查找当前文档" }).click();
     const findOverlay = page.getByRole("region", { name: "查找替换", exact: true });

@@ -22,7 +22,7 @@ describe("packaged Agent approval UI Automation", () => {
 
   test("rejects an unsigned package before an E2E process can be spawned", async () => {
     const packageDirectory = await mkdtemp(join(tmpdir(), "novel-studio-unsigned-e2e-"));
-    const executable = join(packageDirectory, "Novel Studio.exe");
+    const executable = join(packageDirectory, "ShanHai.exe");
     const bytes = Buffer.alloc(0x80);
     bytes.write("MZ", 0, "ascii");
     bytes.writeUInt32LE(0x40, 0x3c);

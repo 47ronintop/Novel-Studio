@@ -267,7 +267,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
             code: "PROJECT_CREATE_CONFLICT",
             message: "Project could not be initialized because a project file already exists.",
             suggestedAction:
-              "Choose a folder without Novel Studio project files, or open the existing project instead.",
+              "选择不含山海项目文件的目录，或直接打开已有项目。",
             traceId: this.traceId,
             redactedDetail: {
               relativePath: conflict
@@ -383,7 +383,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
         storageError({
           code: "PROJECT_FILE_MISSING",
           message: `${fileName} could not be read.`,
-          suggestedAction: `Restore ${fileName} or choose a valid Novel Studio project folder.`,
+          suggestedAction: `恢复 ${fileName}，或选择有效的山海项目目录。`,
           traceId: this.traceId,
           redactedDetail: {
             fileName,

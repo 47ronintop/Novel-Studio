@@ -2,7 +2,7 @@
   "schemaVersion": "1.0",
   "channel": "nightly",
   "appId": "",
-  "productName": "Novel Studio",
+  "productName": "ShanHai",
   "version": "0.1",
   "artifactKinds": ["zip"],
   "publishMode": "automatic",

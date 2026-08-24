@@ -11,7 +11,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
-const mainWindowTitle = "Novel Studio";
+const mainWindowTitle = "山海 / ShanHai";
 const approvalWindowTitles = ["Confirm change set", "Review change set", "审阅变更集"] as const;
 const approvalButtonNames = ["Approve change set", "批准变更集"] as const;
 const nativeConfirmationTitles = ["Final confirmation required", "需要最终确认"] as const;
@@ -203,8 +203,8 @@ export async function resolveQualifiedPackagedExecutable(configured: string): Pr
   const resourcesDirectory = join(packageDirectory, "resources");
   const appAsar = join(resourcesDirectory, "app.asar");
 
-  if (requestedExecutable !== join(packageDirectory, "Novel Studio.exe")) {
-    throw new Error("Qualified packaged Agent E2E requires the package's Novel Studio.exe.");
+  if (requestedExecutable !== join(packageDirectory, "ShanHai.exe")) {
+    throw new Error("Qualified packaged Agent E2E requires the package's ShanHai.exe.");
   }
   if (!(await isRegularContainedDirectory(packageDirectory, packageDirectory))) {
     throw new Error("Qualified packaged Agent E2E package directory is not a regular directory.");

@@ -117,7 +117,7 @@ export class PluginRegistryFileRepository {
         storageError({
           code: "PLUGIN_REGISTRY_FILE_MISSING",
           message: "plugins/plugins.json could not be read.",
-          suggestedAction: "Restore plugins/plugins.json or choose a valid Novel Studio project.",
+          suggestedAction: "恢复 plugins/plugins.json，或选择有效的山海项目。",
           traceId: this.traceId,
           redactedDetail: {
             fileName: "plugins/plugins.json",

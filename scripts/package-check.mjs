@@ -204,8 +204,8 @@ async function checkBuildManifest() {
 
 async function checkElectronBuilderConfig() {
   const config = require("../apps/desktop/electron-builder.config.cjs");
-  if (config.productName !== "Novel Studio") {
-    failures.push("Electron package productName must be Novel Studio.");
+  if (config.productName !== "ShanHai") {
+    failures.push("Electron package productName must be ShanHai.");
   }
   if (config.extraMetadata?.main !== "apps/desktop/dist/main/index.js") {
     failures.push("Electron package main entry must point to desktop dist main.");
@@ -255,14 +255,14 @@ async function checkElectronBuilderConfig() {
   ) {
     failures.push("Package files must exclude tests and fixtures.");
   }
-  if (config.artifactName !== "Novel-Studio-${version}-${os}-${arch}.${ext}") {
+  if (config.artifactName !== "ShanHai-${version}-${os}-${arch}.${ext}") {
     failures.push("Electron package artifactName must be stable and include version/os/arch.");
   }
   if (config.directories?.buildResources !== "apps/desktop/build") {
     failures.push("Electron package buildResources must point to desktop build assets.");
   }
   if (config.win?.icon !== "apps/desktop/build/icon-shanhai.png") {
-    failures.push("Windows package must declare the Novel Studio icon asset.");
+    failures.push("Windows package must declare the ShanHai icon asset.");
   }
   if (!(await fileExists(join(root, "apps", "desktop", "build", "icon-shanhai.png")))) {
     failures.push("Missing desktop icon asset.");

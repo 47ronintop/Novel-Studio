@@ -74,7 +74,7 @@ async function checkPackageScripts() {
 }
 
 async function runQualifiedPackagedE2e(packageDirectory) {
-  const executablePath = join(packageDirectory, "Novel Studio.exe");
+  const executablePath = join(packageDirectory, "ShanHai.exe");
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const completed = await new Promise((resolvePromise) => {
     const child = spawn(npmCommand, ["run", "test:e2e:packaged"], {
@@ -192,7 +192,7 @@ async function verifyPackagedLayout(packageDirectory) {
     return undefined;
   }
 
-  const electronExecutable = join(canonicalDirectory, "Novel Studio.exe");
+  const electronExecutable = join(canonicalDirectory, "ShanHai.exe");
   const resourcesDirectory = join(canonicalDirectory, "resources");
   const appAsar = join(resourcesDirectory, "app.asar");
   if (

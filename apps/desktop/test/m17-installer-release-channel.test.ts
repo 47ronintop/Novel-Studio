@@ -60,7 +60,7 @@ describe("M17 installer and release channel", () => {
 
     expect(targets.has("dir")).toBe(true);
     expect(targets.has("nsis")).toBe(true);
-    expect(config.artifactName).toBe("Novel-Studio-${version}-${os}-${arch}.${ext}");
+    expect(config.artifactName).toBe("ShanHai-${version}-${os}-${arch}.${ext}");
     expect(config.files).toContain("packages/schemas/schema/**");
     expect(config.directories?.buildResources).toBe("apps/desktop/build");
     expect(config.win?.icon).toBe("apps/desktop/build/icon-shanhai.png");
@@ -70,7 +70,7 @@ describe("M17 installer and release channel", () => {
     expect(config.nsis?.allowToChangeInstallationDirectory).toBe(true);
     expect(config.nsis?.createDesktopShortcut).toBe(true);
     expect(config.nsis?.createStartMenuShortcut).toBe(true);
-    expect(config.nsis?.shortcutName).toBe("Novel Studio");
+    expect(config.nsis?.shortcutName).toBe("山海 / ShanHai");
     expect(existsSync(join(process.cwd(), "apps", "desktop", "build", "icon-shanhai.png"))).toBe(
       true
     );

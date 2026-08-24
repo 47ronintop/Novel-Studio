@@ -1520,7 +1520,7 @@ export function normalizeCreativeProjectFilePolicy(
       validationError({
         code: "CREATIVE_PROJECT_FILE_POLICY_VERSION_UNSUPPORTED",
         message: "The creative project file policy version is not supported.",
-        suggestedAction: "Update Novel Studio before opening this project file view.",
+        suggestedAction: "更新山海后再打开此项目文件视图。",
         traceId: "creative-project-file-policy"
       })
     );

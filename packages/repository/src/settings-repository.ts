@@ -38,7 +38,7 @@ export class ProjectSettingsRepository {
         storageError({
           code: "SETTINGS_FILE_MISSING",
           message: "settings.json could not be read.",
-          suggestedAction: "Restore settings.json or choose a valid Novel Studio project folder.",
+          suggestedAction: "恢复 settings.json，或选择有效的山海项目目录。",
           traceId: this.traceId,
           redactedDetail: {
             fileName: "settings.json",

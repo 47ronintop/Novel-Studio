@@ -8,6 +8,7 @@ import type {
 import type { CreativeNavigatorMode, UserAppearancePreferences } from "@novel-studio/shared";
 import type {
   AiWritingWorkflowProps,
+  AgentComposerProps,
   AgentConversationWorkspaceShellProps,
   ChapterEditorProps,
   CommandPaletteFeedback,
@@ -32,6 +33,7 @@ export interface RendererWorkspaceShellProps {
   readonly appearancePreferences?: UserAppearancePreferences | undefined;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
   readonly agentConversationWorkspace: AgentConversationWorkspaceShellProps | undefined;
+  readonly agentComposer: AgentComposerProps | undefined;
   readonly projectWorkflow: ProjectWorkflowProps | undefined;
   readonly projectSearch: ProjectSearchProps | undefined;
   readonly workspaceTransitionFeedback?: ProjectWorkflowFeedback | undefined;
@@ -301,6 +303,7 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
       {...(props.agentConversationWorkspace === undefined
         ? {}
         : { agentConversationWorkspace: props.agentConversationWorkspace })}
+      {...(props.agentComposer === undefined ? {} : { agentComposer: props.agentComposer })}
       {...(projectWorkflow === undefined ? {} : { projectWorkflow })}
       {...(props.projectSearch === undefined
         ? {}

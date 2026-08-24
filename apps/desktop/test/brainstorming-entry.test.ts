@@ -78,7 +78,7 @@ describe("writing entries", () => {
     expect(onRequestChange).not.toHaveBeenCalled();
   });
 
-  test("projects only the two creative actions and forwards focus requests", () => {
+  test("keeps the composer focused without projecting redundant creative action buttons", () => {
     const onSelect = vi.fn();
     const workspace = agentWorkspace(composer());
 
@@ -88,16 +88,9 @@ describe("writing entries", () => {
       focusRequestId: 3,
       onSelect
     });
-    const actions = projected?.view.composer?.quickActions;
-
-    expect(actions?.map(({ id, label }) => ({ id, label }))).toEqual([
-      { id: "brainstorm", label: "开始构思" },
-      { id: "continue", label: "继续写作" }
-    ]);
+    expect(projected?.view.composer?.quickActions).toBeUndefined();
     expect(projected?.view.composer?.focusRequestId).toBe(3);
-    actions?.[0]?.onSelect();
-    actions?.[1]?.onSelect();
-    expect(onSelect.mock.calls).toEqual([["brainstorm"], ["continue"]]);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   test("keeps quick actions out of standalone and engineering projections", () => {

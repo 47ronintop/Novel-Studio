@@ -112,7 +112,7 @@ interface ActiveWorkspace {
 }
 
 const MANAGED_READ_ONLY_REASON =
-  "由 Novel Studio 管理的资产，请使用章节、故事圣经、Studio、版本或恢复界面修改。";
+  "由山海管理的资产，请使用章节、故事圣经、Studio、版本或恢复界面修改。";
 const MANAGED_DIRECTORIES = new Set([
   "chapters",
   "characters",
@@ -252,7 +252,7 @@ export function createEngineeringWorkspaceSession(
             code: "ENGINEERING_MANAGED_ASSET_WRITE_REJECTED",
             category: "UserError",
             message:
-              "Novel Studio managed assets cannot be edited from the engineering file editor.",
+              "山海管理的资产不能从工程文件编辑器直接修改。",
             recoverability: "user-action",
             suggestedAction: MANAGED_READ_ONLY_REASON,
             traceId: "engineering-workspace-session"
@@ -425,7 +425,7 @@ function lockAcquireFailed<T = never>(): Result<T, UnifiedError> {
       category: "StorageError",
       message: "The engineering workspace lock could not be acquired.",
       recoverability: "user-action",
-      suggestedAction: "Close other Novel Studio windows using this workspace and try again.",
+      suggestedAction: "关闭其他正在使用此工作区的山海窗口，然后重试。",
       traceId: "engineering-workspace-session"
     })
   );
@@ -439,7 +439,7 @@ function lockReleaseFailed<T = never>(): Result<T, UnifiedError> {
       message: "The engineering workspace lock could not be released.",
       recoverability: "retryable",
       suggestedAction:
-        "Retry the operation or restart Novel Studio before reopening the workspace.",
+        "重试此操作，或重启山海后再重新打开工作区。",
       traceId: "engineering-workspace-session"
     })
   );
@@ -455,7 +455,7 @@ function lockRollbackFailed<T = never>(
       category: "StorageError",
       message: "Workspace activation rollback could not release every lock.",
       recoverability: "user-action",
-      suggestedAction: "Restart Novel Studio before reopening either workspace.",
+      suggestedAction: "重启山海后再重新打开工作区。",
       traceId: "engineering-workspace-session",
       redactedDetail: {
         primaryErrorCode: primaryError.code,

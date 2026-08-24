@@ -336,7 +336,7 @@ async function acquireProjectFileLock(
           code: "PROJECT_FILE_LOCK_STALE",
           message: "The project mutation lock appears to be stale.",
           suggestedAction:
-            "Confirm no Novel Studio process is using the project before removing the stale lock.",
+            "确认没有山海进程正在使用该项目后，再移除过期锁。",
           traceId: input.traceId,
           reason: `staleAfterMs=${input.staleAfterMs}`
         })

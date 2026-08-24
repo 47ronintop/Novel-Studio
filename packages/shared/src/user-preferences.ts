@@ -34,6 +34,8 @@ export interface UserShellPreferences {
   readonly creativeNavigatorMode: CreativeNavigatorMode;
   readonly creativeFileExpandedPathIds: readonly string[];
   readonly engineeringExpandedPathIds: readonly string[];
+  /** Absolute path of the most recently opened creative project, if any. */
+  readonly lastOpenedProjectRoot?: string;
   readonly standaloneSelectedConversationId?: string;
   readonly navigatorCollapsed: boolean;
   readonly navigatorExpandedSectionIds?: readonly string[];

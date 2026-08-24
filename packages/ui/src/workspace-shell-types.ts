@@ -58,6 +58,8 @@ export interface WorkspaceShellProps {
   readonly workspaceTransitionFeedback?: ProjectWorkflowFeedback | undefined;
   readonly aiWritingWorkflow?: AiWritingWorkflowProps;
   readonly agentConversationWorkspace?: AgentConversationWorkspaceShellProps;
+  /** The live Composer remains visible while the conversation history is loading. */
+  readonly agentComposer?: AgentComposerProps;
   readonly search?: ProjectSearchProps;
   readonly settings?: ModelSettingsPanelProps;
   readonly storyBible?: StoryBibleSummaryProps;

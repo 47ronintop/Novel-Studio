@@ -146,12 +146,14 @@ function normalizeShellPreferences(
   const standaloneSelectedConversationId = normalizeStandaloneSelectedConversationId(
     preferences?.standaloneSelectedConversationId
   );
+  const lastOpenedProjectRoot = normalizeLastOpenedProjectRoot(preferences?.lastOpenedProjectRoot);
 
   return {
     workbenchMode: normalizeWorkbenchMode(preferences?.workbenchMode),
     creativeNavigatorMode: normalizeCreativeNavigatorMode(preferences?.creativeNavigatorMode),
     creativeFileExpandedPathIds: normalizeStringArray(preferences?.creativeFileExpandedPathIds),
     engineeringExpandedPathIds: normalizeStringArray(preferences?.engineeringExpandedPathIds),
+    ...(lastOpenedProjectRoot === undefined ? {} : { lastOpenedProjectRoot }),
     ...(standaloneSelectedConversationId === undefined ? {} : { standaloneSelectedConversationId }),
     navigatorCollapsed:
       preferences?.navigatorCollapsed ?? DEFAULT_USER_SHELL_PREFERENCES.navigatorCollapsed,
@@ -252,6 +254,10 @@ function normalizeStringArray(value: unknown): readonly string[] {
 }
 
 function normalizeStandaloneSelectedConversationId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function normalizeLastOpenedProjectRoot(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 

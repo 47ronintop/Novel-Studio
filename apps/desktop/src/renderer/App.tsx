@@ -480,6 +480,10 @@ export function App() {
     if (activeCreativeFileRef !== null && !(await guardCreativeFile())) return false;
     return guardStoryBibleDraft();
   }, [activeCreativeFileRef, guardCreativeFile, guardStoryBibleDraft]);
+  const activeAgentChapterId =
+    projectWorkflow === undefined
+      ? chapterEditor?.chapter.frontmatter.id
+      : projectWorkflow.activeChapterId;
 
   useAgentRunWorkspaceEffects({
     agentRunBridge,
@@ -490,12 +494,14 @@ export function App() {
       shellState.workspaceContext.kind === "creativeProject"
         ? shellState.workbenchMode === "engineering" || fileEditorScope === "creativeProjectFile"
           ? "general_file"
-          : "writing"
+          : activeAgentChapterId === undefined
+            ? "general_file"
+            : "writing"
         : undefined,
     activeResourceRef: activeAgentResourceRef,
     beforeStart: guardAgentStart,
     conversationId: agentConversationWorkspace.selectedConversationId,
-    activeChapterId: projectWorkflow?.activeChapterId ?? chapterEditor?.chapter.frontmatter.id,
+    activeChapterId: activeAgentChapterId,
     chapterEditor,
     fileEditor,
     storyBibleSnapshotBinding: storyBibleBridge?.getSnapshotBinding(activeCreativeWorkspaceId),
@@ -807,6 +813,7 @@ export function App() {
   const agentConversationWorkspaceForShell = decorateAgentConversationWorkspace({
     workspace: agentConversationWorkspacePresentation.workspace,
     workspaceKind: shellState.workspaceContext.kind,
+    activeChapterId: activeAgentChapterId,
     chapterEditor,
     chapterSelection,
     aiWritingWorkflow,
@@ -927,6 +934,7 @@ export function App() {
         workspaceTransitionFeedback={workspaceTransitionFeedback}
         aiWritingWorkflow={aiWritingWorkflow}
         agentConversationWorkspace={writingEntry.workspace}
+        agentComposer={agentRunBridge?.getComposerProps()}
         projectWorkflow={projectWorkflow}
         projectSearch={projectSearch}
         settings={interactiveSettings}

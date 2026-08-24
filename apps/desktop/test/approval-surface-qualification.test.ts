@@ -284,7 +284,7 @@ describe("approval surface qualification", () => {
     const inspector = createSignedAsarPackageCoverageInspector({
       resourcesPath: "C:/Program Files/Novel Studio/resources",
       appPath: "C:/Program Files/Novel Studio/resources/app.asar",
-      executablePath: "C:/Program Files/Novel Studio/Novel Studio.exe",
+      executablePath: "C:/Program Files/ShanHai/ShanHai.exe",
       embeddedAsarIntegrityValidationEnabled: () => true,
       onlyLoadAppFromAsarEnabled: () => true,
       executableCodeSignatureInspector: validSignature
@@ -293,7 +293,7 @@ describe("approval surface qualification", () => {
     const unsigned = createSignedAsarPackageCoverageInspector({
       resourcesPath: "C:/Program Files/Novel Studio/resources",
       appPath: "C:/Program Files/Novel Studio/resources/app.asar",
-      executablePath: "C:/Program Files/Novel Studio/Novel Studio.exe",
+      executablePath: "C:/Program Files/ShanHai/ShanHai.exe",
       embeddedAsarIntegrityValidationEnabled: () => true,
       onlyLoadAppFromAsarEnabled: () => true,
       executableCodeSignatureInspector: { verify: async () => "unsigned" }
@@ -302,7 +302,7 @@ describe("approval surface qualification", () => {
     const unpacked = createSignedAsarPackageCoverageInspector({
       resourcesPath: "C:/Program Files/Novel Studio/resources",
       appPath: "C:/work/novel-studio",
-      executablePath: "C:/Program Files/Novel Studio/Novel Studio.exe",
+      executablePath: "C:/Program Files/ShanHai/ShanHai.exe",
       embeddedAsarIntegrityValidationEnabled: () => true,
       onlyLoadAppFromAsarEnabled: () => true,
       executableCodeSignatureInspector: validSignature
@@ -313,7 +313,7 @@ describe("approval surface qualification", () => {
   test("reads both required V1 fuse states without a packaged runtime dependency", async () => {
     const root = await mkdtemp(join(tmpdir(), "approval-fuse-state-"));
     roots.push(root);
-    const executablePath = join(root, "Novel Studio.exe");
+    const executablePath = join(root, "ShanHai.exe");
     const sentinel = Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX", "ascii");
     const wire = Buffer.from([1, 8, 0x30, 0x30, 0x30, 0x30, 0x31, 0x31, 0x30, 0x30]);
     await writeFile(executablePath, Buffer.concat([Buffer.from("MZ"), sentinel, wire]));

@@ -385,7 +385,7 @@ export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRec
         validationError({
           code: "ROLLBACK_REVIEW_RUN_ID_INVALID",
           message: "Rollback review run id is invalid.",
-          suggestedAction: "Use the run id recorded by Novel Studio.",
+          suggestedAction: "Use the run id recorded by ShanHai.",
           traceId: this.traceId
         })
       );
@@ -483,7 +483,7 @@ export class RecoveryRepository implements RecoveryRepositoryPort, AgentWriteRec
       validationError({
         code: "AGENT_TRANSACTION_ID_INVALID",
         message: "Agent transaction id is invalid.",
-        suggestedAction: "Use the transaction id recorded by Novel Studio.",
+        suggestedAction: "Use the transaction id recorded by ShanHai.",
         traceId: this.traceId
       })
     );

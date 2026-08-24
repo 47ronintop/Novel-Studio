@@ -16,8 +16,8 @@ const engineeringFileAccessArtifacts = [
 
 module.exports = {
   appId: "studio.novel.local",
-  productName: "Novel Studio",
-  artifactName: "Novel-Studio-${version}-${os}-${arch}.${ext}",
+  productName: "ShanHai",
+  artifactName: "ShanHai-${version}-${os}-${arch}.${ext}",
   directories: {
     output: process.env.NOVEL_STUDIO_PACKAGE_OUTPUT ?? "release",
     buildResources: "apps/desktop/build"
@@ -59,6 +59,6 @@ module.exports = {
     allowToChangeInstallationDirectory: true,
     createDesktopShortcut: true,
     createStartMenuShortcut: true,
-    shortcutName: "Novel Studio"
+    shortcutName: "山海 / ShanHai"
   }
 };

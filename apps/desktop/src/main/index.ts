@@ -1231,6 +1231,21 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
     };
     expireQualification();
   }
+  const workspaceActivationCoordinator = createWorkspaceActivationCoordinator({
+    application,
+    runtimeManager: agentRuntimeManager,
+    creativeProjectFileSession,
+    clearCreativeGeneralActiveResourceProof: () => creativeGeneralActiveResourceProof.clear(),
+    onCreativeProjectActivated: async (projectRoot) => {
+      await application.saveUserPreferences({ shell: { lastOpenedProjectRoot: projectRoot } });
+    },
+    reportCleanupFailure: (error) => {
+      process.emitWarning(error.message, {
+        code: error.code,
+        detail: `Workspace cleanup will be retried during shutdown (${error.traceId}).`
+      });
+    }
+  });
   if (bootstrapped !== undefined) {
     const workspaceId = bootstrapped.workspace.project.projectId;
     const fileSession = await creativeProjectFileSession.activate({
@@ -1266,38 +1281,42 @@ export async function registerApplicationIpcHandlers(): Promise<void> {
       throw new Error(initialBinding.error.message);
     }
   } else {
-    const standalonePrepared = await agentRuntimeManager.prepareStandalone();
-    if (!standalonePrepared.ok) {
-      process.emitWarning(standalonePrepared.error.message, {
-        code: standalonePrepared.error.code,
-        detail: "Standalone Agent is disabled; workspace open/create remains available."
-      });
-    } else {
-      const standaloneActivated = await agentRuntimeManager.activateStandalone();
-      if (!standaloneActivated.ok) {
-        process.emitWarning(standaloneActivated.error.message, {
-          code: standaloneActivated.error.code,
+    const preferences = await application.loadUserPreferences();
+    const lastProjectRoot = preferences.ok
+      ? preferences.value.shell.lastOpenedProjectRoot
+      : undefined;
+    let restoredLastProject = false;
+    if (lastProjectRoot !== undefined) {
+      try {
+        restoredLastProject = (
+          await workspaceActivationCoordinator.openCreativeProject(lastProjectRoot)
+        ).ok;
+      } catch {
+        restoredLastProject = false;
+      }
+    }
+    if (!restoredLastProject) {
+      const standalonePrepared = await agentRuntimeManager.prepareStandalone();
+      if (!standalonePrepared.ok) {
+        process.emitWarning(standalonePrepared.error.message, {
+          code: standalonePrepared.error.code,
           detail: "Standalone Agent is disabled; workspace open/create remains available."
         });
+      } else {
+        const standaloneActivated = await agentRuntimeManager.activateStandalone();
+        if (!standaloneActivated.ok) {
+          process.emitWarning(standaloneActivated.error.message, {
+            code: standaloneActivated.error.code,
+            detail: "Standalone Agent is disabled; workspace open/create remains available."
+          });
+        }
       }
     }
   }
   activeAgentRuntimeManager = agentRuntimeManager;
-  const workspaceActivationCoordinator = createWorkspaceActivationCoordinator({
-    application,
-    runtimeManager: agentRuntimeManager,
-    creativeProjectFileSession,
-    clearCreativeGeneralActiveResourceProof: () => creativeGeneralActiveResourceProof.clear(),
-    reportCleanupFailure: (error) => {
-      process.emitWarning(error.message, {
-        code: error.code,
-        detail: `Workspace cleanup will be retried during shutdown (${error.traceId}).`
-      });
-    }
-  });
   const handlers = createApplicationIpcHandlers(activeDesktopApplication, {
-    chooseOpenProjectDirectory: () => chooseProjectDirectory("Open Novel Studio project"),
-    chooseCreateProjectDirectory: () => chooseProjectDirectory("Create Novel Studio project"),
+    chooseOpenProjectDirectory: () => chooseProjectDirectory("打开山海项目"),
+    chooseCreateProjectDirectory: () => chooseProjectDirectory("创建山海项目"),
     chooseEngineeringDirectory: () => chooseProjectDirectory("Open engineering workspace"),
     chooseProjectTextFile: (workspaceRoot) => chooseProjectTextFile(workspaceRoot),
     workspaceActivationCoordinator,
@@ -2278,7 +2297,7 @@ export function createMainWindow(): BrowserWindow {
     height: 960,
     minWidth: 720,
     minHeight: 640,
-    title: "Novel Studio",
+    title: "山海 / ShanHai",
     webPreferences: createSecureWebPreferences(preloadPath)
   });
 

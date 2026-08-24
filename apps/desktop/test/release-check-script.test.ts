@@ -40,7 +40,7 @@ describe("release-check script", () => {
     try {
       const resourcesDirectory = join(packageDirectory, "resources");
       await mkdir(resourcesDirectory, { recursive: true });
-      await writeFile(join(packageDirectory, "Novel Studio.exe"), minimalPortableExecutable());
+      await writeFile(join(packageDirectory, "ShanHai.exe"), minimalPortableExecutable());
       await writeFile(
         join(sourceDirectory, "package.json"),
         JSON.stringify({ main: "apps/desktop/dist/main/index.js" })

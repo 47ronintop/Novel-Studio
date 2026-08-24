@@ -1470,7 +1470,7 @@ function createMemoryLockRepository(
           createUnifiedError({
             code: "PROJECT_LOCK_CONFLICT",
             category: "StorageError",
-            message: "Project is already locked by another Novel Studio window.",
+            message: "项目已被另一个山海窗口锁定。",
             recoverability: "user-action",
             suggestedAction: "Close the other window or resolve the stale lock.",
             traceId: "test-project-lock",

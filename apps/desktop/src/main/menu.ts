@@ -76,7 +76,7 @@ export function createApplicationMenuTemplate(
       label: "帮助",
       submenu: [
         {
-          label: "关于 Novel Studio",
+          label: "关于山海 / ShanHai",
           enabled: false
         }
       ]

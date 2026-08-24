@@ -21,7 +21,24 @@ describe("AgentConversationView", () => {
 
   test("keeps the composer visible while the first conversation is prepared", () => {
     const onCreate = vi.fn();
-    const { host } = renderView({ conversation: undefined, loading: true, onCreate });
+    const { host } = renderView({
+      conversation: undefined,
+      loading: true,
+      onCreate,
+      composer: composer({
+        model: {
+          profiles: [{ id: "profile-local", label: "本地模型", provider: "local" }],
+          selectedProfileId: "profile-local",
+          onSelect: vi.fn()
+        },
+        reasoning: {
+          visible: true,
+          values: ["medium"],
+          current: "medium",
+          onSelect: vi.fn()
+        }
+      })
+    });
 
     expect(host.querySelector('[aria-label="Agent 会话主视图"]')).not.toBeNull();
     expect(host.textContent).toContain("正在准备会话");
@@ -29,6 +46,7 @@ describe("AgentConversationView", () => {
     expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Agent 请求"]')?.disabled).toBe(
       true
     );
+    expect(host.querySelector('[aria-label="模型与推理：本地模型 · 中"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="新建会话"]')).toBeNull();
     expect(onCreate).not.toHaveBeenCalled();
   });
@@ -114,7 +132,7 @@ describe("AgentConversationView", () => {
     });
 
     try {
-      const { rerender } = renderView();
+      const { host, rerender } = renderView();
       const view = document.querySelector<HTMLElement>('[aria-label="Agent 会话主视图"]');
       if (view === null) throw new Error("Expected the conversation view");
       let scrollHeight = 800;
@@ -157,6 +175,7 @@ describe("AgentConversationView", () => {
 
       view.scrollTop = 120;
       act(() => view.dispatchEvent(new Event("scroll", { bubbles: true })));
+      expect(host.querySelector('[aria-label="回到会话底部"]')).not.toBeNull();
       scrollHeight = 920;
       rerender({
         agentRun: {
@@ -168,6 +187,10 @@ describe("AgentConversationView", () => {
         }
       });
       expect(scrollTop).toBe(120);
+
+      act(() => host.querySelector<HTMLButtonElement>('[aria-label="回到会话底部"]')?.click());
+      expect(scrollTop).toBe(scrollHeight - clientHeight);
+      expect(host.querySelector('[aria-label="回到会话底部"]')).toBeNull();
 
       view.scrollTop = scrollHeight - clientHeight;
       act(() => view.dispatchEvent(new Event("scroll", { bubbles: true })));

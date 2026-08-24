@@ -171,6 +171,7 @@ export function useAgentRunWorkspaceEffects(input: {
 export function decorateAgentConversationWorkspace(input: {
   readonly workspace: AgentConversationWorkspaceShellProps | undefined;
   readonly workspaceKind: "creativeProject" | "engineeringWorkspace" | "none";
+  readonly activeChapterId: string | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly chapterSelection: ChapterEditorSelection | undefined;
   readonly aiWritingWorkflow: AiWritingWorkflowProps | undefined;
@@ -189,7 +190,9 @@ export function decorateAgentConversationWorkspace(input: {
   const availableContextModes = standalone
     ? (["standalone_chat"] as const)
     : creative
-      ? (["writing", "general_file"] as const)
+      ? input.activeChapterId === undefined
+        ? (["general_file"] as const)
+        : (["writing", "general_file"] as const)
       : (["general_file"] as const);
   const selection = standalone ? undefined : input.aiWritingWorkflow?.selectionReview;
   const selectionMainReview: AgentConversationMainReview | undefined =

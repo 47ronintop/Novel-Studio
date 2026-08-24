@@ -91,22 +91,7 @@ export function decorateWritingEntryWorkspace(
       ? baseComposer
       : {
           ...baseComposer,
-          ...(input.focusRequestId === undefined ? {} : { focusRequestId: input.focusRequestId }),
-          quickActions: (["brainstorm", "continue"] as const).map((kind) => {
-            const disabledReason = writingEntryDisabledReason(
-              workspace,
-              kind,
-              input.activeChapterId
-            );
-            return {
-              id: kind,
-              label: kind === "brainstorm" ? "开始构思" : "继续写作",
-              ...(disabledReason === undefined ? {} : { disabledReason }),
-              onSelect: () => {
-                if (disabledReason === undefined) input.onSelect(kind);
-              }
-            } satisfies AgentComposerQuickAction;
-          })
+          ...(input.focusRequestId === undefined ? {} : { focusRequestId: input.focusRequestId })
         };
 
   return {

@@ -37,6 +37,7 @@ export function AgentConversationView(props: AgentConversationViewProps) {
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const conversationViewRef = useRef<HTMLElement>(null);
   const stickToBottomRef = useRef(true);
+  const [showReturnToBottom, setShowReturnToBottom] = useState(false);
   const closeHistory = useCallback(() => {
     setHistoryOpen(false);
     historyButtonRef.current?.focus();
@@ -71,6 +72,7 @@ export function AgentConversationView(props: AgentConversationViewProps) {
 
   useLayoutEffect(() => {
     stickToBottomRef.current = true;
+    setShowReturnToBottom(false);
   }, [conversation?.conversationId]);
 
   useLayoutEffect(() => {
@@ -84,11 +86,23 @@ export function AgentConversationView(props: AgentConversationViewProps) {
     const view = conversationViewRef.current;
     if (view === null) return;
     view.scrollTop = Math.max(0, view.scrollHeight - view.clientHeight);
+    setShowReturnToBottom(false);
   }, [messageVersion]);
 
   const handleConversationScroll = useCallback((event: UIEvent<HTMLElement>) => {
     const view = event.currentTarget;
-    stickToBottomRef.current = view.scrollHeight - view.scrollTop - view.clientHeight <= 48;
+    const distanceFromBottom = view.scrollHeight - view.scrollTop - view.clientHeight;
+    const atBottom = distanceFromBottom <= 48;
+    stickToBottomRef.current = atBottom;
+    setShowReturnToBottom(!atBottom && distanceFromBottom > 48);
+  }, []);
+
+  const returnToBottom = useCallback(() => {
+    const view = conversationViewRef.current;
+    if (view === null) return;
+    stickToBottomRef.current = true;
+    view.scrollTop = Math.max(0, view.scrollHeight - view.clientHeight);
+    setShowReturnToBottom(false);
   }, []);
 
   if (conversation === undefined) {
@@ -121,6 +135,9 @@ export function AgentConversationView(props: AgentConversationViewProps) {
         {composer === undefined ? null : (
           <AgentComposer {...composer} disabled={true} disabledReason={composerDisabledReason} />
         )}
+        {showReturnToBottom ? (
+          <ReturnToBottomButton onClick={returnToBottom} />
+        ) : null}
         {historyDrawer}
       </section>
     );
@@ -259,8 +276,24 @@ export function AgentConversationView(props: AgentConversationViewProps) {
           {...(disabledReason === undefined ? {} : { disabledReason })}
         />
       )}
+      {showReturnToBottom ? <ReturnToBottomButton onClick={returnToBottom} /> : null}
       {historyDrawer}
     </section>
+  );
+}
+
+function ReturnToBottomButton({ onClick }: { readonly onClick: () => void }) {
+  return (
+    <button
+      aria-label="回到会话底部"
+      className="ns-agent-conversation-return-to-bottom"
+      onClick={onClick}
+      title="回到会话底部"
+      type="button"
+    >
+      <ChevronDown aria-hidden="true" size={14} />
+      <span>回到会话底部</span>
+    </button>
   );
 }
 

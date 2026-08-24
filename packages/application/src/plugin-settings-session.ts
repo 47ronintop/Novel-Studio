@@ -97,7 +97,7 @@ export function pluginRegistryUnavailable(): Result<PluginSettingsSnapshot, Unif
       category: "PluginError",
       message: "Plugin registry is not available in this desktop session.",
       recoverability: "user-action",
-      suggestedAction: "Open a Novel Studio project before managing plugins.",
+      suggestedAction: "打开山海项目后再管理插件。",
       traceId: "application-plugin-settings"
     })
   );

@@ -5516,7 +5516,7 @@ function workspaceActivationUnavailable<T>(): Result<T, UnifiedError> {
       category: "StorageError",
       message: "Workspace activation is unavailable.",
       recoverability: "retryable",
-      suggestedAction: "Restart Novel Studio and try again.",
+      suggestedAction: "重启山海后重试。",
       traceId: "desktop-workspace-ipc"
     })
   );

@@ -60,7 +60,7 @@ test("switches a creative project into the engineering explorer without losing t
     await expect(projectFile).toBeVisible();
     await projectFile.click();
     await expect(page.getByRole("region", { name: "普通文件编辑器" })).toBeVisible();
-    await expect(page.getByText(/只读：由 Novel Studio 管理的资产/)).toBeVisible();
+    await expect(page.getByText(/只读：由山海管理的资产/)).toBeVisible();
     await expect(page.getByRole("button", { name: "保存当前文档" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "当前工作台：工程工作区" }).click();

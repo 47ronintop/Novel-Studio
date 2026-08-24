@@ -71,7 +71,7 @@ export class ProjectLockFileRepository {
         storageError({
           code: "PROJECT_LOCK_FAILED",
           message: "Project lock could not be acquired.",
-          suggestedAction: "Choose a writable project folder or close other Novel Studio windows.",
+          suggestedAction: "选择可写项目目录，或关闭其他山海窗口。",
           traceId: this.traceId,
           redactedDetail: {
             reason: error instanceof Error ? error.message : "Unknown lock error"
@@ -166,7 +166,7 @@ export class ProjectLockFileRepository {
           code: "PROJECT_LOCK_STALE",
           message: "Project lock appears to be stale.",
           suggestedAction:
-            "Confirm no other Novel Studio window is using this project before replacing the stale lock.",
+            "确认没有其他山海窗口正在使用该项目后，再替换过期锁。",
           traceId: this.traceId,
           redactedDetail: {
             ownerId: existing.value.ownerId,
@@ -180,7 +180,7 @@ export class ProjectLockFileRepository {
     return err(
       storageError({
         code: "PROJECT_LOCK_CONFLICT",
-        message: "Project is already locked by another Novel Studio window.",
+        message: "项目已被另一个山海窗口锁定。",
         suggestedAction: "Close the other window or resolve the stale lock before opening again.",
         traceId: this.traceId,
         redactedDetail: {

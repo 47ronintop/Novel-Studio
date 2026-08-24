@@ -298,6 +298,30 @@ test("isolates multi-run conversation context and restores project-scoped conver
     });
     await expect(page.getByRole("banner").getByText("Project B", { exact: true })).toBeVisible();
     await openAgentSurface(page);
+    await configureLocalModel(page, `http://127.0.0.1:${address.port}/v1`);
+    await chooseWorkspaceModelSharing(page);
+    await expect(page.getByLabel("会话输入区")).toBeVisible();
+    await expect(page.getByLabel("Agent 请求")).toBeEnabled({ timeout: 15_000 });
+    await expect(page.getByLabel(/^模型与推理：/)).toBeVisible({ timeout: 15_000 });
+    await sendConversationRequest(page, "Hold beta in an empty project.");
+    await expect(page.locator(".ns-agent-assistant-text")).toContainText("Holding beta run");
+    const projectBRuns = await page.evaluate(async () => {
+      const listed = await window.novelStudio?.agentRuns.list("prj_project_b");
+      return listed?.ok ? listed.value : [];
+    });
+    const projectBRunId = projectBRuns.at(-1)?.runId;
+    expect(projectBRunId).toBeDefined();
+    await page.getByRole("button", { name: "停止 Agent 运行" }).click();
+    await expect
+      .poll(async () => {
+        if (projectBRunId === undefined) return "missing";
+        const read = await page.evaluate(
+          async (runId) => window.novelStudio?.agentRuns.read(runId),
+          projectBRunId
+        );
+        return read?.ok ? read.value.snapshot.status : "missing";
+      })
+      .toBe("cancelled");
     const preparedDrawer = await openHistoryDrawer(page);
     await expect(preparedDrawer.locator(".ns-agent-conversation-row")).toHaveCount(1);
     await expect(

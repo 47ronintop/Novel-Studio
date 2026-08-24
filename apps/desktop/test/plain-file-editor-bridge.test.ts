@@ -49,13 +49,13 @@ describe("plain file editor bridge", () => {
         content: "managed",
         checksum: "checksum",
         byteLength: 7,
-        readOnlyReason: "由 Novel Studio 管理"
+        readOnlyReason: "由山海管理"
       });
     const bridge = createPlainFileEditorBridge(api);
 
     const opened = await bridge.openFile("chapters/ch_01.md");
 
-    expect(opened).toMatchObject({ readOnlyReason: "由 Novel Studio 管理" });
+    expect(opened).toMatchObject({ readOnlyReason: "由山海管理" });
     expect(opened.onContentChange).toBeUndefined();
     expect(opened.onSave).toBeUndefined();
   });

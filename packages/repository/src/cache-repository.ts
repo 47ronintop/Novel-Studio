@@ -25,7 +25,7 @@ export class CacheRepository implements CacheRepositoryPort {
         storageError({
           code: "CACHE_PATH_INVALID",
           message: "Cache path resolved outside the project folder.",
-          suggestedAction: "Choose a valid Novel Studio project folder and retry.",
+          suggestedAction: "选择有效的山海项目目录后重试。",
           traceId: this.traceId,
           redactedDetail: {
             cacheRoot

@@ -79,6 +79,7 @@ function WorkspaceShellContent({
   projectWorkflow,
   aiWritingWorkflow,
   agentConversationWorkspace,
+  agentComposer,
   search,
   settings,
   storyBibleEditor,
@@ -268,30 +269,32 @@ function WorkspaceShellContent({
             />
           ) : (
             <AgentConversationView
-              loading={false}
+              loading={agentComposer !== undefined}
               createDisabled={true}
               onCreate={() => undefined}
               onArchive={() => undefined}
               onRestore={() => undefined}
               onReturnToActive={() => undefined}
-              composer={{
-                request: "",
-                operationMode: "execution",
-                contextMode: "writing",
-                writePolicy: "write_before_confirmation",
-                writePolicyAcknowledged: false,
-                executionWritePolicyDraft: "write_before_confirmation",
-                active: false,
-                disabled: true,
-                disabledReason: "打开创作项目或工程工作区后，Agent 会在这里保持可用。",
-                onRequestChange: () => undefined,
-                onOperationModeChange: () => undefined,
-                onContextModeChange: () => undefined,
-                onWritePolicyChange: () => undefined,
-                onExecutionWritePolicyDraftChange: () => undefined,
-                onSend: () => undefined,
-                onStop: () => undefined
-              }}
+              composer={
+                agentComposer ?? {
+                  request: "",
+                  operationMode: "execution",
+                  contextMode: "general_file",
+                  writePolicy: "write_before_confirmation",
+                  writePolicyAcknowledged: false,
+                  executionWritePolicyDraft: "write_before_confirmation",
+                  active: false,
+                  disabled: true,
+                  disabledReason: "打开创作项目或工程工作区后，Agent 会在这里保持可用。",
+                  onRequestChange: () => undefined,
+                  onOperationModeChange: () => undefined,
+                  onContextModeChange: () => undefined,
+                  onWritePolicyChange: () => undefined,
+                  onExecutionWritePolicyDraftChange: () => undefined,
+                  onSend: () => undefined,
+                  onStop: () => undefined
+                }
+              }
             />
           )}
         </aside>

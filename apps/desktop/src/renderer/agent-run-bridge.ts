@@ -2528,7 +2528,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         ? ["standalone_chat"]
         : context?.workspaceKind === "engineeringWorkspace"
           ? ["general_file"]
-          : ["writing", "general_file"],
+          : context?.activeChapterId === undefined
+            ? ["general_file"]
+            : ["writing", "general_file"],
       ...composerDraftGroups(),
       capability: capabilityFacts(),
       ...(standalone ||

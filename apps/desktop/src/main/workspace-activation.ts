@@ -45,6 +45,7 @@ export interface CreateWorkspaceActivationCoordinatorOptions {
   /** Clears the Main-owned creative Files-surface proof before a workspace transition commits. */
   readonly clearCreativeGeneralActiveResourceProof?: () => void;
   readonly reportCleanupFailure?: ((error: UnifiedError) => void) | undefined;
+  readonly onCreativeProjectActivated?: ((projectRoot: string) => void | Promise<void>) | undefined;
 }
 
 export function createWorkspaceActivationCoordinator(
@@ -148,6 +149,13 @@ export function createWorkspaceActivationCoordinator(
         options.reportCleanupFailure?.(finalized.error);
       } catch {
         // The activation is already committed; reporting must not split Renderer and main state.
+      }
+    }
+    if ("creativeProject" in candidate) {
+      try {
+        await options.onCreativeProjectActivated?.(candidate.context.contentRoot);
+      } catch {
+        // Persistence of the last-opened path is best effort; activation already succeeded.
       }
     }
     return ok(activation);
