@@ -1,15 +1,17 @@
 # Novel Studio Agent Tool P0/P1 优化设计
 
-**日期：** 2026-08-19
-**状态：** Proposed
+**原始日期：** 2026-08-19
+**审查更新：** 2026-08-24
+**状态：** Reviewed / Proposed
 **范围：** Agent 工具目录、工程文件能力、项目路径发现、发布证据、活动工具集与只读调用调度
 **相关基线：** `docs/superpowers/specs/2026-08-02-agent-completion-and-system-guidance-v3-design.md`
+**审查基线：** `main` HEAD `9ecbda0`；包含其后的 unsigned-beta 工程文件接线与空项目 Agent 流程修复
 
 ## 1. 结论
 
-本设计补齐当前 Agent 工具体系的五个高优先级缺口：
+本设计保留四个仍未完成的高优先级缺口，并把已经由后续代码补齐的工程 CRUD 项改为一致性审计：
 
-1. 工程工作区已经声明文件移动、删除和建目录能力，但生产 capability projection 仍只允许 replace/create。
+1. 工程工作区的五项文件 operation 已经进入 Catalog 2.0、Main capability projection 和 unsigned beta 接线，但仍需确认 feature、backend、资格、release、Permission Summary、UI 和撤销边界逐项一致。
 2. `search_project` 只能进行正文搜索或引用反查，缺少类似 `find` 的独立路径发现能力。
 3. 机器可读发布证据与源码、用户控制和实际发布目录之间尚未形成自动一致性门禁。
 4. 当前工具目录按 profile/capability 冻结，但缺少用户可见、每次运行可进一步缩小的 active-tool allowlist。
@@ -21,7 +23,7 @@
 
 | 领域      | 当前事实                                                                                              | 主要缺口                                                                             |
 | --------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| 工程 CRUD | Catalog 2.0 能描述 replace/create/move/delete/create-directory；Desktop 生产过滤只保留 replace/create | feature、backend、资格和目录投影没有形成五项逐操作单一真值                           |
+| 工程 CRUD | Catalog 2.0、Main feature flags、runtime projection 和 unsigned beta 已能表达五项 operation；已有逐操作测试 | 需要继续审计 release projection、Permission Summary、UI 和运行中撤销，不再新增 CRUD operation |
 | 项目发现  | `list_project_entries` 浏览单层目录；`search_project` 支持 `text/references`                          | 大项目缺少按文件名、目录名和 glob 快速定位路径的能力                                 |
 | 发布证据  | `stage5-agent-tool-evidence.json` 记录 phase 状态                                                     | release catalog 没有强制与 `releaseEligible`、安全资格、用户控制和 packaged E2E 求交 |
 | 活动工具  | Main 根据 profile 和 capability 生成并冻结工具目录                                                    | 用户不能在本次运行前进一步关闭不需要的网络、MCP 或 mutation 工具                     |
@@ -29,11 +31,13 @@
 
 现有 V2 Catalog 2.0、Effective Capability State、Permission Summary、provider-name mapping、Prompt Artifact、首次发送预览和发送账本继续作为实现基础，不建立第二套权限或工具真值。
 
+工程文件 operation 的运行时资格继续由 Main-owned qualification、root binding、approval、recovery 和 executor 共同决定；`stage5-agent-tool-evidence.json` 只作为公共发布证据，不作为运行时 capability 的授予来源。现有 hardened engineering access 已提供 `listDirectory`、`readTextFile`、`searchText` 和 `buildIndex`，路径发现应复用这些 authority。
+
 ## 3. 目标与非目标
 
 ### 3.1 目标
 
-- 工程五项 workspace operation 从 Main feature 到 UI 的投影逐项一致、只缩权、可测试。
+- 工程五项 workspace operation 的现有投影从 Main feature 到 UI 逐项一致、只缩权、可测试；不因本设计重新扩大任何 operation。
 - Agent 能在不执行 Shell 的前提下按路径模式发现项目内文件和目录。
 - 公共发布版只能公开已经完成生产接线、安全资格、用户控制和 packaged E2E 的工具。
 - 用户能在首次发送前查看并进一步缩小本次运行的活动工具集。
@@ -46,10 +50,11 @@
 - 不允许 active-tool 选择扩大 Main 已解析的 Effective Capability State。
 - 不允许路径 glob 进入 mutation schema，也不允许路径发现结果绕过稳定引用和 fresh-base 校验。
 - 不因源码、类型、测试 stub 或 feature flag 存在而自动把工具标记为可发布。
+- 不新增第二套工程文件访问、root handle、稳定引用、mutation authority 或 Permission Summary 真值。
 
 ## 4. 共用安全不变量
 
-1. Desktop Main 是 capability、活动工具目录和发布资格的唯一运行时 authority；Renderer、模型、项目文件和外部工具描述只能请求缩权。
+1. Desktop Main 是 runtime capability 和活动工具目录的唯一 authority；CI/release-check 负责公共发布 projection；Renderer、模型、项目文件和外部工具描述只能请求缩权。
 2. 工具目录在第一次 Provider 请求前冻结。当前 Run 只允许 capability 撤销或工具移除，不允许新增工具、恢复已移除工具或替换 schema。
 3. 所有 mutation 继续使用现有稳定引用、Change Set、Approval Binding、事务、恢复和撤销，不提供直接文件写入旁路。
 4. 项目文件、搜索结果、网页、MCP 描述和工具输出都是不可信数据，不能授权路径、工具或发布能力。
@@ -58,7 +63,9 @@
 
 ## 5. P0：能力真值、路径发现与发布门禁
 
-### 5.1 P0-A：工程 CRUD 逐操作生产投影
+### 5.1 P0-A：工程 CRUD 逐操作一致性审计
+
+**当前状态：** 该项的原始缺口已被后续实现部分解决。`agent-tool-capabilities.ts` 已定义五项 operation，Desktop Main 已按 operation 生成并求交，Catalog 2.0 已使用 effect-specific descriptor，unsigned beta 也有独立的 Main-owned qualification。此项不再是“新增 move/delete/create-directory”的开发任务，而是对现有投影链做最终审计和测试补齐。
 
 工程 workspace operation 固定为：
 
@@ -68,7 +75,7 @@
 - `delete_file`
 - `create_directory`
 
-每个 operation 的公开条件必须使用同一张 Main-owned 资格表计算：
+每个 operation 的公共 production projection 必须使用同一张 Main-owned 资格表计算：
 
 ```text
 operationVisible =
@@ -80,7 +87,7 @@ operationVisible =
   && effectiveCapabilityNotRevoked
 ```
 
-上式定义的是公共 production projection；开发/测试 projection 只有在显式 non-public feature flag 下才可省略 `releaseEvidenceEligible`，并且生成的目录必须带 non-public 标记，绝不能流入 `publicReleaseTools` 或公共发布包。
+上式定义的是公共 production projection。运行时的 `releaseEvidenceEligible` 由 Main-owned qualification 事实提供；公共构建还必须经过 P0-C 的 descriptor/evidence 交集。开发/测试 projection 只有在显式 non-public feature flag 下才可省略公共发布交集，并且生成的目录必须带 non-public 标记，绝不能流入公共发布包。
 
 投影链固定为：
 
@@ -97,14 +104,16 @@ Production Feature Facts
 
 要求：
 
-1. 使用 operation-keyed 表驱动投影替代 engineering 分支中只允许 replace/create 的硬编码判断。
+1. 保持 operation-keyed 表驱动投影，防止未来回退到只允许 replace/create 的硬编码判断。
 2. `requestedCapabilitySnapshot` 只能请求 Main 已证明的 operation；`buildRuntimeCapabilitySnapshot` 只能继续求交，不得增加 operation。
 3. move/delete/create-directory 必须继续使用 effect-specific 工具名，不恢复宽泛 `manage_path`。
 4. move、delete 和 create-directory 始终人工确认；replace/create 是否具备条件审阅资格继续由版本化 approval rule 决定。
 5. 任一 backend、qualification、root binding、recovery 或 release evidence 撤销后，当前 Run 进入 `capability_changed`，不继续发送旧目录。
-6. 对五项 operation 建立跨层矩阵测试，覆盖单项开启、组合开启、全部关闭、资格过期、executor 缺失和运行中撤销。
+6. 对五项 operation 保持跨层矩阵测试，覆盖单项开启、组合开启、全部关闭、资格过期、executor 缺失和运行中撤销；测试应同时确认 Permission Summary、system facts、Provider tools 和 UI 摘要没有漏项或误报。
 
 ### 5.2 P0-B：有界路径发现工具
+
+**当前状态：** 尚未实现。现有 `search_project` 只有 `text` 和 `references`；全文搜索的 include/exclude glob 不能替代按文件名、目录名和 glob 返回路径。实现必须接入现有 search session、creative project file policy 和 engineering hardened root/index authority。
 
 首选扩展现有 `search_project`：
 
@@ -129,7 +138,7 @@ Production Feature Facts
     {
       "relativePath": "src/index.ts",
       "entryKind": "file",
-      "ref": "file:src/index.ts"
+      "stableRef": "file:src/index.ts"
     },
     {
       "relativePath": "src/components",
@@ -142,6 +151,8 @@ Production Feature Facts
 }
 ```
 
+`stableRef` 必须沿用当前 profile 的引用合同：creative/general file 使用现有 `file:` 引用，engineering 使用 Main 签发并由当前 ref registry 解析的 opaque file/directory ref；不能为了路径发现引入第二种稳定引用格式。
+
 约束：
 
 - 只接受项目相对、长度和深度有界的 glob；拒绝绝对路径、`..`、UNC、设备路径、ADS 和 Windows 保留名。
@@ -149,12 +160,17 @@ Production Feature Facts
 - cursor 必须绑定 project、workspace kind、effective-capability/catalog revision、root binding revision、sharing/path-policy revision、规范化 query、kind、index revision、页位置和有效期；任一绑定变化后稳定拒绝，不能跨项目、跨查询或跨授权重放。
 - 只返回当前 workspace、sharing grant 和 path policy 允许公开的条目；`hard_denied`、不允许的 managed/ignored 路径及其名称不能泄露。
 - engineering 复用 hardened root-handle list/index authority，并拒绝 symlink、junction、mount point、reparse point、特殊文件和 stale index。
+- 不新增 pathname traversal authority；engineering 直接复用现有 `listDirectory`、`buildIndex`、root binding 和 path-policy 校验，creative 复用现有 `AgentProjectSearchRepository`/`AgentSearchToolSession` 过滤边界。
 - creative project 继续过滤章节、Story Bible、设置和其他受管路径，不能借路径发现进入错误 profile。
-- file 命中必须返回可由当前 `read_resource` 解析的 `file:` ref；directory 命中不得伪造 file ref，只能将 `relativePath` 交给当前 `list_project_entries` 再次校验和展开。
+- file 命中必须返回当前读取链可消费的 `stableRef`（当前 `read_resource` 合同为 `file:`）；若 engineering mutation 还需要 Main 签发的 opaque ref，应作为独立的 mutation-only 字段返回，不能替代 `stableRef`。directory 命中不得伪造 file ref，只能将 `relativePath` 交给当前 `list_project_entries` 再次校验和展开。
 - path 结果只用于后续 `read_resource`、`list_project_entries` 或 effect-specific proposal；不能作为写授权或 fresh-base 证明。
 - glob 仅属于只读发现工具，不能出现在 create/move/delete 等 mutation schema 中。
 
 ### 5.3 P0-C：发布证据与发布目录一致性
+
+**当前状态：** 尚未实现 descriptor 级公共发布门禁。当前 Stage 5 evidence 仍为 schema `1.0`、整体 `Blocked`，phase-b 的旧文案还与 unsigned beta 工程文件接线不一致；`scripts/release-check.mjs` 目前主要校验 phase 状态、证据路径和 roadmap/readiness 文案，尚未校验 descriptor claim、digest 或公共目录交集。
+
+本项只负责公共发布资格。它不能授予运行时 capability，也不能替代 `engineering-file-access-qualification`、creative operation qualification、approval 或 root binding。unsigned beta 可以在其独立 Main-owned authority 下运行已资格化能力，但这些能力不能因此进入公共发布目录。
 
 公共发布工具目录增加最终交集：
 
@@ -164,11 +180,11 @@ publicReleaseTools = runtimeQualifiedTools ∩ evidenceEligibleTools
 
 要求：
 
-1. `stage5-agent-tool-evidence.json` 为机器可读发布状态源，必须更新 `assessedAt`，并逐 phase 记录 production runtime、用户控制、安全资格、packaged E2E 和 `releaseEligible`。
+1. `stage5-agent-tool-evidence.json` 为机器可读发布状态源，必须更新 `assessedAt`，并逐 phase 记录 production runtime、用户控制、安全资格、packaged E2E 和 `releaseEligible`；刷新证据时必须同步修正与当前代码不符的 phase 文案。
 2. manifest 增加 `catalogClaims`，把固定 core descriptor 以 `toolId + contextProfileId + optional writeOperation` 唯一映射到一个或多个 `phaseIds`，并绑定已验收的 `descriptorDigest`；动态 remote MCP 使用 `sourceClass=remote_mcp` 的类级 claim，同时要求每来源 runtime qualification 绑定实际 descriptor digest。
 3. `evidenceEligibleTools` 只能从 descriptor 与 claim 身份/digest 完全匹配、且 claim 引用的全部 phase 均为 `Complete && releaseEligible=true` 推导。缺失、重复、digest 漂移、引用不存在 phase 或同一 descriptor 命中多个 claim 时一律 fail closed，不允许按 label、说明文本或数组位置猜测。
 4. 协议工具也必须有明确 claim；若某 profile 所需的 `finish`/`finish_plan` 或 `request_user_input` 不合格，应阻止该 Agent surface/Run 启动并返回稳定错误，不能发送缺少协议工具的残缺目录。
-5. 开发/测试构建可以在显式 feature flag 下保留未发布实现；公共构建必须隐藏 evidence 不合格的工具。
+5. 开发/测试构建可以在显式 feature flag 下保留未发布实现；公共构建必须隐藏 evidence 不合格的工具。首版优先覆盖固定 core descriptor；只有当 remote MCP 被纳入公共静态发布目录时，才启用对应的类级 claim。
 6. CI 必须拒绝以下状态：
    - 工具进入公共目录，但对应 evidence 为 `Partial`、`Blocked`、`Unavailable` 或 `releaseEligible=false`；
    - evidence 宣称 Complete，但 executor、用户控制、安全资格或 packaged E2E 任一缺失；
@@ -179,8 +195,8 @@ publicReleaseTools = runtimeQualifiedTools ∩ evidenceEligibleTools
 
 ### 5.4 P0 验收标准
 
-- 五项 engineering operation 在 feature、backend、qualification、evidence、catalog、Permission Summary、system 和 UI 中逐项一致。
-- move/delete/create-directory 资格齐全时不会被 replace/create 专用过滤器误删，资格不全时绝不进入 Provider tools。
+- 五项 engineering operation 的现有投影在 feature、backend、qualification、evidence、catalog、Permission Summary、system 和 UI 中逐项一致；验收不以扩大默认公开能力为前提。
+- move/delete/create-directory 资格齐全时不会被 replace/create 专用过滤器误删，资格不全时绝不进入 Provider tools；没有任何路径恢复宽泛 `manage_path`。
 - 路径发现覆盖 glob、分页、截断、大小写、Unicode、stale index、root replacement、reparse、managed/ignored/hard-denied 和跨 profile 负例。
 - file 命中可由 `read_resource` 解析，directory 命中可由 `list_project_entries` 展开；不能产生不可解析、类型错误或越权 ref。
 - 公共构建的工具目录与机器可读 evidence 无矛盾；开发 flag 不改变公共发布判断。
@@ -189,6 +205,8 @@ publicReleaseTools = runtimeQualifiedTools ∩ evidenceEligibleTools
 ## 6. P1：活动工具集与只读批次并行
 
 ### 6.1 P1-A：每次运行的 shrink-only active-tool allowlist
+
+**当前状态：** 尚未实现。当前已有 frozen catalog、descriptor/provider/catalog revisions 和 descriptor digest，但没有把用户或 task 的进一步缩权作为独立的 per-run active set 持久化。实现必须在现有 Qualified Catalog 之后增加一层，不重新生成或替代 Catalog 2.0。
 
 活动目录生成顺序：
 
@@ -220,6 +238,8 @@ UI 至少显示：
 
 ### 6.2 P1-B：纯本地读取批次有界并行
 
+**当前状态：** 尚未实现。当前 `agent-tool-call-pipeline` 通过顺序循环执行整批调用，并且审批边界依赖这种串行语义。不能直接把 `handleToolCall` 包进 `Promise.all`：单次 read/search 可能更新 context sources、snapshot、event ledger、tool messages 和 retry checkpoint，因此必须拆成“预验证 -> 开始事件 -> 只读执行缓冲 -> 按源顺序提交”。
+
 只有整批工具调用全部满足以下条件时才允许并行：
 
 ```text
@@ -239,7 +259,7 @@ effect == read
 
 1. 先按模型源顺序完成 provider-name 解析、严格 schema 校验、capability 重检和重复 tool-call ID 检查。
 2. 按源顺序持久化 `tool_started`，之后在固定并发上限内执行；首版上限为 4，并允许通过 Main-owned 常量降为 1。
-3. 每项结果只写入内存缓冲；全部完成后按原 tool-call 顺序持久化 `tool_completed/tool_failed` 并生成 Provider tool messages。
+3. 每项结果只写入内存缓冲；全部完成后按原 tool-call 顺序持久化 `tool_completed/tool_failed` 并生成 Provider tool messages。任何无法证明提交顺序等价的调用批次继续走串行路径。
 4. 单项读取失败形成该调用自己的稳定错误包络，不改变其他已验证读取的结果；是否重试继续服从现有 safe-read retry 合同，本设计不新增自动重试。
 5. 用户取消时同时 abort 所有未完成读取，停止下一次 Provider 调用，并按原顺序完成持久化终态。
 6. crash/hydrate 不根据完成顺序重排结果；未形成持久化完成证据的读取按现有恢复策略处理，不能因并行引入重复 mutation 或外发风险。
@@ -266,31 +286,31 @@ effect == read
 | 领域                   | 主要文件                                                                                                                                                                                                        |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 工具 schema/目录       | `packages/agent-engine/src/tool-registry.ts`、`packages/agent-engine/src/agent-run-tool-catalog.ts`                                                                                                             |
-| Capability 投影        | `packages/agent-engine/src/agent-tool-capabilities.ts`、`packages/agent-engine/src/effective-capability-state.ts`、`apps/desktop/src/main/agent-feature-flags.ts`、`apps/desktop/src/main/agent-run-runtime.ts` |
+| Capability 投影/审计   | `packages/agent-engine/src/agent-tool-capabilities.ts`、`packages/agent-engine/src/effective-capability-state.ts`、`apps/desktop/src/main/agent-feature-flags.ts`、`apps/desktop/src/main/agent-run-runtime.ts` 以及对应矩阵测试 |
 | Permission/system 真值 | `packages/agent-engine/src/permission-summary.ts`、`packages/application/src/agent-runtime-facts.ts`、`packages/application/src/agent-system-prompt.ts`                                                         |
 | 路径发现               | `packages/application/src/agent-search-tool-session.ts`、`packages/repository/src/agent-project-search-repository.ts`、engineering hardened access/index adapter                                                |
 | Tool 调度              | `packages/application/src/agent-tool-call-pipeline.ts`、`packages/application/src/agent-run-session.ts`                                                                                                         |
 | Preview/账本/cache     | Prompt Artifact、Canonical Round Manifest、send ledger 与 prompt cache consumers                                                                                                                                |
 | UI                     | `packages/ui/src/agent-capability-summary.tsx`、Agent composer/permission surface、MCP tool-source panel                                                                                                        |
-| 发布证据               | `docs/releases/stage5-agent-tool-evidence.json`、`scripts/release-check.mjs`、packaged E2E                                                                                                                      |
+| 发布证据               | `docs/releases/stage5-agent-tool-evidence.json`、`scripts/release-check.mjs`、public catalog projection、packaged E2E                                                                                         |
 
 ## 8. 推进顺序与回滚
 
-1. 先落 P0-A 的共享 operation projection 和跨层不变量测试，不立即扩大任何工具。
-2. 接入 P0-B 路径发现并保持 feature 默认关闭；通过安全矩阵后再进入开发目录。
-3. 完成 P0-C evidence/public-release intersection，再逐项开放已具备完整证据的能力。
+1. 先刷新当前 release evidence 和 phase-b 文案，完成 P0-A 现有五项 operation 的共享投影审计，不扩大默认公开能力。
+2. 完成 P0-C evidence/public-release intersection，先让公共目录对未合格 descriptor fail closed。
+3. 接入 P0-B 路径发现并保持 feature 默认关闭；复用现有 root/index/ref authority，通过安全矩阵后再进入开发目录。
 4. P1-A 先提供只读活动目录预览，再开放用户缩权；旧 frozen Run 不迁移 active set。
-5. P1-B 以并发上限 1 建立等价基线，通过确定性测试后切换为 4。
+5. P1-B 以并发上限 1 建立等价基线，通过确定性、取消和恢复测试后切换为 4。
 
 回滚只允许缩权：关闭路径发现、active-tool selection 或并行读取 feature 后，新 Run 回到旧目录或串行调度；新格式 frozen Run 按其持久化 catalog 和 active-set revision 恢复，旧格式 Run 按原始有序 frozen catalog 派生 `legacy_full_catalog` 兼容绑定，均不按当前代码重新选工具。任何无法证明安全回滚的状态进入 `capability_changed` 或稳定 blocked/error，不静默降级为更宽权限实现。
 
 ## 9. 风险与决定
 
-### 9.1 工程 CRUD 被错误扩大
+### 9.1 工程 CRUD 投影与历史基线漂移
 
-风险：把后端端口存在误当成安全资格，导致 move/delete/create-directory 提前进入目录。
+风险：把后端端口存在误当成安全资格，或因历史文档仍写 replace/create-only 而在后续改动中重新引入 operation-specific 漏洞。
 
-决定：逐 operation 同时要求 feature、backend capability、approval/recovery qualification、release evidence 和未撤销状态；缺一即隐藏。
+决定：保留现有五项 operation projection，逐 operation 同时要求 feature、backend capability、approval/recovery qualification、release evidence 和未撤销状态；缺一即隐藏，不以本设计直接扩大任何默认目录。
 
 ### 9.2 路径名称泄露
 
@@ -318,6 +338,6 @@ effect == read
 
 ## 10. 完成定义
 
-P0 Complete 必须同时满足：工程五项 operation 投影无矛盾、路径发现安全矩阵通过、公共发布目录与 evidence 一致，并且没有新增 Shell/Git/进程旁路。
+P0 Complete 必须同时满足：现有工程五项 operation 投影无矛盾、路径发现安全矩阵通过、公共发布目录与 evidence 一致，并且没有新增 Shell/Git/进程旁路。P0-A 的完成标志是审计和测试通过，不是重新实现五项 operation。
 
 P1 Complete 必须同时满足：活动工具集可预览、可缩权、不可在旧 Run 中扩权；所有相关 checksum/preview/cache/ledger 绑定一致；纯本地读取并行与串行结果确定性等价，任何副作用或外发批次继续串行。
