@@ -112,7 +112,7 @@ import {
   type VersionGroupTransactionApplyInput,
   type WritingTaskIntent
 } from "@novel-studio/application";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { createDesktopCompactionSources } from "./agent-compaction-composer.js";
@@ -746,6 +746,7 @@ function createEngineeringProjectSearchAdapter(
   refRegistry?: EngineeringMutationRefRegistryV2,
   refCapabilityRevision?: string
 ) {
+  const pathCursorKey = randomBytes(32);
   return {
     async searchText(input: {
       readonly query: string;
@@ -836,6 +837,137 @@ function createEngineeringProjectSearchAdapter(
         query: baseName,
         maxResults: 200,
         ...(input.signal === undefined ? {} : { signal: input.signal })
+      });
+    },
+    async findPaths(input: {
+      readonly query: string;
+      readonly kind?: "file" | "directory" | "any";
+      readonly cursor?: string;
+      readonly maxResults?: number;
+      readonly signal?: AbortSignal;
+    }) {
+      if (session === undefined)
+        return err(runtimeError("ENGINEERING_WORKSPACE_ACCESS_UNAVAILABLE"));
+      if (input.signal?.aborted === true) return err(runtimeError("AGENT_SEARCH_CANCELLED"));
+      const query = input.query;
+      const kind = input.kind ?? "any";
+      const maxResults = Math.min(input.maxResults ?? 50, 200);
+      if (
+        query.length === 0 ||
+        query.length > 512 ||
+        query.includes("..") ||
+        query.includes("\\") ||
+        query.startsWith("/") ||
+        query.includes(":") ||
+        (kind !== "file" && kind !== "directory" && kind !== "any") ||
+        !Number.isInteger(maxResults) ||
+        maxResults < 1 ||
+        query
+          .split("/")
+          .some((segment) => /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(segment))
+      ) {
+        return err(runtimeError("AGENT_SEARCH_GLOB_INVALID"));
+      }
+      const indexed = await session.buildIndex();
+      if (!indexed.ok) return indexed;
+      const capabilityRevision = refCapabilityRevision ?? "";
+      const indexRevision = checksumText(
+        `${session.binding.rootBindingId}:${session.binding.pathPolicyRevision}:${capabilityRevision}:${indexed.value.files
+          .map((file) => `${file.relativeIdentity}:${file.refChecksum}:${file.byteLength}`)
+          .join("|")}`
+      );
+      const cursor = decodeEngineeringPathCursor(input.cursor, pathCursorKey);
+      if (
+        input.cursor !== undefined &&
+        (cursor === undefined ||
+          cursor.query !== query ||
+          cursor.kind !== kind ||
+          cursor.maxResults !== maxResults ||
+          cursor.capabilityRevision !== capabilityRevision ||
+          cursor.indexRevision !== indexRevision)
+      ) {
+        return err(runtimeError("AGENT_SEARCH_CURSOR_INVALID"));
+      }
+      const offset = cursor?.offset ?? 0;
+      const entries = new Map<
+        string,
+        {
+          readonly relativePath: string;
+          readonly entryKind: "file" | "directory";
+          readonly refChecksum?: string;
+        }
+      >();
+      for (const file of indexed.value.files) {
+        const parts = file.relativeIdentity.split("/");
+        for (let index = 1; index < parts.length; index += 1) {
+          const directory = parts.slice(0, index).join("/");
+          entries.set(directory, { relativePath: directory, entryKind: "directory" });
+        }
+        entries.set(file.relativeIdentity, {
+          relativePath: file.relativeIdentity,
+          entryKind: "file",
+          refChecksum: file.refChecksum
+        });
+      }
+      const ordered = [...entries.values()]
+        .filter(
+          (entry) =>
+            (kind === "any" || entry.entryKind === kind) &&
+            engineeringPathGlobMatches(entry.relativePath, query)
+        )
+        .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+      const page = ordered.slice(offset, offset + maxResults);
+      const hasMore = offset + page.length < ordered.length || indexed.value.truncated;
+      const items = [] as {
+        readonly relativePath: string;
+        readonly entryKind: "file" | "directory";
+        readonly stableRef?: string;
+        readonly mutationRef?: string;
+      }[];
+      for (const entry of page) {
+        if (entry.entryKind === "directory") {
+          items.push({ relativePath: entry.relativePath, entryKind: entry.entryKind });
+          continue;
+        }
+        const opaqueRef =
+          refRegistry === undefined || refCapabilityRevision === undefined
+            ? undefined
+            : refRegistry.issue({
+                kind: "file",
+                rootBindingId: session.binding.rootBindingId,
+                pathPolicyRevision: session.binding.pathPolicyRevision,
+                relativeIdentity: entry.relativePath,
+                sourceNativeRefChecksum: entry.refChecksum ?? "",
+                issuedCapabilityRevision: refCapabilityRevision
+              })?.opaqueRef;
+        if (opaqueRef === undefined) {
+          return err(runtimeError("ENGINEERING_MUTATION_REF_UNAVAILABLE"));
+        }
+        items.push({
+          relativePath: entry.relativePath,
+          entryKind: entry.entryKind,
+          stableRef: `file:${entry.relativePath}`,
+          mutationRef: opaqueRef
+        });
+      }
+      return ok({
+        kind: "path_results" as const,
+        items,
+        nextCursor: hasMore
+          ? encodeEngineeringPathCursor(
+              {
+                query,
+                kind,
+                maxResults,
+                offset: offset + page.length,
+                capabilityRevision,
+                indexRevision
+              },
+              pathCursorKey
+            )
+          : null,
+        truncated: indexed.value.truncated || hasMore,
+        indexVersion: indexRevision
       });
     }
   };
@@ -5876,6 +6008,92 @@ function checksumText(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
+interface EngineeringPathCursor {
+  readonly query: string;
+  readonly kind: "file" | "directory" | "any";
+  readonly maxResults: number;
+  readonly offset: number;
+  readonly capabilityRevision: string;
+  readonly indexRevision: string;
+}
+
+function encodeEngineeringPathCursor(cursor: EngineeringPathCursor, key: Uint8Array): string {
+  const payload = Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+  const signature = createHmac("sha256", key).update(payload, "utf8").digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function decodeEngineeringPathCursor(
+  value: string | undefined,
+  key: Uint8Array
+): EngineeringPathCursor | undefined {
+  if (value === undefined || value.length === 0 || value.length > 4096) return undefined;
+  try {
+    const [payload, signature, ...extra] = value.split(".");
+    if (payload === undefined || signature === undefined || extra.length > 0) return undefined;
+    const expectedSignature = createHmac("sha256", key).update(payload, "utf8").digest("base64url");
+    const actualSignature = Buffer.from(signature, "base64url");
+    const expectedSignatureBytes = Buffer.from(expectedSignature, "base64url");
+    if (
+      actualSignature.length !== expectedSignatureBytes.length ||
+      !timingSafeEqual(actualSignature, expectedSignatureBytes)
+    ) {
+      return undefined;
+    }
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    if (
+      typeof parsed.query !== "string" ||
+      (parsed.kind !== "file" && parsed.kind !== "directory" && parsed.kind !== "any") ||
+      typeof parsed.maxResults !== "number" ||
+      !Number.isInteger(parsed.maxResults) ||
+      typeof parsed.offset !== "number" ||
+      !Number.isInteger(parsed.offset) ||
+      parsed.offset < 0 ||
+      typeof parsed.capabilityRevision !== "string" ||
+      typeof parsed.indexRevision !== "string"
+    ) {
+      return undefined;
+    }
+    return parsed as unknown as EngineeringPathCursor;
+  } catch {
+    return undefined;
+  }
+}
+
+function engineeringPathGlobMatches(relativePath: string, pattern: string): boolean {
+  let expression = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index] ?? "";
+    if (character === "*" && pattern[index + 1] === "*") {
+      index += 1;
+      if (pattern[index + 1] === "/") {
+        index += 1;
+        expression += "(?:.*/)?";
+      } else {
+        expression += ".*";
+      }
+      continue;
+    }
+    if (character === "*") {
+      expression += "[^/]*";
+      continue;
+    }
+    if (character === "?") {
+      expression += "[^/]";
+      continue;
+    }
+    expression += /[.+^${}()|[\]\\]/u.test(character) ? `\\${character}` : character;
+  }
+  try {
+    return new RegExp(`^${expression}$`, "u").test(relativePath);
+  } catch {
+    return false;
+  }
+}
+
 function runtimeError(code: string, redactedDetail?: JsonObject): UnifiedError {
   const descriptor = runtimeErrorDescriptor(code);
   return createUnifiedError({
@@ -7510,6 +7728,10 @@ function routeCreativeSearch(
       return filterCreativeSearchResult(
         await generalFileExecutor.findReferences({ ...input, stableRef: path })
       );
+    },
+    async findPaths(input) {
+      if (input.contextMode === "writing") return writingExecutor.findPaths(input);
+      return filterCreativePathResult(await generalFileExecutor.findPaths(input));
     }
   };
 }
@@ -7525,6 +7747,21 @@ function filterCreativeSearchResult(
     ...result.value,
     items,
     totalHits: items.length,
+    truncated: result.value.truncated || items.length !== result.value.items.length
+  });
+}
+
+function filterCreativePathResult(
+  result: Awaited<ReturnType<AgentSearchToolExecutor["findPaths"]>>
+): Awaited<ReturnType<AgentSearchToolExecutor["findPaths"]>> {
+  if (!result.ok) return result;
+  const items = result.value.items.filter((item) => {
+    const kind = item.entryKind === "directory" ? "directory" : "file";
+    return normalizeCreativeProjectFilePath(item.relativePath, kind).ok;
+  });
+  return ok({
+    ...result.value,
+    items,
     truncated: result.value.truncated || items.length !== result.value.items.length
   });
 }

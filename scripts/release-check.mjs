@@ -5,6 +5,7 @@ import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { runStrictPackagedQualificationChecks } from "./release-gate-sequencing.mjs";
+import { validateCatalogClaims, validatePublicReleaseCatalog } from "./public-release-catalog.mjs";
 
 const require = createRequire(import.meta.url);
 const Ajv = require("ajv");
@@ -492,6 +493,12 @@ async function checkStage5Evidence() {
     failures.push(
       `Strict release gate cannot pass while Stage 5 overall status is ${manifest.overallStatus}.`
     );
+  }
+  for (const claimFailure of validateCatalogClaims(manifest)) {
+    failures.push(claimFailure);
+  }
+  for (const catalogFailure of validatePublicReleaseCatalog(manifest)) {
+    failures.push(catalogFailure);
   }
 
   const actualPhases = new Set();

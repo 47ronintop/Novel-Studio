@@ -326,7 +326,13 @@ function listLegacyV2AgentTools(input: ListAgentToolsInput): readonly AgentToolD
         ]
       : [];
   const searchTools =
-    cap?.searchEnabled === true ? [coreTool("search_project", "search_tool", "read")] : [];
+    cap?.searchEnabled === true
+      ? [
+          coreTool("search_project", "search_tool", "read", {
+            inputSchema: v2SearchSchema(input.contextMode !== "writing")
+          })
+        ]
+      : [];
 
   if (input.operationMode === "planning") {
     return [
@@ -385,7 +391,13 @@ function listCatalogV2AgentTools(input: ListAgentToolsInput): readonly AgentTool
         ]
       : [];
   const searchTools =
-    cap?.searchEnabled === true ? [coreTool("search_project", "search_tool", "read")] : [];
+    cap?.searchEnabled === true
+      ? [
+          coreTool("search_project", "search_tool", "read", {
+            inputSchema: v2SearchSchema(input.contextMode !== "writing")
+          })
+        ]
+      : [];
   const reads = [
     ...(writing
       ? [coreTool("list_chapters", "file_tool", "read")]
@@ -1516,45 +1528,60 @@ function stableRefSchema(kind?: "chapter" | "file"): JsonObject {
   };
 }
 
-function v2SearchSchema(): JsonObject {
-  return {
-    oneOf: [
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["mode", "query"],
-        properties: {
-          mode: { const: "text" },
-          query: { type: "string", minLength: 1, maxLength: 500 },
-          includeGlobs: {
-            type: "array",
-            items: { type: "string", minLength: 1, maxLength: 256 },
-            maxItems: 20
-          },
-          excludeGlobs: {
-            type: "array",
-            items: { type: "string", minLength: 1, maxLength: 256 },
-            maxItems: 20
-          },
-          maxResults: { type: "integer", minimum: 1, maximum: 200 }
-        }
-      },
-      {
-        type: "object",
-        additionalProperties: false,
-        required: ["mode", "ref"],
-        properties: {
-          mode: { const: "references" },
-          ref: {
-            type: "string",
-            minLength: 6,
-            maxLength: 1036,
-            pattern: STABLE_RESOURCE_REF_PATTERN
-          },
-          maxResults: { type: "integer", minimum: 1, maximum: 200 }
-        }
+function v2SearchSchema(includePaths = true): JsonObject {
+  const branches: JsonObject[] = [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["mode", "query"],
+      properties: {
+        mode: { const: "text" },
+        query: { type: "string", minLength: 1, maxLength: 500 },
+        includeGlobs: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 20
+        },
+        excludeGlobs: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          maxItems: 20
+        },
+        maxResults: { type: "integer", minimum: 1, maximum: 200 }
       }
-    ]
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["mode", "ref"],
+      properties: {
+        mode: { const: "references" },
+        ref: {
+          type: "string",
+          minLength: 6,
+          maxLength: 1036,
+          pattern: STABLE_RESOURCE_REF_PATTERN
+        },
+        maxResults: { type: "integer", minimum: 1, maximum: 200 }
+      }
+    }
+  ];
+  if (includePaths) {
+    branches.push({
+      type: "object",
+      additionalProperties: false,
+      required: ["mode", "query"],
+      properties: {
+        mode: { const: "paths" },
+        query: { type: "string", minLength: 1, maxLength: 512 },
+        kind: { type: "string", enum: ["file", "directory", "any"] },
+        cursor: { type: "string", minLength: 1, maxLength: 4096 },
+        maxResults: { type: "integer", minimum: 1, maximum: 200 }
+      }
+    });
+  }
+  return {
+    oneOf: branches
   };
 }
 

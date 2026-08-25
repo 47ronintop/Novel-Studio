@@ -34,6 +34,18 @@ export interface AgentSearchToolResult {
   /** Increments when the index schema changes and forces a rebuild. */
   readonly indexVersion: string;
 }
+export interface AgentPathDiscoveryResult {
+  readonly kind: "untrusted_project_data";
+  readonly items: readonly {
+    readonly relativePath: string;
+    readonly entryKind: "file" | "directory";
+    readonly stableRef?: string;
+    readonly mutationRef?: string;
+  }[];
+  readonly nextCursor: string | null;
+  readonly truncated: boolean;
+  readonly indexRevision: string;
+}
 
 export interface AgentSearchToolExecutor {
   searchText(input: {
@@ -54,6 +66,16 @@ export interface AgentSearchToolExecutor {
     readonly stableRef: string;
     readonly signal: AbortSignal;
   }): Promise<Result<AgentSearchToolResult, UnifiedError>>;
+  findPaths(input: {
+    readonly runId: string;
+    readonly projectId: string;
+    readonly contextMode?: "standalone_chat" | "writing" | "general_file";
+    readonly query: string;
+    readonly kind?: "file" | "directory" | "any";
+    readonly cursor?: string;
+    readonly maxResults?: number;
+    readonly signal: AbortSignal;
+  }): Promise<Result<AgentPathDiscoveryResult, UnifiedError>>;
 }
 
 // ── Phase C: Controlled task execution ──────────────────────────────────────

@@ -346,6 +346,82 @@ describe("AgentProjectSearchRepository — engineering workspace", () => {
     // CON is a Windows device name in a glob — should be rejected
     expect(result.ok).toBe(false);
   });
+
+  test("discovers files and directories with deterministic pagination", async () => {
+    const root = await makeProjectRoot();
+    await mkdir(join(root, "src", "components"), { recursive: true });
+    await writeFile(join(root, "src", "index.ts"), "export {}", "utf8");
+    await writeFile(join(root, "src", "components", "button.ts"), "export {}", "utf8");
+    await writeFile(join(root, "credentials.json"), "secret", "utf8");
+    await mkdir(join(root, ".git"), { recursive: true });
+    await writeFile(join(root, ".git", "config"), "secret", "utf8");
+
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "engineeringWorkspace"
+    });
+    const first = await repo.findPaths({ query: "src/**/*.ts", entryKind: "file", maxResults: 1 });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.value.items).toHaveLength(1);
+    expect(first.value.items[0]).toMatchObject({
+      relativePath: "src/components/button.ts",
+      entryKind: "file",
+      stableRef: "file:src/components/button.ts"
+    });
+    expect(first.value.nextCursor).not.toBeNull();
+
+    const second = await repo.findPaths({
+      query: "src/**/*.ts",
+      entryKind: "file",
+      maxResults: 1,
+      ...(first.value.nextCursor === null ? {} : { cursor: first.value.nextCursor })
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.value.items).toEqual([
+      { relativePath: "src/index.ts", entryKind: "file", stableRef: "file:src/index.ts" }
+    ]);
+    expect(second.value.nextCursor).toBeNull();
+
+    const directories = await repo.findPaths({ query: "src/**", entryKind: "directory" });
+    expect(directories.ok).toBe(true);
+    if (!directories.ok) return;
+    expect(directories.value.items).toEqual([
+      { relativePath: "src/components", entryKind: "directory" }
+    ]);
+    expect(directories.value.items[0]?.stableRef).toBeUndefined();
+
+    const allFiles = await repo.findPaths({ query: "**", entryKind: "file" });
+    expect(allFiles.ok).toBe(true);
+    if (!allFiles.ok) return;
+    expect(allFiles.value.items.some((item) => item.relativePath.includes("credentials"))).toBe(
+      false
+    );
+    expect(allFiles.value.items.some((item) => item.relativePath.startsWith(".git/"))).toBe(false);
+  });
+
+  test("binds path cursors to the query and page size and rejects unsafe globs", async () => {
+    const root = await makeProjectRoot();
+    await writeFile(join(root, "a.ts"), "", "utf8");
+    await writeFile(join(root, "b.ts"), "", "utf8");
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "engineeringWorkspace"
+    });
+    const page = await repo.findPaths({ query: "*.ts", maxResults: 1 });
+    expect(page.ok).toBe(true);
+    if (!page.ok || page.value.nextCursor === null) return;
+    expect(
+      (await repo.findPaths({ query: "*.ts", maxResults: 2, cursor: page.value.nextCursor })).ok
+    ).toBe(false);
+    expect(
+      (await repo.findPaths({ query: "*.md", maxResults: 1, cursor: page.value.nextCursor })).ok
+    ).toBe(false);
+    for (const query of ["../*.ts", "C:/秘密/*.ts", "src\\*.ts", "secret:stream", "CON.md"]) {
+      expect((await repo.findPaths({ query })).ok).toBe(false);
+    }
+  });
 });
 
 describe("AgentProjectSearchRepository — creative project files", () => {
@@ -408,5 +484,46 @@ describe("AgentProjectSearchRepository — creative project files", () => {
     if (!result.ok) return;
     expect(result.value.items.map((item) => item.relativePath)).toEqual(["notes/visible.md"]);
     expect(result.value.indexVersion).toBe("creative-project-files/1.0");
+  });
+
+  test("path discovery reuses creative project file policy", async () => {
+    const root = await makeProjectRoot();
+    await mkdir(join(root, "notes"), { recursive: true });
+    await mkdir(join(root, "chapters"), { recursive: true });
+    await writeFile(join(root, "notes", "visible.md"), "visible", "utf8");
+    await writeFile(join(root, "chapters", "managed.md"), "managed", "utf8");
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "creativeProject",
+      creativeProjectFilePolicy: DEFAULT_CREATIVE_PROJECT_FILE_POLICY
+    });
+    const result = await repo.findPaths({ query: "**", entryKind: "any" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items.map((item) => item.relativePath)).toEqual([
+      "notes",
+      "notes/visible.md"
+    ]);
+    expect(result.value.items.every((item) => !item.relativePath.startsWith("chapters"))).toBe(
+      true
+    );
+  });
+
+  test("path discovery applies the default creative policy when no policy is injected", async () => {
+    const root = await makeProjectRoot();
+    await mkdir(join(root, "notes"), { recursive: true });
+    await mkdir(join(root, "chapters"), { recursive: true });
+    await writeFile(join(root, "notes", "visible.md"), "visible", "utf8");
+    await writeFile(join(root, "chapters", "managed.md"), "managed", "utf8");
+    const repo = new AgentProjectSearchRepository({
+      projectRoot: root,
+      workspaceKind: "creativeProject"
+    });
+    const result = await repo.findPaths({ query: "**", entryKind: "file" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items).toEqual([
+      { relativePath: "notes/visible.md", entryKind: "file", stableRef: "file:notes/visible.md" }
+    ]);
   });
 });

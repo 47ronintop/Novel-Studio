@@ -24,6 +24,29 @@ interface SearchRepositoryPort {
     readonly stableRef: string;
     readonly signal?: AbortSignal;
   }): Promise<Result<SearchRepositoryResult, UnifiedError>>;
+  findPaths(input: {
+    readonly query: string;
+    readonly entryKind?: "file" | "directory" | "any";
+    readonly cursor?: string;
+    readonly maxResults?: number;
+    readonly signal?: AbortSignal;
+  }): Promise<
+    Result<
+      {
+        readonly kind: "path_results";
+        readonly items: readonly {
+          readonly relativePath: string;
+          readonly entryKind: "file" | "directory";
+          readonly stableRef?: string;
+          readonly mutationRef?: string;
+        }[];
+        readonly nextCursor: string | null;
+        readonly truncated: boolean;
+        readonly indexVersion: string;
+      },
+      UnifiedError
+    >
+  >;
 }
 
 interface SearchRepositoryResult {
@@ -78,6 +101,23 @@ export function createAgentSearchToolSession(
       });
       if (!result.ok) return result;
       return ok(buildToolResult(result.value, input.contextMode));
+    },
+    async findPaths(input) {
+      const result = await searchRepository.findPaths({
+        query: input.query,
+        ...(input.kind !== undefined ? { entryKind: input.kind } : {}),
+        ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+        ...(input.maxResults !== undefined ? { maxResults: input.maxResults } : {}),
+        signal: input.signal
+      });
+      if (!result.ok) return result;
+      return ok({
+        kind: "untrusted_project_data",
+        items: result.value.items,
+        nextCursor: result.value.nextCursor,
+        truncated: result.value.truncated,
+        indexRevision: result.value.indexVersion
+      });
     }
   };
 }

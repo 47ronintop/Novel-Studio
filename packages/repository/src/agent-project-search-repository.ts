@@ -6,15 +6,13 @@ import { extname, isAbsolute, join, relative } from "node:path";
 import { err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import {
+  DEFAULT_CREATIVE_PROJECT_FILE_POLICY,
   normalizeCreativeProjectFilePath,
   normalizeCreativeProjectFilePolicy,
   type CreativeProjectFilePolicy
 } from "./creative-project-file-repository.js";
 import { storageError, validationError } from "./errors.js";
-import {
-  SearchIndexFileRepository,
-  type SearchSourceRef
-} from "./search-index-repository.js";
+import { SearchIndexFileRepository, type SearchSourceRef } from "./search-index-repository.js";
 
 // Hard limits for search queries
 const MAX_QUERY_LENGTH = 1024;
@@ -166,6 +164,21 @@ export interface AgentSearchResults {
   readonly indexVersion: string;
 }
 
+export interface AgentPathDiscoveryItem {
+  readonly relativePath: string;
+  readonly entryKind: "file" | "directory";
+  readonly stableRef?: string;
+  readonly mutationRef?: string;
+}
+
+export interface AgentPathDiscoveryResults {
+  readonly kind: "path_results";
+  readonly items: readonly AgentPathDiscoveryItem[];
+  readonly nextCursor: string | null;
+  readonly truncated: boolean;
+  readonly indexVersion: string;
+}
+
 export interface AgentProjectSearchRepositoryOptions {
   readonly projectRoot: string;
   readonly workspaceKind: "creativeProject" | "engineeringWorkspace";
@@ -227,18 +240,23 @@ function isWithinRoot(canonicalRoot: string, candidate: string): boolean {
 
 function isSearchableEngineeringFile(fileName: string): boolean {
   const lowerName = fileName.toLowerCase();
-  if (
-    lowerName === ".env" ||
-    lowerName.startsWith(".env.") ||
-    sensitiveFileNames.has(lowerName) ||
-    sensitiveFileSuffixes.some((suffix) => lowerName.endsWith(suffix)) ||
-    /(?:^|[._-])(credential|credentials|key|keys|secret|secrets)(?:[._-]|$)/.test(lowerName)
-  ) {
+  if (isSensitiveEngineeringFileName(lowerName)) {
     return false;
   }
 
   return (
     searchableTextExtensions.has(extname(lowerName)) || searchableExtensionlessNames.has(lowerName)
+  );
+}
+
+function isSensitiveEngineeringFileName(fileName: string): boolean {
+  const lowerName = fileName.toLowerCase();
+  return (
+    lowerName === ".env" ||
+    lowerName.startsWith(".env.") ||
+    sensitiveFileNames.has(lowerName) ||
+    sensitiveFileSuffixes.some((suffix) => lowerName.endsWith(suffix)) ||
+    /(?:^|[._-])(credential|credentials|key|keys|secret|secrets)(?:[._-]|$)/.test(lowerName)
   );
 }
 
@@ -287,15 +305,70 @@ function extractSnippetWithLineRange(
 
 function matchesGlob(relativePath: string, pattern: string): boolean {
   if (pattern.includes("..") || isAbsolute(pattern)) return false;
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, "___DOUBLESTAR___")
-    .replace(/\*/g, "[^/]*")
-    .replace(/___DOUBLESTAR___/g, ".*");
+  let expression = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index] ?? "";
+    if (character === "*" && pattern[index + 1] === "*") {
+      index += 1;
+      if (pattern[index + 1] === "/") {
+        index += 1;
+        expression += "(?:.*/)?";
+      } else {
+        expression += ".*";
+      }
+      continue;
+    }
+    if (character === "*") {
+      expression += "[^/]*";
+      continue;
+    }
+    if (character === "?") {
+      expression += "[^/]";
+      continue;
+    }
+    expression += /[.+^${}()|[\]\\]/u.test(character) ? `\\${character}` : character;
+  }
   try {
-    return new RegExp(`^${escaped}$`).test(relativePath);
+    return new RegExp(`^${expression}$`, "u").test(relativePath);
   } catch {
     return false;
+  }
+}
+
+interface PathCursor {
+  readonly query: string;
+  readonly kind: "file" | "directory" | "any";
+  readonly maxResults: number;
+  readonly offset: number;
+  readonly indexVersion: string;
+}
+
+function encodePathCursor(cursor: PathCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodePathCursor(value: string | undefined): PathCursor | undefined {
+  if (value === undefined || value.length === 0 || value.length > 4096) return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    if (
+      typeof parsed.query !== "string" ||
+      (parsed.kind !== "file" && parsed.kind !== "directory" && parsed.kind !== "any") ||
+      typeof parsed.maxResults !== "number" ||
+      !Number.isInteger(parsed.maxResults) ||
+      typeof parsed.offset !== "number" ||
+      !Number.isInteger(parsed.offset) ||
+      parsed.offset < 0 ||
+      typeof parsed.indexVersion !== "string"
+    ) {
+      return undefined;
+    }
+    return parsed as unknown as PathCursor;
+  } catch {
+    return undefined;
   }
 }
 
@@ -406,6 +479,201 @@ export class AgentProjectSearchRepository {
     const baseName = ref.split("/").at(-1) ?? ref;
     const signalOpt = input.signal === undefined ? {} : { signal: input.signal };
     return this.searchText({ query: baseName, maxResults: MAX_RESULTS_HARD_LIMIT, ...signalOpt });
+  }
+
+  public async findPaths(input: {
+    readonly query: string;
+    readonly entryKind?: "file" | "directory" | "any";
+    readonly cursor?: string;
+    readonly maxResults?: number;
+    readonly signal?: AbortSignal;
+  }): Promise<Result<AgentPathDiscoveryResults, UnifiedError>> {
+    const query = input.query;
+    const kind = input.entryKind ?? "any";
+    const maxResults = Math.min(input.maxResults ?? 50, MAX_RESULTS_HARD_LIMIT);
+    const globSegments = query.split("/");
+    if (
+      query.length === 0 ||
+      query.length > MAX_GLOB_LENGTH ||
+      query.includes("..") ||
+      query.includes("\\") ||
+      query.includes(":") ||
+      isAbsolute(query) ||
+      globSegments.some((segment) => windowsDeviceNames.test(segment)) ||
+      (kind !== "file" && kind !== "directory" && kind !== "any")
+    ) {
+      return err(
+        validationError({
+          code: "AGENT_SEARCH_GLOB_INVALID",
+          message: "Path glob pattern is invalid.",
+          suggestedAction: "Use a project-relative glob without traversal.",
+          traceId: this.traceId
+        })
+      );
+    }
+    if (
+      !Number.isInteger(maxResults) ||
+      maxResults < 1 ||
+      (input.cursor !== undefined && (input.cursor.length === 0 || input.cursor.length > 4096))
+    ) {
+      return err(
+        validationError({
+          code: "AGENT_SEARCH_CURSOR_INVALID",
+          message: "Path search pagination is invalid.",
+          suggestedAction: "Use a positive result limit and a current cursor.",
+          traceId: this.traceId
+        })
+      );
+    }
+    let canonicalRoot: string;
+    let rootStat: Stats;
+    try {
+      canonicalRoot = await this.canonicalRoot;
+      rootStat = await lstat(canonicalRoot);
+    } catch {
+      return err(
+        storageError({
+          code: "AGENT_SEARCH_ROOT_UNAVAILABLE",
+          message: "The project root could not be resolved.",
+          suggestedAction: "Ensure the project root directory exists.",
+          traceId: this.traceId
+        })
+      );
+    }
+    const configuredPolicy =
+      this.options.creativeProjectFilePolicy ??
+      (this.options.workspaceKind === "creativeProject"
+        ? DEFAULT_CREATIVE_PROJECT_FILE_POLICY
+        : undefined);
+    const policy =
+      configuredPolicy === undefined
+        ? undefined
+        : normalizeCreativeProjectFilePolicy(configuredPolicy);
+    if (policy !== undefined && !policy.ok) return policy;
+    const state = {
+      directories: 0,
+      files: 0,
+      truncated: false,
+      aborted: false
+    };
+    const matches: AgentPathDiscoveryItem[] = [];
+    const visit = async (directory: string, depth: number): Promise<void> => {
+      if (state.aborted || state.truncated || state.directories >= MAX_DIRECTORIES || depth > 64) {
+        state.truncated = true;
+        return;
+      }
+      state.directories += 1;
+      let entries;
+      try {
+        entries = await readdir(directory, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+        if (input.signal?.aborted) {
+          state.aborted = true;
+          return;
+        }
+        if (entry.isSymbolicLink() || windowsDeviceNames.test(entry.name)) continue;
+        const fullPath = join(directory, entry.name);
+        const relativePath = relative(canonicalRoot, fullPath).replaceAll("\\", "/");
+        if (relativePath.length === 0 || relativePath.length > 1024) continue;
+        const isDirectory = entry.isDirectory();
+        if (
+          isDirectory &&
+          this.options.workspaceKind === "engineeringWorkspace" &&
+          (blockedRoots.has(entry.name.toLowerCase()) || isSensitiveEngineeringFileName(entry.name))
+        ) {
+          continue;
+        }
+        if (!isDirectory && !entry.isFile()) continue;
+        if (!isDirectory) {
+          state.files += 1;
+          if (state.files > MAX_FILES) {
+            state.truncated = true;
+            return;
+          }
+          if (
+            this.options.workspaceKind === "engineeringWorkspace" &&
+            !isSearchableEngineeringFile(entry.name)
+          ) {
+            continue;
+          }
+        }
+        if (
+          policy?.value &&
+          !normalizeCreativeProjectFilePath(
+            relativePath,
+            isDirectory ? "directory" : "file",
+            policy.value
+          ).ok
+        ) {
+          continue;
+        }
+        if (
+          matchesGlob(relativePath, query) &&
+          (kind === "any" || (kind === "directory" ? isDirectory : !isDirectory))
+        ) {
+          matches.push({
+            relativePath,
+            entryKind: isDirectory ? "directory" : "file",
+            ...(!isDirectory ? { stableRef: `file:${relativePath}` } : {})
+          });
+        }
+        if (isDirectory) await visit(fullPath, depth + 1);
+        if (state.truncated || state.aborted) return;
+      }
+    };
+    await visit(canonicalRoot, 0);
+    const indexVersion = sha256(
+      JSON.stringify({
+        workspaceKind: this.options.workspaceKind,
+        root: canonicalRoot,
+        rootIdentity: [rootStat.dev, rootStat.ino, rootStat.mtimeMs],
+        policy: policy?.value ?? null,
+        entries: matches.map((item) => [item.relativePath, item.entryKind])
+      })
+    );
+    const cursor = decodePathCursor(input.cursor);
+    if (
+      input.cursor !== undefined &&
+      (cursor === undefined ||
+        cursor.query !== query ||
+        cursor.kind !== kind ||
+        cursor.maxResults !== maxResults ||
+        cursor.indexVersion !== indexVersion)
+    ) {
+      return err(
+        validationError({
+          code: "AGENT_SEARCH_CURSOR_INVALID",
+          message: "Path search cursor is invalid or stale.",
+          suggestedAction: "Start a new path search.",
+          traceId: this.traceId
+        })
+      );
+    }
+    const offset = cursor?.offset ?? 0;
+    const ordered = matches.sort((left, right) =>
+      left.relativePath.localeCompare(right.relativePath)
+    );
+    const items = ordered.slice(offset, offset + maxResults);
+    const hasMore = offset + items.length < ordered.length || state.truncated;
+    const nextCursor = hasMore
+      ? encodePathCursor({
+          query,
+          kind,
+          maxResults,
+          offset: offset + items.length,
+          indexVersion
+        })
+      : null;
+    return ok({
+      kind: "path_results",
+      items: Object.freeze(items),
+      nextCursor,
+      truncated: state.truncated || hasMore,
+      indexVersion
+    });
   }
 
   private async searchCreativeProject(

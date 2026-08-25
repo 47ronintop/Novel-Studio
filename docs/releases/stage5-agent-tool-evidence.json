@@ -1,7 +1,9 @@
 {
   "schemaVersion": "1.0",
-  "assessedAt": "2026-07-25",
+  "assessedAt": "2026-08-25",
   "overallStatus": "Blocked",
+  "catalogClaims": [],
+  "publicReleaseCatalog": [],
   "notes": "Local executable scope (C.0, C.1-C.4, and E.1-E.2) was canceled by the active Agent-tool priorities plan. Existing-text creative writes use standard_trusted_creative; D network and E.3 remote MCP remain active but incomplete.",
   "phases": [
     {

@@ -14,15 +14,36 @@ describe("Agent capability summary", () => {
     const summary = v2Summary({
       operationMode: "execution",
       workspaceKind: "engineeringWorkspace",
-      workspaceFileOperations: ["replace_file", "create_file", "move_file", "delete_file"],
-      proposalCapabilities: ["replace_file", "create_file", "move_file", "delete_file"],
+      workspaceFileOperations: [
+        "replace_file",
+        "create_file",
+        "move_file",
+        "delete_file",
+        "create_directory"
+      ],
+      proposalCapabilities: [
+        "replace_file",
+        "create_file",
+        "move_file",
+        "delete_file",
+        "create_directory"
+      ],
       writeCapability: "propose",
       writeApprovalPolicy: "confirm_each_change_set",
       approvalRules: [
-        { operation: "replace_file", reviewMode: "conditional_auto_review", effectRuleId: "ordinary_clean_file_replace_v1" },
-        { operation: "create_file", reviewMode: "conditional_auto_review", effectRuleId: "ordinary_create_only_v1" },
+        {
+          operation: "replace_file",
+          reviewMode: "conditional_auto_review",
+          effectRuleId: "ordinary_clean_file_replace_v1"
+        },
+        {
+          operation: "create_file",
+          reviewMode: "conditional_auto_review",
+          effectRuleId: "ordinary_create_only_v1"
+        },
         { operation: "move_file", reviewMode: "always_human" },
-        { operation: "delete_file", reviewMode: "always_human" }
+        { operation: "delete_file", reviewMode: "always_human" },
+        { operation: "create_directory", reviewMode: "always_human" }
       ]
     });
     const facts = {
@@ -38,10 +59,12 @@ describe("Agent capability summary", () => {
       "replace_file",
       "create_file",
       "move_file",
-      "delete_file"
+      "delete_file",
+      "create_directory"
     ]);
-    expect(description.approvalRules).toHaveLength(4);
+    expect(description.approvalRules).toHaveLength(5);
     expect(description.headline).toContain("无 Shell/任务/Git");
+    expect(description.headline).toContain("创建目录");
 
     const html = renderToStaticMarkup(<AgentCapabilitySummary facts={facts} />);
     expect(html).toContain("工程工作区");

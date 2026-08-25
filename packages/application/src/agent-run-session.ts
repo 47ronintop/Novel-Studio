@@ -1231,6 +1231,7 @@ const networkToolNames = new Set<string>(["web_search", "fetch_url"]);
 const searchToolNames = new Set<string>([
   "search_project_text",
   "find_project_references",
+  "find_project_paths",
   "search_project"
 ]);
 
@@ -1247,10 +1248,11 @@ const fileLifecycleToolNames = new Set<string>([
 
 function workspaceFileMutationKindForTool(
   toolName: string
-): "create_file" | "move_file" | "delete_file" | undefined {
+): "create_file" | "move_file" | "delete_file" | "create_directory" | undefined {
   if (toolName === "propose_file_create") return "create_file";
   if (toolName === "propose_file_move") return "move_file";
   if (toolName === "propose_file_delete") return "delete_file";
+  if (toolName === "propose_directory_create") return "create_directory";
   return undefined;
 }
 
@@ -5678,6 +5680,48 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
           ...(typeof maxResults === "number" ? { maxResults } : {}),
           signal: runtime.controller.signal
         });
+      } else if (dispatchName === "find_project_paths") {
+        const query = readString(dispatchArguments, "query");
+        if (query === undefined)
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            "AGENT_TOOL_ARGUMENTS_INVALID",
+            "find_project_paths requires a non-empty query."
+          ))
+            ? "terminal"
+            : "continue";
+        const rawKind = dispatchArguments["kind"];
+        if (
+          rawKind !== undefined &&
+          rawKind !== "file" &&
+          rawKind !== "directory" &&
+          rawKind !== "any"
+        ) {
+          return (await toolFailure(
+            runtime,
+            runId,
+            call,
+            "AGENT_TOOL_ARGUMENTS_INVALID",
+            "find_project_paths kind must be file, directory, or any."
+          ))
+            ? "terminal"
+            : "continue";
+        }
+        const kind = rawKind as "file" | "directory" | "any" | undefined;
+        const cursor = readString(dispatchArguments, "cursor");
+        const maxResults = dispatchArguments["maxResults"];
+        searchResult = await options.searchToolExecutor.findPaths({
+          runId,
+          projectId: snapshot.projectId,
+          contextMode: snapshot.contextMode,
+          query,
+          ...(kind === "file" || kind === "directory" || kind === "any" ? { kind } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
+          ...(typeof maxResults === "number" ? { maxResults } : {}),
+          signal: runtime.controller.signal
+        });
       } else {
         const stableRef = readString(dispatchArguments, "stableRef");
         if (stableRef === undefined) {
@@ -5721,7 +5765,7 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
         detail: {
           toolCallId: call.toolCallId,
           toolName: descriptor.name,
-          summary: `${searchResult.value.totalHits} hit(s)${searchResult.value.truncated ? " (truncated)" : ""}`
+          summary: `${"totalHits" in searchResult.value ? searchResult.value.totalHits : searchResult.value.items.length} hit(s)${searchResult.value.truncated ? " (truncated)" : ""}`
         }
       });
       runtime.messages.push({
@@ -12630,10 +12674,15 @@ function adaptToolInvocation(
         ? err(invalidV2ResourceRef(toolName))
         : ok({ name: "find_project_references", arguments: { stableRef: ref } });
     }
+    if (mode === "paths") {
+      const pathArguments = { ...argumentsValue };
+      delete pathArguments.mode;
+      return ok({ name: "find_project_paths", arguments: pathArguments });
+    }
     return err(
       applicationError(
         "AGENT_TOOL_ARGUMENTS_INVALID",
-        "search_project requires mode text or references."
+        "search_project requires mode text, references, or paths."
       )
     );
   }

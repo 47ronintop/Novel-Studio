@@ -468,6 +468,9 @@ describe("Agent tool registry", () => {
     expect(
       isValid("search_project", { mode: "references", ref: "chapter:ch_01", maxResults: 20 })
     ).toBe(true);
+    expect(isValid("search_project", { mode: "paths", query: "src/**/*.ts", kind: "file" })).toBe(
+      false
+    );
     expect(isValid("search_project", { mode: "text", ref: "chapter:ch_01" })).toBe(false);
     expect(isValid("search_project", { mode: "text", query: "oath", maxResults: 201 })).toBe(false);
     expect(
@@ -481,6 +484,35 @@ describe("Agent tool registry", () => {
     expect(descriptors.map((tool) => tool.name)).not.toEqual(
       expect.arrayContaining(["edit_text", "create_resource", "manage_path"])
     );
+
+    const generalDescriptors = listTools({
+      facadeVersion: "v2",
+      catalogSchemaVersion: "2.0",
+      operationMode: "execution",
+      contextMode: "general_file",
+      writePolicy: "read_only",
+      capabilitySnapshot: {
+        workspaceKind: "engineeringWorkspace",
+        searchEnabled: true,
+        fileLifecycleEnabled: false,
+        controlledExecutionEnabled: false,
+        gitReadEnabled: false,
+        networkReadEnabled: false,
+        pluginToolsEnabled: false,
+        mcpToolsEnabled: false,
+        featureFlagRevision: "flags_v2"
+      }
+    });
+    const generalSearch = generalDescriptors.find((tool) => tool.name === "search_project");
+    expect(generalSearch).toBeDefined();
+    if (generalSearch === undefined) throw new Error("search_project descriptor is missing");
+    expect(
+      validate({
+        descriptor: generalSearch,
+        arguments: { mode: "paths", query: "src/**/*.ts", kind: "file" },
+        argumentsText: JSON.stringify({ mode: "paths", query: "src/**/*.ts", kind: "file" })
+      }).ok
+    ).toBe(true);
   });
 
   test("assigns stable digests to the v2 descriptor set", () => {

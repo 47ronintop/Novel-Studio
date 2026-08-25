@@ -8026,6 +8026,76 @@ describe("AgentRunSession v2 tool facade", () => {
     });
   });
 
+  test("rejects an invalid path-discovery kind before invoking the search executor", async () => {
+    const repository = durableMemoryRepository();
+    const findPaths = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        kind: "untrusted_project_data" as const,
+        items: [],
+        nextCursor: null,
+        truncated: false,
+        indexVersion: "test-v1"
+      }
+    }));
+    let rounds = 0;
+    const session = createSession({
+      coordinatorOptions: { createRunId: () => "run_invalid_path_kind" },
+      repository,
+      newRunToolFacadeVersion: "v2",
+      capabilitySnapshot: creativeV2Capabilities(),
+      modelDriver: {
+        async *streamRound() {
+          rounds += 1;
+          if (rounds === 1) {
+            yield toolCall("invalid-path-kind", "search_project", {
+              mode: "paths",
+              query: "src/**",
+              kind: "bogus"
+            });
+            yield { type: "round_completed", finishReason: "tool_calls" };
+            return;
+          }
+          yield { type: "round_completed", finishReason: "stop" };
+        }
+      },
+      startPreflight: echoStartPreflight(),
+      readToolExecutor: readExecutor,
+      searchToolExecutor: {
+        async searchText() {
+          throw new Error("unexpected text search");
+        },
+        async findReferences() {
+          throw new Error("unexpected reference search");
+        },
+        findPaths
+      }
+    });
+
+    await session.startAgentRun({
+      ...startCommand(),
+      contextMode: "general_file",
+      limits: { maxModelRounds: 2, maxToolCalls: 2, maxConsecutiveToolFailures: 2 }
+    });
+    await vi.waitFor(async () => {
+      expect(await session.readAgentRun("run_invalid_path_kind")).toMatchObject({
+        value: {
+          snapshot: { status: "completed" },
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_failed",
+              detail: expect.objectContaining({
+                toolCallId: "invalid-path-kind",
+                code: "AGENT_TOOL_ARGUMENTS_INVALID"
+              })
+            })
+          ])
+        }
+      });
+    });
+    expect(findPaths).not.toHaveBeenCalled();
+  });
+
   test.each([
     {
       name: "create",

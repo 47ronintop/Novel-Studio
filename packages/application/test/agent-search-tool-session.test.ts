@@ -6,6 +6,7 @@ import type { AgentSearchToolResult } from "../src/agent-tool-ports.js";
 function makeMockSearchRepository(overrides?: {
   searchText?: (input: unknown) => Promise<unknown>;
   findReferences?: (input: unknown) => Promise<unknown>;
+  findPaths?: (input: unknown) => Promise<unknown>;
 }) {
   return {
     searchText:
@@ -38,6 +39,18 @@ function makeMockSearchRepository(overrides?: {
           kind: "search_results",
           items: [],
           totalHits: 0,
+          truncated: false,
+          indexVersion: "1.1"
+        }
+      })),
+    findPaths:
+      overrides?.findPaths ??
+      (async () => ({
+        ok: true,
+        value: {
+          kind: "path_results",
+          items: [],
+          nextCursor: null,
           truncated: false,
           indexVersion: "1.1"
         }
@@ -106,6 +119,51 @@ describe("AgentSearchToolSession", () => {
       expect.objectContaining({
         stableRef: "src/app.ts"
       })
+    ]);
+  });
+
+  test("wraps path discovery without manufacturing directory references", async () => {
+    const calls: unknown[] = [];
+    const session = createAgentSearchToolSession({
+      searchRepository: makeMockSearchRepository({
+        findPaths: async (input) => {
+          calls.push(input);
+          return {
+            ok: true,
+            value: {
+              kind: "path_results",
+              items: [
+                { relativePath: "src", entryKind: "directory" },
+                { relativePath: "src/index.ts", entryKind: "file", stableRef: "file:src/index.ts" }
+              ],
+              nextCursor: "next",
+              truncated: true,
+              indexVersion: "engineering-index-1"
+            }
+          };
+        }
+      })
+    });
+
+    const result = await session.findPaths({
+      runId: "run-01",
+      projectId: "proj-01",
+      contextMode: "general_file",
+      query: "src/**",
+      kind: "any",
+      maxResults: 10,
+      signal: new AbortController().signal
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.items).toEqual([
+      { relativePath: "src", entryKind: "directory" },
+      { relativePath: "src/index.ts", entryKind: "file", stableRef: "file:src/index.ts" }
+    ]);
+    expect(result.value.nextCursor).toBe("next");
+    expect(calls).toEqual([
+      expect.objectContaining({ query: "src/**", entryKind: "any", maxResults: 10 })
     ]);
   });
 

@@ -43,9 +43,7 @@ export interface AgentCapabilitySummaryProps {
  * summaries intentionally expose no operation-level claims; only a strict 2.0 summary can list
  * mutation operations or catalog approval rules.
  */
-export function describeAgentCapabilities(
-  facts: AgentCapabilityFacts
-): AgentCapabilityDescription {
+export function describeAgentCapabilities(facts: AgentCapabilityFacts): AgentCapabilityDescription {
   const summary = facts.permissionSummary;
   const isV2 = summary?.schemaVersion === "2.0";
   const isV11 = summary?.schemaVersion === "1.1";
@@ -55,8 +53,7 @@ export function describeAgentCapabilities(
   const approvalRules = isV2
     ? summary.approvalRules.map((rule) => ({
         operation: rule.operation,
-        reviewLabel:
-          rule.reviewMode === "always_human" ? "人工确认" : "条件审阅",
+        reviewLabel: rule.reviewMode === "always_human" ? "人工确认" : "条件审阅",
         ...(rule.reviewMode === "conditional_auto_review"
           ? { effectRuleLabel: effectRuleLabel(rule.effectRuleId) }
           : {})
@@ -78,15 +75,17 @@ export function describeAgentCapabilities(
     limitedRunPreapproval
   });
   const profileLabel = profileLabelFor(facts.profileId);
-  const forbiddenCapabilities = forbiddenLabels(summary?.forbiddenCapabilities ?? [], facts.profileId);
+  const forbiddenCapabilities = forbiddenLabels(
+    summary?.forbiddenCapabilities ?? [],
+    facts.profileId
+  );
   const networkRead = isV2
     ? summary.allowedCapabilities.includes("network")
     : isV11 && summary.externalReadCapabilities.length > 0;
   const remoteMcp = isV2
     ? summary.allowedCapabilities.includes("remote_mcp")
-    : isV11 && summary.externalActionCapabilities.some((value) =>
-        value.toLowerCase().includes("mcp")
-      );
+    : isV11 &&
+      summary.externalActionCapabilities.some((value) => value.toLowerCase().includes("mcp"));
   const futureActPolicyLabel =
     facts.operationMode === "planning" && facts.executionWritePolicy !== undefined
       ? futurePolicyLabel(facts.executionWritePolicy)
@@ -137,9 +136,7 @@ export function capabilityModeLabel(input: {
   if (input.profileId === "standalone") return "Standalone · 不连接项目";
   if (input.operationMode === "planning") return "只读规划";
   if (!input.hasWrite) return "只读执行";
-  return input.limitedRunPreapproval
-    ? "可提案 · 本次运行有限预授权"
-    : "可提案 · 需审批";
+  return input.limitedRunPreapproval ? "可提案 · 本次运行有限预授权" : "可提案 · 需审批";
 }
 
 export function operationLabel(operation: string): string {
@@ -304,7 +301,8 @@ export function AgentCapabilitySummary({
           <ul>
             {facts.proposalApprovals.map((approval, index) => (
               <li key={`${approval.operation}-${index}`}>
-                {operationLabel(approval.operation)} · {approvalRequirementLabel(approval.approvalRequirement)}
+                {operationLabel(approval.operation)} ·{" "}
+                {approvalRequirementLabel(approval.approvalRequirement)}
                 {approval.reasonCodes.length === 0
                   ? ""
                   : ` · ${approval.reasonCodes.map(approvalReasonLabel).join("、")}`}
@@ -324,15 +322,19 @@ export function AgentCapabilitySummary({
         </p>
       ) : null}
       {blocked.length === 0 ? null : (
-        <p className="ns-agent-capability-summary-blocked">
-          写入受阻：{blocked.join("、")}
-        </p>
+        <p className="ns-agent-capability-summary-blocked">写入受阻：{blocked.join("、")}</p>
       )}
     </section>
   );
 }
 
-function CapabilityList({ label, values }: { readonly label: string; readonly values: readonly string[] }) {
+function CapabilityList({
+  label,
+  values
+}: {
+  readonly label: string;
+  readonly values: readonly string[];
+}) {
   return (
     <section aria-label={label} className="ns-agent-capability-list">
       <strong>{label}</strong>
@@ -394,9 +396,10 @@ function fileHeadline(operations: readonly string[]): string {
     labels.has("replace_file") &&
     labels.has("create_file") &&
     labels.has("delete_file") &&
-    labels.has("move_file")
+    labels.has("move_file") &&
+    labels.has("create_directory")
   ) {
-    return "可提案文件查/增/改/删/移动与重命名";
+    return "可提案文件查/增/改/删/移动与重命名、创建目录";
   }
   return operations.map(operationLabel).join("、");
 }
