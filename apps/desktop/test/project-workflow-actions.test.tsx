@@ -10,9 +10,11 @@ import type {
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
 import {
+  guardDirtyChapterDraft,
   guardDirtyChapterForForeshadowAnalysis,
   useProjectWorkflowActions
 } from "../src/renderer/project-workflow-actions.js";
+import type { ChapterEditorBridge } from "../src/renderer/chapter-editor-bridge.js";
 import type { ProjectWorkflowBridge } from "../src/renderer/project-workflow-bridge.js";
 import type { StoryBibleBridge } from "../src/renderer/story-bible-bridge.js";
 
@@ -227,12 +229,156 @@ describe("useProjectWorkflowActions", () => {
       await Promise.resolve();
     });
 
-    expect(beforeWorkspaceTransition).toHaveBeenCalledTimes(3);
+    expect(beforeWorkspaceTransition).toHaveBeenCalledOnce();
     expect(getProps).not.toHaveBeenCalled();
     expect(openProject).not.toHaveBeenCalled();
     expect(createProject).not.toHaveBeenCalled();
     expect(createExampleProject).not.toHaveBeenCalled();
     expect(workflowStates).toEqual([]);
+  });
+
+  test("does not start a project transition when a dirty chapter is left unresolved", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const openProject = vi.fn(async () => currentWorkflow);
+    const chapterBridge = {
+      load: vi.fn(async () => createChapterEditor("ch_01"))
+    } as unknown as ChapterEditorBridge;
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge,
+        chapterEditor: { ...createChapterEditor("ch_01"), dirty: true },
+        saveCurrentChapter: vi.fn(async () => true),
+        projectWorkflowBridge: {
+          getProps: vi.fn(() => currentWorkflow),
+          openProject
+        } as unknown as ProjectWorkflowBridge,
+        settingsBridge: undefined,
+        storyBibleBridge: undefined,
+        setChapterEditor: () => undefined,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined
+      });
+      return null;
+    }
+
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(window.confirm).toHaveBeenCalledWith("当前章节尚未保存。是否先保存？");
+    expect(openProject).not.toHaveBeenCalled();
+    expect(chapterBridge.load).not.toHaveBeenCalled();
+  });
+
+  test("saves a dirty chapter before allowing a transition", async () => {
+    const editor = { ...createChapterEditor("ch_01"), dirty: true };
+    const saveCurrentChapter = vi.fn(async () => true);
+    const update = vi.fn();
+
+    await expect(
+      guardDirtyChapterDraft(
+        { load: vi.fn(async () => createChapterEditor("ch_01")) },
+        editor,
+        saveCurrentChapter,
+        update,
+        vi.fn(() => true)
+      )
+    ).resolves.toBe(true);
+
+    expect(saveCurrentChapter).toHaveBeenCalledOnce();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test("reloads a dirty chapter after the user discards it", async () => {
+    const loaded = createChapterEditor("ch_01");
+    const load = vi.fn(async () => loaded);
+    const discardRecovery = vi.fn(async () => true);
+    const update = vi.fn();
+    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    await expect(
+      guardDirtyChapterDraft(
+        { load },
+        { ...loaded, dirty: true },
+        vi.fn(),
+        update,
+        confirm,
+        discardRecovery
+      )
+    ).resolves.toBe(true);
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(discardRecovery).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledWith(loaded);
+  });
+
+  test("clears editors when a project transition changes workspace identity", async () => {
+    const currentWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-a",
+      status: "ready" as const
+    };
+    const nextWorkflow = {
+      ...createWorkflow(),
+      projectId: "project-b",
+      status: "ready" as const
+    };
+    const clearWorkspaceFileEditors = vi.fn();
+    const setChapterEditor = vi.fn();
+    const openProject = vi.fn(async () => nextWorkflow);
+    let actions: ReturnType<typeof useProjectWorkflowActions> | undefined;
+
+    function Harness() {
+      actions = useProjectWorkflowActions({
+        api: undefined,
+        chapterBridge: undefined,
+        projectWorkflowBridge: {
+          getProps: vi.fn(() => currentWorkflow),
+          openProject
+        } as unknown as ProjectWorkflowBridge,
+        settingsBridge: undefined,
+        storyBibleBridge: undefined,
+        setChapterEditor,
+        clearWorkspaceFileEditors,
+        setProjectWorkflow: () => undefined,
+        setSettings: () => undefined,
+        setShellState: () => undefined,
+        setStoryBible: () => undefined,
+        setStoryBibleEditor: () => undefined
+      });
+      return null;
+    }
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<Harness />));
+
+    await act(async () => {
+      actions?.handleOpenProject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(openProject).toHaveBeenCalledOnce();
+    expect(clearWorkspaceFileEditors).toHaveBeenCalledOnce();
+    expect(setChapterEditor).toHaveBeenCalledWith(undefined);
   });
 
   test("saves a dirty Story Bible after the file guard before opening a project", async () => {

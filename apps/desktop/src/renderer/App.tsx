@@ -218,6 +218,7 @@ export function App() {
   const [navigatorSearchQuery, setNavigatorSearchQuery] = useState("");
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [projectCreateDialogOpen, setProjectCreateDialogOpen] = useState(false);
+  const projectCreateDialogOriginProjectIdRef = useRef<string | undefined>(undefined);
   const [appearancePreferences, setAppearancePreferences] = useState<UserAppearancePreferences>({
     theme: "dark",
     accentColor: "teal"
@@ -248,11 +249,17 @@ export function App() {
     if (
       projectCreateDialogOpen &&
       projectWorkflow?.status === "ready" &&
-      projectWorkflow.feedback === undefined
+      projectWorkflow.feedback === undefined &&
+      projectWorkflow.projectId !== projectCreateDialogOriginProjectIdRef.current
     ) {
       setProjectCreateDialogOpen(false);
     }
-  }, [projectCreateDialogOpen, projectWorkflow?.status, projectWorkflow?.feedback]);
+  }, [
+    projectCreateDialogOpen,
+    projectWorkflow?.feedback,
+    projectWorkflow?.projectId,
+    projectWorkflow?.status
+  ]);
 
   useEffect(() => {
     const next = ensureCreativeWorkspaceContext(shellState, projectWorkflow?.projectId);
@@ -451,6 +458,7 @@ export function App() {
     handleConfirmForeshadowAnalysisChanges,
     handleRetryFailedForeshadowAnalysisChanges,
     handleCloseForeshadowAnalysis,
+    guardChapterDraft,
     guardStoryBibleDraft
   } = useProjectWorkflowActions({
     api,
@@ -465,6 +473,7 @@ export function App() {
     beforeCreateChapter: storyAnalysisWorkspace.beforeCreateChapter,
     setChapterEditor,
     clearFileEditor,
+    clearWorkspaceFileEditors,
     setProjectWorkflow,
     onWorkspaceTransitionFeedback: setWorkspaceTransitionFeedback,
     setSettings,
@@ -474,8 +483,9 @@ export function App() {
   });
   const guardWorkspaceTransition = useCallback(async () => {
     if (!(await guardWorkspaceFileTransition())) return false;
+    if (!(await guardChapterDraft())) return false;
     return guardStoryBibleDraft();
-  }, [guardStoryBibleDraft, guardWorkspaceFileTransition]);
+  }, [guardChapterDraft, guardStoryBibleDraft, guardWorkspaceFileTransition]);
   const guardAgentStart = useCallback(async () => {
     if (activeCreativeFileRef !== null && !(await guardCreativeFile())) return false;
     return guardStoryBibleDraft();
@@ -535,14 +545,27 @@ export function App() {
     void (async () => {
       if (!(await guardWorkspaceTransition())) return;
       const next = await engineeringWorkspaceBridge.openEngineeringWorkspace();
-      if (next.status !== "ready" || next.workspace === undefined) {
+      if (next.status !== "ready" || next.workspace === undefined || next.feedback !== undefined) {
         setWorkspaceTransitionFeedback(next.feedback);
         return;
       }
+      clearWorkspaceFileEditors();
+      setProjectWorkflow(undefined);
+      setChapterEditor(undefined);
+      storyBibleBridge?.clear();
+      setStoryBible(undefined);
+      setStoryBibleEditor(undefined);
+      setSettings(undefined);
       setWorkspaceTransitionFeedback(undefined);
       setShellState(await api.getShellState());
     })().catch(() => undefined);
-  }, [api, engineeringWorkspaceBridge, guardWorkspaceTransition]);
+  }, [
+    api,
+    clearWorkspaceFileEditors,
+    engineeringWorkspaceBridge,
+    guardWorkspaceTransition,
+    storyBibleBridge
+  ]);
 
   const applyActivity = useCallback(
     (activityId: ActivityId) => {
@@ -684,6 +707,10 @@ export function App() {
       persistUserPreferences
     ]
   );
+  const handleCreateCreativeProject = useCallback(() => {
+    projectCreateDialogOriginProjectIdRef.current = projectWorkflow?.projectId;
+    setProjectCreateDialogOpen(true);
+  }, [projectWorkflow?.projectId]);
   const workspaceNavigation = createWorkspaceNavigation({
     getWorkspaceContext: () => shellState.workspaceContext,
     projectWorkflowBridge,
@@ -709,7 +736,7 @@ export function App() {
     },
     openCreativeProject: handleOpenProject,
     openEngineeringWorkspace: handleOpenEngineeringWorkspace,
-    createCreativeProject: () => setProjectCreateDialogOpen(true),
+    createCreativeProject: handleCreateCreativeProject,
     engineeringWorkspaceBridge,
     setEngineeringWorkspace,
     onNavigationFeedback: (message) =>

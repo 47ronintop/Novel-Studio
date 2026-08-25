@@ -8,7 +8,7 @@ import type {
   StoryBibleEditorProps,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { ChapterEditorBridge } from "./chapter-editor-bridge.js";
@@ -31,6 +31,7 @@ export interface ProjectWorkflowActionInputs {
   readonly beforeCreateChapter?: (() => Promise<boolean>) | undefined;
   readonly setChapterEditor: Dispatch<SetStateAction<ChapterEditorProps | undefined>>;
   readonly clearFileEditor?: (() => void) | undefined;
+  readonly clearWorkspaceFileEditors?: (() => void) | undefined;
   readonly setFileEditor?: Dispatch<SetStateAction<PlainFileEditorProps | undefined>> | undefined;
   readonly setProjectWorkflow: Dispatch<SetStateAction<ProjectWorkflowProps | undefined>>;
   readonly onWorkspaceTransitionFeedback?:
@@ -55,6 +56,7 @@ export function useProjectWorkflowActions({
   beforeCreateChapter,
   setChapterEditor,
   clearFileEditor,
+  clearWorkspaceFileEditors,
   setFileEditor,
   setProjectWorkflow,
   onWorkspaceTransitionFeedback,
@@ -63,6 +65,7 @@ export function useProjectWorkflowActions({
   setStoryBible,
   setStoryBibleEditor
 }: ProjectWorkflowActionInputs) {
+  const workspaceTransitionInFlightRef = useRef(false);
   const refreshProjectWorkflow = useCallback(
     async (nextWorkflow: ProjectWorkflowProps) => {
       setProjectWorkflow(nextWorkflow);
@@ -137,10 +140,17 @@ export function useProjectWorkflowActions({
         nextWorkflow.projectId !== previousProjectId
       ) {
         clearProjectBoundStory();
+        clearWorkspaceFileEditors?.();
+        setChapterEditor(undefined);
       }
       await refreshProjectWorkflow(nextWorkflow);
     },
-    [clearProjectBoundStory, refreshProjectWorkflow]
+    [
+      clearProjectBoundStory,
+      clearWorkspaceFileEditors,
+      refreshProjectWorkflow,
+      setChapterEditor
+    ]
   );
 
   const restoreWorkspaceTransition = useCallback(
@@ -178,30 +188,92 @@ export function useProjectWorkflowActions({
     );
   }, [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
 
+  const guardChapterDraft = useCallback(
+    async () => {
+      let currentWorkflow = projectWorkflow;
+      if (
+        chapterEditor?.dirty === true &&
+        currentWorkflow !== undefined &&
+        projectWorkflowBridge !== undefined
+      ) {
+        try {
+          currentWorkflow = await projectWorkflowBridge.refreshActiveProject();
+          setProjectWorkflow(currentWorkflow);
+        } catch {
+          return false;
+        }
+        if (currentWorkflow.status !== "ready" || currentWorkflow.feedback !== undefined) {
+          return false;
+        }
+      }
+
+      const recoveryItem =
+        projectWorkflowBridge === undefined
+          ? undefined
+          : currentWorkflow?.recovery?.availableItems.find(
+              (item) => item.chapterId === chapterEditor?.chapter.frontmatter.id
+            );
+      const discardRecovery =
+        recoveryItem === undefined || projectWorkflowBridge === undefined
+          ? undefined
+          : async () => {
+              const next = await projectWorkflowBridge.discardRecoveryDraft(
+                recoveryItem.sessionId
+              );
+              setProjectWorkflow(next);
+              return next.status === "ready" && next.feedback === undefined;
+            };
+      return guardDirtyChapterDraft(
+        chapterBridge,
+        chapterEditor,
+        saveCurrentChapter,
+        (editor) => setChapterEditor(editor),
+        undefined,
+        discardRecovery
+      );
+    },
+    [
+      chapterBridge,
+      chapterEditor,
+      projectWorkflow,
+      projectWorkflowBridge,
+      saveCurrentChapter,
+      setChapterEditor,
+      setProjectWorkflow
+    ]
+  );
+
   const runWorkspaceTransition = useCallback(
     async (operation: () => Promise<ProjectWorkflowProps>, status: "opening" | "creating") => {
-      if (beforeWorkspaceTransition !== undefined && !(await beforeWorkspaceTransition())) return;
-      if (!(await guardStoryBibleDraft())) return;
-
-      onWorkspaceTransitionFeedback?.(undefined);
-
-      const previous = projectWorkflowBridge?.getProps();
-      if (previous === undefined) return;
-      setProjectWorkflow({ ...previous, status });
+      if (workspaceTransitionInFlightRef.current) return;
+      workspaceTransitionInFlightRef.current = true;
       try {
-        const nextWorkflow = await operation();
-        if (nextWorkflow.folderImportPreview !== undefined) {
-          setProjectWorkflow(nextWorkflow);
-          return;
-        }
+        if (beforeWorkspaceTransition !== undefined && !(await beforeWorkspaceTransition())) return;
+        if (!(await guardChapterDraft())) return;
+        if (!(await guardStoryBibleDraft())) return;
+
         onWorkspaceTransitionFeedback?.(undefined);
-        await refreshWorkspaceTransition(nextWorkflow, previous.projectId);
-      } catch (error) {
-        restoreWorkspaceTransition(previous, error);
+        const previous = projectWorkflowBridge?.getProps();
+        if (previous === undefined) return;
+        setProjectWorkflow({ ...previous, status });
+        try {
+          const nextWorkflow = await operation();
+          if (nextWorkflow.folderImportPreview !== undefined) {
+            setProjectWorkflow(nextWorkflow);
+            return;
+          }
+          onWorkspaceTransitionFeedback?.(undefined);
+          await refreshWorkspaceTransition(nextWorkflow, previous.projectId);
+        } catch (error) {
+          restoreWorkspaceTransition(previous, error);
+        }
+      } finally {
+        workspaceTransitionInFlightRef.current = false;
       }
     },
     [
       beforeWorkspaceTransition,
+      guardChapterDraft,
       guardStoryBibleDraft,
       onWorkspaceTransitionFeedback,
       projectWorkflowBridge,
@@ -558,6 +630,7 @@ export function useProjectWorkflowActions({
     handleConfirmForeshadowAnalysisChanges,
     handleRetryFailedForeshadowAnalysisChanges,
     handleCloseForeshadowAnalysis,
+    guardChapterDraft,
     guardStoryBibleDraft
   };
 }
@@ -585,6 +658,39 @@ export async function guardDirtyChapterForForeshadowAnalysis(
   }
 }
 
+export async function guardDirtyChapterDraft(
+  chapterBridge: Pick<ChapterEditorBridge, "load"> | undefined,
+  chapterEditor: ChapterEditorProps | undefined,
+  saveCurrentChapter: (() => Promise<boolean>) | undefined,
+  update: (editor: ChapterEditorProps) => void,
+  confirm: (message: string) => boolean = confirmDirtyChapterDraft,
+  discardRecovery?: (() => Promise<boolean>) | undefined
+): Promise<boolean> {
+  if (chapterBridge === undefined || chapterEditor?.dirty !== true) return true;
+
+  if (confirm("当前章节尚未保存。是否先保存？")) {
+    if (saveCurrentChapter === undefined) return false;
+    try {
+      return await saveCurrentChapter();
+    } catch {
+      return false;
+    }
+  }
+
+  if (!confirm("是否放弃当前章节的未保存修改？")) return false;
+  try {
+    if (discardRecovery !== undefined && !(await discardRecovery())) return false;
+    update(await chapterBridge.load());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function confirmForeshadowAnalysisSave(message: string): boolean {
+  return globalThis.window?.confirm(message) === true;
+}
+
+function confirmDirtyChapterDraft(message: string): boolean {
   return globalThis.window?.confirm(message) === true;
 }
