@@ -274,6 +274,8 @@ describe("Gemini provider", () => {
       totalTokens: 15,
       usageStatus: "actual"
     });
+    expect(result.value.usage).not.toHaveProperty("cacheEligibleInputTokens");
+    expect(result.value.usage).not.toHaveProperty("cacheHitRate");
   });
 
   test("serializes Gemini 2.5 reasoning as a thinking budget", async () => {

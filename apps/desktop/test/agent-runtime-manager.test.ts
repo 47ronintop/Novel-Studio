@@ -183,6 +183,66 @@ describe("DesktopAgentRuntimeManager", () => {
     expect(manager.active()).toMatchObject({ scope: "standalone" });
   });
 
+  test("blocks workspace replacement while a renderer Agent command lease is held", async () => {
+    const rootA = await createRoot("command-lease-source");
+    const rootB = await createRoot("command-lease-target");
+    const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime(binding) {
+        const runtime = fakeRuntime(binding.workspaceId, binding.contentRoot, binding.stateRoot);
+        runtimes.set(binding.workspaceId, runtime);
+        return runtime as unknown as DesktopAgentRuntime;
+      }
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_command_lease_a", rootA));
+
+    const lease = manager.acquireActiveRuntimeCommandLease?.();
+    expect(lease).toMatchObject({ ok: true });
+    if (lease === undefined || !lease.ok) throw new Error("command lease unavailable");
+    expect(lease.value.runtime).toBe(runtimes.get("ws_command_lease_a"));
+
+    await expect(
+      manager.prepareWorkspace(engineeringBinding("ws_command_lease_b", rootB))
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+    expect(runtimes.has("ws_command_lease_b")).toBe(false);
+    expect(runtimes.get("ws_command_lease_a")).toMatchObject({ disposeCalls: 0 });
+
+    lease.value.release();
+    await expect(
+      manager.bindWorkspace(engineeringBinding("ws_command_lease_b", rootB))
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  test("defers disposal until active Agent leases have released their runtime", async () => {
+    const root = await createRoot("command-lease-dispose");
+    const runtime = fakeRuntime("ws_command_lease_dispose", root, root);
+    const manager = createDesktopAgentRuntimeManager({
+      createRuntime: () => runtime as unknown as DesktopAgentRuntime
+    });
+    await manager.bindWorkspace(engineeringBinding("ws_command_lease_dispose", root));
+
+    const lease = manager.acquireActiveRuntimeCommandLease?.();
+    expect(lease).toMatchObject({ ok: true });
+    if (lease === undefined || !lease.ok) throw new Error("command lease unavailable");
+
+    manager.dispose();
+    expect(runtime.disposeCalls).toBe(0);
+    expect(manager.active()).toMatchObject({ scope: "workspace" });
+    await expect(
+      manager.bindWorkspace(engineeringBinding("ws_after_dispose", root))
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED" }
+    });
+
+    lease.value.release();
+    expect(runtime.disposeCalls).toBe(1);
+    expect(manager.active()).toBeUndefined();
+  });
+
   test("keeps workspace replacement closed to starts through commit", async () => {
     const rootA = await createRoot("transition-gate-source");
     const rootB = await createRoot("transition-gate-target");

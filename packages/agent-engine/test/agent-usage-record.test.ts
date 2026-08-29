@@ -154,6 +154,19 @@ describe("validateAgentUsageRecord", () => {
     expect(result.ok).toBe(true);
   });
 
+  test("rejects cache reads above the verified eligible input denominator", () => {
+    const result = validateAgentUsageRecord(
+      baseRecord({
+        cacheReadTokens: 101,
+        cacheEligibleInputTokens: 100,
+        cacheOutcome: "hit",
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "included_in_input"
+      })
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "AGENT_USAGE_RECORD_INVALID" } });
+  });
+
   test("accepts an actual provider cost without pricing registry metadata", () => {
     const result = validateAgentUsageRecord(
       baseRecord({

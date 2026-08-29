@@ -39,7 +39,13 @@ export class WorkspaceStateFileRepository {
     const stateRoot = join(this.options.userDataRoot, "workspaces", workspaceId);
     try {
       await mkdir(stateRoot, { recursive: true });
-      return ok({ workspaceId, stateRoot });
+      // Keep the state root in the same canonical form as the content root. The
+      // runtime binds workspace roots again before constructing lock-backed
+      // sessions; returning the canonical path here prevents a Windows 8.3
+      // short-path value from being persisted in the lock record and compared
+      // against its long-path equivalent later.
+      const canonicalStateRoot = await realpath(stateRoot);
+      return ok({ workspaceId, stateRoot: canonicalStateRoot });
     } catch {
       return err(
         storageError({

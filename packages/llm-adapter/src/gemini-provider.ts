@@ -579,7 +579,12 @@ function parseUsage(value: unknown, request?: LlmRequest): LlmUsage | undefined 
       ? { resolution: { active: false } satisfies ResolvedLlmPromptCacheRequest }
       : resolveGeminiPromptCache(request);
   const cacheWriteTokens = promptCache.resolution.config?.resourceWriteTokens;
-  const cacheEligibleInputTokens = geminiCacheEligibleInputTokens(cachedTokens, cacheWriteTokens);
+  const cacheEligibleInputTokens = promptCache.resolution.active
+    ? geminiCacheEligibleInputTokens(
+        promptCache.resolution.config?.eligibleInputTokens,
+        cacheWriteTokens
+      )
+    : undefined;
   return withLlmPromptCacheUsage(usage, promptCache.resolution, {
     ...(cachedTokens === undefined ? {} : { cacheReadTokens: cachedTokens }),
     ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
@@ -615,12 +620,10 @@ function missingUsage(request?: LlmRequest): LlmUsage {
 }
 
 function geminiCacheEligibleInputTokens(
-  cacheReadTokens: number | undefined,
+  configuredEligibleTokens: number | undefined,
   cacheWriteTokens: number | undefined
 ): number | undefined {
-  return cacheReadTokens !== undefined && cacheReadTokens > 0
-    ? cacheReadTokens
-    : (cacheWriteTokens ?? cacheReadTokens);
+  return configuredEligibleTokens ?? cacheWriteTokens;
 }
 
 function normalizeFinishReason(value: string, sawToolCall: boolean): LlmRoundFinishReason {

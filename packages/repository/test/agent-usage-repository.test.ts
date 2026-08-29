@@ -416,6 +416,20 @@ describe("AgentUsageFileRepository", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "AGENT_USAGE_RECORD_INVALID" } });
   });
 
+  test("rejects cache reads above the verified eligible input denominator", async () => {
+    const repository = await createRepository();
+    const result = await repository.writeFinal(
+      baseRecord({
+        cacheReadTokens: 101,
+        cacheEligibleInputTokens: 100,
+        cacheOutcome: "hit",
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "included_in_input"
+      })
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "AGENT_USAGE_RECORD_INVALID" } });
+  });
+
   test("maintains a daily aggregate keyed by localDate and does not double-count replays", async () => {
     const repository = await createRepository();
     const userDataRoot = latestRoot();
@@ -663,6 +677,29 @@ describe("AgentUsageFileRepository", () => {
       cacheTelemetryComparableInputTokens: 2300,
       cacheComparableInputTokens: 5450
     });
+  });
+
+  test("does not expose a hit rate when actual cache reads have no denominator", async () => {
+    const repository = await createRepository();
+    await repository.writeFinal(
+      baseRecord({
+        cacheReadTokens: 10,
+        cacheOutcome: "hit",
+        cacheUsageStatus: "actual",
+        cacheInputTokenSemantics: "included_in_input"
+      })
+    );
+
+    const result = await repository.queryDetails({
+      range: { fromLocalDate: "2026-07-16", toLocalDate: "2026-07-16" },
+      detailLocalDate: "2026-07-16"
+    });
+
+    expect(result.value?.[0]).toMatchObject({
+      cacheReadTokens: 10,
+      cacheUsageStatus: "actual"
+    });
+    expect(result.value?.[0]?.cacheHitRate).toBeUndefined();
   });
 
   test("rebuilds old or damaged aggregates deterministically without changing details", async () => {

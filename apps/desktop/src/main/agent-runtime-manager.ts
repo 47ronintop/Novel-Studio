@@ -97,6 +97,16 @@ export interface DesktopAgentRunStartLease {
   release(): void;
 }
 
+/**
+ * Keeps the active runtime selected while any renderer-originated Agent command is in flight.
+ * Workspace transitions use the same gate, preventing a command continuation from targeting a
+ * runtime that has already been disposed.
+ */
+export interface DesktopAgentRuntimeCommandLease {
+  readonly runtime: DesktopAgentRuntime | DesktopStandaloneAgentRuntime;
+  release(): void;
+}
+
 export interface DesktopAgentRuntimeManager {
   /** Initialize the persistent application-scoped runtime without selecting a workspace. */
   prepareStandalone(): Promise<Result<DesktopStandaloneAgentRuntime, UnifiedError>>;
@@ -120,6 +130,8 @@ export interface DesktopAgentRuntimeManager {
    * transitions use the same gate so they cannot hide a run that has not been persisted yet.
    */
   acquireActiveRunStartLease(): Result<DesktopAgentRunStartLease, UnifiedError>;
+  /** Reserve the active runtime for the lifetime of one Agent command. */
+  acquireActiveRuntimeCommandLease?(): Result<DesktopAgentRuntimeCommandLease, UnifiedError>;
   currentWorkspace():
     | {
         readonly workspaceId: string;
@@ -177,6 +189,10 @@ export function createDesktopAgentRuntimeManager(
   const pendingPreparations = new Set<PreparedDesktopAgentWorkspace>();
   let activeScopeTransition: symbol | undefined;
   let activeStartLeaseCount = 0;
+  let activeCommandLeaseCount = 0;
+  let disposeRequested = false;
+  let disposed = false;
+  let finalizingDispose = false;
   let settingsRefreshGeneration = 0;
   let settingsRefreshTail: Promise<void> = Promise.resolve();
   let deferredSettingsRefresh:
@@ -215,7 +231,13 @@ export function createDesktopAgentRuntimeManager(
   }
 
   function beginScopeTransition(): Result<symbol, UnifiedError> {
-    if (activeScopeTransition !== undefined || activeStartLeaseCount > 0) {
+    if (
+      disposeRequested ||
+      disposed ||
+      activeScopeTransition !== undefined ||
+      activeStartLeaseCount > 0 ||
+      activeCommandLeaseCount > 0
+    ) {
       return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
     }
     const transition = Symbol("desktop-agent-runtime-transition");
@@ -225,10 +247,11 @@ export function createDesktopAgentRuntimeManager(
 
   function endScopeTransition(transition: symbol): void {
     if (activeScopeTransition === transition) activeScopeTransition = undefined;
+    maybeFinalizeDispose();
   }
 
   function acquireActiveRunStartLease(): Result<DesktopAgentRunStartLease, UnifiedError> {
-    if (activeScopeTransition !== undefined) {
+    if (disposeRequested || disposed || activeScopeTransition !== undefined) {
       return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
     }
     const session =
@@ -247,6 +270,35 @@ export function createDesktopAgentRuntimeManager(
         if (released) return;
         released = true;
         activeStartLeaseCount -= 1;
+        maybeFinalizeDispose();
+      }
+    });
+  }
+
+  function acquireActiveRuntimeCommandLease(): Result<
+    DesktopAgentRuntimeCommandLease,
+    UnifiedError
+  > {
+    if (disposeRequested || disposed || activeScopeTransition !== undefined) {
+      return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+    }
+    const active =
+      selectedScope === "workspace"
+        ? runtime
+        : selectedScope === "standalone"
+          ? standaloneRuntime
+          : undefined;
+    if (active === undefined) return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+
+    activeCommandLeaseCount += 1;
+    let released = false;
+    return ok({
+      runtime: active,
+      release() {
+        if (released) return;
+        released = true;
+        activeCommandLeaseCount -= 1;
+        maybeFinalizeDispose();
       }
     });
   }
@@ -262,6 +314,9 @@ export function createDesktopAgentRuntimeManager(
   }
 
   async function createStandalone(): Promise<Result<DesktopStandaloneAgentRuntime, UnifiedError>> {
+    if (disposeRequested || disposed) {
+      return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+    }
     if (standaloneRuntime !== undefined) return ok(standaloneRuntime);
     const factory = options.createStandaloneRuntime;
     if (factory === undefined) return err(runtimeError("AGENT_STANDALONE_RUNTIME_UNAVAILABLE"));
@@ -281,6 +336,10 @@ export function createDesktopAgentRuntimeManager(
       if (!prepared.ok) {
         candidate.dispose?.();
         return prepared;
+      }
+      if (disposeRequested || disposed) {
+        candidate.dispose?.();
+        return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
       }
       const unsubscribe = candidate.agentRunSession.subscribe((event) => {
         forwardEvent("standalone", candidate, event);
@@ -449,6 +508,9 @@ export function createDesktopAgentRuntimeManager(
 
   const manager: DesktopAgentRuntimeManager = {
     async prepareStandalone() {
+      if (disposeRequested || disposed) {
+        return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+      }
       if (standalonePreparation !== undefined) return standalonePreparation;
       const preparation = createStandalone();
       standalonePreparation = preparation;
@@ -473,6 +535,9 @@ export function createDesktopAgentRuntimeManager(
         if (!activeAfterPrepare.ok) return activeAfterPrepare;
         if (activeAfterPrepare.value)
           return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+        if (disposeRequested || disposed) {
+          return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+        }
         // A closed workspace has no runtime that can accidentally remain reachable through Main.
         // Standalone remains allocated when a workspace is opened, but the reverse transition tears
         // down workspace-only state after its active-run guard has passed.
@@ -485,6 +550,9 @@ export function createDesktopAgentRuntimeManager(
       }
     },
     async bindWorkspace(binding) {
+      if (disposeRequested || disposed) {
+        return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+      }
       if (
         runtime !== undefined &&
         currentBinding !== undefined &&
@@ -553,7 +621,7 @@ export function createDesktopAgentRuntimeManager(
           candidate.dispose?.();
           return activeBeforeCommit;
         }
-        if (runtime !== sourceRuntime || activeBeforeCommit.value) {
+        if (disposeRequested || disposed || runtime !== sourceRuntime || activeBeforeCommit.value) {
           candidate.dispose?.();
           return err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
         }
@@ -629,6 +697,7 @@ export function createDesktopAgentRuntimeManager(
           : undefined,
     activeScope: () => selectedScope,
     acquireActiveRunStartLease,
+    acquireActiveRuntimeCommandLease,
     currentWorkspace: () =>
       runtime === undefined || selectedScope !== "workspace"
         ? undefined
@@ -669,8 +738,26 @@ export function createDesktopAgentRuntimeManager(
       return () => listeners.delete(listener);
     },
     dispose() {
+      if (disposeRequested || disposed) return;
+      disposeRequested = true;
       settingsRefreshGeneration += 1;
       deferredSettingsRefresh = undefined;
+      maybeFinalizeDispose();
+    }
+  };
+
+  function maybeFinalizeDispose(): void {
+    if (
+      !disposeRequested ||
+      disposed ||
+      finalizingDispose ||
+      activeStartLeaseCount > 0 ||
+      activeCommandLeaseCount > 0
+    ) {
+      return;
+    }
+    finalizingDispose = true;
+    try {
       disposeWorkspaceRuntime();
       unsubscribeStandaloneRuntime?.();
       unsubscribeStandaloneRuntime = undefined;
@@ -679,11 +766,14 @@ export function createDesktopAgentRuntimeManager(
       selectedScope = undefined;
       options.onActiveRuntimeChanged?.(undefined);
       for (const prepared of [...pendingPreparations]) {
-        this.discardPreparedWorkspace(prepared);
+        manager.discardPreparedWorkspace(prepared);
       }
       listeners.clear();
+      disposed = true;
+    } finally {
+      finalizingDispose = false;
     }
-  };
+  }
   return manager;
 }
 

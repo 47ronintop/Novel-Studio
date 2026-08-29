@@ -323,6 +323,13 @@ export function validateAgentUsageRecord(
   for (const [field, value] of optional) {
     if (value !== undefined && !isTokenCount(value)) return err(invalid(record, field));
   }
+  if (
+    record.cacheReadTokens !== undefined &&
+    record.cacheEligibleInputTokens !== undefined &&
+    record.cacheReadTokens > record.cacheEligibleInputTokens
+  ) {
+    return err(invalid(record, "cacheReadTokens"));
+  }
   if (record.totalTokens < record.inputTokens + record.outputTokens) {
     return err(invalid(record, "totalTokens"));
   }

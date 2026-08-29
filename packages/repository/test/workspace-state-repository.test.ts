@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, realpath, readdir, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -25,7 +25,9 @@ describe("WorkspaceStateFileRepository", () => {
     if (!second.ok) throw new Error(second.error.message);
     expect(first).toEqual(second);
     expect(first.value.workspaceId).toMatch(/^ws_[a-f0-9]{24}$/u);
-    expect(first.value.stateRoot).toBe(join(userDataRoot, "workspaces", first.value.workspaceId));
+    expect(first.value.stateRoot).toBe(
+      await realpath(join(userDataRoot, "workspaces", first.value.workspaceId))
+    );
     expect((await stat(first.value.stateRoot)).isDirectory()).toBe(true);
     expect(await readdir(contentRoot)).toEqual([]);
   });
@@ -52,6 +54,24 @@ describe("WorkspaceStateFileRepository", () => {
     expect(JSON.stringify([nonCanonical, missing])).not.toContain(contentRoot);
     await expect(stat(join(userDataRoot, "workspaces"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readdir(contentRoot)).toEqual([]);
+  });
+
+  test("returns a canonical state root when the user-data root uses a realpath alias", async () => {
+    const contentRoot = await createRoot("aliased-content");
+    const userDataRoot = await createRoot("aliased-user-data");
+    const userDataAlias = `${userDataRoot}-alias`;
+    await symlink(userDataRoot, userDataAlias, process.platform === "win32" ? "junction" : "dir");
+    roots.push(userDataAlias);
+    const repository = new WorkspaceStateFileRepository({ userDataRoot: userDataAlias });
+
+    const resolved = await repository.resolveState(await realpath(contentRoot));
+
+    expect(resolved).toMatchObject({ ok: true });
+    if (!resolved.ok) return;
+    expect(resolved.value.stateRoot).toBe(await realpath(resolved.value.stateRoot));
+    expect(resolved.value.stateRoot).toBe(
+      await realpath(join(userDataAlias, "workspaces", resolved.value.workspaceId))
+    );
   });
 });
 

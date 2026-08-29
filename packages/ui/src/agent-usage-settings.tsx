@@ -117,6 +117,7 @@ function UsageSummary({
     // existing daily/run data. Keep this UI tolerant while older reports load.
     report
   );
+  const cacheHitRate = summarizeCacheHitRate(days);
   return (
     <section aria-label="用量摘要" className="agent-usage-summary">
       <h3>用量摘要</h3>
@@ -129,6 +130,12 @@ function UsageSummary({
           secondary={cacheTelemetry.label}
           secondaryStatus={cacheTelemetry.status}
           value={formatTokenCount(summary.cacheReadTokens)}
+        />
+        <UsageSummaryCard
+          label="缓存命中率"
+          secondary={cacheHitRate === undefined ? "不可用" : "可验证"}
+          secondaryStatus={cacheHitRate === undefined ? "unavailable" : "complete"}
+          value={cacheHitRate === undefined ? "不可用" : formatPercent(cacheHitRate)}
         />
       </div>
     </section>
@@ -203,6 +210,31 @@ function summarizeCacheTelemetry(report: AgentUsageReport): {
     return { status: "partial", label: "数据不完整" };
   }
   return { status: "unavailable", label: "未上报" };
+}
+
+function summarizeCacheHitRate(days: readonly AgentUsageDailyBucket[]): number | undefined {
+  let cacheReadTokens = 0;
+  let cacheEligibleInputTokens = 0;
+  for (const day of days) {
+    const eligible = day.cacheEligibleInputTokens ?? 0;
+    const read = day.cacheReadTokens ?? day.cachedTokens;
+    if (eligible === 0) {
+      if (read > 0) return undefined;
+      continue;
+    }
+    if (
+      day.cacheHitRate === undefined ||
+      !Number.isFinite(day.cacheHitRate) ||
+      day.cacheHitRate < 0 ||
+      day.cacheHitRate > 1 ||
+      read > eligible
+    ) {
+      return undefined;
+    }
+    cacheReadTokens += read;
+    cacheEligibleInputTokens += eligible;
+  }
+  return cacheEligibleInputTokens > 0 ? cacheReadTokens / cacheEligibleInputTokens : undefined;
 }
 
 function formatPercent(value: number): string {
@@ -425,6 +457,7 @@ function DailyUsageTable({
               <th>输入</th>
               <th>输出</th>
               <th>缓存</th>
+              <th>命中率</th>
             </tr>
           </thead>
           <tbody>
@@ -454,6 +487,9 @@ function DailyUsageTable({
                   <span className="agent-usage-table-secondary">
                     {formatTokenCount(day.cacheReadTokens ?? day.cachedTokens)}
                   </span>
+                </td>
+                <td data-label="命中率">
+                  <span className="agent-usage-table-secondary">{formatDayCacheHitRate(day)}</span>
                 </td>
               </tr>
             ))}
@@ -551,6 +587,20 @@ function formatTokenCount(value: number | undefined): string {
   return value === undefined ? "不可用" : value.toLocaleString();
 }
 
+function formatDayCacheHitRate(day: AgentUsageDailyBucket): string {
+  const read = day.cacheReadTokens ?? day.cachedTokens;
+  const eligible = day.cacheEligibleInputTokens;
+  return day.cacheHitRate !== undefined &&
+    Number.isFinite(day.cacheHitRate) &&
+    day.cacheHitRate >= 0 &&
+    day.cacheHitRate <= 1 &&
+    eligible !== undefined &&
+    eligible > 0 &&
+    read <= eligible
+    ? formatPercent(day.cacheHitRate)
+    : "不可用";
+}
+
 function formatRunTime(timestamp: string): string {
   const parsed = new Date(timestamp);
   if (!Number.isFinite(parsed.getTime())) return "时间未知";
@@ -563,7 +613,17 @@ function formatRunTime(timestamp: string): string {
 
 function formatRunCache(run: AgentUsageReport["runs"][number]): string {
   if (run.cacheOutcome === "hit" && run.cacheReadTokens !== undefined) {
-    return `命中 · 读取 ${formatTokenCount(run.cacheReadTokens)}`;
+    const hitRate =
+      run.cacheHitRate !== undefined &&
+      Number.isFinite(run.cacheHitRate) &&
+      run.cacheHitRate >= 0 &&
+      run.cacheHitRate <= 1 &&
+      run.cacheEligibleInputTokens !== undefined &&
+      run.cacheEligibleInputTokens > 0 &&
+      run.cacheReadTokens <= run.cacheEligibleInputTokens
+        ? ` · 命中率 ${formatPercent(run.cacheHitRate)}`
+        : "";
+    return `命中${hitRate} · 读取 ${formatTokenCount(run.cacheReadTokens)}`;
   }
   if (run.cacheOutcome === "hit") return "命中";
   if (run.cacheOutcome === "miss") return "未命中";

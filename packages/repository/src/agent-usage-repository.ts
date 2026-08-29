@@ -1780,7 +1780,10 @@ function cacheHitRateForRecord(record: JsonObject): number | undefined {
   }
   const cacheRead = optionalTokenField(record, "cacheReadTokens");
   const cacheEligible = optionalTokenField(record, "cacheEligibleInputTokens");
-  return cacheRead === undefined || cacheEligible === undefined || cacheEligible <= 0
+  return cacheRead === undefined ||
+    cacheEligible === undefined ||
+    cacheEligible <= 0 ||
+    cacheRead > cacheEligible
     ? undefined
     : cacheRead / cacheEligible;
 }
@@ -1793,7 +1796,9 @@ function cacheHitRateForDimensions(dimensions: readonly JsonObject[]): number | 
     if (dimension["cacheHitRateAvailable"] !== true) return undefined;
     const read = optionalTokenField(dimension, "cacheReadTokens");
     const eligible = optionalTokenField(dimension, "cacheEligibleInputTokens");
-    if (read === undefined || eligible === undefined || eligible <= 0) return undefined;
+    if (read === undefined || eligible === undefined || eligible <= 0 || read > eligible) {
+      return undefined;
+    }
     cacheRead += read;
     cacheEligible += eligible;
   }

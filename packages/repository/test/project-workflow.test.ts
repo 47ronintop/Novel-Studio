@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -281,6 +281,26 @@ describe("M12 project workflow repository support", () => {
       });
     }
     expect(lockContent).toContain('"ownerId": "crashed_window"');
+  });
+
+  test("accepts lock ownership when the same root is addressed through a realpath alias", async () => {
+    const projectRoot = await createTempRoot();
+    const aliasRoot = `${projectRoot}-alias`;
+    await symlink(projectRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    tempRoots.push(aliasRoot);
+
+    const owner = new ProjectLockFileRepository({
+      projectRoot,
+      ownerId: "window_owner"
+    });
+    const aliasOwner = new ProjectLockFileRepository({
+      projectRoot: aliasRoot,
+      ownerId: "window_owner"
+    });
+
+    await expect(owner.acquireProjectLock()).resolves.toMatchObject({ ok: true });
+    await expect(aliasOwner.verifyProjectLockOwnership()).resolves.toMatchObject({ ok: true });
+    await expect(owner.releaseProjectLock()).resolves.toMatchObject({ ok: true });
   });
 });
 

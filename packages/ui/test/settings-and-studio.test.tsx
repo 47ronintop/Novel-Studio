@@ -639,7 +639,7 @@ describe("M8 Settings UI", () => {
     expect(html).toContain("总 Token");
     expect(html).not.toContain("缓存写入");
     expect(html).not.toContain("可缓存输入");
-    expect(html).toContain("命中 · 读取 400");
+    expect(html).toContain("命中 · 命中率 80% · 读取 400");
     expect(html).toContain('aria-label="运行记录分页"');
     expect(html).toContain("第 1 / 1 页 · 共 6 条");
     expect(html).toContain("命中");
@@ -657,7 +657,8 @@ describe("M8 Settings UI", () => {
     expect(html).not.toContain("aaaaaaaa...aaaaaa");
     expect(html).not.toContain(prefixChecksum);
     expect(html).not.toContain("费用");
-    expect(html).not.toContain("缓存命中率");
+    expect(html).toContain("缓存命中率");
+    expect(html).toContain("80%");
     expect(html).not.toContain("缓存节省");
     expect(html).not.toContain("USD");
     expect(html).not.toContain("EUR");
@@ -797,7 +798,7 @@ describe("M8 Settings UI", () => {
     expect(host.querySelector('[aria-label="运行记录分页"]')?.textContent).toContain(
       "第 1 / 3 页 · 共 21 条"
     );
-    expect(runList?.textContent).toContain("命中 · 读取 0");
+    expect(runList?.textContent).toContain("命中 · 命中率 0% · 读取 0");
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>('button[aria-label="下一页运行记录"]')?.click();

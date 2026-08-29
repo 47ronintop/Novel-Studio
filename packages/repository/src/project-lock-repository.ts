@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { err, ok, type JsonObject, type Result, type UnifiedError } from "@novel-studio/shared";
 
@@ -130,10 +130,8 @@ export class ProjectLockFileRepository {
     if (!existing.ok) {
       return existing;
     }
-    if (
-      existing.value.ownerId !== this.options.ownerId ||
-      existing.value.projectRoot !== this.options.projectRoot
-    ) {
+    const rootsMatch = await sameProjectRoot(existing.value.projectRoot, this.options.projectRoot);
+    if (existing.value.ownerId !== this.options.ownerId || !rootsMatch) {
       return err(
         storageError({
           code: "PROJECT_LOCK_OWNER_MISMATCH",
@@ -165,8 +163,7 @@ export class ProjectLockFileRepository {
         storageError({
           code: "PROJECT_LOCK_STALE",
           message: "Project lock appears to be stale.",
-          suggestedAction:
-            "确认没有其他山海窗口正在使用该项目后，再替换过期锁。",
+          suggestedAction: "确认没有其他山海窗口正在使用该项目后，再替换过期锁。",
           traceId: this.traceId,
           redactedDetail: {
             ownerId: existing.value.ownerId,
@@ -238,6 +235,22 @@ export class ProjectLockFileRepository {
       );
     }
   }
+}
+
+async function sameProjectRoot(left: string, right: string): Promise<boolean> {
+  if (samePath(left, right)) return true;
+  try {
+    const [resolvedLeft, resolvedRight] = await Promise.all([realpath(left), realpath(right)]);
+    return samePath(resolvedLeft, resolvedRight);
+  } catch {
+    return false;
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  return process.platform === "win32"
+    ? left.toLocaleLowerCase("en-US") === right.toLocaleLowerCase("en-US")
+    : left === right;
 }
 
 function isStaleLock(record: ProjectLockRecord, now: string, staleAfterMs: number): boolean {

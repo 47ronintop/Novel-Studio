@@ -1060,6 +1060,72 @@ describe("Agent Run IPC", () => {
     ]);
   });
 
+  test("holds the runtime command lease while a permission summary draft is resolving", async () => {
+    let enterResolveDraft: (() => void) | undefined;
+    const resolveDraftEntered = new Promise<void>((resolve) => {
+      enterResolveDraft = resolve;
+    });
+    let finishResolveDraft: (() => void) | undefined;
+    const resolveDraftFinished = new Promise<void>((resolve) => {
+      finishResolveDraft = resolve;
+    });
+    const release = vi.fn();
+    const runtime = {
+      workspaceId: "project-01",
+      projectRoot: "C:/project-01",
+      agentRunDraftSession: {
+        async resolveStartDraft() {
+          enterResolveDraft?.();
+          await resolveDraftFinished;
+          return {
+            ok: true,
+            value: {
+              runDraft: {
+                runDraftId: "draft-01",
+                revision: 3,
+                operationMode: "execution",
+                contextMode: "writing",
+                writePolicy: "write_before_confirmation"
+              },
+              contextDraft: { contextDraftId: "context-01", revision: 2 }
+            }
+          };
+        }
+      },
+      agentPermissionSession: {
+        async prepareForDraft() {
+          return { ok: true, value: {} };
+        }
+      },
+      agentRunSession: {},
+      agentConversationSession: {}
+    };
+    const manager = {
+      current: () => runtime,
+      acquireActiveRuntimeCommandLease: () => ok({ runtime, release }),
+      subscribeAgentRunEvents: () => () => undefined
+    };
+    const handlers = createApplicationIpcHandlers(
+      {} as DesktopApplication,
+      { agentRuntimeManager: manager } as never
+    ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    const pending = handlers["application:agent-run:read-permission-summary"]({
+      kind: "draft",
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      runDraftId: "draft-01",
+      runDraftRevision: 3,
+      runDraftChecksum: "draft-checksum-03"
+    });
+    await resolveDraftEntered;
+    expect(release).not.toHaveBeenCalled();
+
+    finishResolveDraft?.();
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   test("preload exposes the permission summary and plan revision channels", async () => {
     const invoked: string[] = [];
     const api = createNovelStudioApi({

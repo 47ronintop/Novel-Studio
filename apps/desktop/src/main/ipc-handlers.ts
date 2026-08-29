@@ -491,6 +491,9 @@ export function createApplicationIpcHandlers(
   const currentAgentPermissionSession = (): AgentPermissionSession | undefined =>
     activeAgentRuntime()?.agentPermissionSession;
 
+  const acquireAgentCommandLease = () =>
+    options.agentRuntimeManager?.acquireActiveRuntimeCommandLease?.();
+
   const verifyCreativeGeneralProof = async (
     identity: AgentScopeIdentity,
     reference?: {
@@ -1433,33 +1436,63 @@ export function createApplicationIpcHandlers(
       // Persist the renderer's pre-run intent (user choices only) as the current draft, returning a
       // reference the draft-only start command can carry. Server resolves capabilities/content later.
       const parsed = toSyncStartDraftCommand(command);
-      const draftSession = currentAgentRunDraftSession();
-      if (parsed === undefined || draftSession === undefined) return agentRunUnavailable();
-      if (parsed.contextMode === "general_file") {
-        const verified = await verifyCreativeGeneralProof(
-          parsed,
-          parsed.activeResourceRef?.kind !== "project_file" ? undefined : parsed.activeResourceRef
-        );
-        if (verified !== undefined && !verified.ok) return verified;
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const draftSession = lease?.ok
+        ? lease.value.runtime.agentRunDraftSession
+        : currentAgentRunDraftSession();
+      if (parsed === undefined || draftSession === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
       }
-      return draftSession.syncStartDraft(parsed);
+      try {
+        if (parsed.contextMode === "general_file") {
+          const verified = await verifyCreativeGeneralProof(
+            parsed,
+            parsed.activeResourceRef?.kind !== "project_file" ? undefined : parsed.activeResourceRef
+          );
+          if (verified !== undefined && !verified.ok) return verified;
+        }
+        return await draftSession.syncStartDraft(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
     "application:agent-run:prepare-send-preview": async (command: unknown) => {
       const parsed = toPrepareAgentSendPreviewCommand(command);
-      const previewRuntime = asPreviewCapableRuntime(activeAgentRuntime());
       if (parsed === undefined) return invalidAgentRunCommand();
-      if (previewRuntime === undefined) return agentRunUnavailable();
-      return previewRuntime.prepareAgentSendPreview(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const previewRuntime = asPreviewCapableRuntime(
+        lease?.ok ? lease.value.runtime : activeAgentRuntime()
+      );
+      if (previewRuntime === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
+      }
+      try {
+        return await previewRuntime.prepareAgentSendPreview(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
     "application:agent-run:confirm-send-preview": async (command: unknown) => {
       const parsed = toConfirmAgentSendPreviewCommand(command);
-      const previewRuntime = asPreviewCapableRuntime(activeAgentRuntime());
       if (parsed === undefined) return invalidAgentRunCommand();
-      if (previewRuntime === undefined) return agentRunUnavailable();
       const manager = options.agentRuntimeManager;
-      if (manager === undefined) return previewRuntime.confirmAgentSendPreview(parsed);
+      if (manager === undefined) {
+        const previewRuntime = asPreviewCapableRuntime(activeAgentRuntime());
+        return previewRuntime === undefined
+          ? agentRunUnavailable()
+          : previewRuntime.confirmAgentSendPreview(parsed);
+      }
       const lease = manager.acquireActiveRunStartLease();
       if (!lease.ok) return lease;
+      const previewRuntime = asPreviewCapableRuntime(activeAgentRuntime());
+      if (previewRuntime === undefined) {
+        lease.value.release();
+        return agentRunUnavailable();
+      }
       try {
         return await previewRuntime.confirmAgentSendPreview(parsed);
       } finally {
@@ -1468,80 +1501,148 @@ export function createApplicationIpcHandlers(
     },
     "application:agent-run:read-send-ledger": async (runId: unknown) => {
       const parsed = toReadAgentSendLedgerRunId(runId);
-      const previewRuntime = asPreviewCapableRuntime(activeAgentRuntime());
       if (parsed === undefined) return invalidAgentRunCommand();
-      if (previewRuntime?.readAgentSendLedger === undefined) return agentRunUnavailable();
-      return previewRuntime.readAgentSendLedger(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const previewRuntime = asPreviewCapableRuntime(
+        lease?.ok ? lease.value.runtime : activeAgentRuntime()
+      );
+      if (previewRuntime?.readAgentSendLedger === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
+      }
+      try {
+        return await previewRuntime.readAgentSendLedger(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-run:read-run-draft": (command: unknown) => {
+    "application:agent-run:read-run-draft": async (command: unknown) => {
       const parsed = toReadAgentRunDraftCommand(command);
-      const draftSession = currentAgentRunDraftSession();
-      return parsed === undefined || draftSession === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : draftSession.readAgentRunDraft(parsed);
+      if (parsed === undefined) return agentRunUnavailable();
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const draftSession = lease?.ok
+        ? lease.value.runtime.agentRunDraftSession
+        : currentAgentRunDraftSession();
+      if (draftSession === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
+      }
+      try {
+        return await draftSession.readAgentRunDraft(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
     "application:agent-run:update-run-draft": async (command: unknown) => {
       const parsed = toUpdateAgentRunDraftCommand(command);
-      const draftSession = currentAgentRunDraftSession();
-      if (parsed === undefined || draftSession === undefined) return agentRunUnavailable();
-      if (
-        parsed.mutation.kind === "set_context_mode" &&
-        parsed.mutation.contextMode === "general_file"
-      ) {
-        const verified = await verifyCreativeGeneralProof(parsed);
-        if (verified !== undefined && !verified.ok) return verified;
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const draftSession = lease?.ok
+        ? lease.value.runtime.agentRunDraftSession
+        : currentAgentRunDraftSession();
+      if (parsed === undefined || draftSession === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
       }
-      const updated = await draftSession.updateAgentRunDraft(parsed);
-      if (
-        updated.ok &&
-        parsed.mutation.kind === "set_context_mode" &&
-        parsed.mutation.contextMode !== "general_file"
-      ) {
-        options.creativeGeneralActiveResourceProof?.clear();
+      try {
+        if (
+          parsed.mutation.kind === "set_context_mode" &&
+          parsed.mutation.contextMode === "general_file"
+        ) {
+          const verified = await verifyCreativeGeneralProof(parsed);
+          if (verified !== undefined && !verified.ok) return verified;
+        }
+        const updated = await draftSession.updateAgentRunDraft(parsed);
+        if (
+          updated.ok &&
+          parsed.mutation.kind === "set_context_mode" &&
+          parsed.mutation.contextMode !== "general_file"
+        ) {
+          options.creativeGeneralActiveResourceProof?.clear();
+        }
+        return updated;
+      } finally {
+        lease?.value.release();
       }
-      return updated;
     },
     "application:agent-run:update-context-draft": async (command: unknown) => {
       const parsed = toUpdateContextDraftCommand(command);
-      const draftSession = currentAgentRunDraftSession();
-      if (parsed === undefined || draftSession === undefined) return agentRunUnavailable();
-      if (parsed.mutation.kind === "set_active_resource") {
-        if (parsed.mutation.ref?.kind === "project_file") {
-          const verified = await verifyCreativeGeneralProof(parsed, parsed.mutation.ref);
-          if (verified !== undefined && !verified.ok) return verified;
-        }
-        if (parsed.mutation.ref === null)
-          options.creativeGeneralActiveResourceProof?.clearResource();
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const draftSession = lease?.ok
+        ? lease.value.runtime.agentRunDraftSession
+        : currentAgentRunDraftSession();
+      if (parsed === undefined || draftSession === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
       }
-      return draftSession.updateContextDraft(parsed);
+      try {
+        if (parsed.mutation.kind === "set_active_resource") {
+          if (parsed.mutation.ref?.kind === "project_file") {
+            const verified = await verifyCreativeGeneralProof(parsed, parsed.mutation.ref);
+            if (verified !== undefined && !verified.ok) return verified;
+          }
+          if (parsed.mutation.ref === null)
+            options.creativeGeneralActiveResourceProof?.clearResource();
+        }
+        return await draftSession.updateContextDraft(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
     "application:agent-run:refresh-context-draft": (command: unknown) => {
       const parsed = toRefreshContextDraftCommand(command);
-      const draftSession = currentAgentRunDraftSession();
-      return parsed === undefined || draftSession === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : draftSession.refreshContextDraft(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const draftSession = lease?.ok
+        ? lease.value.runtime.agentRunDraftSession
+        : currentAgentRunDraftSession();
+      if (parsed === undefined || draftSession === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return draftSession.refreshContextDraft(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:preview-context-budget": (command: unknown) => {
       const parsed = toPreviewContextBudgetCommand(command);
-      const contextSession = currentAgentContextSession();
-      return parsed === undefined || contextSession === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : contextSession.previewContextBudget(parsed);
+      if (parsed === undefined) return Promise.resolve(agentRunUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const contextSession = lease?.ok
+        ? lease.value.runtime.agentContextSession
+        : currentAgentContextSession();
+      if (contextSession === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return contextSession.previewContextBudget(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:preview-packed-context": (command: unknown) => {
       const parsed = toPreviewContextBudgetCommand(command);
-      const contextSession = currentAgentContextSession();
-      return parsed === undefined || contextSession === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : contextSession.previewPackedContext(parsed);
+      if (parsed === undefined) return Promise.resolve(agentRunUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const contextSession = lease?.ok
+        ? lease.value.runtime.agentContextSession
+        : currentAgentContextSession();
+      if (contextSession === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return contextSession.previewPackedContext(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:compact-context": (command: unknown) => {
       const parsed = toCompactContextCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.compactContext(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return session.compactContext(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:start": (command: unknown) => {
       const parsed = toStartAgentRunCommand(command);
@@ -1566,186 +1667,345 @@ export function createApplicationIpcHandlers(
     },
     "application:agent-run:stop": (command: unknown) => {
       const parsed = toStopAgentRunCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.stopAgentRun(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return session.stopAgentRun(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:answer-user-input": (command: unknown) => {
       const parsed = toAnswerAgentUserInputCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.answerUserInput(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return session.answerUserInput(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:resume": (command: unknown) => {
       const parsed = toResumeAgentRunCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.resumeAgentRun(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return session.resumeAgentRun(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:retry-step": (command: unknown) => {
       const parsed = toRetryAgentRunStepCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.retryStep(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return session.retryStep(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:retry-target": (command: unknown) => {
       const parsed = toRetryRunTargetCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(invalidAgentRunCommand())
-        : session.retryRunTarget(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(invalidAgentRunCommand());
+      }
+      return session.retryRunTarget(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:decide-plan": async (command: unknown) => {
       const parsed = toDecideAgentPlanCommand(command);
-      const session = currentAgentRunSession();
-      if (parsed === undefined || session === undefined) return agentRunUnavailable();
-      const verified = await verifyCreativePlanApprovalContext(parsed, session);
-      return verified === undefined || verified.ok ? session.decidePlan(parsed) : verified;
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
+      }
+      try {
+        const verified = await verifyCreativePlanApprovalContext(parsed, session);
+        return verified === undefined || verified.ok ? await session.decidePlan(parsed) : verified;
+      } finally {
+        lease?.value.release();
+      }
     },
     "application:agent-run:read-permission-summary": async (query: unknown) => {
       const parsed = toReadAgentPermissionSummaryQuery(query);
+      if (parsed === undefined) return invalidAgentRunCommand();
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
       const runtime = options.agentRuntimeManager?.current();
-      const permissionSession = currentAgentPermissionSession();
+      const permissionSession = lease?.ok
+        ? lease.value.runtime.agentPermissionSession
+        : currentAgentPermissionSession();
       if (
-        parsed === undefined ||
         runtime === undefined ||
         permissionSession === undefined ||
         parsed.projectId !== runtime.workspaceId
       ) {
+        lease?.value.release();
         return invalidAgentRunCommand();
       }
-      if (parsed.kind === "run") {
-        return permissionSession.readForRun({
-          runId: parsed.runId,
-          permissionSummaryId: parsed.permissionSummaryId
+      try {
+        if (parsed.kind === "run") {
+          return await permissionSession.readForRun({
+            runId: parsed.runId,
+            permissionSummaryId: parsed.permissionSummaryId
+          });
+        }
+        const draftSession = lease?.ok
+          ? lease.value.runtime.agentRunDraftSession
+          : currentAgentRunDraftSession();
+        if (draftSession === undefined) return agentRunUnavailable();
+        const draft = await draftSession.resolveStartDraft({
+          projectId: parsed.projectId,
+          conversationId: parsed.conversationId,
+          runDraftId: parsed.runDraftId,
+          runDraftRevision: parsed.runDraftRevision,
+          runDraftChecksum: parsed.runDraftChecksum
         });
+        if (!draft.ok) return draft;
+        return await permissionSession.prepareForDraft({
+          projectId: parsed.projectId,
+          runDraftId: draft.value.runDraft.runDraftId,
+          runDraftRevision: draft.value.runDraft.revision,
+          operationMode: draft.value.runDraft.operationMode,
+          contextMode: draft.value.runDraft.contextMode,
+          writePolicy: draft.value.runDraft.writePolicy
+        });
+      } finally {
+        lease?.value.release();
       }
-      const draftSession = currentAgentRunDraftSession();
-      if (draftSession === undefined) return agentRunUnavailable();
-      const draft = await draftSession.resolveStartDraft({
-        projectId: parsed.projectId,
-        conversationId: parsed.conversationId,
-        runDraftId: parsed.runDraftId,
-        runDraftRevision: parsed.runDraftRevision,
-        runDraftChecksum: parsed.runDraftChecksum
-      });
-      if (!draft.ok) return draft;
-      return permissionSession.prepareForDraft({
-        projectId: parsed.projectId,
-        runDraftId: draft.value.runDraft.runDraftId,
-        runDraftRevision: draft.value.runDraft.revision,
-        operationMode: draft.value.runDraft.operationMode,
-        contextMode: draft.value.runDraft.contextMode,
-        writePolicy: draft.value.runDraft.writePolicy
-      });
     },
     "application:agent-run:decide-plan-revision": (command: unknown) => {
       const parsed = toDecidePlanRevisionCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(invalidAgentRunCommand())
-        : session.decidePlanRevision(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(invalidAgentRunCommand());
+      }
+      return session.decidePlanRevision(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:refresh-context": (command: unknown) => {
       const parsed = toRefreshAgentContextCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.refreshContext(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(agentRunUnavailable());
+      }
+      return session.refreshContext(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:decide-change-set": (command: unknown) => {
       const parsed = toDecideChangeSetCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(invalidAgentRunCommand())
-        : session.decideChangeSet(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(invalidAgentRunCommand());
+      }
+      return session.decideChangeSet(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:decide-tool-approval": (command: unknown) => {
       const parsed = toDecideToolApprovalCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(invalidAgentRunCommand())
-        : session.decideToolApproval(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(invalidAgentRunCommand());
+      }
+      return session.decideToolApproval(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:decide-context-share-approval": (command: unknown) => {
       const parsed = toDecideContextShareApprovalCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(invalidAgentRunCommand())
-        : session.decideContextShareApproval(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(invalidAgentRunCommand());
+      }
+      return session.decideContextShareApproval(parsed).finally(() => lease?.value.release());
     },
     "application:agent-run:undo": (command: unknown) => {
       const parsed = toUndoAgentRunCommand(command);
-      const session = currentAgentRunSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(invalidAgentRunCommand())
-        : session.undoRun(parsed);
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return Promise.resolve(lease);
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (parsed === undefined || session === undefined) {
+        lease?.value.release();
+        return Promise.resolve(invalidAgentRunCommand());
+      }
+      return session.undoRun(parsed).finally(() => lease?.value.release());
     },
-    "application:agent-run:read": (runId: unknown) => {
-      const session = currentAgentRunSession();
-      return typeof runId !== "string" || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.readAgentRun(runId);
+    "application:agent-run:read": async (runId: unknown) => {
+      if (typeof runId !== "string") return agentRunUnavailable();
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
+      }
+      try {
+        return await session.readAgentRun(runId);
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-run:list": (identity: unknown) => {
-      const session = currentAgentRunSession();
+    "application:agent-run:list": async (identity: unknown) => {
       const scope = toAgentScopeIdentity(identity);
-      return scope === undefined || session === undefined
-        ? Promise.resolve(agentRunUnavailable())
-        : session.listAgentRuns(scope.scope ?? scope.projectId ?? "");
+      if (scope === undefined) return agentRunUnavailable();
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok ? lease.value.runtime.agentRunSession : currentAgentRunSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return agentRunUnavailable();
+      }
+      try {
+        return await session.listAgentRuns(scope.scope ?? scope.projectId ?? "");
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-conversation:create": (command: unknown) => {
+    "application:agent-conversation:create": async (command: unknown) => {
       const parsed = toCreateAgentConversationCommand(command);
-      const session = currentAgentConversationSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(err(agentConversationUnavailable()))
-        : session.createConversation(parsed);
+      if (parsed === undefined) return err(agentConversationUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok
+        ? lease.value.runtime.agentConversationSession
+        : currentAgentConversationSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return err(agentConversationUnavailable());
+      }
+      try {
+        return await session.createConversation(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-conversation:list": (query: unknown) => {
+    "application:agent-conversation:list": async (query: unknown) => {
       const parsed = toListAgentConversationsQuery(query);
-      const session = currentAgentConversationSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(err(agentConversationUnavailable()))
-        : session.listConversations(parsed);
+      if (parsed === undefined) return err(agentConversationUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok
+        ? lease.value.runtime.agentConversationSession
+        : currentAgentConversationSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return err(agentConversationUnavailable());
+      }
+      try {
+        return await session.listConversations(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-conversation:read": (query: unknown) => {
+    "application:agent-conversation:read": async (query: unknown) => {
       const parsed = toReadAgentConversationQuery(query);
-      const session = currentAgentConversationSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(err(agentConversationUnavailable()))
-        : session.readConversation(parsed);
+      if (parsed === undefined) return err(agentConversationUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok
+        ? lease.value.runtime.agentConversationSession
+        : currentAgentConversationSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return err(agentConversationUnavailable());
+      }
+      try {
+        return await session.readConversation(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-conversation:archive": (command: unknown) => {
+    "application:agent-conversation:archive": async (command: unknown) => {
       const parsed = toChangeAgentConversationStatusCommand(command);
-      const session = currentAgentConversationSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(err(agentConversationUnavailable()))
-        : session.archiveConversation(parsed);
+      if (parsed === undefined) return err(agentConversationUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok
+        ? lease.value.runtime.agentConversationSession
+        : currentAgentConversationSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return err(agentConversationUnavailable());
+      }
+      try {
+        return await session.archiveConversation(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-conversation:restore": (command: unknown) => {
+    "application:agent-conversation:restore": async (command: unknown) => {
       const parsed = toChangeAgentConversationStatusCommand(command);
-      const session = currentAgentConversationSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(err(agentConversationUnavailable()))
-        : session.restoreConversation(parsed);
+      if (parsed === undefined) return err(agentConversationUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok
+        ? lease.value.runtime.agentConversationSession
+        : currentAgentConversationSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return err(agentConversationUnavailable());
+      }
+      try {
+        return await session.restoreConversation(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-conversation:delete": (command: unknown) => {
+    "application:agent-conversation:delete": async (command: unknown) => {
       const parsed = toChangeAgentConversationStatusCommand(command);
-      const session = currentAgentConversationSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(err(agentConversationUnavailable()))
-        : session.deleteConversation(parsed);
+      if (parsed === undefined) return err(agentConversationUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok
+        ? lease.value.runtime.agentConversationSession
+        : currentAgentConversationSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return err(agentConversationUnavailable());
+      }
+      try {
+        return await session.deleteConversation(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
-    "application:agent-conversation:search": (query: unknown) => {
+    "application:agent-conversation:search": async (query: unknown) => {
       const parsed = toSearchAgentConversationsQuery(query);
-      const session = currentAgentConversationSession();
-      return parsed === undefined || session === undefined
-        ? Promise.resolve(err(agentConversationUnavailable()))
-        : session.searchConversations(parsed);
+      if (parsed === undefined) return err(agentConversationUnavailable());
+      const lease = acquireAgentCommandLease();
+      if (lease !== undefined && !lease.ok) return lease;
+      const session = lease?.ok
+        ? lease.value.runtime.agentConversationSession
+        : currentAgentConversationSession();
+      if (session === undefined) {
+        lease?.value.release();
+        return err(agentConversationUnavailable());
+      }
+      try {
+        return await session.searchConversations(parsed);
+      } finally {
+        lease?.value.release();
+      }
     },
     "application:chapter:load": () => application.loadActiveChapter(),
     "application:chapter:edit": (nextBody: unknown) => {
