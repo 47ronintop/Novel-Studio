@@ -197,6 +197,8 @@ interface BridgeState {
   readonly contextPreferenceScope: AgentComposerContextPreferenceScope;
   readonly draftPending: boolean;
   readonly contextPreferencePending: boolean;
+  /** True while a manual context compaction command is awaiting Main. */
+  readonly compactionPending: boolean;
   readonly startPending: boolean;
   readonly permissionSummary: PermissionSummary | undefined;
   readonly permissionPending: boolean;
@@ -208,6 +210,12 @@ interface BridgeState {
   readonly conventionsPolicyPending: boolean;
   readonly conventionsPolicyError: string | undefined;
   readonly conventionsDisabled: boolean;
+}
+
+interface PendingRunEventBuffer {
+  readonly selectionGeneration: number;
+  readonly runId: string;
+  readonly events: AgentRunEvent[];
 }
 
 type PackedPreviewAttempt =
@@ -249,6 +257,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     contextPreferenceScope: "run",
     draftPending: false,
     contextPreferencePending: false,
+    compactionPending: false,
     startPending: false,
     permissionSummary: undefined,
     permissionPending: false,
@@ -274,6 +283,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   let planDecisionInFlight: Promise<AgentRunPanelProps> | undefined;
   let retryTargetInFlight: Promise<AgentRunPanelProps> | undefined;
   let permissionSummaryRequested = false;
+  let hydrateGeneration = 0;
+  let runSelectionGeneration = 0;
+  let selectedRunId: string | undefined;
+  let pendingRunEvents: PendingRunEventBuffer | undefined;
   // Increments on every conversation switch so a slow in-flight draft load for a previous
   // conversation can detect it is stale and drop its result instead of clobbering the new one.
   let draftToken = 0;
@@ -289,42 +302,24 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (projectFilesChanged !== undefined) {
       for (const listener of projectFilesChangedListeners) listener(projectFilesChanged);
     }
-    if (state.snapshot !== undefined && state.snapshot.runId !== event.runId) return;
-    const nextSnapshot =
-      state.snapshot === undefined ? undefined : snapshotAfterEvent(state.snapshot, event);
-    state = {
-      ...state,
-      events: appendEvent(state.events, event),
-      snapshot: nextSnapshot,
-      ...(nextSnapshot !== undefined && isTerminalRunStatus(nextSnapshot.status)
-        ? {
-            ...defaultNextRunWriteAuthorization(),
-            executionWritePolicy: "write_before_confirmation" as const
-          }
-        : {}),
-      assistantText:
-        event.type === "assistant_text_delta"
-          ? `${state.assistantText}${stringDetail(event.detail, "delta") ?? ""}`
-          : event.type === "run_completed" && state.assistantText.length === 0
-            ? (completedResultDetail(event.detail) ?? state.assistantText)
-            : state.assistantText,
-      pendingUserInput:
-        event.type === "user_input_requested"
-          ? pendingInputFromDetail(event.detail)
-          : event.type === "user_input_resolved"
-            ? undefined
-            : state.pendingUserInput,
-      errorMessage:
-        event.type === "run_failed" && event.detail?.["diagnosticPersistenceFailed"] === true
-          ? "Agent run failed, and diagnostic details could not be saved."
-          : event.type === "run_failed" || event.type === "tool_failed"
-            ? undefined
-            : state.errorMessage,
-      planArtifact:
-        event.type === "plan_ready" && event.detail !== undefined
-          ? (event.detail as unknown as PersistedPlanArtifact)
-          : state.planArtifact
-    };
+    if (selectedRunId !== event.runId) return;
+    if (state.snapshot?.runId !== event.runId) {
+      pendingRunEvents =
+        pendingRunEvents?.selectionGeneration === runSelectionGeneration &&
+        pendingRunEvents.runId === event.runId
+          ? {
+              ...pendingRunEvents,
+              events: appendEvent(pendingRunEvents.events, event)
+            }
+          : {
+              selectionGeneration: runSelectionGeneration,
+              runId: event.runId,
+              events: [event]
+            };
+      return;
+    }
+    if (state.snapshot !== undefined && event.sequence <= state.snapshot.lastSequence) return;
+    state = projectRunEvent(state, event);
     notify();
     if (
       event.type === "change_set_ready" ||
@@ -343,9 +338,11 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       event.type === "plan_deviation_recorded" ||
       event.type === "plan_revision_requested" ||
       event.type === "error_recorded" ||
-      event.type === "plan_decision_resolved"
+      event.type === "plan_decision_resolved" ||
+      event.type === "context_compaction_completed" ||
+      event.type === "context_compaction_failed"
     ) {
-      void hydrate(event.runId).then(notify);
+      void hydrate(event.runId, event.runId, runSelectionGeneration).then(notify);
     }
   });
 
@@ -443,6 +440,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       notify();
       return toProps();
     }
+    beginRunSelection(undefined);
     state = {
       ...state,
       draftRequest: request,
@@ -470,6 +468,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       conventionsPolicyPending: false,
       conventionsPolicyError: undefined,
       conventionsDisabled: false,
+      compactionPending: false,
       startPending: true
     };
     notify();
@@ -996,6 +995,15 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
   }
 
   async function applyCommandResult(result: AgentRunCommandResult): Promise<void> {
+    const resultRunId = result.ok ? result.value.runId : result.latestSnapshot?.runId;
+    if (
+      (resultRunId !== undefined &&
+        selectedRunId !== resultRunId &&
+        !(selectedRunId === undefined && state.snapshot === undefined && state.startPending)) ||
+      (resultRunId === undefined && state.snapshot === undefined && !state.startPending)
+    ) {
+      return;
+    }
     if (!result.ok) {
       const errorMessage = formatAgentStartError(result.error);
       state = {
@@ -1004,7 +1012,12 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         ...(result.latestSnapshot === undefined ? {} : { snapshot: result.latestSnapshot })
       };
       if (result.latestSnapshot !== undefined) {
-        await hydrate(result.latestSnapshot.runId);
+        const selectionGeneration = beginRunSelection(result.latestSnapshot.runId);
+        await hydrate(
+          result.latestSnapshot.runId,
+          result.latestSnapshot.runId,
+          selectionGeneration
+        );
       }
       notify();
       return;
@@ -1026,18 +1039,46 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
           : failClosedCurrentWritePolicy(result.value.writePolicy),
       errorMessage: undefined
     };
-    await hydrate(result.value.runId);
+    const selectionGeneration = beginRunSelection(result.value.runId);
+    await hydrate(result.value.runId, result.value.runId, selectionGeneration);
     notify();
   }
 
-  async function hydrate(runId: string): Promise<void> {
+  function beginRunSelection(runId: string | undefined): number {
+    selectedRunId = runId;
+    runSelectionGeneration += 1;
+    pendingRunEvents = undefined;
+    // Invalidate any read that was started for the previous selection before awaiting Main.
+    hydrateGeneration += 1;
+    return runSelectionGeneration;
+  }
+
+  async function hydrate(
+    runId: string,
+    expectedSnapshotRunId?: string,
+    expectedSelectionGeneration = runSelectionGeneration
+  ): Promise<void> {
+    const generation = ++hydrateGeneration;
+    const hydrationScope = context?.scope;
+    const hydrationConversationId = context?.conversationId;
+    const isCurrentHydration = (): boolean =>
+      generation === hydrateGeneration &&
+      expectedSelectionGeneration === runSelectionGeneration &&
+      selectedRunId === runId &&
+      hydrationScope !== undefined &&
+      context !== undefined &&
+      sameAgentScope(context.scope, hydrationScope) &&
+      context.conversationId === hydrationConversationId &&
+      (expectedSnapshotRunId === undefined || state.snapshot?.runId === expectedSnapshotRunId);
     const result = await api.agentRuns.read(runId);
     if (!result.ok) {
+      if (!isCurrentHydration()) return;
       state = { ...state, errorMessage: result.error.message };
       return;
     }
     const read = result.value;
     if (context !== undefined && !sameAgentScope(context.scope, scopeForSnapshot(read.snapshot))) {
+      if (!isCurrentHydration()) return;
       state = { ...state, errorMessage: "The Agent run is outside the selected context." };
       return;
     }
@@ -1067,21 +1108,116 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       state.rollbackReview,
       nextRollbackReview
     );
+    if (!isCurrentHydration()) return;
+    const currentSnapshot = state.snapshot;
+    const currentStateSequence = latestEventSequenceForRun(state.events, read.snapshot.runId);
+    const pendingBuffer =
+      pendingRunEvents?.selectionGeneration === expectedSelectionGeneration &&
+      pendingRunEvents.runId === read.snapshot.runId
+        ? pendingRunEvents
+        : undefined;
+    const pendingEvents = pendingBuffer?.events ?? [];
+    const hydratedEvents = pendingEvents.reduce(
+      (events, event) => appendEvent(events, event),
+      [...read.events]
+    );
+    const hydrationBaseSnapshot =
+      currentSnapshot?.runId === read.snapshot.runId &&
+      currentSnapshot.lastSequence > read.snapshot.lastSequence
+        ? currentSnapshot
+        : read.snapshot;
+    let hydratedSnapshot = hydrationBaseSnapshot;
+    for (const event of hydratedEvents) {
+      if (event.runId !== read.snapshot.runId || event.sequence <= hydratedSnapshot.lastSequence) {
+        continue;
+      }
+      hydratedSnapshot = snapshotAfterEvent(hydratedSnapshot, event);
+    }
+    const pendingEventAdvancesCurrentState = pendingEvents.some(
+      (event) =>
+        event.runId === read.snapshot.runId &&
+        (currentSnapshot?.runId !== read.snapshot.runId ||
+          event.sequence > currentSnapshot.lastSequence)
+    );
+    const hydrationIsStale =
+      ((currentSnapshot?.runId === read.snapshot.runId &&
+        currentSnapshot.lastSequence > read.snapshot.lastSequence) ||
+        (currentStateSequence !== undefined && currentStateSequence > read.snapshot.lastSequence) ||
+        (currentSnapshot?.runId === read.snapshot.runId &&
+          isTerminalRunStatus(currentSnapshot.status) &&
+          !isTerminalRunStatus(read.snapshot.status))) &&
+      !pendingEventAdvancesCurrentState;
+    const retryPendingHydration =
+      pendingBuffer !== undefined &&
+      pendingRunEvents !== undefined &&
+      pendingRunEvents !== pendingBuffer &&
+      pendingRunEvents.selectionGeneration === expectedSelectionGeneration &&
+      pendingRunEvents.runId === read.snapshot.runId;
+    if (hydrationIsStale) {
+      // Diagnostic DTOs can be persisted by a later event while the snapshot read is still one
+      // revision behind. Merge that durable detail without regressing the newer run state.
+      if (read.diagnostic !== undefined && currentSnapshot?.runId === read.snapshot.runId) {
+        state = { ...state, diagnostic: read.diagnostic, errorMessage: undefined };
+        notify();
+      }
+      // A stale read can race with a target-run event that was buffered while the run selection
+      // was hydrating. Replay those events into the already-newer renderer state before returning;
+      // otherwise a stale read would leave the buffer with no later hydrate responsible for it.
+      const currentPendingBuffer =
+        pendingRunEvents?.selectionGeneration === expectedSelectionGeneration &&
+        pendingRunEvents.runId === read.snapshot.runId
+          ? pendingRunEvents
+          : undefined;
+      const currentPendingEvents = currentPendingBuffer?.events ?? [];
+      if (currentSnapshot?.runId === read.snapshot.runId) {
+        const pendingEventsToReplay = currentPendingEvents.filter(
+          (event) =>
+            event.runId === read.snapshot.runId &&
+            event.sequence > currentSnapshot.lastSequence &&
+            !state.events.some(
+              (currentEvent) =>
+                currentEvent.runId === event.runId && currentEvent.sequence === event.sequence
+            )
+        );
+        if (pendingEventsToReplay.length > 0) {
+          state = pendingEventsToReplay.reduce(
+            (nextState, event) => projectRunEvent(nextState, event),
+            state
+          );
+          notify();
+        }
+      }
+      if (currentPendingBuffer !== undefined && currentSnapshot?.runId === read.snapshot.runId) {
+        pendingRunEvents = undefined;
+      }
+      if (retryPendingHydration) {
+        void hydrate(runId, expectedSnapshotRunId, expectedSelectionGeneration).then(notify);
+      }
+      return;
+    }
+    if (pendingRunEvents === pendingBuffer) {
+      pendingRunEvents = undefined;
+    }
     state = {
       ...state,
-      snapshot: read.snapshot,
-      operationMode: read.snapshot.operationMode,
-      contextMode: read.snapshot.contextMode,
-      userRequest: read.snapshot.userRequest,
-      ...writeAuthorizationForSnapshot(read.snapshot),
+      snapshot: hydratedSnapshot,
+      operationMode: hydratedSnapshot.operationMode,
+      contextMode: hydratedSnapshot.contextMode,
+      userRequest: hydratedSnapshot.userRequest,
+      ...writeAuthorizationForSnapshot(hydratedSnapshot),
       executionWritePolicy:
-        isTerminalRunStatus(read.snapshot.status) || read.snapshot.operationMode === "planning"
+        isTerminalRunStatus(hydratedSnapshot.status) ||
+        hydratedSnapshot.operationMode === "planning"
           ? "write_before_confirmation"
-          : failClosedCurrentWritePolicy(read.snapshot.writePolicy),
-      events: [...read.events],
+          : failClosedCurrentWritePolicy(hydratedSnapshot.writePolicy),
+      events: hydratedEvents,
+      compactionPending:
+        state.compactionPending && state.snapshot?.runId === read.snapshot.runId
+          ? !isTerminalRunStatus(hydratedSnapshot.status)
+          : false,
       packedContextHistory: read.packedContextHistory,
       sendLedger,
-      assistantText: assistantTextFromEvents(read.events),
+      assistantText: assistantTextFromEvents(hydratedEvents),
       pendingUserInput: read.pendingUserInput,
       diagnostic: read.diagnostic,
       errorMessage: read.diagnostic === undefined ? state.errorMessage : undefined,
@@ -1106,6 +1242,10 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
             ? true
             : state.reviewOpen
     };
+    if (retryPendingHydration) {
+      // A future await added above must not strand events appended after the copied buffer.
+      void hydrate(runId, expectedSnapshotRunId, expectedSelectionGeneration).then(notify);
+    }
   }
 
   async function readBoundPermissionSummary(snapshot: AgentRunSnapshot): Promise<{
@@ -1266,13 +1406,22 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       state.events,
       contextShareApprovalInFlight !== undefined
     );
+    const snapshotStatus = state.snapshot?.status;
+    const compactionBusy = isCompactionBusy(state.snapshot, state.events, state.compactionPending);
     const props = {
       ...(scope === undefined ? {} : { scope }),
       ...(scope?.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
       ...(conversationId === undefined ? {} : { conversationId }),
       ...(state.snapshot === undefined ? {} : { runId: state.snapshot.runId }),
       ...(state.userRequest.length === 0 ? {} : { userRequest: state.userRequest }),
-      status: state.snapshot?.status ?? (state.startPending ? "created" : "idle"),
+      status:
+        snapshotStatus !== undefined && isTerminalRunStatus(snapshotStatus)
+          ? snapshotStatus
+          : compactionBusy && state.snapshot !== undefined
+            ? "context_compacting"
+            : snapshotStatus === "context_compacting"
+              ? "executing_model"
+              : (snapshotStatus ?? (state.startPending ? "created" : "idle")),
       assistantText: state.assistantText,
       events: state.events,
       ...(state.packedContextHistory === undefined
@@ -2044,28 +2193,66 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     if (
       compactContext === undefined ||
       snapshot === undefined ||
-      snapshot.contextBudgetSnapshotId === null
+      snapshot.contextBudgetSnapshotId === null ||
+      state.compactionPending ||
+      isTerminalRunStatus(snapshot.status) ||
+      snapshot.status === "context_compacting"
     ) {
       return;
     }
+    const runId = snapshot.runId;
+    const runScope = scopeForSnapshot(snapshot);
+    const selectionGeneration = runSelectionGeneration;
     const budgetSnapshotId = snapshot.contextBudgetSnapshotId;
+    state = { ...state, compactionPending: true, errorMessage: undefined };
+    notify();
     void (async () => {
-      const result = await compactContext({
-        ...scopeIdentity(scopeForSnapshot(snapshot)),
-        runId: snapshot.runId,
-        commandId: createCommandId("compact"),
-        expectedRunRevision: snapshot.runRevision,
-        contextBudgetSnapshotId: budgetSnapshotId,
-        trigger: "manual"
-      } as never);
-      if (!result.ok) {
-        state = { ...state, errorMessage: result.error.message };
+      try {
+        const result = await compactContext({
+          ...scopeIdentity(runScope),
+          runId,
+          commandId: createCommandId("compact"),
+          expectedRunRevision: snapshot.runRevision,
+          contextBudgetSnapshotId: budgetSnapshotId,
+          trigger: "manual"
+        } as never);
+        if (!isCurrentRun(runId, runScope, selectionGeneration)) return;
+        if (!result.ok) {
+          await hydrate(runId, runId, selectionGeneration);
+          if (!isCurrentRun(runId, runScope, selectionGeneration)) return;
+          state = { ...state, errorMessage: result.error.message };
+          notify();
+          return;
+        }
+        await hydrate(runId, runId, selectionGeneration);
+        if (isCurrentRun(runId, runScope, selectionGeneration)) notify();
+      } catch (error: unknown) {
+        if (!isCurrentRun(runId, runScope, selectionGeneration)) return;
+        state = { ...state, errorMessage: thrownErrorMessage(error) };
         notify();
-        return;
+      } finally {
+        if (isCurrentRun(runId, runScope, selectionGeneration)) {
+          state = { ...state, compactionPending: false };
+          notify();
+        }
       }
-      await hydrate(snapshot.runId);
-      notify();
     })();
+  }
+
+  function isCurrentRun(
+    runId: string,
+    runScope: AgentContextScope,
+    selectionGeneration: number
+  ): boolean {
+    return (
+      selectionGeneration === runSelectionGeneration &&
+      selectedRunId === runId &&
+      context !== undefined &&
+      sameAgentScope(context.scope, runScope) &&
+      state.snapshot?.runId === runId &&
+      (context.conversationId === undefined ||
+        state.snapshot.conversationId === context.conversationId)
+    );
   }
 
   function applyDraftResult(
@@ -2189,14 +2376,24 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     const budget = state.budgetPreview;
     const packedPreview = state.packedPreview;
     const snapshot = state.snapshot;
+    const compactionBusy = isCompactionBusy(snapshot, state.events, state.compactionPending);
+    const contextBusy = state.draftPending || state.contextPreferencePending || compactionBusy;
     const canCompact =
       draftApi.compactContext !== undefined &&
       snapshot !== undefined &&
-      snapshot.contextBudgetSnapshotId !== null;
-    const compactDisabledReason =
-      draftApi.compactContext !== undefined && !canCompact
-        ? "启动 Agent 并生成上下文预算后可用。"
-        : undefined;
+      snapshot.contextBudgetSnapshotId !== null &&
+      !compactionBusy &&
+      !isTerminalRunStatus(snapshot.status);
+    const compactDisabledReason = (() => {
+      if (draftApi.compactContext === undefined || canCompact) return undefined;
+      if (compactionBusy) {
+        return "正在压缩上下文，请稍候。";
+      }
+      if (snapshot !== undefined && isTerminalRunStatus(snapshot.status)) {
+        return "当前 Agent 运行已结束，无法压缩上下文。";
+      }
+      return "启动 Agent 并生成上下文预算后可用。";
+    })();
     const automaticSources = automaticContextSourceRows(state.events);
     const automaticRefIds = new Set(automaticSources.map((source) => source.refId));
     const fallbackSources: AgentComposerContextSourceRow[] = [
@@ -2244,7 +2441,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const hasPreference = source.selectionPolicy === "pinned" || source.state === "excluded";
       return {
         ...source,
-        busy: state.draftPending || state.contextPreferencePending,
+        busy: contextBusy,
         onPin: () => updateContextSourcePreference(source.refId, "pinned", priority),
         onExclude: () => updateContextSourcePreference(source.refId, "excluded", priority),
         onRestore: () => {
@@ -2342,7 +2539,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...(draftApi.refreshContextDraft === undefined
         ? {}
         : { onRefresh: () => refreshContextDraftSources() }),
-      busy: state.draftPending || state.contextPreferencePending
+      busy: contextBusy
     };
   }
 
@@ -2506,6 +2703,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
 
   function toComposerProps(): AgentComposerProps {
     const standalone = context !== undefined && isStandaloneScope(context.scope);
+    const compactionBusy = isCompactionBusy(state.snapshot, state.events, state.compactionPending);
+    const composerBusy = state.draftPending || state.startPending || compactionBusy;
     return {
       request: state.draftRequest,
       operationMode: standalone ? "conversation" : state.operationMode,
@@ -2514,14 +2713,16 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       writePolicyAcknowledged: state.writePolicyAcknowledged,
       executionWritePolicyDraft: state.executionWritePolicy,
       active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
-      disabled: state.draftPending || state.startPending,
-      ...(state.draftPending || state.startPending
+      disabled: composerBusy,
+      ...(composerBusy
         ? {
-            disabledReason: state.startPending
-              ? "正在启动 Agent…"
-              : state.runDraft === undefined
-                ? "正在准备模型与上下文…"
-                : "正在保存运行设置…"
+            disabledReason: compactionBusy
+              ? "正在压缩上下文…"
+              : state.startPending
+                ? "正在启动 Agent…"
+                : state.runDraft === undefined
+                  ? "正在准备模型与上下文…"
+                  : "正在保存运行设置…"
           }
         : {}),
       availableContextModes: standalone
@@ -2646,6 +2847,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       const scopeChanged =
         context === undefined || !sameAgentScope(context.scope, nextContext.scope);
       const conversationChanged = context?.conversationId !== nextContext.conversationId;
+      if (scopeChanged || conversationChanged) beginRunSelection(undefined);
       context = nextContext;
       if (
         conversationChanged ||
@@ -2699,10 +2901,19 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
     async load(scopeOrProjectId) {
       const scope = resolveScopeInput(scopeOrProjectId, context?.workspaceKind);
       if (context === undefined || !sameAgentScope(context.scope, scope)) {
+        beginRunSelection(undefined);
         context = resolveAgentRunBridgeContext({ scope });
         state = resetRunState(state, scope);
       }
+      const loadSelectionGeneration = runSelectionGeneration;
       const listed = await listAgentRunsForScope(api, scope);
+      if (
+        loadSelectionGeneration !== runSelectionGeneration ||
+        context === undefined ||
+        !sameAgentScope(context.scope, scope)
+      ) {
+        return toProps();
+      }
       if (!listed.ok) {
         state = { ...state, errorMessage: listed.error.message };
         return toProps();
@@ -2717,12 +2928,16 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
             isTerminalRunStatus(run.status) &&
             (typeof run.pendingChangeSetId === "string" || typeof run.versionGroupId === "string")
         );
-      if (latest !== undefined) await hydrate(latest.runId);
+      if (latest !== undefined) {
+        const selectionGeneration = beginRunSelection(latest.runId);
+        await hydrate(latest.runId, undefined, selectionGeneration);
+      }
       notify();
       return toProps();
     },
     async loadRun(runId) {
       if (runId === undefined) {
+        beginRunSelection(undefined);
         permissionSummaryRequested = false;
         const currentDraft = {
           runDraft: state.runDraft,
@@ -2750,9 +2965,33 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         notify();
         return toProps();
       }
-      const result = await api.agentRuns.read(runId);
+      const selectionGeneration = beginRunSelection(runId);
+      let result: Awaited<ReturnType<typeof api.agentRuns.read>>;
+      try {
+        result = await api.agentRuns.read(runId);
+      } catch (error: unknown) {
+        if (selectionGeneration !== runSelectionGeneration || selectedRunId !== runId) {
+          return toProps();
+        }
+        beginRunSelection(state.snapshot?.runId);
+        state = {
+          ...state,
+          compactionPending: false,
+          errorMessage: thrownErrorMessage(error)
+        };
+        notify();
+        return toProps();
+      }
+      if (selectionGeneration !== runSelectionGeneration || selectedRunId !== runId) {
+        return toProps();
+      }
       if (!result.ok) {
-        state = { ...state, errorMessage: result.error.message };
+        beginRunSelection(state.snapshot?.runId);
+        state = {
+          ...state,
+          compactionPending: false,
+          errorMessage: result.error.message
+        };
         notify();
         return toProps();
       }
@@ -2762,6 +3001,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         (context.conversationId !== undefined &&
           result.value.snapshot.conversationId !== context.conversationId)
       ) {
+        beginRunSelection(undefined);
         state = {
           ...resetRunState(state, context?.scope),
           errorMessage: "The Agent run is outside the selected conversation."
@@ -2769,7 +3009,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
         notify();
         return toProps();
       }
-      await hydrate(runId);
+      await hydrate(runId, undefined, selectionGeneration);
       notify();
       return toProps();
     },
@@ -2876,6 +3116,7 @@ function resetRunState(state: BridgeState, scope?: AgentContextScope): BridgeSta
     contextPreferenceScope: "run",
     draftPending: false,
     contextPreferencePending: false,
+    compactionPending: false,
     startPending: false,
     permissionSummary: undefined,
     permissionPending: false,
@@ -3077,19 +3318,80 @@ function hasSameRollbackDecisionContext(
 }
 
 function isTerminalRunStatus(status: AgentRunSnapshot["status"]): boolean {
-  return ["completed", "cancelled", "failed", "limit_reached"].includes(status);
+  return [
+    "completed",
+    "blocked",
+    "cancelled",
+    "failed",
+    "limit_reached",
+    "capability_changed"
+  ].includes(status);
 }
 
 function snapshotAfterEvent(snapshot: AgentRunSnapshot, event: AgentRunEvent): AgentRunSnapshot {
   // The coordinator owns version-specific status validity. Renderer events only advance the
   // already-hydrated discriminated snapshot and never create or upgrade its schema version.
+  const nextStatus = eventStatus(event.type);
   return {
     ...snapshot,
-    status: eventStatus(event.type) ?? snapshot.status,
+    status:
+      isTerminalRunStatus(snapshot.status) || nextStatus === undefined
+        ? snapshot.status
+        : nextStatus,
     runRevision: event.runRevision,
     lastSequence: event.sequence,
     updatedAt: event.createdAt
   } as AgentRunSnapshot;
+}
+
+/** Projects a durable event onto the currently selected run without performing any I/O. */
+function projectRunEvent(state: BridgeState, event: AgentRunEvent): BridgeState {
+  const nextSnapshot =
+    state.snapshot === undefined ? undefined : snapshotAfterEvent(state.snapshot, event);
+  const currentSnapshotTerminal =
+    state.snapshot !== undefined && isTerminalRunStatus(state.snapshot.status);
+  return {
+    ...state,
+    events: appendEvent(state.events, event),
+    snapshot: nextSnapshot,
+    compactionPending: currentSnapshotTerminal
+      ? false
+      : event.type === "context_compaction_started"
+        ? true
+        : event.type === "context_compaction_completed" ||
+            event.type === "context_compaction_failed" ||
+            (nextSnapshot !== undefined && isTerminalRunStatus(nextSnapshot.status))
+          ? false
+          : state.compactionPending,
+    ...(nextSnapshot !== undefined && isTerminalRunStatus(nextSnapshot.status)
+      ? {
+          ...defaultNextRunWriteAuthorization(),
+          executionWritePolicy: "write_before_confirmation" as const
+        }
+      : {}),
+    assistantText:
+      event.type === "assistant_text_delta"
+        ? `${state.assistantText}${stringDetail(event.detail, "delta") ?? ""}`
+        : event.type === "run_completed" && state.assistantText.length === 0
+          ? (completedResultDetail(event.detail) ?? state.assistantText)
+          : state.assistantText,
+    pendingUserInput:
+      event.type === "user_input_requested"
+        ? pendingInputFromDetail(event.detail)
+        : event.type === "user_input_resolved"
+          ? undefined
+          : state.pendingUserInput,
+    errorMessage:
+      event.type === "run_failed" && event.detail?.["diagnosticPersistenceFailed"] === true
+        ? "Agent run failed, and diagnostic details could not be saved."
+        : event.type === "run_failed" || event.type === "tool_failed"
+          ? undefined
+          : state.errorMessage,
+    planArtifact:
+      event.type === "plan_ready" && event.detail !== undefined
+        ? (event.detail as unknown as PersistedPlanArtifact)
+        : state.planArtifact
+  };
 }
 
 function defaultNextRunWriteAuthorization(): Pick<
@@ -3732,9 +4034,33 @@ function suggestedStoryBibleReferenceRefs(
 function latestCompactionFailed(events: readonly AgentRunEvent[]): boolean {
   for (const event of [...events].reverse()) {
     if (event.type === "context_compaction_failed") return true;
+    if (event.type === "context_compaction_started") return false;
     if (event.type === "context_compaction_completed") return false;
   }
   return false;
+}
+
+function latestCompactionEvent(events: readonly AgentRunEvent[]): AgentRunEvent | undefined {
+  return [...events]
+    .reverse()
+    .find(
+      (event) =>
+        event.type === "context_compaction_started" ||
+        event.type === "context_compaction_completed" ||
+        event.type === "context_compaction_failed"
+    );
+}
+
+function isCompactionBusy(
+  snapshot: AgentRunSnapshot | undefined,
+  events: readonly AgentRunEvent[],
+  pending: boolean
+): boolean {
+  if (snapshot !== undefined && isTerminalRunStatus(snapshot.status)) return false;
+  if (pending) return true;
+  if (snapshot?.status !== "context_compacting") return false;
+  const latest = latestCompactionEvent(events);
+  return latest === undefined || latest.type === "context_compaction_started";
 }
 
 /** True when a context source went stale and has not yet been refreshed or excluded. */
@@ -3776,6 +4102,18 @@ function appendEvent(events: readonly AgentRunEvent[], event: AgentRunEvent): Ag
     : [...events, event].sort((left, right) => left.sequence - right.sequence);
 }
 
+function latestEventSequenceForRun(
+  events: readonly AgentRunEvent[],
+  runId: string
+): number | undefined {
+  let latest: number | undefined;
+  for (const event of events) {
+    if (event.runId !== runId) continue;
+    latest = latest === undefined ? event.sequence : Math.max(latest, event.sequence);
+  }
+  return latest;
+}
+
 function assistantTextFromEvents(events: readonly AgentRunEvent[]): string {
   const streamed = events
     .filter((event) => event.type === "assistant_text_delta")
@@ -3806,6 +4144,11 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
       return "awaiting_tool_approval";
     case "context_share_approval_requested":
       return "awaiting_context_share_approval";
+    case "context_compaction_started":
+      return "context_compacting";
+    case "context_compaction_completed":
+    case "context_compaction_failed":
+      return undefined;
     case "external_outcome_unknown":
       return "awaiting_external_outcome_resolution";
     case "write_started":
@@ -3813,12 +4156,16 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
       return "applying_changes";
     case "run_completed":
       return "completed";
+    case "run_blocked":
+      return "blocked";
     case "run_cancelled":
       return "cancelled";
     case "run_failed":
       return "failed";
     case "run_limit_reached":
       return "limit_reached";
+    case "capability_changed":
+      return "capability_changed";
     case "run_started":
     case "run_resumed":
     case "user_input_resolved":
@@ -3842,7 +4189,6 @@ function eventStatus(eventType: AgentRunEvent["type"]): AgentRunSnapshot["status
     case "tool_retry_requested":
     case "tool_approval_resolved":
     case "context_share_approval_resolved":
-    case "capability_changed":
     case "capability_revoked":
     case "process_output":
     case "assistant_text_delta":

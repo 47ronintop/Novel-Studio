@@ -3824,13 +3824,474 @@ describe("Agent Run renderer bridge — draft-backed composer", () => {
     const contextStatus = bridge.getComposerProps()?.contextStatus;
     expect(typeof contextStatus?.onCompact).toBe("function");
     contextStatus?.onCompact?.();
+    expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(true);
+    expect(bridge.getComposerProps()?.disabled).toBe(true);
+    expect(bridge.getProps()?.status).toBe("context_compacting");
+    contextStatus?.onCompact?.();
 
     await vi.waitFor(() => expect(compactCalls.length).toBe(1));
+    expect(compactCalls).toHaveLength(1);
     expect(compactCalls[0]).toMatchObject({
       runId: "run-bridge",
       contextBudgetSnapshotId: "budget-live-01",
       trigger: "manual"
     });
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
+  });
+
+  test("releases compaction pending state and surfaces IPC failures", async () => {
+    const activeRun: AgentRunSnapshot = {
+      ...snapshot,
+      status: "executing_model",
+      contextBudgetSnapshotId: "budget-live-01",
+      runRevision: 5
+    };
+    const { api } = createDraftApi({
+      activeRun,
+      heavyRefThreshold: 1,
+      compactContext: async () => {
+        throw new Error("IPC unavailable");
+      }
+    });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await bridge.load("project-01");
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.state).toBe("heavy"));
+    bridge.getComposerProps()?.contextStatus?.onCompact?.();
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false));
+    expect(bridge.getProps()?.errorMessage).toContain("IPC unavailable");
+  });
+
+  test("does not resurrect a cleared run when hydration resolves late", async () => {
+    let readCount = 0;
+    let releaseHydration: (() => void) | undefined;
+    const hydrationGate = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const api = {
+      agentRuns: {
+        onEvent: () => () => undefined,
+        read: async () => {
+          readCount += 1;
+          if (readCount === 2) await hydrationGate;
+          return ok({ snapshot, events: [] });
+        },
+        list: async () => ok([])
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", conversationId: "conversation-01" });
+
+    const loading = bridge.loadRun("run-bridge");
+    await vi.waitFor(() => expect(readCount).toBe(2));
+    await bridge.loadRun(undefined);
+    expect(bridge.getProps()?.runId).toBeUndefined();
+
+    releaseHydration?.();
+    await loading;
+    expect(bridge.getProps()?.runId).toBeUndefined();
+  });
+
+  test("ignores a stale compaction completion while switching runs in one conversation", async () => {
+    const oldRun: AgentRunSnapshot = {
+      ...snapshot,
+      status: "executing_model",
+      contextBudgetSnapshotId: "budget-old",
+      runRevision: 5
+    };
+    const newRun: AgentRunSnapshot = {
+      ...oldRun,
+      runId: "run-new",
+      contextBudgetSnapshotId: "budget-new",
+      updatedAt: "2026-07-16T00:00:05.000Z"
+    };
+    let releaseCompaction: (() => void) | undefined;
+    const compactionGate = new Promise<void>((resolve) => {
+      releaseCompaction = resolve;
+    });
+    let releaseNewHydration: (() => void) | undefined;
+    const newHydrationGate = new Promise<void>((resolve) => {
+      releaseNewHydration = resolve;
+    });
+    let oldReads = 0;
+    let newReads = 0;
+    const { api } = createDraftApi({
+      activeRun: oldRun,
+      heavyRefThreshold: 1,
+      compactContext: async () => {
+        await compactionGate;
+        return ok({});
+      }
+    });
+    api.agentRuns.read = async (runId: string) => {
+      if (runId === newRun.runId) {
+        newReads += 1;
+        if (newReads === 2) await newHydrationGate;
+        return ok({ snapshot: newRun, events: [] });
+      }
+      oldReads += 1;
+      return ok({ snapshot: oldRun, events: [] });
+    };
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await bridge.load("project-01");
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.state).toBe("heavy"));
+
+    bridge.getComposerProps()?.contextStatus?.onCompact?.();
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(true));
+
+    const switching = bridge.loadRun(newRun.runId);
+    await vi.waitFor(() => expect(newReads).toBe(2));
+    releaseCompaction?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(oldReads).toBe(1);
+
+    releaseNewHydration?.();
+    await switching;
+    expect(bridge.getProps()?.runId).toBe(newRun.runId);
+  });
+
+  test("replays target-run events emitted while switching runs", async () => {
+    const newRun: AgentRunSnapshot = {
+      ...snapshot,
+      runId: "run-new",
+      status: "executing_model",
+      lastSequence: 1,
+      runRevision: 1
+    };
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    let newRunReads = 0;
+    let releaseHydration: (() => void) | undefined;
+    const hydrationGate = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const api = {
+      agentRuns: {
+        onEvent: (next: (event: AgentRunEvent) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+        list: async () => ok([snapshot]),
+        read: async (runId: string) => {
+          if (runId === newRun.runId) {
+            newRunReads += 1;
+            if (newRunReads === 2) await hydrationGate;
+            return ok({ snapshot: newRun, events: [] });
+          }
+          return ok({ snapshot, events: [] });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    const switching = bridge.loadRun(newRun.runId);
+    await vi.waitFor(() => expect(newRunReads).toBe(2));
+    listener?.({
+      schemaVersion: "1.0",
+      runId: newRun.runId,
+      projectId: "project-01",
+      sequence: 2,
+      runRevision: 2,
+      type: "run_started",
+      createdAt: "2026-07-16T00:00:02.000Z",
+      detail: { operationMode: "planning" }
+    });
+    listener?.({
+      schemaVersion: "1.0",
+      runId: newRun.runId,
+      projectId: "project-01",
+      sequence: 3,
+      runRevision: 3,
+      type: "run_completed",
+      createdAt: "2026-07-16T00:00:03.000Z",
+      detail: { summary: "新 run 已完成" }
+    });
+    releaseHydration?.();
+    await switching;
+
+    expect(bridge.getProps()?.runId).toBe(newRun.runId);
+    expect(bridge.getProps()?.status).toBe("completed");
+    expect(bridge.getProps()?.assistantText).toBe("新 run 已完成");
+    expect(bridge.getProps()?.events).toEqual([
+      expect.objectContaining({ runId: newRun.runId, sequence: 2, type: "run_started" }),
+      expect.objectContaining({ runId: newRun.runId, sequence: 3, type: "run_completed" })
+    ]);
+  });
+
+  test("keeps a terminal state when a same-run hydration resolves late", async () => {
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    let readCount = 0;
+    let releaseHydration: (() => void) | undefined;
+    const hydrationGate = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const api = {
+      agentRuns: {
+        onEvent: (next: (event: AgentRunEvent) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+        list: async () => ok([snapshot]),
+        read: async () => {
+          readCount += 1;
+          if (readCount === 2) await hydrationGate;
+          return ok({ snapshot, events: [] });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    listener?.(event(2, "context_compaction_started", { compactionId: "compaction-01" }));
+    listener?.(event(3, "context_compaction_completed", { compactionId: "compaction-01" }));
+    await vi.waitFor(() => expect(readCount).toBe(2));
+    listener?.(event(4, "run_completed", { result: "完成" }));
+    expect(bridge.getProps()?.status).toBe("completed");
+
+    releaseHydration?.();
+    await vi.waitFor(() => expect(bridge.getProps()?.status).toBe("completed"));
+  });
+
+  test("does not regress a terminal run on a late compaction event", async () => {
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    const api = {
+      agentRuns: {
+        onEvent: (next: (event: AgentRunEvent) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+        list: async () => ok([snapshot]),
+        read: async () => ok({ snapshot, events: [] })
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    listener?.(event(2, "run_completed", { result: "完成" }));
+    listener?.(event(3, "context_compaction_started", { compactionId: "late-compaction" }));
+
+    expect(bridge.getProps()?.status).toBe("completed");
+    expect(bridge.getComposerProps()?.disabled).toBe(false);
+  });
+
+  test("clears a previous compaction failure when a retry starts", async () => {
+    const activeRun: AgentRunSnapshot = {
+      ...snapshot,
+      status: "executing_model",
+      contextBudgetSnapshotId: "budget-live-01",
+      runRevision: 5
+    };
+    const { api, emitEvent } = createDraftApi({ activeRun, heavyRefThreshold: 1 });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await bridge.load("project-01");
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus).toBeDefined());
+
+    emitEvent({
+      schemaVersion: "1.1",
+      runId: activeRun.runId,
+      projectId: "project-01",
+      sequence: 6,
+      runRevision: 6,
+      type: "context_compaction_failed",
+      createdAt: "2026-07-16T00:00:06.000Z",
+      detail: { compactionId: "compaction-01", code: "COMPACTION_FAILED" }
+    } as AgentRunEvent);
+    expect(bridge.getComposerProps()?.contextStatus?.state).toBe("compaction_failed");
+
+    emitEvent({
+      schemaVersion: "1.1",
+      runId: activeRun.runId,
+      projectId: "project-01",
+      sequence: 7,
+      runRevision: 7,
+      type: "context_compaction_started",
+      createdAt: "2026-07-16T00:00:07.000Z",
+      detail: { compactionId: "compaction-02" }
+    } as AgentRunEvent);
+    expect(bridge.getComposerProps()?.contextStatus?.state).toBe("heavy");
+    expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(true);
+  });
+
+  test("restores the previous run when selecting a run fails during compaction", async () => {
+    const activeRun: AgentRunSnapshot = {
+      ...snapshot,
+      status: "executing_model",
+      contextBudgetSnapshotId: "budget-live-01",
+      runRevision: 5
+    };
+    let releaseCompaction: (() => void) | undefined;
+    const compactionGate = new Promise<void>((resolve) => {
+      releaseCompaction = resolve;
+    });
+    const { api } = createDraftApi({
+      activeRun,
+      heavyRefThreshold: 1,
+      compactContext: async () => {
+        await compactionGate;
+        return ok({});
+      }
+    });
+    const originalRead = api.agentRuns.read;
+    api.agentRuns.read = async (runId: string) => {
+      if (runId === "missing-run") {
+        return err(
+          createUnifiedError({
+            code: "AGENT_RUN_NOT_FOUND",
+            category: "AgentError",
+            message: "The Agent run does not exist.",
+            recoverability: "user-action",
+            suggestedAction: "Select another run.",
+            traceId: "agent-run-bridge-test"
+          })
+        );
+      }
+      return originalRead(runId);
+    };
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await bridge.load("project-01");
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.state).toBe("heavy"));
+
+    bridge.getComposerProps()?.contextStatus?.onCompact?.();
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(true));
+    await bridge.loadRun("missing-run");
+
+    expect(bridge.getProps()?.runId).toBe(activeRun.runId);
+    expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(false);
+    expect(bridge.getProps()?.errorMessage).toContain("does not exist");
+
+    releaseCompaction?.();
+    await Promise.resolve();
+  });
+
+  test("does not stay busy when completion hydration fails", async () => {
+    let listener: ((event: AgentRunEvent) => void) | undefined;
+    let readCount = 0;
+    const api = {
+      agentRuns: {
+        onEvent: (next: (event: AgentRunEvent) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+        list: async () => ok([snapshot]),
+        read: async () => {
+          readCount += 1;
+          if (readCount === 2) {
+            return err(
+              createUnifiedError({
+                code: "AGENT_READ_FAILED",
+                category: "StorageError",
+                message: "Hydration unavailable.",
+                recoverability: "retryable",
+                suggestedAction: "Retry.",
+                traceId: "agent-run-bridge-test"
+              })
+            );
+          }
+          return ok({ snapshot, events: [] });
+        }
+      }
+    } as unknown as NovelStudioApi;
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({ projectId: "project-01", settings });
+    await bridge.load("project-01");
+
+    listener?.(event(2, "context_compaction_started", { compactionId: "compaction-01" }));
+    listener?.(event(3, "context_compaction_completed", { compactionId: "compaction-01" }));
+    await vi.waitFor(() => expect(readCount).toBe(2));
+    await vi.waitFor(() => expect(bridge.getProps()?.status).toBe("executing_model"));
+    expect(bridge.getComposerProps()?.disabled).toBe(false);
+  });
+
+  test("disables compaction for terminal runs", async () => {
+    const activeRun: AgentRunSnapshot = {
+      ...snapshot,
+      status: "completed",
+      contextBudgetSnapshotId: "budget-live-01",
+      runRevision: 5
+    };
+    const { api } = createDraftApi({ activeRun, heavyRefThreshold: 1 });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await bridge.loadRun("run-bridge");
+
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus).toBeDefined());
+    const contextStatus = bridge.getComposerProps()?.contextStatus;
+    expect(contextStatus?.onCompact).toBeUndefined();
+    expect(contextStatus?.compactDisabledReason).toContain("已结束");
+  });
+
+  test("projects a compaction started event as context_compacting", async () => {
+    const activeRun: AgentRunSnapshot = {
+      ...snapshot,
+      status: "executing_model",
+      contextBudgetSnapshotId: "budget-live-01",
+      runRevision: 5
+    };
+    const { api, emitEvent } = createDraftApi({ activeRun, heavyRefThreshold: 1 });
+    const bridge = createAgentRunBridge(api);
+    bridge.syncContext({
+      projectId: "project-01",
+      conversationId: "conversation-01",
+      activeChapterId: "chapter-01",
+      chapterEditor: editor,
+      settings: draftSettings
+    });
+    await bridge.load("project-01");
+    await vi.waitFor(() => expect(bridge.getComposerProps()?.contextStatus).toBeDefined());
+
+    emitEvent({
+      schemaVersion: "1.1",
+      runId: "run-bridge",
+      projectId: "project-01",
+      sequence: 6,
+      runRevision: 6,
+      type: "context_compaction_started",
+      createdAt: "2026-07-16T00:00:00.000Z",
+      detail: { compactionId: "compaction-01" }
+    } as AgentRunEvent);
+
+    expect(bridge.getProps()?.status).toBe("context_compacting");
+    expect(bridge.getComposerProps()?.contextStatus?.busy).toBe(true);
+    expect(bridge.getComposerProps()?.disabled).toBe(true);
   });
 
   test("prepares an exact send preview and automatically confirms only its opaque binding", async () => {
@@ -4179,6 +4640,7 @@ function createDraftApi(
     readonly activeRun?: AgentRunSnapshot;
     readonly heavyRefThreshold?: number;
     readonly firstPermissionRead?: Promise<void>;
+    readonly compactContext?: (command: Record<string, unknown>) => Promise<unknown>;
     readonly packedPreview?:
       | false
       | PackedAgentContextPreview
@@ -4313,6 +4775,7 @@ function createDraftApi(
         },
         compactContext: async (command: Record<string, unknown>) => {
           compactCalls.push(command);
+          if (options.compactContext !== undefined) return options.compactContext(command);
           return ok({
             compactionId: "compaction-01",
             revision: {

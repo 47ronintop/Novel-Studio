@@ -148,6 +148,9 @@ describe("AgentContextMenu", () => {
     expect(refresh?.textContent).toContain("刷新上下文");
     expect(compact?.textContent).toContain("压缩上下文");
     expect(compact?.disabled).toBe(false);
+    act(() => compact?.click());
+    expect(onCompact).toHaveBeenCalledTimes(1);
+    expect(onRefresh).not.toHaveBeenCalled();
   });
 });
 
