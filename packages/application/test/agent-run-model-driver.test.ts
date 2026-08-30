@@ -5,6 +5,51 @@ import { describe, expect, test } from "vitest";
 import * as applicationExports from "../src/index.js";
 
 describe("AgentRunModelDriver", () => {
+  test("uses the frozen capability output cap for the provider request", async () => {
+    const createDriver = (applicationExports as unknown as Record<string, unknown>)[
+      "createLlmAgentRunModelDriver"
+    ];
+    expect(typeof createDriver).toBe("function");
+    if (typeof createDriver !== "function") return;
+
+    let providerRequest: Record<string, unknown> | undefined;
+    const driver = (
+      createDriver as (options: Record<string, unknown>) => {
+        streamRound(input: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+      }
+    )({
+      adapter: {
+        async *stream(request: Record<string, unknown>) {
+          providerRequest = request;
+          yield { ok: true, value: { type: "round_completed", finishReason: "stop" } };
+        }
+      },
+      modelProfile: {
+        id: "profile-output-cap",
+        provider: "openai",
+        displayName: "Output cap model",
+        modelName: "gpt-5"
+      },
+      parameters: { maxTokens: 64_000 }
+    });
+
+    for await (const _event of driver.streamRound({
+      runId: "run-output-cap",
+      snapshot: {
+        providerCapabilitySnapshot: { maxOutputTokens: 2_048 },
+        operationMode: "execution",
+        contextMode: "writing"
+      },
+      messages: [{ role: "user", content: "continue" }],
+      tools: [],
+      signal: new AbortController().signal
+    })) {
+      void _event;
+    }
+
+    expect(providerRequest?.["parameters"]).toMatchObject({ maxTokens: 2_048 });
+  });
+
   test("forwards structured usage events without exposing provider frames", async () => {
     const createDriver = (applicationExports as unknown as Record<string, unknown>)[
       "createLlmAgentRunModelDriver"

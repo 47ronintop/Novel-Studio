@@ -18,6 +18,7 @@ import { collectAiWritingContextCandidates } from "./ai-writing-context.js";
 import {
   createChapterSuggestionLlmRequest,
   createSelectionPreviewLlmRequest,
+  validateWritingRequestContextBudget,
   withRequestedReasoningEffort
 } from "./ai-writing-llm-requests.js";
 import { warningRuntimeNotice } from "./ai-writing-runtime-notices.js";
@@ -169,6 +170,30 @@ export function createAgentBackedAiWritingWorkflowSession(
         return runtimeProfile;
       }
 
+      const llmRequest = createChapterSuggestionLlmRequest({
+        workflowRunId: runState.workflowRunId,
+        instruction: request.instruction,
+        currentBody: chapterState.chapter.body,
+        contextTrace: contextBundle.value.trace,
+        modelProfile: runtimeProfile.value.modelProfile,
+        parameters: withRequestedReasoningEffort(
+          runtimeProfile.value.parameters,
+          request.reasoningEffort
+        ),
+        conversationMessages,
+        contextItems: contextBundle.value.items,
+        promptTemplate: assets.value.chapterPrompt.template
+      });
+      const requestBudget = validateWritingRequestContextBudget({
+        request: llmRequest,
+        ...(runtimeProfile.value.contextWindow === undefined
+          ? {}
+          : { contextWindow: runtimeProfile.value.contextWindow })
+      });
+      if (!requestBudget.ok) {
+        return requestBudget;
+      }
+
       const handoff = await runAgent({
         schemaVersion: "1.0",
         agentRunId: createAgentRunId(),
@@ -182,20 +207,7 @@ export function createAgentBackedAiWritingWorkflowSession(
           currentBody: chapterState.chapter.body
         },
         contextBundle: contextBundle.value,
-        llmRequest: createChapterSuggestionLlmRequest({
-          workflowRunId: runState.workflowRunId,
-          instruction: request.instruction,
-          currentBody: chapterState.chapter.body,
-          contextTrace: contextBundle.value.trace,
-          modelProfile: runtimeProfile.value.modelProfile,
-          parameters: withRequestedReasoningEffort(
-            runtimeProfile.value.parameters,
-            request.reasoningEffort
-          ),
-          conversationMessages,
-          contextItems: contextBundle.value.items,
-          promptTemplate: assets.value.chapterPrompt.template
-        }),
+        llmRequest,
         llmAdapter: options.llmAdapter,
         validateSchema: validateAiWritingSchema,
         now
@@ -434,6 +446,25 @@ export function createAgentBackedAiWritingWorkflowSession(
         return runtimeProfile;
       }
 
+      const llmRequest = createSelectionPreviewLlmRequest({
+        workflowRunId: runState.workflowRunId,
+        instruction: request.instruction,
+        selection: validatedSelection.value,
+        modelProfile: runtimeProfile.value.modelProfile,
+        parameters: runtimeProfile.value.parameters,
+        contextItems: contextBundle.value.items,
+        promptTemplate: assets.value.selectionPrompt.template
+      });
+      const requestBudget = validateWritingRequestContextBudget({
+        request: llmRequest,
+        ...(runtimeProfile.value.contextWindow === undefined
+          ? {}
+          : { contextWindow: runtimeProfile.value.contextWindow })
+      });
+      if (!requestBudget.ok) {
+        return requestBudget;
+      }
+
       const handoff = await runAgent({
         schemaVersion: "1.0",
         agentRunId: createAgentRunId(),
@@ -452,15 +483,7 @@ export function createAgentBackedAiWritingWorkflowSession(
           }
         },
         contextBundle: contextBundle.value,
-        llmRequest: createSelectionPreviewLlmRequest({
-          workflowRunId: runState.workflowRunId,
-          instruction: request.instruction,
-          selection: validatedSelection.value,
-          modelProfile: runtimeProfile.value.modelProfile,
-          parameters: runtimeProfile.value.parameters,
-          contextItems: contextBundle.value.items,
-          promptTemplate: assets.value.selectionPrompt.template
-        }),
+        llmRequest,
         llmAdapter: options.llmAdapter,
         validateSchema: validateAiWritingSchema,
         now

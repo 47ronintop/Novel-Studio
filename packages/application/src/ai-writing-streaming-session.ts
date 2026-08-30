@@ -20,7 +20,10 @@ import {
 import type { ModelRuntimeProfile } from "./model-settings-session.js";
 import { resolveWritingAssets } from "./ai-writing-config-assets.js";
 import { collectAiWritingContextCandidates } from "./ai-writing-context.js";
-import { createChapterSuggestionLlmRequest } from "./ai-writing-llm-requests.js";
+import {
+  createChapterSuggestionLlmRequest,
+  validateWritingRequestContextBudget
+} from "./ai-writing-llm-requests.js";
 import { warningRuntimeNotice } from "./ai-writing-runtime-notices.js";
 import { reviewAiWritingStyle } from "./ai-writing-style-rules.js";
 import { evaluateAiWritingStyle } from "./ai-writing-style-evaluator.js";
@@ -177,6 +180,16 @@ export async function* streamChapterSuggestionForSession(
     mode: "streaming",
     ...(request.abortSignal === undefined ? {} : { abortSignal: request.abortSignal })
   });
+  const requestBudget = validateWritingRequestContextBudget({
+    request: llmRequest,
+    ...(runtimeProfile.value.contextWindow === undefined
+      ? {}
+      : { contextWindow: runtimeProfile.value.contextWindow })
+  });
+  if (!requestBudget.ok) {
+    yield requestBudget;
+    return;
+  }
   let streamedText = "";
   let usage = missingWorkflowUsage();
   let runtimeNotice: string | undefined;

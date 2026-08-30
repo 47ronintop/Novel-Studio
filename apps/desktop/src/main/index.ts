@@ -1600,7 +1600,8 @@ async function resolveDesktopAgentModelStartFacts(
         streaming: true,
         toolCalling: true,
         structuredArguments: true,
-        contextWindow: 128_000
+        contextWindow: 128_000,
+        ...(profile.maxTokens === undefined ? {} : { maxOutputTokens: profile.maxTokens })
       },
       requiredContextTokens: 8_000,
       reasoningStrength: reasoningStrengthForModel("demo", "desktop-scripted-agent"),
@@ -1651,6 +1652,7 @@ async function resolveDesktopAgentModelStartFacts(
       ...(toolCalling === undefined ? {} : { toolCalling }),
       ...(structuredArguments === undefined ? {} : { structuredArguments }),
       ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(profile.maxTokens === undefined ? {} : { maxOutputTokens: profile.maxTokens }),
       promptCache:
         storedSecret.ok && storedSecret.value !== undefined
           ? resolveAgentPromptCacheCapability({

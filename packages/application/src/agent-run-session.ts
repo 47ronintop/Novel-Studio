@@ -137,6 +137,7 @@ import {
 } from "@novel-studio/agent-engine";
 import {
   preflightAgentModelCapabilities,
+  resolveAgentMaxOutputTokens,
   resolveAgentReasoningEffort,
   type AgentModelCapabilityDeclaration
 } from "./agent-model-capabilities.js";
@@ -2306,6 +2307,9 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
       model: input.capability.modelName,
       modelProfileId: input.capability.profileId,
       contextWindow: input.capability.contextWindow,
+      ...(input.capability.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: input.capability.maxOutputTokens }),
       requiredContextTokens: input.capability.requiredContextTokens,
       profile: input.profile,
       prompt: input.prompt,
@@ -14119,13 +14123,6 @@ function resolveStartInput(
   const cacheIdentityAvailable =
     isChecksum(facts.model.connectionIdentityChecksum) &&
     isChecksum(facts.model.accountIsolationChecksum);
-  const providerCapabilitySnapshot =
-    capability.value.promptCache.mode === "none" || cacheIdentityAvailable
-      ? capability.value
-      : {
-          ...capability.value,
-          promptCache: NO_AGENT_PROMPT_CACHE_CAPABILITY
-        };
   const reasoning = resolveAgentReasoningEffort({
     profileId: facts.model.profileId,
     modelName: facts.model.modelName,
@@ -14135,6 +14132,25 @@ function resolveStartInput(
       : { requestedEffort: facts.requestedReasoningEffort })
   });
   if (!reasoning.ok) return err(reasoning.error);
+  const effectiveMaxOutputTokens = resolveAgentMaxOutputTokens({
+    provider: facts.model.provider,
+    ...(capability.value.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: capability.value.maxOutputTokens }),
+    reasoningStrength: facts.model.reasoningStrength,
+    ...(reasoning.value.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: reasoning.value.reasoningEffort })
+  });
+  const effectiveProviderCapabilitySnapshot =
+    effectiveMaxOutputTokens === capability.value.maxOutputTokens
+      ? capability.value
+      : {
+          ...capability.value,
+          ...(effectiveMaxOutputTokens === undefined
+            ? {}
+            : { maxOutputTokens: effectiveMaxOutputTokens })
+        };
   const initialContextSources = facts.initialContextSources ?? [];
   const conventionsArtifactId =
     initialContextSources.find(
@@ -14155,7 +14171,13 @@ function resolveStartInput(
       ? { writePolicyAcknowledged: true as const }
       : {}),
     userRequest: facts.userRequest,
-    providerCapabilitySnapshot,
+    providerCapabilitySnapshot:
+      effectiveProviderCapabilitySnapshot.promptCache.mode === "none" || cacheIdentityAvailable
+        ? effectiveProviderCapabilitySnapshot
+        : {
+            ...effectiveProviderCapabilitySnapshot,
+            promptCache: NO_AGENT_PROMPT_CACHE_CAPABILITY
+          },
     contextProfileId: contextProfile.value.profileId,
     profileVersion: contextProfile.value.profileVersion,
     guidanceTemplateChecksum: createHash("sha256").update(systemPrompt, "utf8").digest("hex"),

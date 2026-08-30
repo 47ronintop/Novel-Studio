@@ -1298,7 +1298,19 @@ function isPersistedFinishReport(value: unknown): value is FinishReportV2 {
 function isProviderCapabilities(value: unknown): value is AgentProviderCapabilitySnapshotV13 {
   return (
     isRecord(value) &&
-    exactFields(value, [
+    hasOnlyFields(value, [
+      "profileId",
+      "provider",
+      "modelName",
+      "streaming",
+      "toolCalling",
+      "structuredArguments",
+      "contextWindow",
+      "maxOutputTokens",
+      "requiredContextTokens",
+      "promptCache"
+    ]) &&
+    [
       "profileId",
       "provider",
       "modelName",
@@ -1308,7 +1320,7 @@ function isProviderCapabilities(value: unknown): value is AgentProviderCapabilit
       "contextWindow",
       "requiredContextTokens",
       "promptCache"
-    ]) &&
+    ].every((field) => field in value) &&
     isNonEmptyString(value.profileId) &&
     isNonEmptyString(value.provider) &&
     isNonEmptyString(value.modelName) &&
@@ -1316,6 +1328,7 @@ function isProviderCapabilities(value: unknown): value is AgentProviderCapabilit
     typeof value.toolCalling === "boolean" &&
     typeof value.structuredArguments === "boolean" &&
     positiveInteger(value.contextWindow) &&
+    (value.maxOutputTokens === undefined || positiveInteger(value.maxOutputTokens)) &&
     nonNegativeInteger(value.requiredContextTokens) &&
     isPromptCacheCapability(value.promptCache)
   );

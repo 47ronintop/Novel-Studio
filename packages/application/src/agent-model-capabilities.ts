@@ -3,6 +3,7 @@ import {
   NO_AGENT_PROMPT_CACHE_CAPABILITY,
   type AgentPromptCacheCapabilitySnapshot
 } from "@novel-studio/agent-engine";
+import { anthropicThinkingBudget } from "@novel-studio/llm-adapter";
 
 import type {
   ModelReasoningStrengthControl,
@@ -15,6 +16,8 @@ export interface AgentModelCapabilityDeclaration {
   readonly toolCalling?: boolean;
   readonly structuredArguments?: boolean;
   readonly contextWindow?: number;
+  /** Profile-declared output cap, expressed as the effective Provider max when needed. */
+  readonly maxOutputTokens?: number;
   readonly promptCache?: AgentPromptCacheCapabilitySnapshot;
 }
 
@@ -292,6 +295,7 @@ export interface AgentModelCapabilitySnapshot {
   readonly toolCalling: boolean;
   readonly structuredArguments: boolean;
   readonly contextWindow: number;
+  readonly maxOutputTokens?: number;
   readonly requiredContextTokens: number;
   readonly promptCache: AgentPromptCacheCapabilitySnapshot;
 }
@@ -325,6 +329,15 @@ export function preflightAgentModelCapabilities(
     declaredContextWindow !== undefined && declaredContextWindow < input.requiredContextTokens;
   if (contextWindowInsufficient) {
     missingCapabilities.push("contextWindow");
+  }
+  const declaredMaxOutputTokens = input.capabilities.maxOutputTokens;
+  const maxOutputTokens =
+    declaredMaxOutputTokens === undefined ||
+    (Number.isSafeInteger(declaredMaxOutputTokens) && declaredMaxOutputTokens > 0)
+      ? declaredMaxOutputTokens
+      : undefined;
+  if (declaredMaxOutputTokens !== undefined && maxOutputTokens === undefined) {
+    missingCapabilities.push("maxOutputTokens");
   }
 
   if (missingCapabilities.length > 0) {
@@ -364,9 +377,35 @@ export function preflightAgentModelCapabilities(
     toolCalling: requireToolCapabilities || input.capabilities.toolCalling === true,
     structuredArguments: requireToolCapabilities || input.capabilities.structuredArguments === true,
     contextWindow,
+    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     requiredContextTokens: input.requiredContextTokens,
     promptCache: normalizeAgentPromptCacheCapability(input.capabilities.promptCache)
   });
+}
+
+/**
+ * Resolve the effective Provider output cap for a frozen model round. Anthropic's budget-thinking
+ * adapter raises `max_tokens` to at least `thinking_budget + 1024`, so the context budget must
+ * reserve that larger value even when the profile's explicit maxTokens is smaller.
+ */
+export function resolveAgentMaxOutputTokens(input: {
+  readonly provider: string;
+  readonly maxOutputTokens?: number;
+  readonly reasoningStrength?: ModelReasoningStrengthControl;
+  readonly reasoningEffort?: ModelReasoningStrengthValue;
+}): number | undefined {
+  const base = input.maxOutputTokens;
+  if (
+    input.provider.trim().toLowerCase() !== "anthropic" ||
+    input.reasoningStrength?.status !== "available" ||
+    input.reasoningStrength.providerParamName !== "anthropic_thinking_budget" ||
+    input.reasoningEffort === undefined
+  ) {
+    return base;
+  }
+  const thinkingBudget = anthropicThinkingBudget(input.reasoningEffort);
+  if (thinkingBudget === undefined) return base;
+  return Math.max(base ?? 1024, thinkingBudget + 1024);
 }
 
 export function normalizeAgentPromptCacheCapability(

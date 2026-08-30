@@ -127,6 +127,8 @@ export interface ModelSettingsSnapshot {
 export interface ModelRuntimeProfile {
   readonly modelProfile: LlmModelProfile;
   readonly parameters: LlmParameters;
+  /** Verified model context window when the runtime resolved one from profile/discovery metadata. */
+  readonly contextWindow?: number;
 }
 
 export interface ModelSettingsSession {

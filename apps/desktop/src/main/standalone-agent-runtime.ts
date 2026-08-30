@@ -15,8 +15,11 @@ import {
   canonicalAgentFirstRoundSemanticPayloadChecksumV2,
   materializeCanonicalAgentRound,
   materializeAgentPrompt,
+  preflightAgentModelCapabilities,
   readResolvedContextBudgetUsageLimits,
   resolveBudgetInputs as resolveCanonicalBudgetInputs,
+  resolveAgentMaxOutputTokens,
+  resolveAgentReasoningEffort,
   resolveAgentContextProfile,
   type AgentContextBudgetInputs,
   type AgentContextBudgetInputsPort,
@@ -839,6 +842,34 @@ function createStandaloneBudgetInputs(
       if (model === undefined) {
         return err(standaloneRuntimeError("AGENT_STANDALONE_MODEL_UNAVAILABLE"));
       }
+      const capability = preflightAgentModelCapabilities({
+        profileId: model.profileId,
+        provider: model.provider,
+        modelName: model.modelName,
+        capabilities: model.capabilities,
+        requiredContextTokens: model.requiredContextTokens,
+        requireToolCapabilities: false
+      });
+      if (!capability.ok) return err(capability.error);
+      const reasoning = resolveAgentReasoningEffort({
+        profileId: model.profileId,
+        modelName: model.modelName,
+        reasoningStrength: model.reasoningStrength,
+        ...(input.draft.reasoningEffort === undefined
+          ? {}
+          : { requestedEffort: input.draft.reasoningEffort })
+      });
+      if (!reasoning.ok) return err(reasoning.error);
+      const maxOutputTokens = resolveAgentMaxOutputTokens({
+        provider: model.provider,
+        ...(capability.value.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: capability.value.maxOutputTokens }),
+        reasoningStrength: model.reasoningStrength,
+        ...(reasoning.value.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: reasoning.value.reasoningEffort })
+      });
       const profile = resolveAgentContextProfile(
         STANDALONE_AGENT_SCOPE,
         "conversation",
@@ -862,6 +893,7 @@ function createStandaloneBudgetInputs(
         ...(model.capabilities.contextWindow === undefined
           ? {}
           : { contextWindow: model.capabilities.contextWindow }),
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
         requiredContextTokens: model.requiredContextTokens,
         profile,
         prompt,
@@ -874,6 +906,7 @@ function createStandaloneBudgetInputs(
           provider: model.provider,
           model: model.modelName,
           contextWindow: resolved.value.contextWindow,
+          ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
           toolReserve: resolved.value.toolReserve,
           systemReserve: resolved.value.systemReserve,
           requiredContextTokens: model.requiredContextTokens
@@ -934,6 +967,9 @@ async function resolveStandaloneUsageBudget(
     model: snapshot.providerCapabilitySnapshot.modelName,
     modelProfileId: snapshot.providerCapabilitySnapshot.profileId,
     contextWindow: snapshot.providerCapabilitySnapshot.contextWindow,
+    ...(snapshot.providerCapabilitySnapshot.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: snapshot.providerCapabilitySnapshot.maxOutputTokens }),
     facadeVersion,
     schemaVersion: catalog.value.schemaVersion,
     catalogRevision
@@ -955,9 +991,15 @@ function createStandaloneModelDriver(options: StandaloneAgentModelPorts): AgentR
         input.snapshot.providerCapabilitySnapshot.modelName
       );
       if (profile === undefined) throw new Error("AGENT_STANDALONE_MODEL_UNAVAILABLE");
+      const { maxTokens: _profileMaxTokens, ...profileParameters } = profile.parameters ?? {};
+      const maxOutputTokens = input.snapshot.providerCapabilitySnapshot.maxOutputTokens;
       yield* options
         .createAgentModelDriver({
           ...profile,
+          parameters:
+            maxOutputTokens === undefined
+              ? profileParameters
+              : { ...profileParameters, maxTokens: maxOutputTokens },
           promptCacheScopeKey: agentContextScopeKey(input.snapshot.scope)
         })
         .streamRound(input);

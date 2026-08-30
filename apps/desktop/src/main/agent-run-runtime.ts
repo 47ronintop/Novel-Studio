@@ -45,6 +45,8 @@ import {
   storyBibleAssetRelativePath,
   AGENT_COMPACTION_SUMMARY_TEMPLATE_VERSION,
   preflightAgentModelCapabilities,
+  resolveAgentMaxOutputTokens,
+  resolveAgentReasoningEffort,
   readResolvedContextBudgetUsageLimits,
   resolveBudgetInputs as resolveCanonicalBudgetInputs,
   resolveAgentContextProfile,
@@ -4318,6 +4320,9 @@ async function resolveDesktopUsageBudget(
     model: snapshot.providerCapabilitySnapshot.modelName,
     modelProfileId: snapshot.providerCapabilitySnapshot.profileId,
     contextWindow: snapshot.providerCapabilitySnapshot.contextWindow,
+    ...(snapshot.providerCapabilitySnapshot.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: snapshot.providerCapabilitySnapshot.maxOutputTokens }),
     facadeVersion,
     schemaVersion: catalog.value.schemaVersion,
     catalogRevision
@@ -4433,6 +4438,23 @@ function createDesktopAgentContextSession(input: {
         requiredContextTokens: model.requiredContextTokens
       });
       if (!capability.ok) return err(capability.error);
+      const reasoning = resolveAgentReasoningEffort({
+        profileId: model.profileId,
+        modelName: model.modelName,
+        reasoningStrength: model.reasoningStrength,
+        ...(draft.reasoningEffort === undefined ? {} : { requestedEffort: draft.reasoningEffort })
+      });
+      if (!reasoning.ok) return err(reasoning.error);
+      const maxOutputTokens = resolveAgentMaxOutputTokens({
+        provider: model.provider,
+        ...(capability.value.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: capability.value.maxOutputTokens }),
+        reasoningStrength: model.reasoningStrength,
+        ...(reasoning.value.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: reasoning.value.reasoningEffort })
+      });
       if (
         input.workspaceKind === "creativeProject" &&
         contextDraft.contextMode === "general_file"
@@ -4543,6 +4565,7 @@ function createDesktopAgentContextSession(input: {
         ...(model.capabilities.contextWindow === undefined
           ? {}
           : { contextWindow: model.capabilities.contextWindow }),
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
         requiredContextTokens: model.requiredContextTokens,
         profile,
         prompt,
@@ -4560,6 +4583,7 @@ function createDesktopAgentContextSession(input: {
           provider: model.provider,
           model: model.modelName,
           contextWindow: capability.value.contextWindow,
+          ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
           toolReserve: resolvedBudget.value.toolReserve,
           systemReserve: resolvedBudget.value.systemReserve,
           requiredContextTokens: model.requiredContextTokens
@@ -6284,7 +6308,10 @@ function readResolvedIntent(
         streaming: snapshot["streaming"] === true,
         toolCalling: snapshot["toolCalling"] === true,
         structuredArguments: snapshot["structuredArguments"] === true,
-        contextWindow: Number(snapshot["contextWindow"] ?? 0)
+        contextWindow: Number(snapshot["contextWindow"] ?? 0),
+        ...(snapshot["maxOutputTokens"] === undefined
+          ? {}
+          : { maxOutputTokens: Number(snapshot["maxOutputTokens"]) })
       },
       requiredContextTokens: Number(snapshot["requiredContextTokens"] ?? 8000),
       reasoningStrength: { status: "hidden", reason: "resolved-intent start" }
@@ -7022,8 +7049,14 @@ function createDesktopAdaptiveAgentDriver(input: {
       if (profile === undefined) {
         throw new Error("The selected Agent model profile is unavailable.");
       }
+      const { maxTokens: _profileMaxTokens, ...profileParameters } = profile.parameters ?? {};
+      const maxOutputTokens = roundInput.snapshot.providerCapabilitySnapshot.maxOutputTokens;
       const driver = input.createAgentModelDriver({
         ...profile,
+        parameters:
+          maxOutputTokens === undefined
+            ? profileParameters
+            : { ...profileParameters, maxTokens: maxOutputTokens },
         promptCacheScopeKey: agentContextScopeKey(roundInput.snapshot.scope)
       });
       yield* driver.streamRound(roundInput);

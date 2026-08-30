@@ -1253,6 +1253,50 @@ describe("M14 AI writing workflow session", () => {
       error: { code: "AI_WORKFLOW_CONFIG_ASSET_MISSING" }
     });
   });
+
+  test("fails before the provider when the full chapter request exceeds the model window", async () => {
+    const requests: LlmRequest[] = [];
+    const body = "A".repeat(600);
+    const chapterSession = createChapterEditorSession({
+      chapterId: "ch_budget",
+      repository: {
+        async readChapter() {
+          return ok({ ...originalChapter, body });
+        },
+        async writeChapter(chapter) {
+          return ok(chapter);
+        }
+      },
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+    const loaded = await chapterSession.load();
+    if (isErr(loaded)) throw new Error(loaded.error.message);
+
+    const aiWorkflow = createAgentBackedAiWritingWorkflowSession({
+      chapterEditorSession: chapterSession,
+      llmAdapter: createLlmAdapter({ provider: createCapturingProvider(requests) }),
+      resolveModelRuntimeProfile: async () =>
+        ok({
+          contextWindow: 256,
+          modelProfile: {
+            id: "model_budget",
+            provider: "openai-compatible",
+            displayName: "Budget model",
+            modelName: "budget-model"
+          },
+          parameters: { maxTokens: 64 }
+        }),
+      now: () => "2026-07-04T00:00:00.000Z"
+    });
+
+    const result = await aiWorkflow.generateChapterSuggestion({ instruction: "Continue." });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "AI_WORKFLOW_CONTEXT_BUDGET_EXCEEDED" }
+    });
+    expect(requests).toHaveLength(0);
+  });
 });
 
 function createRepository(writes: ChapterDocument[]): ChapterDraftRepositoryPort {

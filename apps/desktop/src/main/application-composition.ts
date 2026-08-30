@@ -27,7 +27,8 @@ import {
   createUserPreferencesSession,
   resolveDefaultForeshadowAnalysisRuntimeProfile,
   resolveDefaultModelRuntimeProfile,
-  resolveDefaultStoryAnalysisRuntimeProfile
+  resolveDefaultStoryAnalysisRuntimeProfile,
+  resolveCatalogAgentModelCapabilities
 } from "@novel-studio/application";
 import {
   createApprovalRuleSetProjection,
@@ -737,26 +738,44 @@ export function createProjectDesktopApplication(
             return settings;
           }
           const runtime = resolveDefaultModelRuntimeProfile(settings.value);
-          if (!runtime.ok || options.modelDiscoveryPort === undefined) return runtime;
+          if (!runtime.ok) return runtime;
           const profile = settings.value.models.profiles.find(
             (entry) => entry.id === settings.value.models.defaultProfileId
           );
           if (profile === undefined) return runtime;
-          const discovery = await options.modelDiscoveryPort.discoverModels(profile);
-          if (!discovery.ok) return runtime;
+          const discovery =
+            options.modelDiscoveryPort === undefined
+              ? undefined
+              : await options.modelDiscoveryPort.discoverModels(profile);
+          const discoveredModel =
+            discovery?.ok === true
+              ? discovery.value.models.find((model) => model.id === profile.modelName)
+              : undefined;
           const control =
-            discovery.value.models.find((model) => model.id === profile.modelName)
-              ?.reasoningStrength ?? discovery.value.reasoningStrength;
-          return resolveDefaultModelRuntimeProfile(
-            settings.value,
-            control.status === "available"
-              ? {
-                  providerParamName: control.providerParamName,
-                  allowedValues: control.allowedValues,
-                  defaultValue: control.defaultValue
-                }
-              : null
-          );
+            discoveredModel?.reasoningStrength ??
+            (discovery?.ok === true ? discovery.value.reasoningStrength : undefined);
+          const resolved =
+            control === undefined
+              ? runtime
+              : resolveDefaultModelRuntimeProfile(
+                  settings.value,
+                  control.status === "available"
+                    ? {
+                        providerParamName: control.providerParamName,
+                        allowedValues: control.allowedValues,
+                        defaultValue: control.defaultValue
+                      }
+                    : null
+                );
+          if (!resolved.ok) return resolved;
+          const contextWindow =
+            profile.contextWindow ??
+            discoveredModel?.contextWindow ??
+            resolveCatalogAgentModelCapabilities(profile.provider, profile.modelName)?.contextWindow;
+          return ok({
+            ...resolved.value,
+            ...(contextWindow === undefined ? {} : { contextWindow })
+          });
         },
         ...(options.now === undefined ? {} : { now: options.now }),
         workflowRunHistory: {

@@ -1,10 +1,12 @@
 import type { ContextBundleItem, ContextBundleTrace } from "@novel-studio/context-engine";
+import { calculateContextBudget, createDeterministicTokenEstimator } from "@novel-studio/agent-engine";
 import type {
   LlmMode,
   LlmModelProfile,
   LlmParameters,
   LlmRequest
 } from "@novel-studio/llm-adapter";
+import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
 import type {
   AiWritingConversationMessage,
@@ -115,6 +117,62 @@ export function withRequestedReasoningEffort(
   reasoningEffort: LlmParameters["reasoningEffort"] | undefined
 ): LlmParameters {
   return reasoningEffort === undefined ? parameters : { ...parameters, reasoningEffort };
+}
+
+/**
+ * Guard legacy writing requests at the provider boundary. The old workflow's context bundle limit
+ * only covers selected material, so this check measures the fully serialized request as sent.
+ * Unknown windows remain compatible with older callers; modern runtimes fail closed before start.
+ */
+export function validateWritingRequestContextBudget(input: {
+  readonly request: Pick<
+    LlmRequest,
+    "requestId" | "traceId" | "messages" | "responseFormat" | "parameters" | "modelProfile"
+  >;
+  readonly contextWindow?: number;
+}): Result<void, UnifiedError> {
+  if (input.contextWindow === undefined) return ok(undefined);
+
+  const serialized = JSON.stringify({
+    messages: input.request.messages,
+    responseFormat: input.request.responseFormat
+  });
+  const estimatedTokens = createDeterministicTokenEstimator().count(
+    serialized,
+    input.request.modelProfile.id
+  ).tokens;
+  const budget = calculateContextBudget({
+    contextBudgetSnapshotId: `legacy_${input.request.requestId}`,
+    provider: input.request.modelProfile.provider,
+    model: input.request.modelProfile.modelName,
+    contextWindow: input.contextWindow,
+    ...(input.request.parameters.maxTokens === undefined
+      ? {}
+      : { maxOutputTokens: input.request.parameters.maxTokens }),
+    toolReserve: 0,
+    systemReserve: 0,
+    requiredContextTokens: estimatedTokens,
+    usedTokens: estimatedTokens,
+    precision: "estimated",
+    calculatedAt: new Date().toISOString()
+  });
+  if (budget.ok) return ok(undefined);
+
+  return err(
+    createUnifiedError({
+      code: "AI_WORKFLOW_CONTEXT_BUDGET_EXCEEDED",
+      category: "UserError",
+      message: "The AI writing request exceeds the selected model's context window.",
+      recoverability: "user-action",
+      suggestedAction: "Shorten the chapter or conversation, or choose a model with a larger context window.",
+      traceId: input.request.traceId,
+      redactedDetail: {
+        contextWindow: input.contextWindow,
+        estimatedInputTokens: estimatedTokens,
+        maxOutputTokens: input.request.parameters.maxTokens ?? null
+      }
+    })
+  );
 }
 
 function formatPreviousConversation(messages: readonly AiWritingConversationMessage[]): string {

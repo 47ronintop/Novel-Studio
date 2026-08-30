@@ -77,9 +77,18 @@ export function createLlmAgentRunModelDriver(
       // preflight approved is exactly what reaches the provider.
       const baseParameters = options.parameters ?? {};
       const parameters: LlmParameters =
+        input.snapshot.providerCapabilitySnapshot?.maxOutputTokens === undefined &&
         input.snapshot.reasoningEffort === undefined
           ? baseParameters
-          : { ...baseParameters, reasoningEffort: input.snapshot.reasoningEffort };
+          : {
+              ...baseParameters,
+              ...(input.snapshot.providerCapabilitySnapshot?.maxOutputTokens === undefined
+                ? {}
+                : { maxTokens: input.snapshot.providerCapabilitySnapshot.maxOutputTokens }),
+              ...(input.snapshot.reasoningEffort === undefined
+                ? {}
+                : { reasoningEffort: input.snapshot.reasoningEffort })
+            };
       const baseRequest: LlmRequest = {
         schemaVersion: "1.0",
         requestId,

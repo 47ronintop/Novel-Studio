@@ -109,6 +109,7 @@ export function readResolvedContextBudgetUsageLimits(
     readonly model: string;
     readonly modelProfileId: string;
     readonly contextWindow: number;
+    readonly maxOutputTokens?: number;
     readonly facadeVersion: AgentToolFacadeVersion;
     readonly schemaVersion?: "1.0" | "2.0";
     readonly catalogRevision: string;
@@ -135,6 +136,8 @@ export function readResolvedContextBudgetUsageLimits(
     value["model"] !== expected.model ||
     value["contextWindowSemantics"] !== "shared_input_output_window" ||
     contextWindow !== expected.contextWindow ||
+    (expected.maxOutputTokens !== undefined &&
+      requestedMaxOutputTokens !== expected.maxOutputTokens) ||
     !isPositiveTokenCount(contextWindow) ||
     !isTokenCount(outputReserve) ||
     value["maxOutputTokens"] !== outputReserve ||

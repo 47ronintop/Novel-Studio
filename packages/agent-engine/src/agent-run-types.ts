@@ -117,6 +117,8 @@ export interface AgentProviderCapabilitySnapshot {
   readonly toolCalling: boolean;
   readonly structuredArguments: boolean;
   readonly contextWindow: number;
+  /** Frozen effective maximum output tokens, when the selected profile declares one. */
+  readonly maxOutputTokens?: number;
   readonly requiredContextTokens: number;
   /** Required on v1.3 snapshots; absent only on normalized historical records. */
   readonly promptCache?: AgentPromptCacheCapabilitySnapshot;

@@ -23,6 +23,7 @@ export {
   resolveAgentPromptCacheCapability,
   resolveCatalogAgentModelCapabilities,
   resolveAgentReasoningEffort,
+  resolveAgentMaxOutputTokens,
   type AgentModelCapabilityCatalogEntry,
   type AgentModelCapabilityDeclaration,
   type AgentModelCapabilityPreflightInput,

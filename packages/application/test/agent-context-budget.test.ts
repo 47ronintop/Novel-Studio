@@ -83,6 +83,7 @@ function resolve(
     contextWindow?: number;
     omitContextWindow?: boolean;
     requiredContextTokens?: number;
+    maxOutputTokens?: number;
     catalogRevision?: string;
     omitToolCatalog?: boolean;
     omitOutlineFromPrompt?: boolean;
@@ -135,6 +136,9 @@ function resolve(
       ? {}
       : { contextWindow: overrides.contextWindow ?? 128_000 }),
     requiredContextTokens: overrides.requiredContextTokens ?? 8_000,
+    ...(overrides.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: overrides.maxOutputTokens }),
     profile,
     prompt,
     contextSources,
@@ -218,6 +222,51 @@ describe("C4 shared budget inputs", () => {
         .size
     ).toBeGreaterThan(1);
     expect(resolve({ provider: "anthropic" })).toEqual(anthropic);
+  });
+
+  test("uses the resolved profile output cap for the safe input budget", () => {
+    const result = resolve({ maxOutputTokens: 64_000 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.maxOutputTokens).toBe(64_000);
+
+    const snapshot = calculateResolvedContextBudget({
+      contextBudgetSnapshotId: "budget_max_output",
+      resolved: result.value,
+      calculatedAt: "2026-08-30T00:00:00.000Z"
+    });
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    expect(snapshot.value.outputReserve).toBe(64_000);
+    expect(snapshot.value.safeInputBudget).toBe(
+      snapshot.value.contextWindow -
+        64_000 -
+        snapshot.value.toolReserve -
+        snapshot.value.systemReserve
+    );
+    expect(snapshot.value.audit.requestedMaxOutputTokens).toBe(64_000);
+    const expected = {
+      contextBudgetSnapshotId: snapshot.value.contextBudgetSnapshotId,
+      provider: result.value.provider,
+      model: result.value.model,
+      modelProfileId: result.value.modelProfileId,
+      contextWindow: result.value.contextWindow,
+      maxOutputTokens: 64_000,
+      facadeVersion: result.value.toolCatalog.facadeVersion,
+      catalogRevision: result.value.toolCatalog.catalogRevision
+    };
+    expect(
+      readResolvedContextBudgetUsageLimits(snapshot.value as unknown as JsonObject, expected)
+    ).toMatchObject({ ok: true });
+    expect(
+      readResolvedContextBudgetUsageLimits(snapshot.value as unknown as JsonObject, {
+        ...expected,
+        maxOutputTokens: 63_999
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CONTEXT_BUDGET_SNAPSHOT_INVALID" }
+    });
   });
 
   test("v1/v2 and network/MCP descriptors affect the frozen reserve", () => {

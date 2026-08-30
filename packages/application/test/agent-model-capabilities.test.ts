@@ -248,6 +248,54 @@ describe("agent model capability preflight", () => {
       }
     });
   });
+
+  test("freezes a valid output cap and rejects malformed caps", () => {
+    const supported = applicationExports.preflightAgentModelCapabilities({
+      profileId: "model_with_output_cap",
+      provider: "openai-compatible",
+      modelName: "tool-model",
+      capabilities: {
+        streaming: true,
+        toolCalling: true,
+        structuredArguments: true,
+        contextWindow: 128_000,
+        maxOutputTokens: 64_000
+      },
+      requiredContextTokens: 8_000
+    });
+    expect(supported).toMatchObject({ ok: true, value: { maxOutputTokens: 64_000 } });
+
+    const malformed = applicationExports.preflightAgentModelCapabilities({
+      profileId: "model_bad_output_cap",
+      provider: "openai-compatible",
+      modelName: "tool-model",
+      capabilities: { contextWindow: 128_000, maxOutputTokens: 0 },
+      requiredContextTokens: 8_000
+    });
+    expect(malformed).toMatchObject({
+      ok: false,
+      error: {
+        code: "AGENT_MODEL_CAPABILITY_UNSUPPORTED",
+        redactedDetail: { missingCapabilities: ["maxOutputTokens"] }
+      }
+    });
+  });
+
+  test("accounts for Anthropic budget-thinking output expansion", () => {
+    const resolve = applicationExports.resolveAgentMaxOutputTokens;
+    const result = resolve({
+      provider: "anthropic",
+      maxOutputTokens: 1_000,
+      reasoningStrength: {
+        status: "available",
+        providerParamName: "anthropic_thinking_budget",
+        allowedValues: ["low", "medium", "high"],
+        defaultValue: "medium"
+      },
+      reasoningEffort: "high"
+    });
+    expect(result).toBe(9_216);
+  });
 });
 
 describe("agent reasoning effort resolution", () => {

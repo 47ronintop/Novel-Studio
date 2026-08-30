@@ -459,6 +459,9 @@ function calculateCompactionBudget(input: {
     model: capability.modelName,
     modelProfileId: capability.profileId,
     contextWindow: capability.contextWindow,
+    ...(capability.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: capability.maxOutputTokens }),
     requiredContextTokens: capability.requiredContextTokens,
     profile: prompt.profile,
     prompt,
