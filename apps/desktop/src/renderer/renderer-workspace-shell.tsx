@@ -195,7 +195,8 @@ export function RendererWorkspaceShell(props: RendererWorkspaceShellProps) {
             : {
                 analysisReview: {
                   ...sourceStoryBibleEditor.analysisReview,
-                  onOpen: props.navigation.navigateToStoryAnalysis
+                  onOpen: props.navigation.navigateToStoryAnalysis,
+                  onOpenEntry: props.navigation.navigateToStoryEntry
                 }
               }),
           onKindSelect: (kind) => {

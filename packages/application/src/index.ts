@@ -1250,8 +1250,18 @@ export type {
 } from "./story-analysis-session.js";
 export {
   describeStoryBibleType,
+  evaluateStoryBibleCompleteness,
   isStoryBibleV11AssetType,
   validateStoryBibleV11Asset
+} from "@novel-studio/schemas";
+export type {
+  StoryBibleCompletenessCheck,
+  StoryBibleCompletenessCheckStatus,
+  StoryBibleCompletenessCounts,
+  StoryBibleCompletenessImportance,
+  StoryBibleCompletenessInput,
+  StoryBibleCompletenessReport,
+  StoryBibleCompletenessStatus
 } from "@novel-studio/schemas";
 export { validateStoryAnalysisBundle } from "@novel-studio/schemas";
 export type {

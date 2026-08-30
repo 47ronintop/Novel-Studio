@@ -31,6 +31,16 @@ export type {
   StoryBibleSemanticValidationOptions,
   StoryBibleV11AssetType
 } from "./story-bible.js";
+export { evaluateStoryBibleCompleteness } from "./story-bible-completeness.js";
+export type {
+  StoryBibleCompletenessCheck,
+  StoryBibleCompletenessCheckStatus,
+  StoryBibleCompletenessCounts,
+  StoryBibleCompletenessImportance,
+  StoryBibleCompletenessInput,
+  StoryBibleCompletenessReport,
+  StoryBibleCompletenessStatus
+} from "./story-bible-completeness.js";
 export {
   STORY_EPISTEMIC_STATUSES,
   STORY_FACT_KINDS,

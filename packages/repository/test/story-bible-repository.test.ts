@@ -2439,6 +2439,24 @@ describe("StoryBibleFileRepository", () => {
     expect(read.value.asset).not.toHaveProperty("passthrough");
   });
 
+  test("includes deterministic completeness in list and Agent asset reads", async () => {
+    const projectRoot = await createTempProject();
+    const repository = new StoryBibleFileRepository({ projectRoot });
+    await repository.saveStoryAsset(characterAsset());
+
+    const listed = await repository.listStoryBible();
+    const read = await repository.readStoryAssetForAgent("chr_hero");
+
+    expect(listed.ok).toBe(true);
+    expect(read.ok).toBe(true);
+    if (!listed.ok || !read.ok) return;
+    expect(listed.value.items[0]?.completeness).toMatchObject({
+      schemaVersion: "1.0",
+      status: "insufficient"
+    });
+    expect(read.value.completeness).toEqual(listed.value.items[0]?.completeness);
+  });
+
   test("reports incoming, outgoing, and soft-delete reference impact", async () => {
     const projectRoot = await createTempProject();
     const characterId = "chr_11111111111111111111111111111111";

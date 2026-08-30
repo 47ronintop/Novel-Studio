@@ -1,4 +1,8 @@
-import type { NovelStudioApi, UserPreferencesSaveInput } from "@novel-studio/application";
+import type {
+  ActivityId,
+  NovelStudioApi,
+  UserPreferencesSaveInput
+} from "@novel-studio/application";
 import {
   STANDALONE_AGENT_CONTEXT_SCOPE,
   agentContextScopeKey,
@@ -171,6 +175,7 @@ export function useAgentRunWorkspaceEffects(input: {
 export function decorateAgentConversationWorkspace(input: {
   readonly workspace: AgentConversationWorkspaceShellProps | undefined;
   readonly workspaceKind: "creativeProject" | "engineeringWorkspace" | "none";
+  readonly activeActivity?: ActivityId;
   readonly activeChapterId: string | undefined;
   readonly chapterEditor: ChapterEditorProps | undefined;
   readonly chapterSelection: ChapterEditorSelection | undefined;
@@ -187,10 +192,13 @@ export function decorateAgentConversationWorkspace(input: {
 
   const standalone = input.workspaceKind === "none";
   const creative = input.workspaceKind === "creativeProject";
+  const storyBibleSurface =
+    input.activeActivity === "storyBible" || input.activeActivity === "timeline";
+  const writingSurface = input.activeChapterId !== undefined || storyBibleSurface;
   const availableContextModes = standalone
     ? (["standalone_chat"] as const)
     : creative
-      ? input.activeChapterId === undefined
+      ? !writingSurface
         ? (["general_file"] as const)
         : (["writing", "general_file"] as const)
       : (["general_file"] as const);

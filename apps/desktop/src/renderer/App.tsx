@@ -504,9 +504,11 @@ export function App() {
       shellState.workspaceContext.kind === "creativeProject"
         ? shellState.workbenchMode === "engineering" || fileEditorScope === "creativeProjectFile"
           ? "general_file"
-          : activeAgentChapterId === undefined
-            ? "general_file"
-            : "writing"
+          : shellState.activeActivity === "storyBible" || shellState.activeActivity === "timeline"
+            ? "writing"
+            : activeAgentChapterId === undefined
+              ? "general_file"
+              : "writing"
         : undefined,
     activeResourceRef: activeAgentResourceRef,
     beforeStart: guardAgentStart,
@@ -840,6 +842,7 @@ export function App() {
   const agentConversationWorkspaceForShell = decorateAgentConversationWorkspace({
     workspace: agentConversationWorkspacePresentation.workspace,
     workspaceKind: shellState.workspaceContext.kind,
+    activeActivity: shellState.activeActivity,
     activeChapterId: activeAgentChapterId,
     chapterEditor,
     chapterSelection,

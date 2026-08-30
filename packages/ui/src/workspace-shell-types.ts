@@ -1360,6 +1360,7 @@ export interface StoryAnalysisReviewProps {
   readonly result?: StoryAnalysisApplicationResultProps;
   readonly feedback?: ProjectWorkflowFeedback;
   readonly onOpen: () => void;
+  readonly onOpenEntry?: (assetId: string) => void;
   readonly onClose: () => void;
   readonly onRunSelect: (workflowRunId: string) => void;
   readonly onFiltersChange: (filters: Partial<StoryAnalysisReviewFilters>) => void;

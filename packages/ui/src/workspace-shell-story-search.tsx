@@ -1,4 +1,5 @@
 ﻿import type { ProjectSearchResultItem } from "@novel-studio/application";
+import { evaluateStoryBibleCompleteness } from "@novel-studio/application";
 import type { ForeshadowTrackingStatus, JsonObject } from "@novel-studio/shared";
 import {
   ArrowLeft,
@@ -753,6 +754,13 @@ function StoryBibleDetailForm({
       : editor.draft.kind === "foreshadow"
         ? "伏笔"
         : "时间线";
+  const completeness = evaluateStoryBibleCompleteness({
+    type: editor.draft.assetType,
+    title: editor.draft.title,
+    summary: editor.draft.summary,
+    details: editor.draft.details
+  });
+  const incompleteChecks = completeness.checks.filter((check) => check.status !== "present");
 
   return (
     <form
@@ -765,6 +773,34 @@ function StoryBibleDetailForm({
       }}
     >
       <StoryBibleDetailFields editor={editor} />
+
+      <section
+        aria-label="资料完整度"
+        className="ns-story-validation"
+        data-completeness-status={completeness.status}
+      >
+        <div>
+          <strong>
+            资料完整度 · {completeness.score}% ·{" "}
+            {storyBibleCompletenessStatusLabel(completeness.status)}
+          </strong>
+          <span className="ns-muted">
+            必填 {completeness.required.present}/{completeness.required.total} · 建议{" "}
+            {completeness.recommended.present}/{completeness.recommended.total}
+          </span>
+        </div>
+        {incompleteChecks.length === 0 ? (
+          <p className="ns-muted">核心字段和建议字段均已填写。</p>
+        ) : (
+          <ul>
+            {incompleteChecks.map((check) => (
+              <li key={`${check.path}:${check.importance}`}>
+                <strong>{check.label}</strong>：{check.message} {check.suggestedAction}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {validationMessages.length === 0 ? null : (
         <section
@@ -1144,6 +1180,19 @@ function storyAssetStatusLabel(status: StoryBibleEditorEntry["status"]): string 
       return "归档";
     case "deleted":
       return "已删除";
+  }
+}
+
+function storyBibleCompletenessStatusLabel(
+  status: "complete" | "partial" | "insufficient"
+): string {
+  switch (status) {
+    case "complete":
+      return "完整";
+    case "partial":
+      return "部分完整";
+    case "insufficient":
+      return "资料不足";
   }
 }
 

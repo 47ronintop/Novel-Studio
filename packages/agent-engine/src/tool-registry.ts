@@ -783,9 +783,11 @@ function descriptionFor(name: StaticAgentToolName): string {
       "只读稳定分页列出完整章节目录；支持 statuses、cursor、limit 和 includeDeleted，默认隐藏 deleted tombstone，并返回可继续读取的 stable ref、revision 与 checksum。",
     list_project_entries: "列出指定目录下的项目文件条目。",
     read_chapter: "按章节 ID 读取章节正文。",
-    read_story_bible: "按资产 ID 读取 Story Bible 条目。",
+    read_story_bible:
+      "按资产 ID 读取 Story Bible 条目，并返回基于当前字段确定性计算的 completeness report（schemaVersion、status、score、required/recommended 统计及 checks）。资料更新建议必须引用读取结果或其他真实证据，不得臆造字段值。",
     describe_story_bible_type: "返回指定 Story Bible 类型的严格数据合同、默认值和引用约束。",
-    list_story_bible: "按类型、状态和关键词稳定分页列出全部 Story Bible 条目。",
+    list_story_bible:
+      "按类型、状态和关键词稳定分页列出全部 Story Bible 条目；每项包含基于当前字段确定性计算的 completeness report（schemaVersion、status、score、required/recommended 统计及 checks）。资料更新建议必须基于列表/读取结果或其他真实证据，不得臆造字段值。",
     get_story_bible_references: "返回 Story Bible 条目的入向、出向引用及软删除影响。",
     create_story_bible: "生成系统字段并提案创建一个严格校验的 Story Bible 条目。",
     patch_story_bible: "使用稳定 ID 寻址的受限结构化 patch 提案修改 Story Bible。",

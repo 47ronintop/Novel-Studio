@@ -183,4 +183,30 @@ describe("agent conversation workspace presentation", () => {
       (decorated?.mainReview as AgentConversationMainReview & { props: object }).props
     ).not.toHaveProperty("styleReview");
   });
+
+  test("keeps writing context available on a Story Bible surface without an active chapter", () => {
+    const decorated = decorateAgentConversationWorkspace({
+      workspace: {
+        view: {
+          composer: { contextMode: "writing" }
+        }
+      } as AgentConversationWorkspaceShellProps,
+      workspaceKind: "creativeProject",
+      activeActivity: "storyBible",
+      activeChapterId: undefined,
+      chapterEditor: undefined,
+      chapterSelection: undefined,
+      aiWritingWorkflow: undefined,
+      onRewriteSelection: () => undefined,
+      onReviewSelectionStyle: () => undefined,
+      onApplySelection: () => undefined,
+      onRejectSelection: () => undefined,
+      onUndoSelection: () => undefined
+    });
+
+    expect(decorated?.view.composer).toMatchObject({
+      contextMode: "writing",
+      availableContextModes: ["writing", "general_file"]
+    });
+  });
 });

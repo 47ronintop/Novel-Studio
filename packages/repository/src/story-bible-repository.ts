@@ -5,6 +5,7 @@ import {
   STORY_BIBLE_V11_ASSET_TYPES,
   collectStoryBibleDeclaredChapterReferences,
   createStoryBibleDefaultDetails,
+  evaluateStoryBibleCompleteness,
   inspectStoryBibleChapterReferences,
   inspectStoryBibleReferences,
   isStoryBibleV11AssetType,
@@ -12,6 +13,7 @@ import {
   storyBibleReferenceFingerprint,
   validateStoryBibleV11Asset,
   validateStoryBibleWriteCandidate,
+  type StoryBibleCompletenessReport,
   type StoryBibleReferenceTargetType,
   type StoryBibleV11AssetType,
   type ValidationIssue
@@ -144,6 +146,7 @@ export interface StoryBibleListItem {
   readonly summary: string;
   readonly revision: number;
   readonly indexRevision: string;
+  readonly completeness: StoryBibleCompletenessReport;
 }
 
 export interface StoryBibleListPage {
@@ -180,6 +183,7 @@ export interface StoryBiblePassthroughSummary {
 
 export interface StoryBibleAgentAssetRead {
   readonly asset: StoryBibleAgentAsset;
+  readonly completeness: StoryBibleCompletenessReport;
   readonly revision: number;
   readonly checksum: string;
   readonly relativePath: string;
@@ -1449,7 +1453,13 @@ export class StoryBibleFileRepository implements StoryBibleRepositoryPort {
       status: value.asset.status,
       summary: value.asset.summary,
       revision: value.revision,
-      indexRevision
+      indexRevision,
+      completeness: evaluateStoryBibleCompleteness({
+        type: value.asset.type,
+        title: value.asset.title,
+        summary: value.asset.summary,
+        details: value.asset.details
+      })
     }));
     const hasNext = startIndex + pageReads.length < filtered.length;
     const lastRead = pageReads.at(-1);
@@ -1493,11 +1503,18 @@ export class StoryBibleFileRepository implements StoryBibleRepositoryPort {
         ? {}
         : { relatedEntityIds: [...read.value.asset.relatedEntityIds] })
     };
+    const completeness = evaluateStoryBibleCompleteness({
+      type: agentAsset.type,
+      title: agentAsset.title,
+      summary: agentAsset.summary,
+      details: agentAsset.details
+    });
     const rootFieldNames = Object.keys(passthrough?.rootFields ?? {}).sort(compareIds);
     const detailPointers = Object.keys(passthrough?.detailFieldsByPointer ?? {}).sort(compareIds);
     const pointerLimit = 100;
     return ok({
       asset: agentAsset,
+      completeness,
       revision: read.value.revision,
       checksum: read.value.checksum,
       relativePath: read.value.relativePath,

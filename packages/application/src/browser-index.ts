@@ -11,6 +11,16 @@ export {
 } from "./config-studio-session.js";
 export { LEGACY_AGENT_CONVERSATION_ID } from "./agent-conversation-session.js";
 export { evaluateAiWritingStyle } from "./ai-writing-style-evaluator.js";
+export { evaluateStoryBibleCompleteness } from "@novel-studio/schemas";
+export type {
+  StoryBibleCompletenessCheck,
+  StoryBibleCompletenessCheckStatus,
+  StoryBibleCompletenessCounts,
+  StoryBibleCompletenessImportance,
+  StoryBibleCompletenessInput,
+  StoryBibleCompletenessReport,
+  StoryBibleCompletenessStatus
+} from "@novel-studio/schemas";
 export type { WorkspaceModelSharingDefaults } from "./agent-model-sharing.js";
 export type {
   AgentConversationCommandResult,

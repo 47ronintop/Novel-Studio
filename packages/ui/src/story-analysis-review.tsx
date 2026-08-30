@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   Check,
   CheckCheck,
+  ExternalLink,
   FileDiff,
   Inbox,
   Play,
@@ -393,6 +394,9 @@ export function StoryAnalysisReviewView({
                     entryTitles={entryTitles}
                     group={group}
                     key={group.consistencyGroupId}
+                    {...(review.onOpenEntry === undefined
+                      ? {}
+                      : { onOpenEntry: review.onOpenEntry })}
                     onToggle={review.onSuggestionToggle}
                     selected={selected}
                   />
@@ -525,11 +529,13 @@ function SuggestionGroup({
   group,
   selected,
   entryTitles,
+  onOpenEntry,
   onToggle
 }: {
   readonly group: SuggestionGroupModel;
   readonly selected: ReadonlySet<string>;
   readonly entryTitles: ReadonlyMap<string, string>;
+  readonly onOpenEntry?: (assetId: string) => void;
   readonly onToggle: (suggestionId: string) => void;
 }) {
   const firstSuggestion = group.suggestions[0];
@@ -547,6 +553,11 @@ function SuggestionGroup({
       )
     )
   ];
+  const openSuggestionTarget = (suggestion: StoryAnalysisSuggestionProps) => {
+    const assetId = suggestion.targetAssetId;
+    if (assetId === undefined || onOpenEntry === undefined) return;
+    onOpenEntry(assetId);
+  };
   return (
     <section className="ns-story-analysis-group" data-status={group.suggestions[0]?.status}>
       <div className="ns-story-analysis-group-header">
@@ -599,6 +610,17 @@ function SuggestionGroup({
               <span>{Math.round(suggestion.confidence * 100)}%</span>
               <p>{suggestion.reason}</p>
             </div>
+            {suggestion.targetAssetId === undefined || onOpenEntry === undefined ? null : (
+              <button
+                aria-label={`打开资料：${entryTitles.get(suggestion.targetAssetId) ?? suggestion.targetAssetId}`}
+                className="ns-icon-text-button"
+                onClick={() => openSuggestionTarget(suggestion)}
+                type="button"
+              >
+                <ExternalLink aria-hidden="true" size={14} />
+                打开资料
+              </button>
+            )}
             {suggestion.evidence.length === 0 ? null : (
               <div className="ns-story-analysis-evidence">
                 {suggestion.evidence.map((evidence) => (
