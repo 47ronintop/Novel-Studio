@@ -3908,7 +3908,21 @@ export function createAgentRunSession(options: CreateAgentRunSessionOptions): Ag
     runId: string,
     input: Parameters<AgentRunCoordinator["recordRunEvent"]>[0]
   ): Promise<AgentRunCommandResult> {
-    const result = coordinator.recordRunEvent(input);
+    const snapshot = coordinator.readSnapshot(runId);
+    const eventInput =
+      input.type === "tool_completed" &&
+      snapshot?.recoveryState === "retryable" &&
+      typeof snapshot.activeErrorId === "string"
+        ? {
+            ...input,
+            snapshotPatch: {
+              ...input.snapshotPatch,
+              activeErrorId: null,
+              recoveryState: "none" as const
+            }
+          }
+        : input;
+    const result = coordinator.recordRunEvent(eventInput);
     if (!result.ok) return result;
     const persisted = await persistLatest(runId);
     if (persisted.ok && isTerminal(persisted.value.status) && isTerminalRunEvent(input.type)) {

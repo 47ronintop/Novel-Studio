@@ -1034,7 +1034,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       contextMode: result.value.contextMode,
       ...writeAuthorizationForSnapshot(result.value),
       executionWritePolicy:
-        isTerminalRunStatus(result.value.status) || result.value.operationMode === "planning"
+        isTerminalRunStatus(result.value.status) ||
+        isRetryableRunSnapshot(result.value) ||
+        result.value.operationMode === "planning"
           ? "write_before_confirmation"
           : failClosedCurrentWritePolicy(result.value.writePolicy),
       errorMessage: undefined
@@ -1407,6 +1409,8 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       contextShareApprovalInFlight !== undefined
     );
     const snapshotStatus = state.snapshot?.status;
+    const retryableRecovery =
+      state.snapshot !== undefined && isRetryableRunSnapshot(state.snapshot, state.diagnostic);
     const compactionBusy = isCompactionBusy(state.snapshot, state.events, state.compactionPending);
     const props = {
       ...(scope === undefined ? {} : { scope }),
@@ -1414,8 +1418,9 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       ...(conversationId === undefined ? {} : { conversationId }),
       ...(state.snapshot === undefined ? {} : { runId: state.snapshot.runId }),
       ...(state.userRequest.length === 0 ? {} : { userRequest: state.userRequest }),
-      status:
-        snapshotStatus !== undefined && isTerminalRunStatus(snapshotStatus)
+      status: retryableRecovery
+        ? "failed"
+        : snapshotStatus !== undefined && isTerminalRunStatus(snapshotStatus)
           ? snapshotStatus
           : compactionBusy && state.snapshot !== undefined
             ? "context_compacting"
@@ -2712,7 +2717,7 @@ export function createAgentRunBridge(api: NovelStudioApi): AgentRunBridge {
       writePolicy: state.writePolicy,
       writePolicyAcknowledged: state.writePolicyAcknowledged,
       executionWritePolicyDraft: state.executionWritePolicy,
-      active: state.snapshot !== undefined && !isTerminalRunStatus(state.snapshot.status),
+      active: state.snapshot !== undefined && isActiveRunSnapshot(state.snapshot, state.diagnostic),
       disabled: composerBusy,
       ...(composerBusy
         ? {
@@ -3328,6 +3333,25 @@ function isTerminalRunStatus(status: AgentRunSnapshot["status"]): boolean {
   ].includes(status);
 }
 
+/** A retryable diagnostic pauses the provider loop while retaining the run for explicit retry. */
+function isRetryableRunSnapshot(
+  snapshot: Pick<AgentRunSnapshot, "status" | "recoveryState" | "activeErrorId" | "runId">,
+  diagnostic?: AgentRunErrorRecord
+): boolean {
+  return (
+    !isTerminalRunStatus(snapshot.status) &&
+    ((snapshot.recoveryState === "retryable" && typeof snapshot.activeErrorId === "string") ||
+      (diagnostic?.runId === snapshot.runId && diagnostic.recoveryState === "retryable"))
+  );
+}
+
+function isActiveRunSnapshot(
+  snapshot: Pick<AgentRunSnapshot, "status" | "recoveryState" | "activeErrorId" | "runId">,
+  diagnostic?: AgentRunErrorRecord
+): boolean {
+  return !isTerminalRunStatus(snapshot.status) && !isRetryableRunSnapshot(snapshot, diagnostic);
+}
+
 function snapshotAfterEvent(snapshot: AgentRunSnapshot, event: AgentRunEvent): AgentRunSnapshot {
   // The coordinator owns version-specific status validity. Renderer events only advance the
   // already-hydrated discriminated snapshot and never create or upgrade its schema version.
@@ -3426,7 +3450,11 @@ function failClosedCurrentWritePolicy(policy: AgentWritePolicy): AgentWritePolic
 function writeAuthorizationForSnapshot(
   snapshot: AgentRunSnapshot
 ): Pick<BridgeState, "writePolicy" | "writePolicyAcknowledged"> {
-  if (snapshot.operationMode === "planning" || isTerminalRunStatus(snapshot.status)) {
+  if (
+    snapshot.operationMode === "planning" ||
+    isTerminalRunStatus(snapshot.status) ||
+    isRetryableRunSnapshot(snapshot)
+  ) {
     return defaultNextRunWriteAuthorization();
   }
   return {

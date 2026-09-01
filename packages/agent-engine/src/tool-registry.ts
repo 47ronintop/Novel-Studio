@@ -798,7 +798,7 @@ function descriptionFor(name: StaticAgentToolName): string {
     propose_file_write: "提案修改文本文件，进入 Change Set 审批流程。",
     finish: "声明当前执行运行已完成。",
     finish_plan: "提交规划结果。",
-    request_user_input: "向用户请求澄清信息。",
+    request_user_input: "参数:{questionId,prompt,reason,options:[{id,label}]x2-3}",
     search_project_text: "在项目内进行有界全文搜索。",
     find_project_references: "查找章节或资产的引用。",
     propose_chapter_create: "提案创建新章节。",

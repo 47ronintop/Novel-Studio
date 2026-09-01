@@ -207,7 +207,7 @@ export function createDesktopAgentRuntimeManager(
     if (runtime === undefined) return ok(false);
     const listed = await runtime.agentRunSession.listAgentRuns(runtime.workspaceId);
     return listed.ok
-      ? ok(listed.value.some((snapshot) => !isTerminal(snapshot.status)))
+      ? ok(listed.value.some((snapshot) => isActiveRunSnapshot(snapshot)))
       : err(listed.error);
   }
 
@@ -215,7 +215,7 @@ export function createDesktopAgentRuntimeManager(
     if (standaloneRuntime === undefined) return ok(false);
     const listed = await standaloneRuntime.listRunSnapshots();
     return listed.ok
-      ? ok(listed.value.some((snapshot) => !isTerminal(snapshot.status)))
+      ? ok(listed.value.some((snapshot) => isActiveRunSnapshot(snapshot)))
       : err(listed.error);
   }
 
@@ -372,7 +372,7 @@ export function createDesktopAgentRuntimeManager(
       if (currentRuntime === undefined) return ok(undefined);
       const listed = await currentRuntime.agentRunSession.listAgentRuns(currentRuntime.workspaceId);
       if (!listed.ok) return err(listed.error);
-      const active = listed.value.filter((snapshot) => !isTerminal(snapshot.status));
+      const active = listed.value.filter((snapshot) => isActiveRunSnapshot(snapshot));
       if (active.length === 0) return ok(undefined);
 
       let shouldRetry = false;
@@ -386,7 +386,7 @@ export function createDesktopAgentRuntimeManager(
           expectedRunRevision: snapshot.runRevision
         });
         if (stopped.ok) {
-          if (!isTerminal(stopped.value.status)) mustWaitForTerminal = true;
+          if (isActiveRunSnapshot(stopped.value)) mustWaitForTerminal = true;
           continue;
         }
         if (stopped.error.code === "AGENT_RUN_REVISION_CONFLICT") {
@@ -480,7 +480,7 @@ export function createDesktopAgentRuntimeManager(
       ) {
         return;
       }
-      if (listed.value.every((snapshot) => isTerminal(snapshot.status))) {
+      if (listed.value.every((snapshot) => !isActiveRunSnapshot(snapshot))) {
         scheduleDeferredSettingsRefresh(deferred.sourceRuntime);
       }
     })();
@@ -800,6 +800,15 @@ function isTerminal(status: AgentRunSnapshot["status"]): boolean {
     status === "limit_reached" ||
     status === "capability_changed"
   );
+}
+
+/** Retryable diagnostics stop the provider loop; they remain resumable but are not running. */
+function isActiveRunSnapshot(
+  snapshot: Pick<AgentRunSnapshot, "status" | "recoveryState" | "activeErrorId">
+): boolean {
+  const retryableStopped =
+    snapshot.recoveryState === "retryable" && typeof snapshot.activeErrorId === "string";
+  return !isTerminal(snapshot.status) && !retryableStopped;
 }
 
 function isTerminalRunEvent(type: AgentRunEvent["type"]): boolean {

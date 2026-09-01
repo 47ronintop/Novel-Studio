@@ -828,6 +828,9 @@ function transitionRunFinish(
   if (snapshot.schemaVersion !== "2.0") {
     const next = attachLegacyProjectId({
       ...snapshot,
+      ...(report.outcome === "completed"
+        ? { activeErrorId: null, recoveryState: "none" as const }
+        : {}),
       status,
       finishReport: report,
       runRevision: snapshot.runRevision + 1,
@@ -839,6 +842,9 @@ function transitionRunFinish(
 
   const candidate = {
     ...snapshot,
+    ...(report.outcome === "completed"
+      ? { activeErrorId: null, recoveryState: "none" as const }
+      : {}),
     status,
     pendingUserInputId: null,
     pendingChangeSetId: null,

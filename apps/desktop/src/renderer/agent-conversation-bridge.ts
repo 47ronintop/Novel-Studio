@@ -320,7 +320,10 @@ export function createAgentConversationBridge(
       rememberRuns(read.value);
     }
 
-    const status = snapshot?.status ?? statusForEvent(event.type, summary.lastRunStatus);
+    const status =
+      (snapshot !== undefined && isRetryableRunSnapshot(snapshot)
+        ? "failed"
+        : snapshot?.status) ?? statusForEvent(event.type, summary.lastRunStatus, event.detail);
     const isNewRun = summary.lastRunId !== event.runId;
     const updatedSummary: AgentConversationSummary = {
       ...summary,
@@ -962,8 +965,18 @@ function readStringArray(value: unknown): readonly string[] {
     : [];
 }
 
-function isTerminalRunStatus(status: AgentRunPanelProps["status"]): boolean {
-  return ["completed", "cancelled", "failed", "limit_reached", "idle"].includes(status);
+const TERMINAL_RUN_STATUSES = new Set([
+  "completed",
+  "blocked",
+  "cancelled",
+  "failed",
+  "limit_reached",
+  "capability_changed",
+  "idle"
+]);
+
+function isTerminalRunStatus(status: string | undefined): boolean {
+  return status !== undefined && TERMINAL_RUN_STATUSES.has(status);
 }
 
 function readRunString(run: Readonly<Record<string, unknown>>, key: string): string | undefined {
@@ -988,8 +1001,16 @@ function findActiveConversation(
 }
 
 function isActiveRunStatus(status: string | undefined): boolean {
+  return status !== undefined && !isTerminalRunStatus(status);
+}
+
+function isRetryableRunSnapshot(
+  snapshot: Pick<AgentRunSnapshot, "status" | "recoveryState" | "activeErrorId">
+): boolean {
   return (
-    status !== undefined && !["completed", "cancelled", "failed", "limit_reached"].includes(status)
+    !isTerminalRunStatus(snapshot.status) &&
+    snapshot.recoveryState === "retryable" &&
+    typeof snapshot.activeErrorId === "string"
   );
 }
 
@@ -1005,7 +1026,8 @@ function compareConversations(
 
 function statusForEvent(
   type: AgentRunEvent["type"],
-  fallback: string | undefined
+  fallback: string | undefined,
+  detail?: JsonObject
 ): string | undefined {
   switch (type) {
     case "tool_started":
@@ -1024,12 +1046,22 @@ function statusForEvent(
       return "awaiting_plan_revision";
     case "run_completed":
       return "completed";
+    case "run_blocked":
+      return "blocked";
     case "run_cancelled":
       return "cancelled";
     case "run_failed":
       return "failed";
     case "run_limit_reached":
       return "limit_reached";
+    case "capability_changed":
+      return "capability_changed";
+    case "run_resumed":
+      return "executing_model";
+    case "tool_retry_requested":
+      return "executing_model";
+    case "error_recorded":
+      return detail?.["recoveryState"] === "retryable" ? "failed" : fallback;
     default:
       return fallback;
   }
@@ -1074,7 +1106,7 @@ function runSummaryFromSnapshot(
     ...(scope?.kind === "workspace" ? { projectId: scope.workspaceId } : {}),
     ...(snapshot?.conversationId === undefined ? {} : { conversationId: snapshot.conversationId }),
     userRequest: snapshot?.userRequest ?? "Agent request",
-    status: snapshot?.status ?? statusForEvent(event.type, "created") ?? "created",
+    status: snapshot?.status ?? statusForEvent(event.type, "created", event.detail) ?? "created",
     runRevision: event.runRevision,
     lastSequence: event.sequence,
     startedAt: snapshot?.startedAt ?? event.createdAt,

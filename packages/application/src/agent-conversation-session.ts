@@ -1706,6 +1706,12 @@ function toSummary(
   summaryFreshness: AgentConversationSummaryFreshness = "unavailable"
 ): AgentConversationSummary {
   const latest = runs[0];
+  const latestStatus = typeof latest?.["status"] === "string" ? latest["status"] : undefined;
+  const latestRetryable =
+    latestStatus !== undefined &&
+    !isTerminalStatus(latestStatus) &&
+    latest?.["recoveryState"] === "retryable" &&
+    typeof latest?.["activeErrorId"] === "string";
   const publicRecord = {
     schemaVersion: "1.1" as const,
     scope: record.scope,
@@ -1722,7 +1728,9 @@ function toSummary(
     runCount: runs.length,
     summaryFreshness,
     ...(typeof latest?.["runId"] === "string" ? { lastRunId: latest["runId"] } : {}),
-    ...(typeof latest?.["status"] === "string" ? { lastRunStatus: latest["status"] } : {}),
+    ...(latestStatus === undefined
+      ? {}
+      : { lastRunStatus: latestRetryable ? "failed" : latestStatus }),
     ...(typeof latest?.["userRequest"] === "string"
       ? { preview: previewFromRequest(latest["userRequest"]) }
       : {})
@@ -1734,6 +1742,12 @@ function legacySummary(
   runs: readonly JsonObject[]
 ): AgentConversationSummary {
   const latest = runs[0];
+  const latestStatus = typeof latest?.["status"] === "string" ? latest["status"] : undefined;
+  const latestRetryable =
+    latestStatus !== undefined &&
+    !isTerminalStatus(latestStatus) &&
+    latest?.["recoveryState"] === "retryable" &&
+    typeof latest?.["activeErrorId"] === "string";
   return {
     schemaVersion: "1.0",
     scope,
@@ -1748,7 +1762,9 @@ function legacySummary(
     summaryFreshness: "unavailable",
     virtual: true,
     ...(typeof latest?.["runId"] === "string" ? { lastRunId: latest["runId"] } : {}),
-    ...(typeof latest?.["status"] === "string" ? { lastRunStatus: latest["status"] } : {})
+    ...(latestStatus === undefined
+      ? {}
+      : { lastRunStatus: latestRetryable ? "failed" : latestStatus })
   };
 }
 
@@ -1883,7 +1899,10 @@ function isJsonObject(value: unknown): value is JsonObject {
 
 function isTerminalStatus(status: string | undefined): boolean {
   return (
-    status !== undefined && ["completed", "cancelled", "failed", "limit_reached"].includes(status)
+    status !== undefined &&
+    ["completed", "blocked", "cancelled", "failed", "limit_reached", "capability_changed"].includes(
+      status
+    )
   );
 }
 

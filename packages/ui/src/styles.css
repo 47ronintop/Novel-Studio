@@ -5648,10 +5648,10 @@ textarea:focus-visible,
   font-size: 11px;
   gap: 5px;
   min-height: 28px;
+  align-self: center;
   padding: 4px 9px;
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  position: sticky;
+  width: auto;
   white-space: nowrap;
   z-index: 4;
 }
