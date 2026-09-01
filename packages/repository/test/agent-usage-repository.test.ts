@@ -602,6 +602,9 @@ describe("AgentUsageFileRepository", () => {
     expect(
       details.value?.find((detail) => detail.runId === "run_01" && detail.usageId.endsWith(":1"))
     ).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 200,
+      totalTokens: 1200,
       cacheReadTokens: 600,
       cacheEligibleInputTokens: 800,
       cacheHitRate: 0.75,

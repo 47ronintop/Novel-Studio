@@ -89,7 +89,11 @@ test("shows private daily usage analytics and clears only usage data", async () 
     await expect(dailyChart.locator(".agent-usage-bar-column")).toHaveCount(1);
     await expect(dailyChart.locator(".agent-usage-legend li")).toHaveCount(2);
     await expectNoHorizontalOverflow(page.locator(".agent-usage-settings"));
-    await expect(page.locator(".agent-usage-summary-card")).toHaveCount(4);
+    await expect(page.locator(".agent-usage-summary-card")).toHaveCount(6);
+    await expect(page.getByLabel("Provider 筛选")).toBeVisible();
+    await expect(page.getByLabel("Model 筛选")).toBeVisible();
+    await expect(page.getByLabel("Project 筛选")).toBeVisible();
+    await expect(page.getByText("查找用量")).toBeVisible();
     await expectUsesThemeInk(page.locator(".agent-usage-summary-card strong").first());
     await expect(
       page.locator('.agent-usage-summary-secondary[data-telemetry-status="partial"]')
@@ -103,17 +107,17 @@ test("shows private daily usage analytics and clears only usage data", async () 
       );
     expect(new Set(dailySegmentColors).size).toBe(2);
     const daily = page.getByRole("table", { name: "每日 Agent 用量明细" });
-    await expect(daily.locator("thead th")).toHaveCount(5);
+    await expect(daily.locator("thead th")).toHaveCount(7);
     await expect(daily.locator("thead th")).toHaveText([
       "日期",
       "总 Token",
       "输入",
       "输出",
-      "缓存"
+      "缓存读取",
+      "缓存写入",
+      "命中率"
     ]);
-    await expect(page.locator(".agent-usage-settings")).not.toContainText(
-      /费用|缓存节省|缓存命中率|USD|EUR/
-    );
+    await expect(page.locator(".agent-usage-settings")).not.toContainText(/费用|缓存节省|USD|EUR/);
 
     await page.getByRole("button", { name: "今日", exact: true }).press("Enter");
     const hourlyChart = page.locator('.agent-usage-chart[data-chart-kind="hourly"]');
@@ -125,8 +129,13 @@ test("shows private daily usage analytics and clears only usage data", async () 
     const runs = page.getByRole("list", { name: "所选日期 Agent 运行记录" });
     await expect(runs.getByRole("listitem")).toHaveCount(3);
     await expectNoHorizontalOverflow(runs);
-    await expect(runs).toContainText("命中 · 读取 100");
-    await expect(runs).toContainText("未上报（旧记录）");
+    await expect(runs).toContainText("输入1,000");
+    await expect(runs).toContainText("输出200");
+    await expect(runs).toContainText("缓存读取100");
+    await expect(runs).toContainText("缓存写入不可用");
+    await expect(runs).toContainText("命中 · 命中率 80% · 读取 100");
+    await expect(runs).toContainText("未提供缓存结果");
+    await expect(runs).not.toContainText("未启用");
     await expect(runs).not.toContainText(/模式：|缓存用量：|输入口径：|Prefix：|可缓存输入/);
     await expect(runs).not.toContainText(/费用|USD|EUR/);
     await expect(runs).not.toContainText("run_reported");

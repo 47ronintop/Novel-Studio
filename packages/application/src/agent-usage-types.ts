@@ -63,6 +63,9 @@ export interface AgentUsageRunSummary {
   readonly projectId?: string;
   readonly provider: string;
   readonly model: string;
+  /** Present for current records; legacy reports may omit the per-run breakdown. */
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
   readonly totalTokens: number;
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;

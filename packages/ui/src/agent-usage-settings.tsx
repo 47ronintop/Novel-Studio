@@ -28,6 +28,10 @@ const rangeOptions = [
 
 export function AgentUsageSettings(props: AgentUsageSettingsProps) {
   const days = props.report?.days ?? [];
+  const hasUsageFilters =
+    props.filters.provider.trim() !== "" ||
+    props.filters.model.trim() !== "" ||
+    props.filters.projectId.trim() !== "";
   return (
     <section
       className="model-settings-section agent-usage-settings"
@@ -36,7 +40,7 @@ export function AgentUsageSettings(props: AgentUsageSettingsProps) {
       <header className="model-settings-section-header">
         <div>
           <h2 id="agent-usage-heading">Agent 用量</h2>
-          <p>查看总量、输入、输出与缓存用量；详细记录仅保留写作决策需要的信息。</p>
+          <p>查看总量、输入、输出以及缓存读写用量；详细记录仅保留写作决策需要的信息。</p>
         </div>
         <button
           className="ns-icon-text-button"
@@ -61,22 +65,40 @@ export function AgentUsageSettings(props: AgentUsageSettingsProps) {
             </button>
           ))}
         </div>
-        <div className="agent-usage-filters">
-          <UsageFilter
-            label="Provider"
-            onChange={(provider) => props.onFiltersChange?.({ provider })}
-            value={props.filters.provider}
-          />
-          <UsageFilter
-            label="Model"
-            onChange={(model) => props.onFiltersChange?.({ model })}
-            value={props.filters.model}
-          />
-          <UsageFilter
-            label="Project"
-            onChange={(projectId) => props.onFiltersChange?.({ projectId })}
-            value={props.filters.projectId}
-          />
+        <div aria-label="用量查找条件" className="agent-usage-filter-panel" role="group">
+          <div className="agent-usage-filter-header">
+            <div>
+              <strong>查找用量</strong>
+              <p>按 Provider、Model 或 Project ID 精确筛选；输入后会自动刷新结果。</p>
+            </div>
+            {hasUsageFilters ? (
+              <button
+                aria-label="清除用量筛选"
+                className="ns-icon-text-button"
+                onClick={() => props.onFiltersChange?.({ provider: "", model: "", projectId: "" })}
+                type="button"
+              >
+                清除筛选
+              </button>
+            ) : null}
+          </div>
+          <div className="agent-usage-filters">
+            <UsageFilter
+              label="Provider"
+              onChange={(provider) => props.onFiltersChange?.({ provider })}
+              value={props.filters.provider}
+            />
+            <UsageFilter
+              label="Model"
+              onChange={(model) => props.onFiltersChange?.({ model })}
+              value={props.filters.model}
+            />
+            <UsageFilter
+              label="Project"
+              onChange={(projectId) => props.onFiltersChange?.({ projectId })}
+              value={props.filters.projectId}
+            />
+          </div>
         </div>
       </div>
       {props.feedback === undefined ? null : (
@@ -131,6 +153,7 @@ function UsageSummary({
           secondaryStatus={cacheTelemetry.status}
           value={formatTokenCount(summary.cacheReadTokens)}
         />
+        <UsageSummaryCard label="缓存写入" value={formatTokenCount(summary.cacheWriteTokens)} />
         <UsageSummaryCard
           label="缓存命中率"
           secondary={cacheHitRate === undefined ? "不可用" : "可验证"}
@@ -171,6 +194,7 @@ interface UsageSummaryValues {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
 }
 
 function summarizeUsage(days: readonly AgentUsageDailyBucket[]): UsageSummaryValues {
@@ -178,19 +202,22 @@ function summarizeUsage(days: readonly AgentUsageDailyBucket[]): UsageSummaryVal
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
 
   for (const day of days) {
     totalTokens += day.totalTokens;
     inputTokens += day.inputTokens;
     outputTokens += day.outputTokens;
     cacheReadTokens += day.cacheReadTokens ?? day.cachedTokens;
+    cacheWriteTokens += day.cacheWriteTokens ?? 0;
   }
 
   return {
     totalTokens,
     inputTokens,
     outputTokens,
-    cacheReadTokens
+    cacheReadTokens,
+    cacheWriteTokens
   };
 }
 
@@ -209,7 +236,7 @@ function summarizeCacheTelemetry(report: AgentUsageReport): {
   if (coverage !== undefined && coverage > 0 && coverage < 1) {
     return { status: "partial", label: "数据不完整" };
   }
-  return { status: "unavailable", label: "未上报" };
+  return { status: "unavailable", label: "暂无可验证数据" };
 }
 
 function summarizeCacheHitRate(days: readonly AgentUsageDailyBucket[]): number | undefined {
@@ -252,12 +279,14 @@ function UsageFilter({
 }) {
   return (
     <label>
-      <span>{label}</span>
+      <span>查找 {label}</span>
       <input
         aria-label={`${label} 筛选`}
+        autoComplete="off"
         className="ns-search-input"
         onChange={(event) => onChange(event.currentTarget.value)}
         placeholder="全部"
+        type="search"
         value={value}
       />
     </label>
@@ -456,7 +485,8 @@ function DailyUsageTable({
               <th>总 Token</th>
               <th>输入</th>
               <th>输出</th>
-              <th>缓存</th>
+              <th>缓存读取</th>
+              <th>缓存写入</th>
               <th>命中率</th>
             </tr>
           </thead>
@@ -483,9 +513,14 @@ function DailyUsageTable({
                     {day.outputTokens.toLocaleString()}
                   </span>
                 </td>
-                <td data-label="缓存">
+                <td data-label="缓存读取">
                   <span className="agent-usage-table-secondary">
                     {formatTokenCount(day.cacheReadTokens ?? day.cachedTokens)}
+                  </span>
+                </td>
+                <td data-label="缓存写入">
+                  <span className="agent-usage-table-secondary">
+                    {formatTokenCount(day.cacheWriteTokens)}
                   </span>
                 </td>
                 <td data-label="命中率">
@@ -521,7 +556,7 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
       <header className="agent-usage-subsection-header">
         <div>
           <h3 id="agent-usage-runs-heading">{report.query.detailLocalDate} 运行记录</h3>
-          <p>每条仅显示模型、总 Token 和缓存结果。</p>
+          <p>每条显示模型、输入、输出、总量以及缓存读写结果。</p>
         </div>
         <span>{report.runs.length.toLocaleString()} 条</span>
       </header>
@@ -541,13 +576,29 @@ function RunDetails({ report }: { readonly report: AgentUsageReport }) {
                 </div>
                 <dl className="agent-usage-run-metrics">
                   <div>
-                    <dt>Token</dt>
+                    <dt>总 Token</dt>
                     <dd>
                       <strong>{run.totalTokens.toLocaleString()}</strong>
                     </dd>
                   </div>
                   <div>
-                    <dt>缓存</dt>
+                    <dt>输入</dt>
+                    <dd>{formatTokenCount(run.inputTokens)}</dd>
+                  </div>
+                  <div>
+                    <dt>输出</dt>
+                    <dd>{formatTokenCount(run.outputTokens)}</dd>
+                  </div>
+                  <div>
+                    <dt>缓存读取</dt>
+                    <dd>{formatTokenCount(run.cacheReadTokens)}</dd>
+                  </div>
+                  <div>
+                    <dt>缓存写入</dt>
+                    <dd>{formatTokenCount(run.cacheWriteTokens)}</dd>
+                  </div>
+                  <div>
+                    <dt>缓存状态</dt>
                     <dd>{formatRunCache(run)}</dd>
                   </div>
                 </dl>
@@ -612,7 +663,8 @@ function formatRunTime(timestamp: string): string {
 }
 
 function formatRunCache(run: AgentUsageReport["runs"][number]): string {
-  if (run.cacheOutcome === "hit" && run.cacheReadTokens !== undefined) {
+  if (run.cacheOutcome === "hit") {
+    const readTokens = run.cacheReadTokens;
     const hitRate =
       run.cacheHitRate !== undefined &&
       Number.isFinite(run.cacheHitRate) &&
@@ -620,21 +672,46 @@ function formatRunCache(run: AgentUsageReport["runs"][number]): string {
       run.cacheHitRate <= 1 &&
       run.cacheEligibleInputTokens !== undefined &&
       run.cacheEligibleInputTokens > 0 &&
-      run.cacheReadTokens <= run.cacheEligibleInputTokens
+      readTokens !== undefined &&
+      readTokens <= run.cacheEligibleInputTokens
         ? ` · 命中率 ${formatPercent(run.cacheHitRate)}`
         : "";
-    return `命中${hitRate} · 读取 ${formatTokenCount(run.cacheReadTokens)}`;
+    return `命中${hitRate}${readTokens === undefined ? "" : ` · 读取 ${formatTokenCount(readTokens)}`}`;
   }
-  if (run.cacheOutcome === "hit") return "命中";
   if (run.cacheOutcome === "miss") return "未命中";
   if (run.cacheOutcome === "bypass" && run.cacheBypassReason === "policy_none") {
-    return "未启用";
+    return isConfiguredCache(run) ? "已配置 · 按策略跳过" : "按策略跳过";
   }
   if (run.cacheOutcome === "bypass" && run.cacheBypassReason === "below_minimum_tokens") {
-    return "低于门槛";
+    return isConfiguredCache(run) ? "已配置 · 低于门槛" : "低于门槛";
   }
-  return (run.cacheOutcome === "unknown" || run.cacheOutcome === undefined) &&
-    run.cacheMode === null
-    ? "未上报（旧记录）"
-    : "未上报";
+  if (run.cacheOutcome === "bypass") {
+    switch (run.cacheBypassReason) {
+      case "unsupported_provider":
+        return formatCacheStatus(run, "Provider 不支持");
+      case "identity_unverified":
+        return formatCacheStatus(run, "缓存身份未验证");
+      case "resource_unavailable":
+        return formatCacheStatus(run, "缓存资源不可用");
+      case "resource_create_failed":
+        return formatCacheStatus(run, "缓存资源创建失败");
+      case "resource_expired":
+        return formatCacheStatus(run, "缓存资源已过期");
+      case "cache_error":
+        return formatCacheStatus(run, "缓存错误");
+      case "usage_unavailable":
+        return formatCacheStatus(run, "未提供缓存结果");
+      default:
+        return formatCacheStatus(run, "未提供缓存结果");
+    }
+  }
+  return isConfiguredCache(run) ? "已配置 · 未提供结果" : "未提供缓存结果";
+}
+
+function isConfiguredCache(run: AgentUsageReport["runs"][number]): boolean {
+  return run.cacheMode !== undefined && run.cacheMode !== null && run.cacheMode !== "none";
+}
+
+function formatCacheStatus(run: AgentUsageReport["runs"][number], status: string): string {
+  return isConfiguredCache(run) ? `已配置 · ${status}` : status;
 }

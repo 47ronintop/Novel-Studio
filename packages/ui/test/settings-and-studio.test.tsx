@@ -447,7 +447,7 @@ describe("M8 Settings UI", () => {
     expect(pluginHtml).not.toContain('aria-label="模型配置"');
   });
 
-  test("renders Agent usage trends, token breakdowns, filters, and private run summaries", () => {
+  test("renders Agent usage trends, token breakdowns, usage filters, and private run summaries", () => {
     const prefixChecksum = "a".repeat(64);
     const html = renderToStaticMarkup(
       <ModelSettingsPanel
@@ -500,6 +500,8 @@ describe("M8 Settings UI", () => {
                 projectId: "project_01",
                 provider: "openai",
                 model: "gpt-5",
+                inputTokens: 1200,
+                outputTokens: 300,
                 totalTokens: 1500,
                 cacheReadTokens: 400,
                 cacheWriteTokens: 10,
@@ -527,6 +529,8 @@ describe("M8 Settings UI", () => {
                 projectId: "project_01",
                 provider: "openai",
                 model: "gpt-5",
+                inputTokens: 70,
+                outputTokens: 30,
                 totalTokens: 100,
                 cacheOutcome: "bypass",
                 cacheBypassReason: "below_minimum_tokens",
@@ -549,6 +553,8 @@ describe("M8 Settings UI", () => {
                 conversationId: "conversation_01",
                 provider: "openai",
                 model: "gpt-5",
+                inputTokens: 60,
+                outputTokens: 20,
                 totalTokens: 80,
                 cacheOutcome: "miss",
                 cacheUsageStatus: "actual",
@@ -567,6 +573,8 @@ describe("M8 Settings UI", () => {
                 conversationId: "conversation_01",
                 provider: "openai",
                 model: "gpt-5",
+                inputTokens: 60,
+                outputTokens: 20,
                 totalTokens: 80,
                 cacheOutcome: "unknown",
                 cacheMode: null,
@@ -585,6 +593,8 @@ describe("M8 Settings UI", () => {
                 conversationId: "conversation_01",
                 provider: "openai",
                 model: "gpt-5",
+                inputTokens: 60,
+                outputTokens: 20,
                 totalTokens: 80,
                 cacheOutcome: "unknown",
                 cacheMode: "automatic_prefix",
@@ -603,6 +613,8 @@ describe("M8 Settings UI", () => {
                 conversationId: "conversation_01",
                 provider: "openai",
                 model: "gpt-5",
+                inputTokens: 60,
+                outputTokens: 20,
                 totalTokens: 80,
                 cacheOutcome: "bypass",
                 cacheBypassReason: "policy_none",
@@ -610,6 +622,27 @@ describe("M8 Settings UI", () => {
                 usageStatus: "actual",
                 cost: { status: "unknown", amount: 0, currency: "" },
                 timestamp: "2026-07-16T13:00:00.000Z"
+              },
+              {
+                scope: {
+                  kind: "workspace",
+                  workspaceKind: "creativeProject",
+                  workspaceId: "project_01"
+                },
+                usageId: "run_07:round_01:13",
+                runId: "run_07",
+                conversationId: "conversation_01",
+                provider: "openai",
+                model: "gpt-5",
+                inputTokens: 60,
+                outputTokens: 20,
+                totalTokens: 80,
+                cacheOutcome: "bypass",
+                cacheBypassReason: "policy_none",
+                cacheMode: "automatic_prefix",
+                usageStatus: "actual",
+                cost: { status: "unknown", amount: 0, currency: "" },
+                timestamp: "2026-07-16T14:00:00.000Z"
               }
             ],
             generatedAt: "2026-07-17T12:00:00.000Z"
@@ -630,6 +663,10 @@ describe("M8 Settings UI", () => {
     expect(html).toContain("近 7 天");
     expect(html).toContain("近 30 天");
     expect(html).toContain('aria-label="Provider 筛选"');
+    expect(html).toContain('aria-label="Model 筛选"');
+    expect(html).toContain('aria-label="Project 筛选"');
+    expect(html).toContain("查找用量");
+    expect(html).toContain("输入后会自动刷新结果");
     expect(html).toContain('data-chart-kind="daily"');
     expect(html).toContain('aria-label="每日 Agent Token 柱状图"');
     expect(html).toContain('aria-label="模型颜色图例"');
@@ -637,17 +674,21 @@ describe("M8 Settings UI", () => {
     expect(html).toContain("每日明细");
     expect(html).not.toContain("输入 / 输出");
     expect(html).toContain("总 Token");
-    expect(html).not.toContain("缓存写入");
+    expect(html).toContain("缓存读取");
+    expect(html).toContain("缓存写入");
     expect(html).not.toContain("可缓存输入");
-    expect(html).toContain("命中 · 命中率 80% · 读取 400");
+    expect(html).toContain("命中 · 命中率 80%");
     expect(html).toContain('aria-label="运行记录分页"');
-    expect(html).toContain("第 1 / 1 页 · 共 6 条");
+    expect(html).toContain("第 1 / 1 页 · 共 7 条");
     expect(html).toContain("命中");
     expect(html).toContain("未命中");
-    expect(html).toContain("未启用");
+    expect(html).toContain("按策略跳过");
+    expect(html).toContain("已配置 · 按策略跳过");
     expect(html).toContain("低于门槛");
-    expect(html).toContain("未上报（旧记录）");
-    expect(html).toContain("未上报");
+    expect(html).toContain("未提供缓存结果");
+    expect(html).toContain("已配置 · 未提供结果");
+    expect(html).toContain("暂无可验证数据");
+    expect(html).not.toContain("未启用");
     expect(html).toContain('class="agent-usage-run-card"');
     expect(html).toContain('aria-label="所选日期 Agent 运行记录"');
     expect(html).not.toContain("模式：");
@@ -724,7 +765,7 @@ describe("M8 Settings UI", () => {
     expect(partial).toContain('data-telemetry-status="partial"');
 
     const unavailable = render(baseReport);
-    expect(unavailable).toContain("未上报");
+    expect(unavailable).toContain("暂无可验证数据");
     expect(unavailable).toContain('data-telemetry-status="unavailable"');
   });
 
@@ -740,6 +781,8 @@ describe("M8 Settings UI", () => {
       conversationId: "conversation_01",
       provider: "openai",
       model: "gpt-5",
+      inputTokens: index,
+      outputTokens: 1,
       totalTokens: index + 1,
       cacheReadTokens: index,
       cacheWriteTokens: 1,
@@ -798,7 +841,11 @@ describe("M8 Settings UI", () => {
     expect(host.querySelector('[aria-label="运行记录分页"]')?.textContent).toContain(
       "第 1 / 3 页 · 共 21 条"
     );
-    expect(runList?.textContent).toContain("命中 · 命中率 0% · 读取 0");
+    expect(runList?.textContent).toContain("输入0");
+    expect(runList?.textContent).toContain("输出1");
+    expect(runList?.textContent).toContain("缓存读取0");
+    expect(runList?.textContent).toContain("缓存写入1");
+    expect(runList?.textContent).toContain("命中 · 命中率 0%");
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>('button[aria-label="下一页运行记录"]')?.click();

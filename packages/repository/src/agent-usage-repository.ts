@@ -87,6 +87,8 @@ export interface AgentUsageRepositoryRunSummary {
   readonly projectId?: string;
   readonly provider: string;
   readonly model: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
   readonly totalTokens: number;
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
@@ -1397,6 +1399,8 @@ function toRunSummary(record: JsonObject): AgentUsageRepositoryRunSummary {
     ...(projectId === undefined ? {} : { projectId }),
     provider: stringField(record, "provider"),
     model: stringField(record, "model"),
+    inputTokens: numberField(record, "inputTokens"),
+    outputTokens: numberField(record, "outputTokens"),
     totalTokens: numberField(record, "totalTokens"),
     ...(cacheRead === undefined ? {} : { cacheReadTokens: cacheRead }),
     ...(cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite }),

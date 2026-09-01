@@ -42,6 +42,8 @@ function run(): AgentUsageRunSummary {
     projectId: "project_01",
     provider: "openai",
     model: "gpt-5",
+    inputTokens: 100,
+    outputTokens: 20,
     totalTokens: 120,
     usageStatus: "actual",
     cost: { status: "actual", amount: 0.01, currency: "USD" },
