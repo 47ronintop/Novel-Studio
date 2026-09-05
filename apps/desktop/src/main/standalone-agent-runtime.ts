@@ -991,7 +991,9 @@ function createStandaloneModelDriver(options: StandaloneAgentModelPorts): AgentR
         input.snapshot.providerCapabilitySnapshot.modelName
       );
       if (profile === undefined) throw new Error("AGENT_STANDALONE_MODEL_UNAVAILABLE");
-      const { maxTokens: _profileMaxTokens, ...profileParameters } = profile.parameters ?? {};
+      const profileParameters = Object.fromEntries(
+        Object.entries(profile.parameters ?? {}).filter(([name]) => name !== "maxTokens")
+      );
       const maxOutputTokens = input.snapshot.providerCapabilitySnapshot.maxOutputTokens;
       yield* options
         .createAgentModelDriver({
@@ -1092,9 +1094,7 @@ async function readStandaloneConversationRunEvents(
   if (!snapshot.ok && snapshot.error.code === "AGENT_RUN_SNAPSHOT_V20_LEGACY_RECORD") {
     return repository.readEvents(runId);
   }
-  return snapshot.ok
-    ? err(standaloneRuntimeError("AGENT_RUN_NOT_FOUND"))
-    : err(snapshot.error);
+  return snapshot.ok ? err(standaloneRuntimeError("AGENT_RUN_NOT_FOUND")) : err(snapshot.error);
 }
 
 function standaloneRuntimeError(code: string): UnifiedError {

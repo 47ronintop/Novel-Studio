@@ -7049,7 +7049,9 @@ function createDesktopAdaptiveAgentDriver(input: {
       if (profile === undefined) {
         throw new Error("The selected Agent model profile is unavailable.");
       }
-      const { maxTokens: _profileMaxTokens, ...profileParameters } = profile.parameters ?? {};
+      const profileParameters = Object.fromEntries(
+        Object.entries(profile.parameters ?? {}).filter(([name]) => name !== "maxTokens")
+      );
       const maxOutputTokens = roundInput.snapshot.providerCapabilitySnapshot.maxOutputTokens;
       const driver = input.createAgentModelDriver({
         ...profile,

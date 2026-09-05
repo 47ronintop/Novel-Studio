@@ -321,9 +321,8 @@ export function createAgentConversationBridge(
     }
 
     const status =
-      (snapshot !== undefined && isRetryableRunSnapshot(snapshot)
-        ? "failed"
-        : snapshot?.status) ?? statusForEvent(event.type, summary.lastRunStatus, event.detail);
+      (snapshot !== undefined && isRetryableRunSnapshot(snapshot) ? "failed" : snapshot?.status) ??
+      statusForEvent(event.type, summary.lastRunStatus, event.detail);
     const isNewRun = summary.lastRunId !== event.runId;
     const updatedSummary: AgentConversationSummary = {
       ...summary,

@@ -145,12 +145,7 @@ export function useProjectWorkflowActions({
       }
       await refreshProjectWorkflow(nextWorkflow);
     },
-    [
-      clearProjectBoundStory,
-      clearWorkspaceFileEditors,
-      refreshProjectWorkflow,
-      setChapterEditor
-    ]
+    [clearProjectBoundStory, clearWorkspaceFileEditors, refreshProjectWorkflow, setChapterEditor]
   );
 
   const restoreWorkspaceTransition = useCallback(
@@ -188,60 +183,55 @@ export function useProjectWorkflowActions({
     );
   }, [projectWorkflow?.chapters, setStoryBible, setStoryBibleEditor, storyBibleBridge]);
 
-  const guardChapterDraft = useCallback(
-    async () => {
-      let currentWorkflow = projectWorkflow;
-      if (
-        chapterEditor?.dirty === true &&
-        currentWorkflow !== undefined &&
-        projectWorkflowBridge !== undefined
-      ) {
-        try {
-          currentWorkflow = await projectWorkflowBridge.refreshActiveProject();
-          setProjectWorkflow(currentWorkflow);
-        } catch {
-          return false;
-        }
-        if (currentWorkflow.status !== "ready" || currentWorkflow.feedback !== undefined) {
-          return false;
-        }
+  const guardChapterDraft = useCallback(async () => {
+    let currentWorkflow = projectWorkflow;
+    if (
+      chapterEditor?.dirty === true &&
+      currentWorkflow !== undefined &&
+      projectWorkflowBridge !== undefined
+    ) {
+      try {
+        currentWorkflow = await projectWorkflowBridge.refreshActiveProject();
+        setProjectWorkflow(currentWorkflow);
+      } catch {
+        return false;
       }
+      if (currentWorkflow.status !== "ready" || currentWorkflow.feedback !== undefined) {
+        return false;
+      }
+    }
 
-      const recoveryItem =
-        projectWorkflowBridge === undefined
-          ? undefined
-          : currentWorkflow?.recovery?.availableItems.find(
-              (item) => item.chapterId === chapterEditor?.chapter.frontmatter.id
-            );
-      const discardRecovery =
-        recoveryItem === undefined || projectWorkflowBridge === undefined
-          ? undefined
-          : async () => {
-              const next = await projectWorkflowBridge.discardRecoveryDraft(
-                recoveryItem.sessionId
-              );
-              setProjectWorkflow(next);
-              return next.status === "ready" && next.feedback === undefined;
-            };
-      return guardDirtyChapterDraft(
-        chapterBridge,
-        chapterEditor,
-        saveCurrentChapter,
-        (editor) => setChapterEditor(editor),
-        undefined,
-        discardRecovery
-      );
-    },
-    [
+    const recoveryItem =
+      projectWorkflowBridge === undefined
+        ? undefined
+        : currentWorkflow?.recovery?.availableItems.find(
+            (item) => item.chapterId === chapterEditor?.chapter.frontmatter.id
+          );
+    const discardRecovery =
+      recoveryItem === undefined || projectWorkflowBridge === undefined
+        ? undefined
+        : async () => {
+            const next = await projectWorkflowBridge.discardRecoveryDraft(recoveryItem.sessionId);
+            setProjectWorkflow(next);
+            return next.status === "ready" && next.feedback === undefined;
+          };
+    return guardDirtyChapterDraft(
       chapterBridge,
       chapterEditor,
-      projectWorkflow,
-      projectWorkflowBridge,
       saveCurrentChapter,
-      setChapterEditor,
-      setProjectWorkflow
-    ]
-  );
+      (editor) => setChapterEditor(editor),
+      undefined,
+      discardRecovery
+    );
+  }, [
+    chapterBridge,
+    chapterEditor,
+    projectWorkflow,
+    projectWorkflowBridge,
+    saveCurrentChapter,
+    setChapterEditor,
+    setProjectWorkflow
+  ]);
 
   const runWorkspaceTransition = useCallback(
     async (operation: () => Promise<ProjectWorkflowProps>, status: "opening" | "creating") => {

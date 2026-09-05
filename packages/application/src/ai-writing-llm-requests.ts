@@ -1,5 +1,8 @@
 import type { ContextBundleItem, ContextBundleTrace } from "@novel-studio/context-engine";
-import { calculateContextBudget, createDeterministicTokenEstimator } from "@novel-studio/agent-engine";
+import {
+  calculateContextBudget,
+  createDeterministicTokenEstimator
+} from "@novel-studio/agent-engine";
 import type {
   LlmMode,
   LlmModelProfile,
@@ -164,7 +167,8 @@ export function validateWritingRequestContextBudget(input: {
       category: "UserError",
       message: "The AI writing request exceeds the selected model's context window.",
       recoverability: "user-action",
-      suggestedAction: "Shorten the chapter or conversation, or choose a model with a larger context window.",
+      suggestedAction:
+        "Shorten the chapter or conversation, or choose a model with a larger context window.",
       traceId: input.request.traceId,
       redactedDetail: {
         contextWindow: input.contextWindow,

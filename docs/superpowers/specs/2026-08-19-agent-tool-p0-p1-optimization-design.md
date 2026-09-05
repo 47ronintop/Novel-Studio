@@ -21,13 +21,13 @@
 
 ## 2. 当前基线
 
-| 领域      | 当前事实                                                                                              | 主要缺口                                                                             |
-| --------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| 领域      | 当前事实                                                                                                    | 主要缺口                                                                                      |
+| --------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | 工程 CRUD | Catalog 2.0、Main feature flags、runtime projection 和 unsigned beta 已能表达五项 operation；已有逐操作测试 | 需要继续审计 release projection、Permission Summary、UI 和运行中撤销，不再新增 CRUD operation |
-| 项目发现  | `list_project_entries` 浏览单层目录；`search_project` 支持 `text/references`                          | 大项目缺少按文件名、目录名和 glob 快速定位路径的能力                                 |
-| 发布证据  | `stage5-agent-tool-evidence.json` 记录 phase 状态                                                     | release catalog 没有强制与 `releaseEligible`、安全资格、用户控制和 packaged E2E 求交 |
-| 活动工具  | Main 根据 profile 和 capability 生成并冻结工具目录                                                    | 用户不能在本次运行前进一步关闭不需要的网络、MCP 或 mutation 工具                     |
-| 调度      | 工具调用统一顺序执行；副作用顺序安全                                                                  | 多个纯本地、无外发、可安全重试的读取调用不能并行                                     |
+| 项目发现  | `list_project_entries` 浏览单层目录；`search_project` 支持 `text/references`                                | 大项目缺少按文件名、目录名和 glob 快速定位路径的能力                                          |
+| 发布证据  | `stage5-agent-tool-evidence.json` 记录 phase 状态                                                           | release catalog 没有强制与 `releaseEligible`、安全资格、用户控制和 packaged E2E 求交          |
+| 活动工具  | Main 根据 profile 和 capability 生成并冻结工具目录                                                          | 用户不能在本次运行前进一步关闭不需要的网络、MCP 或 mutation 工具                              |
+| 调度      | 工具调用统一顺序执行；副作用顺序安全                                                                        | 多个纯本地、无外发、可安全重试的读取调用不能并行                                              |
 
 现有 V2 Catalog 2.0、Effective Capability State、Permission Summary、provider-name mapping、Prompt Artifact、首次发送预览和发送账本继续作为实现基础，不建立第二套权限或工具真值。
 
@@ -283,16 +283,16 @@ effect == read
 
 ## 7. 主要修改落点
 
-| 领域                   | 主要文件                                                                                                                                                                                                        |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 工具 schema/目录       | `packages/agent-engine/src/tool-registry.ts`、`packages/agent-engine/src/agent-run-tool-catalog.ts`                                                                                                             |
+| 领域                   | 主要文件                                                                                                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 工具 schema/目录       | `packages/agent-engine/src/tool-registry.ts`、`packages/agent-engine/src/agent-run-tool-catalog.ts`                                                                                                                              |
 | Capability 投影/审计   | `packages/agent-engine/src/agent-tool-capabilities.ts`、`packages/agent-engine/src/effective-capability-state.ts`、`apps/desktop/src/main/agent-feature-flags.ts`、`apps/desktop/src/main/agent-run-runtime.ts` 以及对应矩阵测试 |
-| Permission/system 真值 | `packages/agent-engine/src/permission-summary.ts`、`packages/application/src/agent-runtime-facts.ts`、`packages/application/src/agent-system-prompt.ts`                                                         |
-| 路径发现               | `packages/application/src/agent-search-tool-session.ts`、`packages/repository/src/agent-project-search-repository.ts`、engineering hardened access/index adapter                                                |
-| Tool 调度              | `packages/application/src/agent-tool-call-pipeline.ts`、`packages/application/src/agent-run-session.ts`                                                                                                         |
-| Preview/账本/cache     | Prompt Artifact、Canonical Round Manifest、send ledger 与 prompt cache consumers                                                                                                                                |
-| UI                     | `packages/ui/src/agent-capability-summary.tsx`、Agent composer/permission surface、MCP tool-source panel                                                                                                        |
-| 发布证据               | `docs/releases/stage5-agent-tool-evidence.json`、`scripts/release-check.mjs`、public catalog projection、packaged E2E                                                                                         |
+| Permission/system 真值 | `packages/agent-engine/src/permission-summary.ts`、`packages/application/src/agent-runtime-facts.ts`、`packages/application/src/agent-system-prompt.ts`                                                                          |
+| 路径发现               | `packages/application/src/agent-search-tool-session.ts`、`packages/repository/src/agent-project-search-repository.ts`、engineering hardened access/index adapter                                                                 |
+| Tool 调度              | `packages/application/src/agent-tool-call-pipeline.ts`、`packages/application/src/agent-run-session.ts`                                                                                                                          |
+| Preview/账本/cache     | Prompt Artifact、Canonical Round Manifest、send ledger 与 prompt cache consumers                                                                                                                                                 |
+| UI                     | `packages/ui/src/agent-capability-summary.tsx`、Agent composer/permission surface、MCP tool-source panel                                                                                                                         |
+| 发布证据               | `docs/releases/stage5-agent-tool-evidence.json`、`scripts/release-check.mjs`、public catalog projection、packaged E2E                                                                                                            |
 
 ## 8. 推进顺序与回滚
 

@@ -32,11 +32,7 @@ export function createApplicationMenuTemplate(
   return [
     {
       label: "文件",
-      submenu: [
-        ...fileLifecycleItems,
-        { type: "separator" },
-        { role: "close", label: "关闭窗口" }
-      ]
+      submenu: [...fileLifecycleItems, { type: "separator" }, { role: "close", label: "关闭窗口" }]
     },
     {
       label: "编辑",

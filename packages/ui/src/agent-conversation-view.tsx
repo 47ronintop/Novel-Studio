@@ -135,9 +135,7 @@ export function AgentConversationView(props: AgentConversationViewProps) {
         {composer === undefined ? null : (
           <AgentComposer {...composer} disabled={true} disabledReason={composerDisabledReason} />
         )}
-        {showReturnToBottom ? (
-          <ReturnToBottomButton onClick={returnToBottom} />
-        ) : null}
+        {showReturnToBottom ? <ReturnToBottomButton onClick={returnToBottom} /> : null}
         {historyDrawer}
       </section>
     );

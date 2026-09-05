@@ -335,8 +335,7 @@ async function acquireProjectFileLock(
         projectFileLockError({
           code: "PROJECT_FILE_LOCK_STALE",
           message: "The project mutation lock appears to be stale.",
-          suggestedAction:
-            "确认没有山海进程正在使用该项目后，再移除过期锁。",
+          suggestedAction: "确认没有山海进程正在使用该项目后，再移除过期锁。",
           traceId: input.traceId,
           reason: `staleAfterMs=${input.staleAfterMs}`
         })

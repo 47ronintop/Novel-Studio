@@ -266,8 +266,7 @@ export class ProjectFileRepository implements ProjectRepositoryPort {
           storageError({
             code: "PROJECT_CREATE_CONFLICT",
             message: "Project could not be initialized because a project file already exists.",
-            suggestedAction:
-              "选择不含山海项目文件的目录，或直接打开已有项目。",
+            suggestedAction: "选择不含山海项目文件的目录，或直接打开已有项目。",
             traceId: this.traceId,
             redactedDetail: {
               relativePath: conflict

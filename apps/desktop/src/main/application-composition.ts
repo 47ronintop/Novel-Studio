@@ -771,7 +771,8 @@ export function createProjectDesktopApplication(
           const contextWindow =
             profile.contextWindow ??
             discoveredModel?.contextWindow ??
-            resolveCatalogAgentModelCapabilities(profile.provider, profile.modelName)?.contextWindow;
+            resolveCatalogAgentModelCapabilities(profile.provider, profile.modelName)
+              ?.contextWindow;
           return ok({
             ...resolved.value,
             ...(contextWindow === undefined ? {} : { contextWindow })
