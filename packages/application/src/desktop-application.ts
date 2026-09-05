@@ -1548,14 +1548,24 @@ export function createDesktopApplication(
         return pluginRegistryUnavailable();
       }
 
-      return pluginSettingsSession.load();
+      try {
+        return await pluginSettingsSession.load();
+      } catch {
+        // Repository factories are project-scoped and may fail while the shell is unbound.
+        // Normalize that boundary failure so an optional settings panel cannot reject its IPC call.
+        return pluginRegistryUnavailable();
+      }
     },
     async setPluginEnabled(pluginId, enabled) {
       if (pluginSettingsSession === undefined || activeEngineeringWorkspaceSession !== undefined) {
         return pluginRegistryUnavailable();
       }
 
-      return pluginSettingsSession.setEnabled(pluginId, enabled);
+      try {
+        return await pluginSettingsSession.setEnabled(pluginId, enabled);
+      } catch {
+        return pluginRegistryUnavailable();
+      }
     },
     async loadConfigAsset(assetType, assetId) {
       if (configStudioSession === undefined || activeEngineeringWorkspaceSession !== undefined) {

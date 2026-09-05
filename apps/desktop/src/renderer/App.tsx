@@ -16,22 +16,20 @@ import type {
   ProjectWorkflowFeedback,
   StoryBibleSummaryProps
 } from "@novel-studio/ui";
-import {
-  AgentModelSharingDialog,
-  ProjectCreateDialog,
-  ProjectFolderImportDialog
-} from "@novel-studio/ui";
+import { AgentModelSharingDialog } from "@novel-studio/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createAiWritingWorkflowBridge } from "./ai-writing-workflow-bridge.js";
 import { createChapterEditorBridge } from "./chapter-editor-bridge.js";
 import { createCommandExecutionBridge } from "./command-execution-bridge.js";
 import { createProjectWorkflowBridge } from "./project-workflow-bridge.js";
+import { ProjectWorkflowDialogs } from "./project-workflow-dialogs.js";
 import { createProjectSearchBridge, openProjectSearchResult } from "./project-search-bridge.js";
 import { createStoryBibleBridge } from "./story-bible-bridge.js";
 import { createEngineeringWorkspaceBridge } from "./engineering-workspace-bridge.js";
 import { useEngineeringEditorStateBinding } from "./engineering-editor-state-binding.js";
 import { createSettingsBridge } from "./settings-bridge.js";
+import { createInteractiveSettings } from "./settings-panel-props.js";
 import { createAgentRunBridge } from "./agent-run-bridge.js";
 import {
   decorateAgentConversationWorkspace,
@@ -904,41 +902,16 @@ export function App() {
           onVersionPreview: handleVersionPreview,
           onVersionRestore: handleVersionRestore
         };
-  const interactiveSettings =
-    settings === undefined
-      ? undefined
-      : {
-          ...settings,
-          appearanceFeedback,
-          editorPreferences,
-          appearancePreferences: {
-            ...appearancePreferences,
-            editor: editorPreferences
-          },
-          onAppearancePreferencesChange: handleAppearancePreferencesChange,
-          onEditorPreferencesChange,
-          usage:
-            settings.usage === undefined
-              ? undefined
-              : {
-                  ...settings.usage,
-                  ...agentUsageSettingsActions
-                },
-          network:
-            settings.network === undefined
-              ? undefined
-              : {
-                  ...settings.network,
-                  ...settingsPanelActions.network
-                },
-          toolSources:
-            settings.toolSources === undefined
-              ? undefined
-              : {
-                  ...settings.toolSources,
-                  ...settingsPanelActions.toolSources
-                }
-        };
+  const interactiveSettings = createInteractiveSettings({
+    settings,
+    appearanceFeedback,
+    editorPreferences,
+    appearancePreferences,
+    onAppearancePreferencesChange: handleAppearancePreferencesChange,
+    onEditorPreferencesChange,
+    agentUsageSettingsActions,
+    settingsPanelActions
+  });
   const onboarding = createOnboardingProps({
     dismissed: onboardingDismissed,
     shellState,
@@ -1051,34 +1024,18 @@ export function App() {
         onNavigatorExpandedSectionIdsChange={handleNavigatorExpandedSectionIdsChange}
         navigation={workspaceNavigation}
       />
-      <ProjectCreateDialog
-        open={projectCreateDialogOpen}
-        titleInput={projectWorkflow?.projectTitleInput ?? ""}
-        folderNameInput={projectWorkflow?.projectFolderNameInput ?? ""}
-        {...(projectWorkflow?.selectedParentDisplayName === undefined
-          ? {}
-          : { selectedParentDisplayName: projectWorkflow.selectedParentDisplayName })}
-        {...(projectWorkflow?.creationPreview === undefined
-          ? {}
-          : { creationPreview: projectWorkflow.creationPreview })}
-        busy={projectWorkflow?.status === "creating"}
-        {...(projectWorkflow?.feedback === undefined ? {} : { feedback: projectWorkflow.feedback })}
-        onTitleChange={handleProjectTitleChange}
-        onFolderNameChange={handleProjectFolderNameChange}
-        onChooseParentDirectory={handleChooseCreateParentDirectory}
-        onCancel={() => setProjectCreateDialogOpen(false)}
-        onCreate={handleCreateProject}
+      <ProjectWorkflowDialogs
+        projectWorkflow={projectWorkflow}
+        projectCreateDialogOpen={projectCreateDialogOpen}
+        onProjectCreateDialogOpenChange={setProjectCreateDialogOpen}
+        onProjectTitleChange={handleProjectTitleChange}
+        onProjectFolderNameChange={handleProjectFolderNameChange}
+        onChooseCreateParentDirectory={handleChooseCreateParentDirectory}
+        onCreateProject={handleCreateProject}
+        onFolderImportCandidateToggle={handleFolderImportCandidateToggle}
+        onFolderImportCancel={handleFolderImportCancel}
+        onFolderImportConfirm={handleFolderImportConfirm}
       />
-      {projectWorkflow?.folderImportPreview === undefined ? null : (
-        <ProjectFolderImportDialog
-          {...projectWorkflow.folderImportPreview}
-          open
-          busy={projectWorkflow.folderImportPreview.busy || projectWorkflow.status === "creating"}
-          onCandidateToggle={handleFolderImportCandidateToggle}
-          onCancel={handleFolderImportCancel}
-          onConfirm={handleFolderImportConfirm}
-        />
-      )}
       <AgentModelSharingDialog {...modelSharingDialog.dialogProps} />
     </>
   );

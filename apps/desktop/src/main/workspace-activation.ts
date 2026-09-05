@@ -16,6 +16,8 @@ import type {
   DesktopAgentWorkspaceBinding
 } from "./agent-runtime-manager.js";
 
+const RUNTIME_SWITCH_RETRY_DELAYS_MS = [25, 50, 100, 200, 350, 500] as const;
+
 export interface WorkspaceActivationCoordinator {
   openCreativeProject(
     projectRoot: string,
@@ -101,7 +103,7 @@ export function createWorkspaceActivationCoordinator(
     candidate: PreparedWorkspaceActivation
   ): Promise<Result<WorkspaceActivationDto, UnifiedError>> {
     options.clearCreativeGeneralActiveResourceProof?.();
-    const preparedRuntime = await options.runtimeManager.prepareWorkspace(
+    const preparedRuntime = await prepareRuntimeWithTransientRetry(
       toDesktopAgentWorkspaceBinding(candidate)
     );
     if (!preparedRuntime.ok) {
@@ -160,6 +162,30 @@ export function createWorkspaceActivationCoordinator(
     }
     return ok(activation);
   }
+
+  async function prepareRuntimeWithTransientRetry(
+    binding: DesktopAgentWorkspaceBinding
+  ): Promise<Awaited<ReturnType<DesktopAgentRuntimeManager["prepareWorkspace"]>>> {
+    let lastBlocked = await options.runtimeManager.prepareWorkspace(binding);
+    if (lastBlocked.ok || lastBlocked.error.code !== "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED") {
+      return lastBlocked;
+    }
+    for (let attempt = 0; attempt <= RUNTIME_SWITCH_RETRY_DELAYS_MS.length; attempt += 1) {
+      const delayMs = RUNTIME_SWITCH_RETRY_DELAYS_MS[attempt - 1];
+      if (delayMs !== undefined) await delay(delayMs);
+      if (attempt === 0) continue;
+      const prepared = await options.runtimeManager.prepareWorkspace(binding);
+      if (prepared.ok || prepared.error.code !== "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED") {
+        return prepared;
+      }
+      lastBlocked = prepared;
+    }
+    return lastBlocked;
+  }
+}
+
+function delay(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 export function toDesktopAgentWorkspaceBinding(

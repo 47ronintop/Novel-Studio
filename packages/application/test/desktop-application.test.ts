@@ -413,6 +413,35 @@ describe("desktop application command bridge", () => {
     expect(calls).toEqual(["novel.timeline-tools:false"]);
   });
 
+  test("normalizes project-scoped plugin access failures", async () => {
+    const application = createDesktopApplication({
+      pluginSettingsSession: {
+        load: async () => {
+          throw new Error("No creative project is active.");
+        },
+        setEnabled: async () => {
+          throw new Error("No creative project is active.");
+        }
+      }
+    } as Parameters<typeof createDesktopApplication>[0] & {
+      readonly pluginSettingsSession: {
+        load(): Promise<never>;
+        setEnabled(): Promise<never>;
+      };
+    });
+
+    await expect(application.loadPluginRegistry()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_REGISTRY_UNAVAILABLE" }
+    });
+    await expect(
+      application.setPluginEnabled("novel.timeline-tools", false)
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_REGISTRY_UNAVAILABLE" }
+    });
+  });
+
   test("rejects unknown commands at the Application boundary", () => {
     const application = createDesktopApplication();
 

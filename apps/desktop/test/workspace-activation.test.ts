@@ -6,6 +6,7 @@ import type {
   WorkspaceActivationDto
 } from "@novel-studio/application";
 import { createUnifiedError, err, ok } from "@novel-studio/shared";
+import type { Result } from "@novel-studio/shared";
 
 import type {
   DesktopAgentRuntimeManager,
@@ -62,6 +63,33 @@ describe("workspace activation coordinator", () => {
 
     expect(result).toEqual(err(failure));
     expect(order).toEqual(["application:prepare", "runtime:prepare", "application:discard"]);
+  });
+
+  test("retries a transient runtime switch block while startup reads drain", async () => {
+    const order: string[] = [];
+    const candidate = creativeCandidate();
+    const committed = creativeDto();
+    const blocked = createUnifiedError({
+      code: "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED",
+      category: "AgentError",
+      message: "runtime busy",
+      recoverability: "retryable",
+      suggestedAction: "retry",
+      traceId: "workspace-activation-test"
+    });
+    const application = fakeApplication({ candidate, committed, order });
+    const preparedRuntime = { binding: toDesktopAgentWorkspaceBinding(candidate), runtime: {} };
+    const runtimeManager = fakeRuntimeManager({
+      preparedRuntime,
+      order,
+      prepareResults: [err(blocked), ok(preparedRuntime)]
+    });
+    const coordinator = createWorkspaceActivationCoordinator({ application, runtimeManager });
+
+    const result = await coordinator.openCreativeProject("D:/Novel/New");
+
+    expect(result).toEqual(ok(committed));
+    expect(runtimeManager.prepareWorkspace).toHaveBeenCalledTimes(2);
   });
 
   test("keeps the committed activation successful when post-commit cleanup fails", async () => {
@@ -282,11 +310,15 @@ function fakeRuntimeManager(input: {
   readonly preparedRuntime: DesktopAgentWorkspacePreparation;
   readonly order: string[];
   readonly prepareResult?: ReturnType<typeof err>;
+  readonly prepareResults?: readonly Result<DesktopAgentWorkspacePreparation, UnifiedError>[];
 }): DesktopAgentRuntimeManager {
+  let prepareAttempt = 0;
   return {
     prepareWorkspace: vi.fn(async () => {
       input.order.push("runtime:prepare");
-      return input.prepareResult ?? ok(input.preparedRuntime);
+      const prepared = input.prepareResults?.[prepareAttempt];
+      prepareAttempt += 1;
+      return prepared ?? input.prepareResult ?? ok(input.preparedRuntime);
     }),
     commitPreparedWorkspace: vi.fn(() => input.order.push("runtime:commit"))
   } as unknown as DesktopAgentRuntimeManager;

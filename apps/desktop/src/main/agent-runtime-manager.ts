@@ -14,6 +14,8 @@ import type {
 import type { AgentRunEvent, AgentRunSnapshot } from "@novel-studio/agent-engine";
 import { createUnifiedError, err, ok, type Result, type UnifiedError } from "@novel-studio/shared";
 
+const TRANSIENT_SWITCH_RETRY_DELAYS_MS = [25, 50, 100, 200, 350, 500] as const;
+
 export interface DesktopAgentWorkspaceBinding {
   readonly kind: "creativeProject" | "engineeringWorkspace";
   readonly workspaceId: string;
@@ -414,7 +416,7 @@ export function createDesktopAgentRuntimeManager(
     const stopped = await stopActiveRunsForSettingsRefresh(generation);
     if (!stopped.ok || generation !== settingsRefreshGeneration) return stopped;
     if (currentBinding !== binding) return ok(undefined);
-    const prepared = await manager.prepareWorkspace(binding);
+    const prepared = await prepareWorkspaceWithTransientRetry(binding);
     if (!prepared.ok) return prepared;
     if (generation !== settingsRefreshGeneration || currentBinding !== binding) {
       manager.discardPreparedWorkspace(prepared.value);
@@ -422,6 +424,35 @@ export function createDesktopAgentRuntimeManager(
     }
     manager.commitPreparedWorkspace(prepared.value);
     return ok(undefined);
+  }
+
+  async function prepareWorkspaceWithTransientRetry(
+    binding: DesktopAgentWorkspaceBinding
+  ): Promise<Result<PreparedDesktopAgentWorkspace, UnifiedError>> {
+    await waitForTransientLeases();
+    let lastBlocked: Result<PreparedDesktopAgentWorkspace, UnifiedError> | undefined;
+    for (let attempt = 0; attempt <= TRANSIENT_SWITCH_RETRY_DELAYS_MS.length; attempt += 1) {
+      const delayMs = TRANSIENT_SWITCH_RETRY_DELAYS_MS[attempt - 1];
+      if (delayMs !== undefined) await delay(delayMs);
+      const prepared = await manager.prepareWorkspace(binding);
+      if (prepared.ok || prepared.error.code !== "AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED") {
+        return prepared;
+      }
+      lastBlocked = prepared;
+    }
+    return lastBlocked ?? err(runtimeError("AGENT_RUNTIME_PROJECT_SWITCH_BLOCKED"));
+  }
+
+  async function waitForTransientLeases(): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (
+      Date.now() < deadline &&
+      (activeScopeTransition !== undefined ||
+        activeStartLeaseCount > 0 ||
+        activeCommandLeaseCount > 0)
+    ) {
+      await delay(50);
+    }
   }
 
   function scheduleDeferredSettingsRefresh(sourceRuntime: DesktopAgentRuntime): void {
@@ -775,6 +806,10 @@ export function createDesktopAgentRuntimeManager(
     }
   }
   return manager;
+}
+
+function delay(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function isSameBinding(
